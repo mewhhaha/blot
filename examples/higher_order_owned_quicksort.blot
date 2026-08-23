@@ -1,0 +1,24 @@
+// A higher-order driver may consume owned state when its case patterns state
+// where the callback returns the exact successor in every result alternative.
+
+open import "blot:prelude"
+
+const Divide = import "./lib/owned_divide.blot"
+
+const quicksort_driver =
+  Divide.binary (
+    fn (?current, range, before) => do:
+      if Range.length range < 2:
+        return #Done current
+      else:
+        let (current, left, right) =
+          Array.expect_partition_last (current, range, before)
+        let (first, second) = Range.shorter_first (left, right)
+        return #Split (current, first, second)
+  )
+
+const quicksort = fn (values, before) => do:
+  let bounds = Range.whole (&values)
+  return quicksort_driver (?values, bounds, before)
+
+return quicksort ([4, 7, 3, 8, 2, 6, 1, 5], fn (left, right) => left <= right)

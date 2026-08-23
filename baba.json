@@ -442,7 +442,7 @@
         "rebinding": {
           "opcode": "shadow",
           "fields": {
-            "name": "binder",
+            "pattern": "pattern",
             "value": "value"
           }
         },

@@ -4,6 +4,9 @@ import { runArtifact } from "../src/node/run.ts";
 const cases = [
   "examples/minimal.blot",
   "examples/owned_quicksort.blot",
+  "examples/higher_order_owned_fold.blot",
+  "examples/higher_order_owned_quicksort.blot",
+  "examples/region_zipper_quicksort.blot",
 ];
 const compiler = await Compiler.create();
 try {

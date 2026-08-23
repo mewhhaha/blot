@@ -2839,15 +2839,20 @@ impl ResidualTrace {
             .cloned();
         let Some(crate::ownership::OwnershipContract {
             parameter: contract_parameter,
-            result:
-                Produced::Parameter {
-                    source,
-                    qualifier: _,
-                },
+            result,
             ..
         }) = contract
         else {
             return Ok(None);
+        };
+        let source = match result {
+            Produced::Parameter { source, .. } | Produced::StoreParameter { source, .. } => source,
+            Produced::Region {
+                root: Some(source),
+                splits,
+                ..
+            } if splits.is_empty() => source,
+            _ => return Ok(None),
         };
         if contract_parameter != parameter {
             return Err(hir_error(

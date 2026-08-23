@@ -1,0 +1,10 @@
+open import "blot:prelude"
+
+const carry = fn transition => fn ?state => do:
+  return case transition (?state) of
+    #Next ?state => state
+
+const replace = fn ?state => #Next [1, 2, 3]
+
+let state = [4, 5, 6]
+return carry replace state

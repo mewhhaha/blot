@@ -1,0 +1,52 @@
+// The recursive calls own disjoint Region children. The two linear witnesses
+// form a zipper that reconstructs the complete root on the return path.
+
+open import "blot:prelude"
+
+const partition_last = fn (!values, before) => do:
+  let length = Slice.length (&values)
+  if length < 2:
+    return #Done (!values)
+  else:
+    let last = length - 1
+    let pivot = Slice.expect_get ((&values), last)
+    let bounds = Range.of (0, last)
+    let (!values, boundary) = case Slice.partition_in (
+      (!values),
+      bounds,
+      fn value => before (value, pivot)
+    ) of
+      #Partitioned (!next, index) => (!next, index)
+      #PartitionOutOfBounds (!original, index) => (!original, index)
+    let !values = Slice.swap_or_keep ((!values), boundary, last)
+
+    return case Slice.split ((!values), boundary) of
+      #Split (!left, !pivot_and_right, !outer) => do:
+        return case Slice.split ((!pivot_and_right), 1) of
+          #Split (!pivot, !right, !inner) => #Split (
+            !left,
+            !pivot,
+            !right,
+            !outer,
+            !inner
+          )
+          #SplitOutOfBounds !original => #Done (
+            Slice.join (!outer, !left, !original)
+          )
+      #SplitOutOfBounds !original => #Done (!original)
+
+const rec quicksort_region = fn (!values, before) => do:
+  return case partition_last (!values, before) of
+    #Done !values => values
+    #Split (!left, !pivot, !right, !outer, !inner) => do:
+      let !left = quicksort_region (!left, before)
+      let !right = quicksort_region (!right, before)
+      let !pivot_and_right = Slice.join (!inner, !pivot, !right)
+      return Slice.join (!outer, !left, !pivot_and_right)
+
+const quicksort = fn (values, before) => do:
+  let !region = Slice.copy values
+  let !sorted = quicksort_region (!region, before)
+  return Slice.freeze (!sorted)
+
+return quicksort ([4, 7, 3, 8, 2, 6, 1, 5], fn (left, right) => left <= right)

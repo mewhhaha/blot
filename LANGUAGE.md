@@ -588,7 +588,7 @@ let x = x
 x := update x
 ```
 
-Function parameters, `let`/`const` bindings, named `<-` bindings, loop binders,
+Function parameters, `let`/`const` bindings, names bound by `<-`, loop binders,
 and successful `if let` binders introduce names in their frame. `open` does not
 start a rebinding lineage; use `let` first when an opened name should be
 rebound. In a curried function every arrow is a closure boundary, so an inner
@@ -606,15 +606,22 @@ of the inner loop instead.
 ### 4.5 Effect sequencing
 
 ```blot
-name <- expression
+pattern <- expression
 <- expression
 ```
 
 This is the only declaration form that admits an effectful expression. It binds
-one name, not a pattern, and executes the effect value on its right. The leading
-form discards the result and is exactly equivalent to `_ <- expression`; it is
-sequencing syntax, not a prefix operator. The formatter uses the leading form as
-the canonical spelling.
+an ordinary binding pattern and executes the effect value on its right exactly
+once. The pattern has the same matching and ownership rules as a `let` pattern;
+a mismatch is an error, and every name it contains starts a local rebinding
+lineage. The leading form discards the result and is exactly equivalent to
+`_ <- expression`; it is sequencing syntax, not a prefix operator. The formatter
+uses the leading form as the canonical spelling.
+
+```blot
+(status, body) <- Http.fetch request
+#Some value <- Cache.lookup key
+```
 
 An effect value has the erased representation `Unit -> A ~ E`. Sequencing it
 supplies `()` and binds the resulting `A`, so it can be constructed, retained,
@@ -2182,14 +2189,35 @@ result freezes remaining owned Stores implicitly because that transition copies
 no bytes; non-Store linear resources remain forbidden. Last-use and
 proved-consumption facts are recorded for the backend.
 
-A recursive Array function may publish one provisional Store result only when
-its checked result type is Array and exactly one parameter position supplies the
-affine authority. Every non-recursive result path must return that same
-authority shape; otherwise `BLOT_RECURSIVE_OWNERSHIP_RESULT` rejects the
-function. This is the induction step that lets the successor from one recursive
-call feed another without treating an arbitrary recursive result as owned. A
-residual direct call reattaches that certified result authority after lowering;
-the runtime representation alone never upgrades a plain Store.
+A function may itself publish a finite ownership requirement for a
+function-valued parameter. Calling an otherwise opaque parameter with an
+explicit `!` or `?` ownership handoff is accepted only when the result is
+immediately bound by a declaration pattern or eliminated by a `case`. The `!`
+and `?` binders in the direct result pattern or every named constructor arm
+state the positions that receive the consumed authorities; input and output
+ownership leaves pair in structural left-to-right order, and every alternative
+must return the complete compatible set. The enclosing function's certificate
+records the callback parameter path, the owned input tree, and the result
+alternatives. At application, the actual callback's already checked contract is
+substituted with that input tree and must equal the required result tree. The
+requirement is erased before Runtime HIR and does not enter the type lattice.
+
+This rule does not infer forwarding from equal types, authorize an unresolved or
+host callback, or let an opaque owned result escape its immediate binding. A
+callback that drops, shares, replaces, duplicates, or moves an authority to an
+unmarked result position fails the relation. The existing qualifiers are proof
+binders in the generic implementation, not extra call-site syntax.
+
+A recursive Array or Region function may publish one provisional result only
+when exactly one parameter position supplies the matching authority. Every
+non-recursive result path must return that same Store authority or complete
+Region root; otherwise `BLOT_RECURSIVE_OWNERSHIP_RESULT` rejects the function.
+For a Region whose element type cannot carry ownership, the certificate erases
+its empty element tree while retaining root lineage. This is the induction step
+that lets the successor from one recursive call feed another without treating an
+arbitrary recursive result as owned. A residual direct call reattaches that
+certified result authority after lowering; the runtime representation alone
+never upgrades a plain Store or Region.
 
 ### 11.1 A recursive group
 

@@ -20,13 +20,13 @@ in a benchmark months later.
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |      22 | worst-case island candidates allocated per token   |
+| `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
 | `islandCount`               |      66 | one island for every grammar rule                  |
-| `islandStates`              |     389 |                                                    |
-| `islandTransitions`         |     398 |                                                    |
+| `islandStates`              |     388 |                                                    |
+| `islandTransitions`         |     395 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 574,164 | immutable device table                             |
-| `packedBytes`               | 449,799 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 572,688 | immutable device table                             |
+| `packedBytes`               | 448,686 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
@@ -230,9 +230,12 @@ to 4; dense transitions grow by 15,936 bytes and the packed plan by 12,783 bytes
 in total.
 
 `<-` cost two more lexer states and two island states. Splitting it into its own
-declaration alternative was a shift/reduce conflict on IDENT against `:=`, and
-the design fix was to notice that both are a name, an arrow, and a value —
-`rebinding` is one rule with two arrows, and neither takes a pattern.
+declaration alternative was a shift/reduce conflict on IDENT against `:=`, so
+`rebinding` remains one factored rule. Extending its target from a name to an
+ordinary binding pattern moved maximum candidate multiplicity from 22 to 24,
+while removing one island state, three island transitions, 1,476 dense table
+bytes, and 1,113 packed bytes. Lowering keeps `:=` restricted to one unqualified
+name. No parser resolution was added.
 
 The former `for ... do ... end` form cost three lexer states and forty-six
 island states on top of that, again with the multiplicity and contraction bounds

@@ -19,7 +19,13 @@ use crate::value::{Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
 type ScopeRef = Rc<RefCell<Scope>>;
-type FunctionContract = (Option<PatternId>, Produced, Produced, Option<Rc<Module>>);
+type FunctionContract = (
+    Option<PatternId>,
+    Produced,
+    Produced,
+    Vec<CallbackRequirement>,
+    Option<Rc<Module>>,
+);
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub(crate) enum Produced {
@@ -56,6 +62,14 @@ pub(crate) enum Produced {
     Shape(BTreeMap<String, Produced>),
     Variant(Box<Produced>),
     Choice(BTreeMap<String, Produced>),
+    /// An owned call through a function-valued parameter. Its result must be
+    /// exposed immediately by a qualified binding or named `case`, which
+    /// turns the opaque result into a checked callback requirement.
+    PendingCallback {
+        source: PatternId,
+        path: Vec<String>,
+        input: Box<Produced>,
+    },
     Region {
         qualifier: Qualifier,
         root: Option<PatternId>,
@@ -91,11 +105,21 @@ pub(crate) enum Produced {
     },
 }
 
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+pub(crate) struct CallbackRequirement {
+    pub(crate) source: PatternId,
+    pub(crate) path: Vec<String>,
+    pub(crate) input: Produced,
+    pub(crate) result: Produced,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct OwnershipContract {
     pub(crate) parameter: PatternId,
     pub(crate) input: Produced,
     pub(crate) result: Produced,
+    #[serde(default)]
+    pub(crate) callback_requirements: Vec<CallbackRequirement>,
 }
 
 pub(crate) struct OwnershipCheck {
@@ -155,8 +179,45 @@ pub(crate) fn validate_contracts(
         }
         validate_produced(module, &contract.input)?;
         validate_produced(module, &contract.result)?;
+        for requirement in &contract.callback_requirements {
+            validate_pattern_member(module, contract.parameter, requirement.source)?;
+            validate_produced(module, &requirement.input)?;
+            validate_produced(module, &requirement.result)?;
+        }
     }
     Ok(())
+}
+
+fn validate_pattern_member(
+    module: &Module,
+    root: PatternId,
+    expected: PatternId,
+) -> Result<(), String> {
+    if pattern_contains(module, root, expected) {
+        return Ok(());
+    }
+    Err(format!(
+        "ownership callback requirement references pattern {} outside parameter {}",
+        expected.0, root.0
+    ))
+}
+
+fn pattern_contains(module: &Module, root: PatternId, expected: PatternId) -> bool {
+    if root == expected {
+        return true;
+    }
+    match &module.arena.patterns[root.0 as usize] {
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => elements
+            .iter()
+            .any(|child| pattern_contains(module, *child, expected)),
+        Pattern::Constructor { payload, .. } => {
+            payload.is_some_and(|child| pattern_contains(module, child, expected))
+        }
+        Pattern::Shape { fields, .. } => fields
+            .iter()
+            .any(|field| pattern_contains(module, field.pattern, expected)),
+        _ => false,
+    }
 }
 
 fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String> {
@@ -243,6 +304,10 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
             validate_produced(module, outer)?;
             validate_produced(module, inner)
         }
+        Produced::PendingCallback { source, input, .. } => {
+            validate_pattern(*source)?;
+            validate_produced(module, input)
+        }
     }
 }
 
@@ -255,6 +320,7 @@ struct Binding {
     input: Produced,
     contract_module: Option<Rc<Module>>,
     result: Produced,
+    callback_requirements: Vec<CallbackRequirement>,
     recursive_result: Option<Produced>,
     value: Option<ExpressionId>,
     moved: Option<Span>,
@@ -299,6 +365,7 @@ struct Analysis<'a> {
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
     contracts: HashMap<ExpressionId, OwnershipContract>,
+    callback_requirements: Vec<CallbackRequirement>,
     bindings: Vec<BindingRef>,
 }
 
@@ -318,6 +385,7 @@ pub(crate) fn check(
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
         contracts: HashMap::new(),
+        callback_requirements: Vec::new(),
         bindings: Vec::new(),
     };
     let scope = child_scope(None, false);
@@ -330,6 +398,13 @@ pub(crate) fn check(
         analysis.report(
             "BLOT_BORROW_RESULT_ESCAPES",
             "The module result contains a borrowed view.",
+            module.arena.expression_span(module.result),
+        );
+    }
+    if contains_pending_callback(&result) {
+        analysis.report(
+            "BLOT_HIGHER_ORDER_OWNERSHIP_RELATION",
+            "An owned callback result must be eliminated immediately by a qualified binding or named `case`.",
             module.arena.expression_span(module.result),
         );
     }
@@ -442,6 +517,7 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 input: Produced::None,
                 contract_module: None,
                 result: Produced::None,
+                callback_requirements: Vec::new(),
                 recursive_result: None,
                 value: None,
                 moved: None,
@@ -491,7 +567,11 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
             let discarded = join(produced_elements.into_iter().skip(elements.len()));
             report_discarded(pattern, &discarded, analysis);
         }
-        Pattern::Constructor { payload, .. } => {
+        Pattern::Constructor { name, payload, .. } => {
+            let produced = match produced {
+                Produced::Choice(mut cases) => cases.remove(name).unwrap_or(Produced::None),
+                produced => produced,
+            };
             if let Some(payload) = payload {
                 let payload_value = match produced {
                     Produced::Variant(payload) => *payload,
@@ -655,6 +735,7 @@ fn install_capture(scope: &ScopeRef, source: &BindingRef, qualifier: Qualifier) 
             input: source.input.clone(),
             contract_module: source.contract_module.clone(),
             result: source.result.clone(),
+            callback_requirements: source.callback_requirements.clone(),
             recursive_result: source.recursive_result.clone(),
             value: source.value,
             moved: None,
@@ -740,6 +821,7 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
                 Use::Move
             };
             let produced = walk(value, scope, analysis, use_kind);
+            let produced = materialize_callback_binding(produced, pattern, span, analysis);
             if contains_borrow(&produced) {
                 analysis.report(
                     "BLOT_BORROW_STORED",
@@ -754,13 +836,14 @@ fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, input, result, contract_module) =
+                let (parameter, input, result, callback_requirements, contract_module) =
                     declaration_function_contract(value, &produced, &tags, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 binding.parameter = parameter;
                 binding.input = input;
                 binding.contract_module = contract_module;
                 binding.result = result;
+                binding.callback_requirements = callback_requirements;
                 binding.value = Some(value);
             }
         }
@@ -903,6 +986,7 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             input,
             contract_module: None,
             result: result.clone().unwrap_or(Produced::None),
+            callback_requirements: Vec::new(),
             recursive_result: result,
             value: Some(*value),
             moved: None,
@@ -993,15 +1077,15 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             if let Pattern::Name { name, .. } = &analysis.module.arena.patterns[pattern.0 as usize]
                 && let Some(binding) = scope.borrow().bindings.get(name).cloned()
             {
-                let (parameter, input, result, contract_module) =
+                let (parameter, input, result, callback_requirements, contract_module) =
                     function_contract(value, &produced, scope, analysis);
                 let mut binding = binding.borrow_mut();
                 if let Some(expected) = &binding.recursive_result
-                    && &result != expected
+                    && !recursive_result_matches(expected, &result)
                 {
                     analysis.report(
                         "BLOT_RECURSIVE_OWNERSHIP_RESULT",
-                        "This recursive Array function does not return the Store authority its recursive calls assume.",
+                        "This recursive function does not return the authority its recursive calls assume.",
                         analysis.module.arena.expression_span(value),
                     );
                 }
@@ -1011,6 +1095,7 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
                 binding.input = input;
                 binding.contract_module = contract_module;
                 binding.result = result;
+                binding.callback_requirements = callback_requirements;
             }
         }
         return;
@@ -1098,7 +1183,10 @@ fn walk(
             );
             declare(parameter, input.clone(), &inner, analysis);
             mark_function_parameters(parameter, &inner, analysis.module);
-            let result = walk(body, &inner, analysis, Use::Move);
+            let result = normalize_unrestricted_region_result(
+                walk(body, &inner, analysis, Use::Move),
+                closure_result_type(body, analysis),
+            );
             if contains_borrow(&result) {
                 analysis.report(
                     "BLOT_BORROW_RESULT_ESCAPES",
@@ -1106,14 +1194,30 @@ fn walk(
                     analysis.module.arena.expression_span(body),
                 );
             }
+            if contains_pending_callback(&result) {
+                analysis.report(
+                    "BLOT_HIGHER_ORDER_OWNERSHIP_RELATION",
+                    "An owned callback result must be eliminated immediately by a qualified binding or named `case`.",
+                    analysis.module.arena.expression_span(body),
+                );
+            }
             analysis.function_results.insert(expression, result.clone());
             let input = scope_pattern_owned(parameter, &inner, analysis.module);
+            let callback_requirements = analysis
+                .callback_requirements
+                .iter()
+                .filter(|requirement| {
+                    pattern_contains(analysis.module, parameter, requirement.source)
+                })
+                .cloned()
+                .collect();
             analysis.contracts.insert(
                 body,
                 OwnershipContract {
                     parameter,
                     input,
                     result: result.clone(),
+                    callback_requirements,
                 },
             );
             close_scope(&inner, analysis);
@@ -1268,6 +1372,7 @@ fn walk(
         }
         Expression::Case { target, arms, span } => {
             let target = walk(target, scope, analysis, Use::Project);
+            let target = materialize_callback_case(target, &arms, span, analysis);
             let before = snapshot(scope);
             let mut outcomes = Vec::new();
             let mut produced = Vec::new();
@@ -1538,11 +1643,11 @@ fn walk_apply(
             return Produced::SharedStore;
         }
     }
-    if matches!(
-        analysis.module.arena.expressions[function.0 as usize],
-        Expression::Tag { .. }
-    ) {
-        return Produced::Variant(Box::new(walk(argument, scope, analysis, Use::Move)));
+    if let Expression::Tag { name, .. } = &analysis.module.arena.expressions[function.0 as usize] {
+        return Produced::Choice(BTreeMap::from([(
+            name.clone(),
+            Produced::Variant(Box::new(walk(argument, scope, analysis, Use::Move))),
+        )]));
     }
     let (callee, arguments) = application_spine(expression, analysis.module);
     if let Expression::Intrinsic { name, .. } =
@@ -2015,17 +2120,28 @@ fn walk_apply(
     }
 
     let callee = walk(function, scope, analysis, Use::Project);
-    let (parameter, input, result, defining_module) =
+    let (parameter, input, result, callback_requirements, defining_module) =
         function_contract(function, &callee, scope, analysis);
     let contract_module = defining_module.as_deref().unwrap_or(analysis.module);
-    let argument_value = walk_call_argument(
-        argument,
-        parameter,
-        &input,
-        contract_module,
-        scope,
-        analysis,
-    );
+    let opaque_callback = if parameter.is_none() {
+        expression_parameter_source(function, scope, analysis)
+    } else {
+        None
+    };
+    let relational_callback =
+        opaque_callback.is_some() && contains_explicit_ownership_handoff(argument, analysis.module);
+    let argument_value = if relational_callback {
+        walk(argument, scope, analysis, Use::Move)
+    } else {
+        walk_call_argument(
+            argument,
+            parameter,
+            &input,
+            contract_module,
+            scope,
+            analysis,
+        )
+    };
     if contains_borrow(&argument_value)
         && !parameter_accepts_borrow(parameter, &argument_value, contract_module)
         && !trusted_borrow_operation(function, analysis.module)
@@ -2035,6 +2151,16 @@ fn walk_apply(
             "The called function does not promise to borrow this argument.",
             analysis.module.arena.expression_span(argument),
         );
+    }
+    if let Some((source, path)) = opaque_callback
+        && relational_callback
+        && obligation(&argument_value) != Obligation::None
+    {
+        return Produced::PendingCallback {
+            source,
+            path,
+            input: Box::new(argument_value),
+        };
     }
     if (obligation(&argument_value) != Obligation::None
         || (contains_shared(&argument_value) && demands_ownership(&input)))
@@ -2049,12 +2175,316 @@ fn walk_apply(
             analysis.module.arena.expression_span(argument),
         );
     }
+    validate_callback_requirements(
+        &callback_requirements,
+        parameter,
+        argument,
+        contract_module,
+        scope,
+        analysis,
+    );
     let result = substitute_parameters(result, parameter, &argument_value, contract_module);
     shared_array_result(
         expression,
         resolve_pending(result, span, analysis),
         analysis,
     )
+}
+
+fn contains_explicit_ownership_handoff(expression: ExpressionId, module: &Module) -> bool {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Apply { .. } => {
+            let (callee, arguments) = application_spine(expression, module);
+            if matches!(
+                &module.arena.expressions[callee.0 as usize],
+                Expression::Intrinsic { name, .. }
+                    if name == "@linear.own" || name == "@linear.maybe"
+            ) {
+                return true;
+            }
+            arguments
+                .iter()
+                .any(|argument| contains_explicit_ownership_handoff(*argument, module))
+        }
+        Expression::Tuple { elements, .. } => elements
+            .iter()
+            .any(|element| contains_explicit_ownership_handoff(*element, module)),
+        Expression::Array { elements, .. } => elements
+            .iter()
+            .any(|element| contains_explicit_ownership_handoff(element.value, module)),
+        Expression::Shape { members, .. } => members.iter().any(|member| match member {
+            ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                contains_explicit_ownership_handoff(*value, module)
+            }
+        }),
+        _ => false,
+    }
+}
+
+fn validate_callback_requirements(
+    requirements: &[CallbackRequirement],
+    parameter: Option<PatternId>,
+    argument: ExpressionId,
+    parameter_module: &Module,
+    scope: &ScopeRef,
+    analysis: &mut Analysis<'_>,
+) {
+    let Some(parameter) = parameter else {
+        return;
+    };
+    for requirement in requirements {
+        let Some(callback) = callback_argument_expression(
+            parameter,
+            argument,
+            requirement.source,
+            parameter_module,
+            analysis.module,
+        ) else {
+            analysis.report(
+                "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+                "The callback argument cannot be resolved to discharge its ownership relation.",
+                analysis.module.arena.expression_span(argument),
+            );
+            continue;
+        };
+        let Some(callback) = expression_at_path(callback, &requirement.path, analysis.module)
+        else {
+            analysis.report(
+                "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+                "The selected callback value cannot be resolved to discharge its ownership relation.",
+                analysis.module.arena.expression_span(argument),
+            );
+            continue;
+        };
+        let (callback_parameter, callback_input, callback_result, _, defining_module) =
+            function_contract(callback, &Produced::None, scope, analysis);
+        let callback_module = defining_module.as_deref().unwrap_or(analysis.module);
+        if analysis
+            .expression_types
+            .get(&callback)
+            .and_then(function_parameter_type)
+            .is_some_and(|type_| !relation_may_carry_ownership(&requirement.input, type_))
+        {
+            continue;
+        }
+        let Some(expected_result) = instantiate_callback_requirement(
+            &requirement.input,
+            &requirement.result,
+            &callback_input,
+        ) else {
+            analysis.report(
+                "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+                "This callback does not consume the authorities required by the higher-order function.",
+                analysis.module.arena.expression_span(callback),
+            );
+            continue;
+        };
+        if callback_parameter.is_none() {
+            analysis.report(
+                "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+                "The callback has no checked ownership contract.",
+                analysis.module.arena.expression_span(callback),
+            );
+            continue;
+        }
+        let substituted = substitute_parameters(
+            callback_result,
+            callback_parameter,
+            &callback_input,
+            callback_module,
+        );
+        let substituted = resolve_pending(
+            substituted,
+            analysis.module.arena.expression_span(callback),
+            analysis,
+        );
+        if substituted != expected_result {
+            analysis.report(
+                "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+                "This callback does not return each consumed authority in the required result alternative.",
+                analysis.module.arena.expression_span(callback),
+            );
+        }
+    }
+}
+
+fn instantiate_callback_requirement(
+    input: &Produced,
+    result: &Produced,
+    actual: &Produced,
+) -> Option<Produced> {
+    let mut result = result.clone();
+    if match_callback_requirement_input(input, actual, &mut result) {
+        Some(result)
+    } else {
+        None
+    }
+}
+
+fn match_callback_requirement_input(
+    expected: &Produced,
+    actual: &Produced,
+    result: &mut Produced,
+) -> bool {
+    match (expected, actual) {
+        (Produced::None, _) => true,
+        (Produced::Parameter { source, .. }, actual)
+            if obligation(expected) != Obligation::None
+                && obligation(actual) != Obligation::None =>
+        {
+            *result = substitute_parameter_source(result.clone(), *source, actual);
+            true
+        }
+        (Produced::StoreParameter { source, .. }, actual)
+            if obligation(actual) != Obligation::None =>
+        {
+            *result = substitute_parameter_source(result.clone(), *source, actual);
+            true
+        }
+        (Produced::Sequence(expected), Produced::Sequence(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().zip(actual).all(|(expected, actual)| {
+                    match_callback_requirement_input(expected, actual, result)
+                })
+        }
+        (Produced::Shape(expected), Produced::Shape(actual)) => {
+            expected.iter().all(|(name, expected)| {
+                actual.get(name).is_some_and(|actual| {
+                    match_callback_requirement_input(expected, actual, result)
+                })
+            })
+        }
+        (Produced::Variant(expected), Produced::Variant(actual)) => {
+            match_callback_requirement_input(expected, actual, result)
+        }
+        _ => parameter_accepts_ownership(expected, actual),
+    }
+}
+
+fn function_parameter_type(type_: &Type) -> Option<&Type> {
+    match type_ {
+        Type::Forall { body, .. } => function_parameter_type(body),
+        Type::Function { parameter, .. } => Some(parameter),
+        _ => None,
+    }
+}
+
+fn relation_may_carry_ownership(produced: &Produced, type_: &Type) -> bool {
+    match produced {
+        Produced::None | Produced::SharedStore | Produced::EmptyStore | Produced::Borrow(_) => {
+            false
+        }
+        Produced::Sequence(values) => values.iter().enumerate().any(|(index, value)| {
+            let field = match type_ {
+                Type::Record(fields) => fields
+                    .iter()
+                    .find(|(name, _)| name == &index.to_string())
+                    .map(|(_, type_)| type_),
+                _ => None,
+            };
+            field.map_or_else(
+                || demands_ownership(value),
+                |type_| relation_may_carry_ownership(value, type_),
+            )
+        }),
+        Produced::Shape(values) => values.iter().any(|(name, value)| {
+            let field = match type_ {
+                Type::Record(fields) => fields
+                    .iter()
+                    .find(|(field, _)| field == name)
+                    .map(|(_, type_)| type_),
+                _ => None,
+            };
+            field.map_or_else(
+                || demands_ownership(value),
+                |type_| relation_may_carry_ownership(value, type_),
+            )
+        }),
+        Produced::Many(values) => values
+            .iter()
+            .any(|value| relation_may_carry_ownership(value, type_)),
+        Produced::Variant(value) => relation_may_carry_ownership(value, type_),
+        Produced::Choice(cases) => cases
+            .values()
+            .any(|value| relation_may_carry_ownership(value, type_)),
+        _ => type_may_carry_ownership(type_),
+    }
+}
+
+fn callback_argument_expression(
+    parameter: PatternId,
+    argument: ExpressionId,
+    expected: PatternId,
+    parameter_module: &Module,
+    argument_module: &Module,
+) -> Option<ExpressionId> {
+    if parameter == expected {
+        return Some(argument);
+    }
+    match (
+        &parameter_module.arena.patterns[parameter.0 as usize],
+        &argument_module.arena.expressions[argument.0 as usize],
+    ) {
+        (
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. },
+            Expression::Tuple {
+                elements: values, ..
+            },
+        ) => elements
+            .iter()
+            .zip(values)
+            .find_map(|(parameter, argument)| {
+                callback_argument_expression(
+                    *parameter,
+                    *argument,
+                    expected,
+                    parameter_module,
+                    argument_module,
+                )
+            }),
+        (Pattern::Shape { fields, .. }, Expression::Shape { members, .. }) => {
+            fields.iter().find_map(|field| {
+                let value = members.iter().find_map(|member| match member {
+                    ShapeMember::Field { name, value, .. } if name == &field.name => Some(*value),
+                    _ => None,
+                })?;
+                callback_argument_expression(
+                    field.pattern,
+                    value,
+                    expected,
+                    parameter_module,
+                    argument_module,
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
+fn expression_at_path(
+    mut expression: ExpressionId,
+    path: &[String],
+    module: &Module,
+) -> Option<ExpressionId> {
+    for expected in path {
+        let selected = match &module.arena.expressions[expression.0 as usize] {
+            Expression::Shape { members, .. } => members.iter().find_map(|member| match member {
+                ShapeMember::Field { name, value, .. } if name == expected => Some(*value),
+                _ => None,
+            }),
+            Expression::Tuple { elements, .. } => expected
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| elements.get(index).copied()),
+            Expression::Array { elements, .. } => expected
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| elements.get(index).map(|element| element.value)),
+            _ => None,
+        };
+        expression = selected?;
+    }
+    Some(expression)
 }
 
 fn demands_ownership(input: &Produced) -> bool {
@@ -2366,13 +2796,25 @@ fn function_contract(
         parameter, result, ..
     } = produced
     {
-        let input = analysis
+        let contract = analysis
             .contracts
             .values()
             .find(|contract| contract.parameter == *parameter && contract.result == **result)
+            .cloned();
+        let input = contract
+            .as_ref()
             .map(|contract| contract.input.clone())
             .unwrap_or(Produced::None);
-        return (Some(*parameter), input, (**result).clone(), None);
+        let requirements = contract
+            .map(|contract| contract.callback_requirements)
+            .unwrap_or_default();
+        return (
+            Some(*parameter),
+            input,
+            (**result).clone(),
+            requirements,
+            None,
+        );
     }
     match analysis.module.arena.expressions[expression.0 as usize] {
         Expression::Lambda {
@@ -2389,6 +2831,11 @@ fn function_contract(
                 .get(&expression)
                 .cloned()
                 .unwrap_or(Produced::None),
+            analysis
+                .contracts
+                .get(&body)
+                .map(|contract| contract.callback_requirements.clone())
+                .unwrap_or_default(),
             None,
         ),
         Expression::Rec { lambda, .. } => {
@@ -2407,9 +2854,14 @@ fn function_contract(
                         .get(&lambda)
                         .cloned()
                         .unwrap_or(Produced::None),
+                    analysis
+                        .contracts
+                        .get(&body)
+                        .map(|contract| contract.callback_requirements.clone())
+                        .unwrap_or_default(),
                     None,
                 ),
-                _ => (None, Produced::None, Produced::None, None),
+                _ => (None, Produced::None, Produced::None, Vec::new(), None),
             }
         }
         Expression::Var { ref name, .. } => {
@@ -2419,20 +2871,22 @@ fn function_contract(
                     binding.parameter,
                     binding.input.clone(),
                     binding.result.clone(),
+                    binding.callback_requirements.clone(),
                     binding.contract_module.clone(),
                 )
             });
-            if matches!(local, Some((Some(_), _, _, _))) {
+            if matches!(local, Some((Some(_), _, _, _, _))) {
                 return local.expect("matched local ownership contract");
             }
             imported_function_contract(expression, analysis)
                 .or(local)
-                .unwrap_or((None, Produced::None, Produced::None, None))
+                .unwrap_or((None, Produced::None, Produced::None, Vec::new(), None))
         }
         _ => imported_function_contract(expression, analysis).unwrap_or((
             None,
             Produced::None,
             Produced::None,
+            Vec::new(),
             None,
         )),
     }
@@ -2508,6 +2962,7 @@ fn imported_function_contract(
         Some(contract.parameter),
         contract.input,
         contract.result,
+        contract.callback_requirements,
         Some(defining_module),
     ))
 }
@@ -2534,11 +2989,25 @@ fn substitute_parameters(
             }),
         (
             Pattern::Constructor {
+                name: _,
                 payload: Some(payload),
                 ..
             },
             Produced::Variant(value),
         ) => substitute_parameters(produced, Some(*payload), value, module),
+        (
+            Pattern::Constructor {
+                name,
+                payload: Some(payload),
+                ..
+            },
+            Produced::Choice(cases),
+        ) => cases.get(name).map_or(produced.clone(), |value| {
+            let Produced::Variant(value) = value else {
+                return produced.clone();
+            };
+            substitute_parameters(produced, Some(*payload), value, module)
+        }),
         (Pattern::Shape { fields, .. }, Produced::Shape(values)) => {
             fields.iter().fold(produced, |current, field| {
                 values.get(&field.name).map_or(current.clone(), |value| {
@@ -2629,6 +3098,15 @@ fn substitute_parameter_source(
                 .map(|(name, value)| (name, substitute_parameter_source(value, source, argument)))
                 .collect(),
         ),
+        Produced::PendingCallback {
+            source: found,
+            path,
+            input,
+        } => Produced::PendingCallback {
+            source: found,
+            path,
+            input: Box::new(substitute_parameter_source(*input, source, argument)),
+        },
         Produced::RegionWitness {
             left,
             right,
@@ -2858,6 +3336,15 @@ fn substitute_element_source(
                 })
                 .collect(),
         ),
+        Produced::PendingCallback {
+            source: found,
+            path,
+            input,
+        } => Produced::PendingCallback {
+            source: found,
+            path,
+            input: Box::new(substitute_element_source(*input, source, argument_elements)),
+        },
         Produced::Region {
             qualifier: _,
             root: Some(found),
@@ -3179,15 +3666,51 @@ fn closure_result_type<'a>(body: ExpressionId, analysis: &'a Analysis<'_>) -> Op
 }
 
 fn recursive_owned_result(input: &Produced, result_type: Option<&Type>) -> Option<Produced> {
-    if !matches!(result_type, Some(Type::Array(_))) {
+    if !matches!(result_type, Some(Type::Array(_) | Type::Region(_))) {
         return None;
     }
     let mut candidates = Vec::new();
     recursive_owned_candidates(input, &mut candidates);
     if candidates.len() == 1 {
-        candidates.pop()
+        let candidate = candidates.pop()?;
+        if let Some(Type::Region(element)) = result_type {
+            let region = region_authority(candidate);
+            if type_may_carry_ownership(element) {
+                Some(region)
+            } else {
+                Some(clear_region_elements(region))
+            }
+        } else {
+            Some(candidate)
+        }
     } else {
         None
+    }
+}
+
+fn normalize_unrestricted_region_result(result: Produced, result_type: Option<&Type>) -> Produced {
+    match result_type {
+        Some(Type::Region(element)) if !type_may_carry_ownership(element) => {
+            clear_region_elements(region_authority(result))
+        }
+        _ => result,
+    }
+}
+
+fn clear_region_elements(produced: Produced) -> Produced {
+    match produced {
+        Produced::Region {
+            qualifier,
+            root,
+            splits,
+            ..
+        } => Produced::Region {
+            qualifier,
+            root,
+            splits,
+            elements: Box::new(Produced::None),
+        },
+        produced => produced,
     }
 }
 
@@ -3195,7 +3718,7 @@ fn recursive_owned_candidates(produced: &Produced, candidates: &mut Vec<Produced
     match produced {
         Produced::StoreParameter { .. }
         | Produced::Parameter {
-            qualifier: Qualifier::Affine,
+            qualifier: Qualifier::Linear | Qualifier::Affine,
             ..
         } => candidates.push(produced.clone()),
         Produced::Sequence(values) | Produced::Many(values) => {
@@ -3210,6 +3733,13 @@ fn recursive_owned_candidates(produced: &Produced, candidates: &mut Vec<Produced
         }
         Produced::Variant(value) => recursive_owned_candidates(value, candidates),
         _ => {}
+    }
+}
+
+fn recursive_result_matches(expected: &Produced, result: &Produced) -> bool {
+    match (region_proof_part(expected), region_proof_part(result)) {
+        (Some(expected), Some(result)) => expected == result,
+        _ => expected == result,
     }
 }
 
@@ -3347,6 +3877,7 @@ fn obligation(produced: &Produced) -> Obligation {
         // A pending join still carries its live part authorities.
         Produced::PendingJoin { .. } => Obligation::Linear,
         Produced::PendingReassociate { .. } => Obligation::Linear,
+        Produced::PendingCallback { input, .. } => obligation(input),
         // A pending freeze already consumed its authority; only the deferred
         // full-root proof remains, discharged where substitution lands.
         Produced::PendingFreeze { .. } => Obligation::None,
@@ -3403,6 +3934,7 @@ fn contains_borrow(produced: &Produced) -> bool {
         | Produced::PendingJoin { .. }
         | Produced::PendingFreeze { .. }
         | Produced::PendingReassociate { .. } => false,
+        Produced::PendingCallback { input, .. } => contains_borrow(input),
         Produced::Closure {
             captures, result, ..
         } => contains_borrow(captures) || contains_borrow(result),
@@ -3411,6 +3943,53 @@ fn contains_borrow(produced: &Produced) -> bool {
         Produced::Shape(fields) => fields.values().any(contains_borrow),
         Produced::Variant(payload) => contains_borrow(payload),
         Produced::Choice(cases) => cases.values().any(contains_borrow),
+    }
+}
+
+fn contains_pending_callback(produced: &Produced) -> bool {
+    match produced {
+        Produced::PendingCallback { .. } => true,
+        Produced::Borrow(value)
+        | Produced::Store(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value } => contains_pending_callback(value),
+        Produced::Closure {
+            captures, result, ..
+        } => contains_pending_callback(captures) || contains_pending_callback(result),
+        Produced::Many(values) | Produced::Sequence(values) => {
+            values.iter().any(contains_pending_callback)
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().any(contains_pending_callback)
+        }
+        Produced::Region { elements, .. } => contains_pending_callback(elements),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => {
+            contains_pending_callback(left)
+                || contains_pending_callback(right)
+                || contains_pending_callback(parent)
+        }
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            contains_pending_callback(witness)
+                || contains_pending_callback(left)
+                || contains_pending_callback(right)
+        }
+        Produced::PendingReassociate { outer, inner, .. } => {
+            contains_pending_callback(outer) || contains_pending_callback(inner)
+        }
+        Produced::None
+        | Produced::SharedStore
+        | Produced::EmptyStore
+        | Produced::Leaf(_)
+        | Produced::Parameter { .. }
+        | Produced::StoreParameter { .. } => false,
     }
 }
 
@@ -3440,6 +4019,7 @@ fn contains_shared(produced: &Produced) -> bool {
         Produced::PendingReassociate { outer, inner, .. } => {
             contains_shared(outer) || contains_shared(inner)
         }
+        Produced::PendingCallback { input, .. } => contains_shared(input),
         Produced::None
         | Produced::EmptyStore
         | Produced::Leaf(_)
@@ -3486,6 +4066,7 @@ fn contains_empty_store(produced: &Produced) -> bool {
         Produced::PendingReassociate { outer, inner, .. } => {
             contains_empty_store(outer) || contains_empty_store(inner)
         }
+        Produced::PendingCallback { input, .. } => contains_empty_store(input),
         Produced::None
         | Produced::SharedStore
         | Produced::Leaf(_)
@@ -3534,6 +4115,7 @@ fn contains_concrete_store(produced: &Produced) -> bool {
         Produced::PendingReassociate { outer, inner, .. } => {
             contains_concrete_store(outer) || contains_concrete_store(inner)
         }
+        Produced::PendingCallback { input, .. } => contains_concrete_store(input),
         Produced::None
         | Produced::SharedStore
         | Produced::EmptyStore
@@ -3694,8 +4276,23 @@ fn join_alternatives(values: Vec<Produced>) -> Produced {
     }
     if values
         .iter()
-        .all(|value| matches!(value, Produced::Region { .. }))
+        .any(|value| matches!(value, Produced::Region { .. }))
+        && values.iter().all(|value| {
+            matches!(
+                value,
+                Produced::Region { .. }
+                    | Produced::Parameter {
+                        qualifier: Qualifier::Linear | Qualifier::Affine,
+                        ..
+                    }
+            )
+        })
     {
+        let values = values
+            .iter()
+            .cloned()
+            .map(region_authority)
+            .collect::<Vec<_>>();
         let authority = region_proof_part(&values[0]);
         if authority.is_some()
             && values
@@ -3796,6 +4393,183 @@ fn choice_for_pattern(target: &Produced, pattern: PatternId, module: &Module) ->
     match &module.arena.patterns[pattern.0 as usize] {
         Pattern::Constructor { name, .. } => cases.get(name).cloned().unwrap_or(Produced::None),
         _ => join(cases.values().cloned()),
+    }
+}
+
+fn materialize_callback_case(
+    target: Produced,
+    arms: &[crate::ast::Arm],
+    span: Span,
+    analysis: &mut Analysis<'_>,
+) -> Produced {
+    let Produced::PendingCallback {
+        source,
+        path,
+        input,
+    } = target
+    else {
+        return target;
+    };
+    let mut authorities = Vec::new();
+    callback_authority_leaves(&input, &mut authorities);
+    let mut cases = BTreeMap::new();
+    let mut valid = !authorities.is_empty();
+    for arm in arms {
+        let Pattern::Constructor { name, payload, .. } =
+            &analysis.module.arena.patterns[arm.pattern.0 as usize]
+        else {
+            valid = false;
+            continue;
+        };
+        let mut next = 0;
+        let payload = payload.map_or(Produced::None, |payload| {
+            callback_pattern_result(
+                payload,
+                &authorities,
+                &mut next,
+                analysis.module,
+                &mut valid,
+            )
+        });
+        if next != authorities.len() {
+            valid = false;
+        }
+        cases.insert(name.clone(), Produced::Variant(Box::new(payload)));
+    }
+    if !valid || cases.len() != arms.len() {
+        analysis.report(
+            "BLOT_HIGHER_ORDER_OWNERSHIP_RELATION",
+            "Every named callback result arm must bind each consumed authority once with `!` or `?`, in structural order.",
+            span,
+        );
+        return Produced::None;
+    }
+    let result = Produced::Choice(cases);
+    analysis.callback_requirements.push(CallbackRequirement {
+        source,
+        path,
+        input: (*input).clone(),
+        result: result.clone(),
+    });
+    result
+}
+
+fn materialize_callback_binding(
+    target: Produced,
+    pattern: PatternId,
+    span: Span,
+    analysis: &mut Analysis<'_>,
+) -> Produced {
+    let Produced::PendingCallback {
+        source,
+        path,
+        input,
+    } = target
+    else {
+        return target;
+    };
+    let mut authorities = Vec::new();
+    callback_authority_leaves(&input, &mut authorities);
+    let mut next = 0;
+    let mut valid = !authorities.is_empty();
+    let result = callback_pattern_result(
+        pattern,
+        &authorities,
+        &mut next,
+        analysis.module,
+        &mut valid,
+    );
+    if !valid || next != authorities.len() {
+        analysis.report(
+            "BLOT_HIGHER_ORDER_OWNERSHIP_RELATION",
+            "An owned callback result binding must receive each consumed authority once with `!` or `?`, in structural order.",
+            span,
+        );
+        return Produced::None;
+    }
+    analysis.callback_requirements.push(CallbackRequirement {
+        source,
+        path,
+        input: (*input).clone(),
+        result: result.clone(),
+    });
+    result
+}
+
+fn callback_authority_leaves(produced: &Produced, leaves: &mut Vec<Produced>) {
+    match produced {
+        Produced::Sequence(values) | Produced::Many(values) => {
+            for value in values {
+                callback_authority_leaves(value, leaves);
+            }
+        }
+        Produced::Shape(fields) => {
+            for value in fields.values() {
+                callback_authority_leaves(value, leaves);
+            }
+        }
+        Produced::Variant(value) => callback_authority_leaves(value, leaves),
+        value if obligation(value) != Obligation::None => leaves.push(value.clone()),
+        _ => {}
+    }
+}
+
+fn callback_pattern_result(
+    pattern: PatternId,
+    authorities: &[Produced],
+    next: &mut usize,
+    module: &Module,
+    valid: &mut bool,
+) -> Produced {
+    match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name { qualifier, .. }
+            if matches!(qualifier, Qualifier::Linear | Qualifier::Affine) =>
+        {
+            let Some(authority) = authorities.get(*next).cloned() else {
+                *valid = false;
+                return Produced::None;
+            };
+            let accepts = match qualifier {
+                Qualifier::Linear => obligation(&authority) == Obligation::Linear,
+                Qualifier::Affine => obligation(&authority) != Obligation::None,
+                _ => false,
+            };
+            if !accepts {
+                *valid = false;
+            }
+            *next += 1;
+            authority
+        }
+        Pattern::Name { .. }
+        | Pattern::Wildcard { .. }
+        | Pattern::Pin { .. }
+        | Pattern::Int { .. }
+        | Pattern::Float { .. }
+        | Pattern::Text { .. }
+        | Pattern::Unit { .. } => Produced::None,
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => Produced::Sequence(
+            elements
+                .iter()
+                .map(|pattern| callback_pattern_result(*pattern, authorities, next, module, valid))
+                .collect(),
+        ),
+        Pattern::Constructor { name, payload, .. } => Produced::Choice(BTreeMap::from([(
+            name.clone(),
+            Produced::Variant(Box::new(payload.map_or(Produced::None, |payload| {
+                callback_pattern_result(payload, authorities, next, module, valid)
+            }))),
+        )])),
+        Pattern::Shape { fields, .. } => Produced::Shape(
+            fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.name.clone(),
+                        callback_pattern_result(field.pattern, authorities, next, module, valid),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 

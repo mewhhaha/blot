@@ -1256,7 +1256,17 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
         declaration.name === "rebinding" &&
         tokenOf(required(declaration, "arrow")).text === ":="
       ) {
-        const name = tokenOf(required(declaration, "name")).text;
+        const pattern = lowerPattern(
+          asRule(field(declaration, "pattern"), "pattern"),
+        );
+        if (pattern.tag !== "name" || pattern.qualifier !== "none") {
+          fail(
+            "BLOT_BAD_REBINDING_TARGET",
+            "`:=` requires one unqualified name. Use `let` to bind a pattern.",
+            declaration.span,
+          );
+        }
+        const name = pattern.name;
         if (!shadowed.has(name) && !rebound.includes(name)) rebound.push(name);
         continue;
       }
@@ -1264,7 +1274,10 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
         declaration.name === "rebinding" &&
         tokenOf(required(declaration, "arrow")).text === "<-"
       ) {
-        shadowed.add(tokenOf(required(declaration, "name")).text);
+        const pattern = lowerPattern(
+          asRule(field(declaration, "pattern"), "pattern"),
+        );
+        for (const name of patternNames(pattern)) shadowed.add(name);
         continue;
       }
       // Not into a nested `for`. Its own desugaring already threads what it
@@ -1736,10 +1749,17 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     };
   }
   if (rule.name === "rebinding") {
-    const name = tokenOf(required(rule, "name")).text;
+    const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
     const value = lowerValue(asRule(field(rule, "value"), "value"), context);
     if (tokenOf(required(rule, "arrow")).text === ":=") {
-      return { tag: "shadow", name, value, span: rule.span };
+      if (pattern.tag !== "name" || pattern.qualifier !== "none") {
+        fail(
+          "BLOT_BAD_REBINDING_TARGET",
+          "`:=` requires one unqualified name. Use `let` to bind a pattern.",
+          rule.span,
+        );
+      }
+      return { tag: "shadow", name: pattern.name, value, span: rule.span };
     }
     // The effect declaration is the forcing boundary. Type-directed
     // elaboration applies a nullary effect value once and otherwise sequences
@@ -1748,7 +1768,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       tag: "binding",
       kind: "effect",
       tags: [],
-      pattern: { tag: "name", name, qualifier: "none", span: rule.span },
+      pattern,
       value,
       span: rule.span,
     };
@@ -1758,7 +1778,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       tag: "binding",
       kind: "effect",
       tags: [],
-      pattern: { tag: "name", name: "_", qualifier: "none", span: rule.span },
+      pattern: { tag: "wildcard", span: rule.span },
       value: lowerValue(asRule(field(rule, "value"), "value"), context),
       span: rule.span,
     };

@@ -629,15 +629,19 @@ function preferDiscardSequencing(
   const bindings: ConcreteRule[] = [];
   collectRules(concrete, "rebinding", bindings);
   const discardedNames = bindings.flatMap((binding) => {
-    const name = directToken(binding, "_");
+    const pattern = directRule(binding, "binding_pattern");
     const arrow = directToken(binding, "<-");
-    if (name === null || arrow === null || name.span.end > arrow.span.start) {
+    if (
+      pattern === null || arrow === null ||
+      source.slice(pattern.span.start, pattern.span.end).trim() !== "_" ||
+      pattern.span.end > arrow.span.start
+    ) {
       return [];
     }
-    if (!/^[ \t]*$/.test(source.slice(name.span.end, arrow.span.start))) {
+    if (!/^[ \t]*$/.test(source.slice(pattern.span.end, arrow.span.start))) {
       return [];
     }
-    return [{ start: name.span.start, end: arrow.span.start }];
+    return [{ start: pattern.span.start, end: arrow.span.start }];
   }).sort((left, right) => right.start - left.start);
 
   let preferred = source;

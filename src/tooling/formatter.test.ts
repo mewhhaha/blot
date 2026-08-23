@@ -432,6 +432,13 @@ return ()
   assertEquals(await formatSource(explicit), { ok: true, source: sugared });
 });
 
+Deno.test("formatting preserves sequencing patterns", async () => {
+  const source = `(left, right) <- read_pair ()
+return left + right
+`;
+  assertEquals(await formatSource(source), { ok: true, source });
+});
+
 Deno.test("formatting the accepted corpus is idempotent", async () => {
   const pendingDirectories = ["examples", "src/prelude", "case-studies"];
   const sources: string[] = [];

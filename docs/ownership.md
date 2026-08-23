@@ -135,6 +135,14 @@ summary is instantiated with the caller's actual argument at that path, so
 unrestricted argument. The same substitution continues through returned
 closures.
 
+A generic function may also infer a finite requirement for a function-valued
+parameter. It must hand ownership to that callback explicitly and immediately
+expose the result with a qualified binding or named `case`; those binders state
+where every successor authority returns. A caller may pass a callback only when
+its checked input/result contract satisfies every recorded alternative. Equal
+types, a familiar callback name, or later specialization are not ownership
+evidence.
+
 ## Aggregates carry obligations
 
 Records, tuples, arrays, and constructor payloads inherit the obligations of
