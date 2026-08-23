@@ -6,19 +6,12 @@
 
 module with init
 
-// The header only adds precedence; `open` is what brings the names in. `+` is
-// `Num.add` either way — nothing about it is built in.
-operators {
-  infixl 65 (++) = Text.append;
-  infix 40 (===) = Eq.eq;
-}
-
 open import "blot:prelude"
 
 // --- types are values -------------------------------------------------------
 
 const Small = 1 | 2 | 3 | #Woop | "hello"
-const Message = #Ready | #Progress I32 | #Failed Str
+const Message = #Ready | #Progress I32 | #Failed Text
 const Counter = struct { .current = I32; .limit = I32; }
 
 // --- functions --------------------------------------------------------------
@@ -29,7 +22,7 @@ let increment = fn value => value + 1
 // `fn` opens a lambda, so a curried chain needs no parentheses; the idiomatic
 // multi-argument function takes one shape instead.
 let apply_twice = fn f => fn x => f (f x)
-let distance = fn (from, to) => Num.abs (to - from)
+let distance = fn (from, to) => Int.abs (to - from)
 
 // `rec` makes the binding's own name visible inside the lambda.
 const rec factorial =
@@ -87,7 +80,7 @@ for ever:
 
     // --- effects ----------------------------------------------------------------
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 
 let report = fn () => do:
   <- Console.write "one"
@@ -98,7 +91,7 @@ let joining =
   {
     .write = fn (message, ?resume) => do:
       rest <- resume ()
-      return message ++ rest
+      return message <> rest
     ;
     .return = fn value => value;
   }
@@ -154,8 +147,8 @@ return {
   // A prefixed operand needs parentheses: a trailing operator in a flat chain
   // reads as infix, which is what keeps expressions recursion-free.
   .owned = consume (!token);
-  .compared = 20 + 22 === 42;
-  .appended = "a" ++ "b" ++ "c";
-  .piped = 20 |> Num.add 2 |> double;
+  .compared = 20 + 22 == 42;
+  .appended = "a" <> "b" <> "c";
+  .piped = 20 |> Int.add 2 |> double;
   .comptime = 20 * 2 + 1;
 }

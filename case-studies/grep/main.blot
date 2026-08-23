@@ -2,18 +2,18 @@ open import "blot:prelude"
 
 const Arguments =
   @effect.host {
-    .pattern = Unit -> Str;
+    .pattern = Unit -> Text;
   }
 
 const File =
   @effect.host {
     .line_count = Unit -> Int;
-    .line = Int -> Str;
+    .line = Int -> Text;
   }
 
 const Console =
   @effect.host {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 let count = 0

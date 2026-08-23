@@ -160,11 +160,11 @@ inside an imported module names _that_ module, not the entry file. `describe`
 renders a range through the printer, so `sig n = Nat; let n = -1;` names the
 bound the value fell outside of (`0..`) rather than the word "an integer", which
 was true of every range at once. The printer spells the unbounded text range
-`Str`, the name a `sig` accepts; it used to print `Text`, which is the prelude's
-_namespace record_, so copying the compiler's own output into a `sig` failed
-with `BLOT_SIG_NOT_A_TYPE`. Still open: one error per run, the file-wide span
-fallback, no `blot fmt` (`` unknown command `fmt` ``), and 26 `unsupported()`
-sites with no user-readable list.
+`Text`, the name a `sig` accepts; it used to print `Text`, which is the
+prelude's _namespace record_, so copying the compiler's own output into a `sig`
+failed with `BLOT_SIG_NOT_A_TYPE`. Still open: one error per run, the file-wide
+span fallback, no `blot fmt` (`` unknown command `fmt` ``), and 26
+`unsupported()` sites with no user-readable list.
 
 **The standard library ends early.** The complete text surface is
 `@text.concat`, `@text.len`, `@text.cmp`, `@text.contains`, `@text.of_int` —
@@ -315,9 +315,9 @@ who tried to write real programs in blot.
    it through `src/check/print.ts`'s renderer: `-1 is outside 0..`. Same for the
    `fun`/`array` arms that produce "a function is not a function".
 5. **Print the name that works.** `src/check/print.ts:364,366` prints `Text`;
-   the prelude and `LANGUAGE.md` §10.1 both say `Str`, and `Text` is the
+   the prelude and `LANGUAGE.md` §10.1 both say `Text`, and `Text` is the
    _namespace record_, so copying the compiler's own output into a `sig` fails
-   with `BLOT_SIG_NOT_A_TYPE`. Print `Str`, and make that diagnostic say what
+   with `BLOT_SIG_NOT_A_TYPE`. Print `Text`, and make that diagnostic say what
    the expression did evaluate to.
 6. **The refusal table.** Give `unsupported()` a second parameter — the
    alternative — and generate a table in `docs/backend.md` from the 26 call
@@ -670,10 +670,10 @@ refusal blames the user for a missing handler when the user did exactly what
 own line that an effect's identity is its own, not its spelling.
 
 **Work.** Bind a small set of well-known operation shapes selected by CLI flag
-rather than by effect _name_: `Unit -> Str` from stdin, `Str -> Unit` to stdout,
-`Unit -> Int`/`Int -> Str` over a file argument. `checkFile` already returns the
-grants and the module row, so the runner knows what to bind. Until that exists,
-the message must name the mechanism:
+rather than by effect _name_: `Unit -> Text` from stdin, `Text -> Unit` to
+stdout, `Unit -> Int`/`Int -> Text` over a file argument. `checkFile` already
+returns the grants and the module row, so the runner knows what to bind. Until
+that exists, the message must name the mechanism:
 ``BLOT_NO_HOST_IMPLEMENTATION: `Output.write` is a host effect; `blot eval`
 only implements `Console.write`.``
 
@@ -812,13 +812,13 @@ declaration forms; no type namespace. If a feature seems to need one it belongs
 in the comptime evaluator.
 
 **No implicit prelude scope.** `open import "blot:prelude"` stays on the first
-line of every program. A default fixity naming a binding by string is the
-mechanism, and it is not going to be hidden.
+line of every program. The fixed operator table names ordinary bindings by
+string, and those bindings are not going to be hidden.
 
 **No first-class equi-recursive type values.** The inference graph itself may be
 cyclic: recursive functions and recursive flows terminate through the visited
 ordered-constraint relation. That implementation fact is not a source
-constructor. `const Json = #Null | #Num Int | #Arr [Json];` remains refused. A
+constructor. `const Json = #Null | #Int Int | #Arr [Json];` remains refused. A
 recursive datatype can be structural but never _named_, so it cannot appear in a
 `sig` or cross the concrete first-order Runtime-HIR boundary. Adding it would be
 a separate closed-type design, not a reason to complicate open inference.

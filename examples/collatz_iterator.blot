@@ -14,8 +14,8 @@ const collatz = fn start => {
           return Some (value, #Done)
         else:
           let next = do:
-            if Num.rem value 2 == 0:
-              return Num.div value 2
+            if Int.rem value 2 == 0:
+              return Int.div value 2
             else:
               return value * 3 + 1
           return Some (value, #Running next)

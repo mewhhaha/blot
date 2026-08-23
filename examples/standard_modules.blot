@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const arrays = import "blot:array"
+const sorting = import "blot:sort"
+const iteration = import "blot:iter"
+
+let values = arrays.copy [3, 1, 2]
+let _sort_api = sorting.merge
+let _iter_api = iteration.items
+
+return arrays.length values

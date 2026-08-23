@@ -116,7 +116,7 @@ against, so a checked read is accepted and a constant past the end is a compile
 error.
 
 Nothing is recognised by name: a comparison and a junction are both identified
-by _tabulating_ them, so a module that shadows `Eq` or `Logic.and` with
+by _tabulating_ them, so a module that shadows `Int` or `Logic.and` with
 something that is not equality or conjunction proves nothing rather than
 something false.
 
@@ -409,12 +409,12 @@ const fixed_config = @include "./config.json" as_const_json
 The function receives `{ .specifier; .path; .text; }`. Included files are
 tracked compiler dependencies, and the result is compile-time-only: bind it with
 `const`, then specialize whatever runtime value the program needs. `as_json`
-widens JSON leaves to `Str`, `Int`, `Bool`, and `F64` while preserving object
+widens JSON leaves to `Text`, `Int`, `Bool`, and `F64` while preserving object
 fields. `as_const_json` retains literal compile-time values instead.
 
-That line is what makes `+` work: the default fixity for `+` names `Num.add`,
-and a fixity whose target is not in scope is useless. A module that skips it
-does not have `+`.
+That line is what makes `+` work: the fixed operator table names `Int.add`, and
+an operator whose target is not in scope is useless. A module that skips it does
+not have `+`.
 
 A module's input is checked, and nothing separately declares it. The demand is
 whatever its body reaches for: the record an importer hands over must carry
@@ -429,7 +429,7 @@ ordinary compile-time values:
 
 ```blot
 const I32 = I 32
-const Message = #Ready | #Progress I32 | #Failed Str
+const Message = #Ready | #Progress I32 | #Failed Text
 const Point = struct { .x = I32; .y = I32; }
 ```
 
@@ -447,7 +447,7 @@ let x = Point.x p                              // and so is p.0
 The members are invisible to typing — the bridge, equality, and inhabitation see
 straight through — so `sig p = Point;` constrains `p` to the tuple and nothing
 about the namespace reaches the lattice. The storage is a tuple rather than an
-array because a tuple keeps one type per slot; `[I32, Str]` collapses to "an
+array because a tuple keeps one type per slot; `[I32, Text]` collapses to "an
 array of int-or-text" the moment inference looks at it, and storage that is
 imprecise is not predictable storage.
 
@@ -485,7 +485,7 @@ instead, which is what derivation wants anyway.
 `struct` is prelude source — about forty lines over `@shape.*` and
 `@type.attach` — not a compiler builtin. Types are sets, so `|`, `&`, and `\`
 are bound to `Type.union`, `Type.intersect`, and `Type.diff` the same way `+` is
-bound to `Num.add` — at a prelude record, never at a primitive. Because the
+bound to `Int.add` — at a prelude record, never at a primitive. Because the
 binding resolves by name at the use site, a module that defines its own `Type`
 with those three fields rebinds all three operators for itself; structural width
 subtyping is the whole of the dispatch, and there is no coherence rule because
@@ -496,7 +496,7 @@ why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is
-still writable: `sig report = Unit -> Str ~ { Console }` is a closed row and a
+still writable: `sig report = Unit -> Text ~ { Console }` is a closed row and a
 bare `->` is exactly empty. Higher-order signatures may name the rest of a row
 with a signature-local tail such as
 `(a -> b ~ { ..e }) -> a -> b ~ { Console,
@@ -508,7 +508,7 @@ carries.
 it can be stored before it is executed; `let` remains a pure definition:
 
 ```blot
-const Terminal = @effect { .read = Unit -> Str; }
+const Terminal = @effect { .read = Unit -> Text; }
 
 let ask = fn () =>
   let effect = Terminal.read
@@ -517,7 +517,7 @@ let ask = fn () =>
 ```
 
 ```blot
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 
 let report = fn () =>
   <- Console.write "one"
@@ -560,7 +560,7 @@ become typed WebAssembly imports — so blot needs no raw import form, and its r
 is the program's declared interface rather than something left unhandled:
 
 ```blot
-const Console = @effect.host { .write = Str -> Unit; }
+const Console = @effect.host { .write = Text -> Unit; }
 let report = fn () =>
   result <- Console.write "compiled"
   return result

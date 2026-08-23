@@ -249,24 +249,6 @@ pub enum Declaration {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Associativity {
-    Left,
-    Right,
-    None,
-    Prefix,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct Fixity {
-    pub operator: String,
-    pub associativity: Associativity,
-    pub precedence: u32,
-    pub target: Vec<String>,
-    pub span: Span,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AstArena {
     pub expressions: Vec<Expression>,
@@ -320,7 +302,6 @@ impl AstArena {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Module {
     pub parameter: Option<PatternId>,
-    pub fixities: Vec<Fixity>,
     pub declarations: Vec<DeclarationId>,
     pub result: ExpressionId,
     pub result_effects: ResultEffects,
@@ -376,10 +357,6 @@ impl Module {
             declaration_index(*declaration, &format!("module declaration {ordinal}"))?;
         }
         expression_index(self.result, "module result")?;
-        for (ordinal, fixity) in self.fixities.iter().enumerate() {
-            validate_span(fixity.span, &format!("fixity {ordinal}"))?;
-        }
-
         for (index, expression) in self.arena.expressions.iter().enumerate() {
             let location = format!("expression {index}");
             validate_span(
@@ -597,7 +574,6 @@ mod tests {
         let module: Module = serde_json::from_str(
             r#"{
                 "parameter": null,
-                "fixities": [],
                 "declarations": [],
                 "result": 0,
                 "result_effects": "pure",
@@ -621,7 +597,6 @@ mod tests {
         let module: Module = serde_json::from_str(
             r#"{
                 "parameter": null,
-                "fixities": [],
                 "declarations": [],
                 "result": 0,
                 "result_effects": "pure",

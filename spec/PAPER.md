@@ -470,7 +470,7 @@ seal(name, A) = seal(name, B)  iff  A = B
 
 The carrier participates invariantly in identity. Thus `List I32` is the same
 type every time its ordinary compile-time constructor runs, while `List I32` and
-`List Str` are distinct. Choosing the same public name and carrier chooses the
+`List Text` are distinct. Choosing the same public name and carrier chooses the
 same seal even across modules. A future abstraction capability that cannot be
 reconstructed from public inputs would be a separate generative primitive;
 making `seal` itself fresh would invalidate ordinary parameterized nominals.

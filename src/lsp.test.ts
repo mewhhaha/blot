@@ -13,7 +13,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
         textDocument: {
           uri,
           version: 1,
-          text: `return Num.rem 5 2
+          text: `return Int.rem 5 2
 `,
         },
       },
@@ -97,6 +97,6 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
     readonly result: readonly { readonly title: string }[];
   };
   assertEquals(codeAction.result.map((action) => action.title), [
-    "Replace `Num.rem` with `%`",
+    "Replace `Int.rem` with `%`",
   ]);
 });

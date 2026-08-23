@@ -1,5 +1,5 @@
 import { Compiler } from "./compiler.ts";
-import type { Diagnostic } from "./diagnostic.ts";
+import { type Diagnostic, diagnosticCode } from "./diagnostic.ts";
 import type { Span } from "./syntax/ast.ts";
 
 export type TestOutcome =
@@ -42,7 +42,7 @@ export async function testFile(path: string): Promise<readonly TestOutcome[]> {
       name: outcome.name,
       span: outcome.span,
       diagnostic: {
-        code: diagnostic.code,
+        code: diagnosticCode(diagnostic.code),
         message: diagnostic.message,
         span: diagnostic.span,
       },

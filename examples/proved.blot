@@ -6,7 +6,7 @@
 
 open import "blot:prelude"
 
-sig classify = Int -> Str
+sig classify = Int -> Text
 let classify = fn i => case i < 3 of
   #True => case i > 0 of
     #True => case i of
@@ -19,7 +19,7 @@ let classify = fn i => case i < 3 of
 
 // An unbounded domain cannot be covered by arms, so it says so. `@panic` is how
 // an arm records why reaching it is impossible.
-sig only_small = Int -> Str
+sig only_small = Int -> Text
 let only_small = fn n => case n of
   0 => "zero"
   1 => "one"

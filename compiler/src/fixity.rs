@@ -1,6 +1,41 @@
 use std::collections::HashMap;
 
-use crate::ast::{Associativity, AstArena, Expression, ExpressionId, Fixity, Span};
+use crate::ast::{AstArena, Expression, ExpressionId, Span};
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Associativity {
+    Left,
+    Right,
+    None,
+    Prefix,
+}
+
+#[derive(Clone, Copy)]
+enum GeneratedAssociativity {
+    Left,
+    Right,
+    None,
+    Prefix,
+}
+
+struct GeneratedFixity {
+    operator: &'static str,
+    associativity: GeneratedAssociativity,
+    precedence: u32,
+    target: &'static str,
+    control: Option<&'static str>,
+}
+
+include!("fixities_generated.rs");
+
+#[derive(Clone)]
+pub(crate) struct Fixity {
+    operator: String,
+    associativity: Associativity,
+    precedence: u32,
+    target: Vec<String>,
+    control: Option<&'static str>,
+}
 
 pub struct FixityTable {
     infix: HashMap<String, Fixity>,
@@ -14,10 +49,10 @@ pub struct ChainStep {
 }
 
 impl FixityTable {
-    pub fn new(declared: &[Fixity]) -> Self {
+    pub fn new() -> Self {
         let mut infix = HashMap::new();
         let mut prefix = HashMap::new();
-        for fixity in defaults().into_iter().chain(declared.iter().cloned()) {
+        for fixity in defaults() {
             if fixity.associativity == Associativity::Prefix {
                 prefix.insert(fixity.operator.clone(), fixity);
             } else {
@@ -88,6 +123,36 @@ impl FixityTable {
                 start: arena.expression_span(result).start,
                 end: arena.expression_span(right).end,
             };
+            if fixity.control == Some("and") {
+                let fallback = arena.expression(Expression::Tag {
+                    name: "False".to_owned(),
+                    span: step.span,
+                });
+                result = arena.expression(Expression::If {
+                    branches: vec![crate::ast::Branch {
+                        condition: result,
+                        consequence: right,
+                    }],
+                    fallback: Some(fallback),
+                    span,
+                });
+                continue;
+            }
+            if fixity.control == Some("or") {
+                let consequence = arena.expression(Expression::Tag {
+                    name: "True".to_owned(),
+                    span: step.span,
+                });
+                result = arena.expression(Expression::If {
+                    branches: vec![crate::ast::Branch {
+                        condition: result,
+                        consequence,
+                    }],
+                    fallback: Some(right),
+                    span,
+                });
+                continue;
+            }
             let callee = target_expression(fixity, step.span, arena)?;
             let applied_left = arena.expression(Expression::Apply {
                 function: callee,
@@ -143,45 +208,23 @@ pub fn target_expression(
 }
 
 fn defaults() -> Vec<Fixity> {
-    [
-        ("$", Associativity::Right, 10, "Fn.apply"),
-        ("|>", Associativity::Left, 20, "Fn.pipe"),
-        ("~", Associativity::Left, 21, "@type.performs"),
-        ("||", Associativity::Right, 22, "Logic.or"),
-        ("&&", Associativity::Right, 24, "Logic.and"),
-        ("->", Associativity::Right, 25, "@type.arrow"),
-        ("==", Associativity::None, 30, "Eq.eq"),
-        ("!=", Associativity::None, 30, "Eq.ne"),
-        ("<", Associativity::None, 30, "Ord.lt"),
-        ("<=", Associativity::None, 30, "Ord.le"),
-        (">", Associativity::None, 30, "Ord.gt"),
-        (">=", Associativity::None, 30, "Ord.ge"),
-        ("|", Associativity::Left, 40, "Type.union"),
-        ("\\", Associativity::Left, 40, "Type.diff"),
-        ("&", Associativity::Left, 45, "Type.intersect"),
-        ("<+", Associativity::Left, 50, "attach"),
-        ("<>", Associativity::Right, 55, "Text.append"),
-        ("+", Associativity::Left, 60, "Num.add"),
-        ("-", Associativity::Left, 60, "Num.sub"),
-        ("*", Associativity::Left, 70, "Num.mul"),
-        ("/", Associativity::Left, 70, "Num.div"),
-        ("%", Associativity::Left, 70, "Num.rem"),
-        ("-", Associativity::Prefix, 90, "Num.negate"),
-        ("!", Associativity::Prefix, 90, "@linear.own"),
-        ("?", Associativity::Prefix, 90, "@linear.maybe"),
-        ("&", Associativity::Prefix, 90, "@linear.borrow"),
-    ]
-    .into_iter()
-    .map(|(operator, associativity, precedence, target)| Fixity {
-        operator: operator.to_owned(),
-        associativity,
-        precedence,
-        target: if target.starts_with('@') {
-            vec![target.to_owned()]
-        } else {
-            target.split('.').map(str::to_owned).collect()
-        },
-        span: Span { start: 0, end: 0 },
-    })
-    .collect()
+    GENERATED_FIXITIES
+        .iter()
+        .map(|generated| Fixity {
+            operator: generated.operator.to_owned(),
+            associativity: match generated.associativity {
+                GeneratedAssociativity::Left => Associativity::Left,
+                GeneratedAssociativity::Right => Associativity::Right,
+                GeneratedAssociativity::None => Associativity::None,
+                GeneratedAssociativity::Prefix => Associativity::Prefix,
+            },
+            precedence: generated.precedence,
+            target: if generated.target.starts_with('@') {
+                vec![generated.target.to_owned()]
+            } else {
+                generated.target.split('.').map(str::to_owned).collect()
+            },
+            control: generated.control,
+        })
+        .collect()
 }

@@ -76,6 +76,8 @@ const frontendPlan = rustFrontendPlan(frontend);
 const outputs = [
   ["compiler/src/schema.rs", source],
   ["compiler/src/frontend_plan.rs", frontendPlan],
+  ...await protocolOutputs(),
+  ...await languageOutputs(),
 ] as const;
 if (Deno.args.includes("--check")) {
   for (const [outputPath, expected] of outputs) {
@@ -90,6 +92,101 @@ if (Deno.args.includes("--check")) {
   for (const [outputPath, generated] of outputs) {
     await Deno.writeTextFile(outputPath, generated);
   }
+}
+
+async function protocolOutputs(): Promise<
+  readonly (readonly [string, string])[]
+> {
+  const protocol = JSON.parse(
+    await Deno.readTextFile("compiler/protocol.json"),
+  ) as Record<string, unknown>;
+  const compilerHostAbi = protocolVersion(protocol, "compilerHostAbi");
+  const checkedModuleCertificate = protocolVersion(
+    protocol,
+    "checkedModuleCertificate",
+  );
+  const runtimeHir = protocolVersion(protocol, "runtimeHir");
+  return [
+    [
+      "compiler/src/protocol.rs",
+      `// Generated from compiler/protocol.json. Do not edit.\n\n` +
+      `pub(crate) const COMPILER_HOST_ABI_VERSION: u32 = ${compilerHostAbi};\n` +
+      `pub(crate) const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = ${checkedModuleCertificate};\n` +
+      `pub(crate) const RUNTIME_HIR_SCHEMA: u8 = ${runtimeHir};\n`,
+    ],
+    [
+      "src/compiler/protocol.ts",
+      `// Generated from compiler/protocol.json. Do not edit.\n\n` +
+      `export const compilerHostAbiVersion = ${compilerHostAbi} as const;\n` +
+      `export const checkedModuleCertificateSchema = ${checkedModuleCertificate} as const;\n` +
+      `export const runtimeHirSchema = ${runtimeHir} as const;\n`,
+    ],
+  ];
+}
+
+function protocolVersion(
+  protocol: Record<string, unknown>,
+  name: string,
+): number {
+  const value = protocol[name];
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`compiler protocol ${name} must be a positive integer`);
+  }
+  return value as number;
+}
+
+interface OperatorEntry {
+  readonly operator: string;
+  readonly associativity: "left" | "right" | "none" | "prefix";
+  readonly precedence: number;
+  readonly target: string;
+  readonly control?: "and" | "or";
+}
+
+async function languageOutputs(): Promise<
+  readonly (readonly [string, string])[]
+> {
+  const language = JSON.parse(
+    await Deno.readTextFile("compiler/language.json"),
+  ) as { readonly operators?: readonly OperatorEntry[] };
+  const operators = language.operators;
+  if (!Array.isArray(operators) || operators.length === 0) {
+    throw new Error("compiler language vocabulary must declare operators");
+  }
+  const keys = new Set<string>();
+  for (const entry of operators) {
+    const key = `${entry.associativity}:${entry.operator}`;
+    if (keys.has(key)) throw new Error(`duplicate operator ${key}`);
+    keys.add(key);
+    if (!Number.isSafeInteger(entry.precedence) || entry.precedence < 0) {
+      throw new Error(`invalid precedence for ${key}`);
+    }
+  }
+  const typescript =
+    `// Generated from compiler/language.json. Do not edit.\n\n` +
+    `export const generatedFixities = ${
+      JSON.stringify(operators, null, 2)
+    } as const;\n`;
+  const rustEntries = operators.map((entry) => {
+    const associativity = entry.associativity[0].toUpperCase() +
+      entry.associativity.slice(1);
+    let control = "None";
+    if (entry.control !== undefined) {
+      control = `Some(${JSON.stringify(entry.control)})`;
+    }
+    return `    GeneratedFixity { operator: ${
+      JSON.stringify(entry.operator)
+    }, associativity: GeneratedAssociativity::${associativity}, precedence: ${entry.precedence}, target: ${
+      JSON.stringify(entry.target)
+    }, control: ${control} },`;
+  }).join("\n");
+  const rust = `// Generated from compiler/language.json. Do not edit.\n\n` +
+    `#[rustfmt::skip]\n` +
+    `const GENERATED_FIXITIES: &[GeneratedFixity] = &[\n${rustEntries}\n];\n`;
+  return [
+    ["src/syntax/fixities.generated.ts", typescript],
+    ["compiler/src/fixities_generated.rs", rust],
+  ];
 }
 
 function rustSlice(name: string, values: readonly string[]): string {

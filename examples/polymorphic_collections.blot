@@ -5,11 +5,11 @@
 open import "blot:prelude"
 
 sig map_lengths =
-  Mappable (List.of Str, List.of Int, Str, Int) -> List.of Str -> List.of Int
+  Mappable (List.of Text, List.of Int, Text, Int) -> List.of Text -> List.of Int
 let map_lengths = fn implementation => fn values => do:
   return implementation.map (values, Text.length)
 
-sig total_lengths = Foldable (List.of Str, Str, Int) -> List.of Str -> Int
+sig total_lengths = Foldable (List.of Text, Text, Int) -> List.of Text -> Int
 let total_lengths = fn implementation => fn values => do:
   return implementation.fold (
     values,
@@ -17,12 +17,13 @@ let total_lengths = fn implementation => fn values => do:
     fn (total, value) => total + Text.length value
   )
 
-sig retain_long = Filterable (List.of Str, Str) -> List.of Str -> List.of Str
+sig retain_long =
+  Filterable (List.of Text, Text) -> List.of Text -> List.of Text
 let retain_long = fn implementation => fn values => do:
   return implementation.filter (values, fn value => Text.length value > 3)
 
 sig collect_words =
-  Iterable (List.of Str, Str, List.of Str) -> List.of Str -> [Str]
+  Iterable (List.of Text, Text, List.of Text) -> List.of Text -> [Text]
 let collect_words = fn implementation => fn values => do:
   let collected = Array.empty
   for value in implementation.items values:
@@ -32,11 +33,11 @@ let collect_words = fn implementation => fn values => do:
 
 sig map_name_lengths =
   Mappable (
-    Map.of (Int, Str),
+    Map.of (Int, Text),
     Map.of (Int, Int),
-    Str,
+    Text,
     Int
-  ) -> Map.of (Int, Str) -> Map.of (Int, Int)
+  ) -> Map.of (Int, Text) -> Map.of (Int, Int)
 let map_name_lengths = fn implementation => fn names => do:
   return implementation.map (names, Text.length)
 
@@ -54,25 +55,25 @@ let words = List.from_array ["one", "two", "three"]
 let lengths = map_lengths List words
 let long_words = retain_long List words
 
-const IntMap = Map.with Ord.eq
-sig names = Map.of (Int, Str)
+const IntMap = Map.with Int.eq
+sig names = Map.of (Int, Text)
 let names = IntMap.empty
 let names = (IntMap.put (names, 2, "two")).1
 let names = (IntMap.put (names, 1, "one")).1
 let replaced = IntMap.put (names, 2, "deux")
-sig previous = Option Str
+sig previous = Option Text
 let previous = replaced.0
 let name_lengths = map_name_lengths IntMap replaced.1
 
 const TextSet = Set.with (fn left => fn right => text_eq (left, right))
-sig colours = Set.of Str
+sig colours = Set.of Text
 let colours = TextSet.empty
 let colours = (TextSet.insert (colours, "red")).1
 let colours = (TextSet.insert (colours, "green")).1
 let more_colours = ["green", "tan", "blue"]
 let colours = TextSet.union colours more_colours
-let colour_lengths = TextSet.map_with (colours, Ord.eq, Text.length)
-let incremented_lengths = increment_members (Set.with Ord.eq) colour_lengths
+let colour_lengths = TextSet.map_with (colours, Int.eq, Text.length)
+let incremented_lengths = increment_members (Set.with Int.eq) colour_lengths
 
 return {
   .lengths = List.to_array lengths;

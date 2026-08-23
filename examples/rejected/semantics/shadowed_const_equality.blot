@@ -4,9 +4,9 @@
 
 open import "blot:prelude"
 
-const Eq = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
+const Int = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
 
-sig name = 1 | 2 | 3 -> Str
+sig name = 1 | 2 | 3 -> Text
 let name = fn n => do:
   if n == 1:
     return case n of

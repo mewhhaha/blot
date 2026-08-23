@@ -8,6 +8,6 @@ const adding = fn T => case expect (
   ) of
   () => fn (a, b) => @int.add a b
 
-const broken = adding Str
+const broken = adding Text
 
 return broken ("a", "b")

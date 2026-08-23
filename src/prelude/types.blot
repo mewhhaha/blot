@@ -1,0 +1,14 @@
+const prelude = import "blot:prelude"
+
+return {
+  .Type = prelude.Type;
+  .Bool = prelude.Bool;
+  .Int = prelude.Int;
+  .Text = prelude.Text;
+  .F64 = prelude.F64;
+  .F32 = prelude.F32;
+  .F32x4 = prelude.F32x4;
+  .I32x4 = prelude.I32x4;
+  .I16x8 = prelude.I16x8;
+  .I8x16 = prelude.I8x16;
+}

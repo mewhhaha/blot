@@ -1,0 +1,32 @@
+// Generated from compiler/language.json. Do not edit.
+
+#[rustfmt::skip]
+const GENERATED_FIXITIES: &[GeneratedFixity] = &[
+    GeneratedFixity { operator: "$", associativity: GeneratedAssociativity::Right, precedence: 10, target: "Fn.apply", control: None },
+    GeneratedFixity { operator: "|>", associativity: GeneratedAssociativity::Left, precedence: 20, target: "Fn.pipe", control: None },
+    GeneratedFixity { operator: "~", associativity: GeneratedAssociativity::Left, precedence: 21, target: "@type.performs", control: None },
+    GeneratedFixity { operator: "||", associativity: GeneratedAssociativity::Right, precedence: 22, target: "Logic.or", control: Some("or") },
+    GeneratedFixity { operator: "&&", associativity: GeneratedAssociativity::Right, precedence: 24, target: "Logic.and", control: Some("and") },
+    GeneratedFixity { operator: "->", associativity: GeneratedAssociativity::Right, precedence: 25, target: "@type.arrow", control: None },
+    GeneratedFixity { operator: "==", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.eq", control: None },
+    GeneratedFixity { operator: "!=", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.ne", control: None },
+    GeneratedFixity { operator: "<", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.lt", control: None },
+    GeneratedFixity { operator: "<=", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.le", control: None },
+    GeneratedFixity { operator: ">", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.gt", control: None },
+    GeneratedFixity { operator: ">=", associativity: GeneratedAssociativity::None, precedence: 30, target: "Int.ge", control: None },
+    GeneratedFixity { operator: "|", associativity: GeneratedAssociativity::Left, precedence: 40, target: "Type.union", control: None },
+    GeneratedFixity { operator: "\\", associativity: GeneratedAssociativity::Left, precedence: 40, target: "Type.diff", control: None },
+    GeneratedFixity { operator: "&", associativity: GeneratedAssociativity::Left, precedence: 45, target: "Type.intersect", control: None },
+    GeneratedFixity { operator: "<+", associativity: GeneratedAssociativity::Left, precedence: 50, target: "attach", control: None },
+    GeneratedFixity { operator: "<>", associativity: GeneratedAssociativity::Right, precedence: 55, target: "Text.append", control: None },
+    GeneratedFixity { operator: "+", associativity: GeneratedAssociativity::Left, precedence: 60, target: "Int.add", control: None },
+    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Left, precedence: 60, target: "Int.sub", control: None },
+    GeneratedFixity { operator: "*", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Int.mul", control: None },
+    GeneratedFixity { operator: "/", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Int.div", control: None },
+    GeneratedFixity { operator: "%", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Int.rem", control: None },
+    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "Int.negate", control: None },
+    GeneratedFixity { operator: "~", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@type.defer", control: None },
+    GeneratedFixity { operator: "!", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.own", control: None },
+    GeneratedFixity { operator: "?", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.maybe", control: None },
+    GeneratedFixity { operator: "&", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.borrow", control: None },
+];

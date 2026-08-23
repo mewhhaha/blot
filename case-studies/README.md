@@ -46,8 +46,8 @@ did.
 is the `Terminal` effect:
 
 ```text
-read_line : () -> Str
-write     : Str -> ()
+read_line : () -> Text
+write     : Text -> ()
 ```
 
 An empty line is treated as an anonymous answer. A richer terminal program
@@ -157,17 +157,17 @@ row's fourth lane is its translation, and the point's fourth lane decides
 whether that translation applies.
 
 ```blot
-const turn_y = fn (point, rotation) => Vec4.of (
-  Vec4.dot point rotation.to_x,
-  Vec4.y point,
-  Vec4.dot point rotation.to_z,
-  Vec4.w point
+const turn_y = fn (point, rotation) => F32x4.of (
+  F32x4.dot point rotation.to_x,
+  F32x4.y point,
+  F32x4.dot point rotation.to_z,
+  F32x4.w point
 );
 
-const to_view = fn (point, camera) => Vec4.of (
-  Vec4.dot point camera.right,
-  Vec4.dot point camera.up,
-  Vec4.dot point camera.forward,
+const to_view = fn (point, camera) => F32x4.of (
+  F32x4.dot point camera.right,
+  F32x4.dot point camera.up,
+  F32x4.dot point camera.forward,
   ONE
 );
 ```
@@ -211,8 +211,8 @@ costs the artifact nothing.
 
 `sin 45°` is `0.707`, which is what you would want and what the fixed-point
 version could only approach. The module's square root takes an `F32` now, so
-`sqrt 2.0` is a type error and `sqrt (Float32.of_float 2.0)` is how it is asked
-— a lane cannot be written, only converted.
+`sqrt 2.0` is a type error and `sqrt (F32.of_float 2.0)` is how it is asked — a
+lane cannot be written, only converted.
 
 ### 2D is the same renderer with the lens switched
 
@@ -221,11 +221,11 @@ The camera carries a lens, and `to_screen` is the only place it matters:
 ```blot
 const to_screen = fn (view, camera) =>
   if camera.lens == 0:
-    return Vec4.add
+    return F32x4.add
       SCREEN_CENTRE
-      (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
+      (F32x4.div (F32x4.mul view FOCAL_AXES) (F32x4.splat (F32x4.z view)))
   else:
-    return Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
+    return F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
 ```
 
 A perspective divide, or no divide — the lenses differ only in what the view
@@ -267,11 +267,11 @@ compile and not a device acquisition.
 
 ```text
 Canvas.clear/present : () -> ()
-Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; colour : Str } -> ()
-Canvas.sprite        : { x, y, size, depth : Int; texture : Str } -> ()
+Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; colour : Text } -> ()
+Canvas.sprite        : { x, y, size, depth : Int; texture : Text } -> ()
 View.yaw/pitch/distance/lens : () -> Int
 Assets.generation/count      : () -> Int
-Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; colour : Str }
+Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; colour : Text }
 Host.frame           : () -> Int
 ```
 
@@ -320,13 +320,13 @@ remove the worker.
   cause is the record, not the tuple pattern.
 - **A lane cannot be written, only converted.** There is one float token in the
   grammar and it reads as an `F64`, so every single-precision constant in the
-  engine is a `Float32.of_float` the program wrote down. That is the right
-  default — narrowing should be visible — but a file whose every constant is
-  single precision pays for it on every line.
+  engine is a `F32.of_float` the program wrote down. That is the right default —
+  narrowing should be visible — but a file whose every constant is single
+  precision pays for it on every line.
 - **A vector is four boxed lanes at a lazy boundary.** `F32x4` reaches Core as a
   one-constructor type with four `F32` fields. A strict chain stays in a `v128`
   across let bindings and calls when every argument is provably a vector, so
-  `Vec4.dot (Vec4.add a b) c` keeps its register; a materialized closure or a
+  `F32x4.dot (F32x4.add a b) c` keeps its register; a materialized closure or a
   lazy boundary still boxes, because a heap value must outlive the native worker
   that produced it. The instructions are in the artifact and this is one of the
   programs that put them there, as is `examples/simd.blot`, which takes a lane
@@ -348,9 +348,9 @@ been rewritten to take them:
 - **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`
   and `f64` at the ABI (`docs/abi.md`), so `Assets.entry` carries thousandths
   and `Canvas.tri` carries pixels by history rather than by necessity.
-- **There is a lane-wise comparison and a shuffle.** `Vec4.less`, `Vec4.equal`,
-  `Vec4.select`, `Vec4.shuffle`, and `Vec4.swizzle` are prelude source over
-  `@f32x4.*`, and `F32x4Mask` is the type the comparisons produce. The near test
-  is still four `Vec4.z` extracts and four scalar compares, and the comment in
-  `lib/render.blot` still says there is no lane-wise comparison; both are the
-  port, not the language.
+- **There is a lane-wise comparison and a shuffle.** `F32x4.less`,
+  `F32x4.equal`, `F32x4.select`, `F32x4.shuffle`, and `F32x4.swizzle` are
+  prelude source over `@f32x4.*`, and `F32x4Mask` is the type the comparisons
+  produce. The near test is still four `F32x4.z` extracts and four scalar
+  compares, and the comment in `lib/render.blot` still says there is no
+  lane-wise comparison; both are the port, not the language.

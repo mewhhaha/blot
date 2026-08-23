@@ -11,12 +11,10 @@
 import type {
   Arm,
   ArrayElement,
-  Associativity,
   Branch,
   Decl,
   DeclarationTag,
   Expr,
-  Fixity,
   Module,
   Pattern,
   Qualifier,
@@ -56,15 +54,16 @@ export function lowerModule(root: Rule, source: string): Module {
     ),
   );
 
-  const operatorsCursor = field(root, "operators");
-  const fixities = operatorsCursor === null
-    ? []
-    : fieldList(asRule(operatorsCursor, "operator_section"), "declarations")
-      .map((cursor) =>
-        lowerFixity(asRule(cursor, "fixity_declaration"), source)
-      );
+  const operators = field(root, "operators");
+  if (operators !== null) {
+    fail(
+      "BLOT_REMOVED_OPERATOR_SECTION",
+      "Operator precedence and targets are fixed; use a named function for another operation.",
+      operators.span,
+    );
+  }
 
-  const table = buildFixityTable(fixities);
+  const table = buildFixityTable();
   const context: Context = {
     source,
     table,
@@ -106,7 +105,6 @@ export function lowerModule(root: Rule, source: string): Module {
   }
   return {
     parameter,
-    fixities,
     declarations: loweredDeclarations,
     result,
     resultEffects,
@@ -797,36 +795,6 @@ function lowerControlConditional(
   return { tag: "if", branches, fallback, span: body.span };
 }
 
-function lowerFixity(rule: Rule, source: string): Fixity {
-  const associativity = readAssociativity(
-    tokenOf(required(rule, "associativity")).text,
-    rule.span,
-  );
-  const operator = tokenOf(required(rule, "operator")).text;
-  const precedence = Number(tokenOf(required(rule, "precedence")).text);
-  const target = lowerQualifiedName(
-    asRule(field(rule, "target"), "target"),
-    source,
-  );
-  return { operator, associativity, precedence, target, span: rule.span };
-}
-
-function readAssociativity(text: string, span: Span): Associativity {
-  if (text === "infixl") return "left";
-  if (text === "infixr") return "right";
-  if (text === "infix") return "none";
-  if (text === "prefix") return "prefix";
-  fail("BLOT_BAD_FIXITY", `Unknown associativity \`${text}\`.`, span);
-}
-
-function lowerQualifiedName(rule: Rule, _source: string): readonly string[] {
-  const root = tokenOf(required(rule, "root")).text;
-  const rest = fieldList(rule, "rest").map((part) =>
-    tokenOf(required(asRule(part, "qualified_name_part"), "name")).text
-  );
-  return [root, ...rest];
-}
-
 /**
  * `for source:` followed by an indented body becomes the recursion behind `iterate`.
  *
@@ -930,6 +898,7 @@ function desugarLoop(
   source: Expr,
   body: LoopBody,
   effectful: boolean,
+  filtering: boolean,
   completion:
     | { readonly tag: "iterate" }
     | { readonly tag: "control" },
@@ -984,11 +953,8 @@ function desugarLoop(
       span,
     });
   }
-  // An irrefutable binder is a `let`. A refutable one — `#Some x in src` — is
-  // a `case` whose other arm hands the accumulator back untouched, so an
-  // element that does not match skips the iteration instead of failing it.
-  // That is the filter, and it costs one arm.
-  const filtering = binder !== null && refutable(binder);
+  // `for case` makes filtering visible at the source boundary. Ordinary `for`
+  // binders are irrefutable and lower to a `let`.
   if (binder !== null && !filtering) {
     declarations.push({
       tag: "binding",
@@ -1221,6 +1187,28 @@ function desugarLoop(
   };
 }
 
+function loopFiltering(rule: Rule, binder: Pattern | null): boolean {
+  const filtering = field(rule, "kind") !== null;
+  if (binder === null) {
+    if (filtering) {
+      fail(
+        "BLOT_FILTERING_LOOP_WITHOUT_PATTERN",
+        "`for case` requires a pattern followed by `in`.",
+        rule.span,
+      );
+    }
+    return false;
+  }
+  if (refutable(binder) && !filtering) {
+    fail(
+      "BLOT_REFUTABLE_FOR_PATTERN",
+      "A refutable loop pattern must be introduced with `for case`.",
+      binder.span,
+    );
+  }
+  return filtering;
+}
+
 /**
  * The names a statement stream rebinds with `:=`.
  *
@@ -1373,6 +1361,7 @@ function lowerControlLoop(
         breaks,
       },
       statementsContainEffect(statements),
+      loopFiltering(rule, null),
       { tag: "control" },
       rule.span,
     );
@@ -1382,8 +1371,9 @@ function lowerControlLoop(
       returns,
     };
   }
+  const binder = patternFromExpr(head);
   const loop = desugarLoop(
-    patternFromExpr(head),
+    binder,
     lowerValue(
       asRule(
         required(asRule(drawn, "iteration_source"), "source"),
@@ -1403,6 +1393,7 @@ function lowerControlLoop(
       breaks,
     },
     statementsContainEffect(statements),
+    loopFiltering(rule, binder),
     { tag: "control" },
     rule.span,
   );
@@ -1604,12 +1595,14 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         head,
         { tag: "plain", declarations: body, carried },
         kind === "effect",
+        loopFiltering(rule, null),
         { tag: "iterate" },
         rule.span,
       );
     } else {
+      const binder = patternFromExpr(head);
       loop = desugarLoop(
-        patternFromExpr(head),
+        binder,
         lowerValue(
           asRule(
             required(asRule(drawn, "iteration_source"), "source"),
@@ -1619,6 +1612,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         ),
         { tag: "plain", declarations: body, carried },
         kind === "effect",
+        loopFiltering(rule, binder),
         { tag: "iterate" },
         rule.span,
       );
@@ -2210,7 +2204,7 @@ function lowerOperand(rule: Rule, context: Context): Expr {
 
   for (const prefix of prefixes) {
     const span = { start: rule.span.start, end: result.span.end };
-    // A negated literal folds here rather than dispatching to `Num.negate`,
+    // A negated literal folds here rather than dispatching to `Int.negate`,
     // so writing `-1` does not require the prelude to be in scope.
     if (prefix.text === "-" && result.tag === "int") {
       result = { tag: "int", value: -result.value, span };

@@ -1,4 +1,4 @@
-// NOT IMPLEMENTED YET (SUGGESTION.md §12): Float.cmp has only Less, Equal,
+// NOT IMPLEMENTED YET (SUGGESTION.md §12): F64.cmp has only Less, Equal,
 // and Greater, so NaN currently reaches BLOT_UNORDERED. A future total result
 // would return #Unordered and make the caller handle it explicitly. This file
 // records the current trap; it must be promoted and given a fourth case if that
@@ -6,5 +6,5 @@
 
 open import "blot:prelude"
 
-let nan = Float.div 0.0 0.0
-return Float.cmp nan 1.0
+let nan = F64.div 0.0 0.0
+return F64.cmp nan 1.0

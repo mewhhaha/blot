@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+for #Some value in Iter.items [Some 1, None]:
+  let _ = value
+
+return ()

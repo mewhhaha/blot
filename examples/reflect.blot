@@ -28,8 +28,8 @@ const describe = fn t => case reflect t of
 // `refines (narrow, wide)` is the comptime mirror of what biunification decides
 // during checking, over ground values rather than inferred ones.
 
-const Ok = { .status = Status; .body = Str; }
-const Failed = { .status = Status; .reason = Str; }
+const Ok = { .status = Status; .body = Text; }
+const Failed = { .status = Status; .reason = Text; }
 const HasStatus = { .status = Status; }
 const OptionalCount = { .count? = Int; }
 
@@ -62,7 +62,7 @@ const element_of = fn t => unwrap_or (opened ("List", t), Unit)
 // with its namespace attached — so `Header` is both the tuple a value of it is
 // and the place `new`, `slot`, and the field accessors live.
 
-const Header = struct { .code = U8; .label = Str; }
+const Header = struct { .code = U8; .label = Text; }
 
 return {
   .literal = describe 42;
@@ -82,7 +82,7 @@ return {
   .member_count = @array.len (members Message);
 
   .same_list_twice = List I32 | List I32;
-  .list_element = element_of (List Str);
+  .list_element = element_of (List Text);
   .not_a_list = element_of I32;
   .pair_carrier = unwrap_or (opened ("Pair", Pair U8), Unit);
 

@@ -4,7 +4,6 @@ import type {
   Decl,
   DeclarationTag,
   Expr,
-  Fixity,
   Module,
   Pattern,
   ShapeMember,
@@ -14,7 +13,6 @@ import type {
 
 export interface PortableModule {
   readonly parameter: number | null;
-  readonly fixities: readonly unknown[];
   readonly declarations: readonly number[];
   readonly result: number;
   readonly result_effects: "pure" | "ambient";
@@ -302,13 +300,6 @@ export function encodePortableModule(module: Module): PortableModule {
   if (module.parameter !== null) parameter = patternId(module.parameter);
   return {
     parameter,
-    fixities: module.fixities.map((fixity) => ({
-      operator: fixity.operator,
-      associativity: fixity.associativity,
-      precedence: fixity.precedence,
-      target: fixity.target,
-      span: fixity.span,
-    })),
     declarations: module.declarations.map(declarationId),
     result: expressionId(module.result),
     result_effects: module.resultEffects,
@@ -927,37 +918,6 @@ export function decodePortableModule(
   }
   const module: Module = {
     parameter,
-    fixities: list(root.fixities, `${location} fixities`).map(
-      (encodedFixity, ordinal): Fixity => {
-        const fixity = record(
-          encodedFixity,
-          `${location} fixity ${ordinal}`,
-        );
-        return {
-          operator: text(
-            fixity.operator,
-            `${location} fixity ${ordinal} operator`,
-          ),
-          associativity: associativity(
-            fixity.associativity,
-            `${location} fixity ${ordinal} associativity`,
-          ),
-          precedence: unsignedInteger(
-            fixity.precedence,
-            `${location} fixity ${ordinal} precedence`,
-          ),
-          target: list(fixity.target, `${location} fixity ${ordinal} target`)
-            .map(
-              (segment, targetOrdinal) =>
-                text(
-                  segment,
-                  `${location} fixity ${ordinal} target ${targetOrdinal}`,
-                ),
-            ),
-          span: decodeSpan(fixity.span, `${location} fixity ${ordinal} span`),
-        };
-      },
-    ),
     declarations: references(
       root.declarations,
       `${location} declarations`,
@@ -1066,17 +1026,6 @@ function qualifier(
   if (
     value === "none" || value === "linear" || value === "affine" ||
     value === "borrow"
-  ) return value;
-  throw new Error(`${location} has unknown value ${String(value)}`);
-}
-
-function associativity(
-  value: unknown,
-  location: string,
-): "left" | "right" | "none" | "prefix" {
-  if (
-    value === "left" || value === "right" || value === "none" ||
-    value === "prefix"
   ) return value;
   throw new Error(`${location} has unknown value ${String(value)}`);
 }

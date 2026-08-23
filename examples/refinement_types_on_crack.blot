@@ -19,7 +19,7 @@ let array_count = count [1, 2, 3]
 // A canonical record requirement refines the open carrier before projection.
 // Width subtyping admits the extra `.debug` field; there is no instance
 // registry or nominal trait declaration.
-const Renderable = { .render = Unit -> Str; }
+const Renderable = { .render = Unit -> Text; }
 let render = fn value => do:
   let renderable = @satisfies value Renderable
   return renderable.render ()

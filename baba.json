@@ -473,6 +473,7 @@
       "operators": {},
       "scopes": [
         "program",
+        "operator_section",
         "lambda",
         "do_block",
         "case_arm"
@@ -524,7 +525,6 @@
     "rainbows": {
       "scopes": [
         "program",
-        "operator_section",
         "shape",
         "array"
       ],

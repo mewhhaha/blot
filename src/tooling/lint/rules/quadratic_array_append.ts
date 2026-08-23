@@ -46,5 +46,5 @@ function insideFold(ancestors: readonly AstNode[]): boolean {
 
 function isExpression(node: AstNode): node is Expr {
   return "tag" in node && node.tag !== "binding" && node.tag !== "shadow" &&
-    node.tag !== "open" && !("declarations" in node && "fixities" in node);
+    node.tag !== "open" && !("declarations" in node && "resultEffects" in node);
 }

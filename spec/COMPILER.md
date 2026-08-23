@@ -117,7 +117,7 @@ boundary increases compiler surface without strengthening the theorem.
 The source pipeline is:
 
 ```text
-source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -> fixity fold -> AST
+source -> Baba lexer -> layout elaboration -> Baba CPU frontend -> compact CST -> fixed operator fold -> AST
        -> comptime evaluation -> biunification -> safety -> ownership
        -> staging and specialization -> validated Runtime HIR
        -> ABI closure -> Rust/Wasm emission -> ClosedProgram
@@ -154,6 +154,14 @@ a second semantic authority. Local development may reproduce the artifact with
 the pinned build procedure or download an artifact for matching compiler inputs.
 Node compilation requires the artifact but never starts Cargo or a native
 compiler implicitly.
+
+`compiler/protocol.json` is the single source for transport and certificate
+versions. `compiler/language.json` is the single source for fixed operator
+spelling, precedence, targets, and control behavior. Generation produces both
+Rust and TypeScript consumers; CI rejects stale copies. The generated
+`language-health.json`, diagnostic-code union, and `STDLIB.md` inventory the
+remaining intrinsic, diagnostic, hotspot, and public-library surfaces so growth
+is reviewed as an explicit contract change.
 
 The distribution has one host adapter with the resident `Compiler` shape:
 `check`, `checkSource`, `prepare`, `compile`, and `destroy`. The adapter
@@ -457,17 +465,17 @@ public artifact, or an explicit compiler command.
 
 ### 9.2 Frontend and elaboration
 
-| Responsibility                                                            | Required result                                  |
-| ------------------------------------------------------------------------- | ------------------------------------------------ |
-| execute Baba's generated lexer plan                                       | deterministic tokens and lexical diagnostics     |
-| execute Baba's island parser plan                                         | deterministic compact CST                        |
-| reuse an unaffected token prefix after an edit                            | fresh-equivalent incremental frontend output     |
-| materialize compact nodes, fields, tokens, and spans                      | a checked CST view                               |
-| fold declared fixities                                                    | ordinary binding applications                    |
-| build flat AST arenas and validate their references                       | one source representation for later semantics    |
-| desugar loops, statement control, guards, elements, and effect sequencing | the small core source language                   |
-| assign source origins and compiler-local fresh names                      | stable diagnostics and hygienic control lowering |
-| discover imports and includes in lowered expressions                      | complete graph inputs before evaluation          |
+| Responsibility                                                            | Required result                                   |
+| ------------------------------------------------------------------------- | ------------------------------------------------- |
+| execute Baba's generated lexer plan                                       | deterministic tokens and lexical diagnostics      |
+| execute Baba's island parser plan                                         | deterministic compact CST                         |
+| reuse an unaffected token prefix after an edit                            | fresh-equivalent incremental frontend output      |
+| materialize compact nodes, fields, tokens, and spans                      | a checked CST view                                |
+| fold the generated fixed operator table                                   | ordinary binding applications and boolean control |
+| build flat AST arenas and validate their references                       | one source representation for later semantics     |
+| desugar loops, statement control, guards, elements, and effect sequencing | the small core source language                    |
+| assign source origins and compiler-local fresh names                      | stable diagnostics and hygienic control lowering  |
+| discover imports and includes in lowered expressions                      | complete graph inputs before evaluation           |
 
 ### 9.3 Static semantics
 
@@ -711,9 +719,9 @@ by expected leverage, not by compatibility.
    values may be moved at most once and may be dropped. This substantially
    simplifies branch joins and closure obligations while retaining safe
    destructive reuse. It weakens protocols that rely on exactly-once use.
-5. **Remove arbitrary user-defined fixity.** Parse a small fixed operator set or
-   require named calls. This removes one frontend environment and fold, but its
-   leverage is small compared with staging and structural specialization.
+5. **Complete: remove arbitrary user-defined fixity.** One fixed table folds
+   operator chains. The old header is recognized only for a targeted migration
+   diagnostic and never becomes semantic state.
 
 The first lever is the only language change likely to rival the architectural
 collapse. Types-as-values plus imported compile-time dispatch means inference,

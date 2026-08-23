@@ -33,44 +33,44 @@ const HALF_PI = 1.5707963267948966
 const TURN = 256
 const QUARTER = 64
 
-const STEP_RADIANS = Float32.of_float (Float.div TAU 256.0)
+const STEP_RADIANS = F32.of_float (F64.div TAU 256.0)
 
-const radians = fn steps => Float32.mul (Float32.of_int steps) STEP_RADIANS
+const radians = fn steps => F32.mul (F32.of_int steps) STEP_RADIANS
 
 // sin over [0, pi/2], seven terms. Odd powers only, and evaluated left to
 // right so each is the previous one times x squared — which keeps the largest
 // intermediate at x to the thirteenth rather than a factorial.
 const sin_quarter = fn k => do:
-  let x = Float.mul (Float.of_int k) (Float.div HALF_PI (Float.of_int QUARTER))
-  let x2 = Float.mul x x
-  let x3 = Float.mul x2 x
-  let x5 = Float.mul x3 x2
-  let x7 = Float.mul x5 x2
-  let x9 = Float.mul x7 x2
-  let x11 = Float.mul x9 x2
-  let x13 = Float.mul x11 x2
-  return Float.add
-    (Float.sub
-    (Float.add
-    (Float.sub
-    (Float.add
-    (Float.sub x (Float.div x3 6.0))
-    (Float.div x5 120.0))
-    (Float.div x7 5040.0))
-    (Float.div x9 362880.0))
-    (Float.div x11 39916800.0))
-    (Float.div x13 6227020800.0)
+  let x = F64.mul (F64.of_int k) (F64.div HALF_PI (F64.of_int QUARTER))
+  let x2 = F64.mul x x
+  let x3 = F64.mul x2 x
+  let x5 = F64.mul x3 x2
+  let x7 = F64.mul x5 x2
+  let x9 = F64.mul x7 x2
+  let x11 = F64.mul x9 x2
+  let x13 = F64.mul x11 x2
+  return F64.add
+    (F64.sub
+    (F64.add
+    (F64.sub
+    (F64.add
+    (F64.sub x (F64.div x3 6.0))
+    (F64.div x5 120.0))
+    (F64.div x7 5040.0))
+    (F64.div x9 362880.0))
+    (F64.div x11 39916800.0))
+    (F64.div x13 6227020800.0)
 
 const table =
   fold (
     upto (0, QUARTER + 1),
     Array.empty,
-    fn (built, k) => @array.push built (Float32.of_float (sin_quarter k))
+    fn (built, k) => @array.push built (F32.of_float (sin_quarter k))
   )
 
 const table_at = fn index => case Array.get (table, index) of
   #Some value => value
-  #None => Float32.of_int 0
+  #None => F32.of_int 0
 
 // `steps` is any integer; the quadrant decides which end of the table to read
 // and which sign to give it.
@@ -83,19 +83,19 @@ const sin_steps = fn steps => do:
   else if quadrant == 1:
     return table_at (QUARTER - step)
   else if quadrant == 2:
-    return Float32.negate (table_at step)
+    return F32.negate (table_at step)
   else:
-    return Float32.negate (table_at (QUARTER - step))
+    return F32.negate (table_at (QUARTER - step))
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
 return {
-  .pi = Float32.of_float PI;
-  .tau = Float32.of_float TAU;
+  .pi = F32.of_float PI;
+  .tau = F32.of_float TAU;
   .turn = TURN;
   .quarter = QUARTER;
   .radians = radians;
   .sin = sin_steps;
   .cos = cos_steps;
-  .sqrt = Float32.sqrt;
+  .sqrt = F32.sqrt;
 }

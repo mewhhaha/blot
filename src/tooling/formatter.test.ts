@@ -341,23 +341,16 @@ return Namespace
   );
 });
 
-Deno.test("formatting closes an operator section outside its declarations", async () => {
-  await assertStableFormatting(
-    `operators {
-  infix 30 (!=) = Eq.ne;
-  }
-
-open import "blot:prelude"
-return 1 != 2
-`,
-    `operators {
-  infix 30 (!=) = Eq.ne;
+Deno.test("formatting reports the removed operator section", async () => {
+  const formatted = await formatSource(`operators {
+  infix 30 (!=) = Int.ne;
 }
 
 open import "blot:prelude"
 return 1 != 2
-`,
-  );
+`);
+  if (formatted.ok) throw new Error("removed syntax formatted successfully");
+  assertEquals(formatted.diagnostics[0]?.code, "BLOT_REMOVED_OPERATOR_SECTION");
 });
 
 Deno.test("formatting separates a completed statement suite", async () => {

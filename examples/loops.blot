@@ -72,7 +72,7 @@ for n in Iter.range (1, 4):
   // costs exactly one arm.
 
 let found = 0
-for #Some n in Iter.items [Some 1, None, Some 20, None, Some 300]:
+for case #Some n in Iter.items [Some 1, None, Some 20, None, Some 300]:
   found := found + n
 
 // A tuple binder cannot fail, so it stays a `let`.

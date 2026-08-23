@@ -42,7 +42,7 @@ export function hoverAt(
   if (token === null) return null;
 
   const binding = bindingAt(module, source, token, offset, checked);
-  const tokenDocs = tokenDocumentation(module, token);
+  const tokenDocs = tokenDocumentation(token);
   if (binding === null) {
     if (tokenDocs === null) return null;
     return { markdown: tokenDocs, span: token.span };
@@ -620,11 +620,12 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   module: "Introduces the single explicit input pattern accepted by a module.",
   with: "Separates a module or import from its explicit input.",
   import: "Instantiates a module once with unit or the value following `with`.",
-  operators: "Begins the module's fixity declarations.",
-  infixl: "Declares a left-associative infix operator.",
-  infixr: "Declares a right-associative infix operator.",
-  infix: "Declares a non-associative infix operator.",
-  prefix: "Declares a prefix operator.",
+  operators:
+    "This retired keyword begins an operator section, which is rejected because Blot's operators are fixed.",
+  infixl: "This retired keyword described a left-associative operator.",
+  infixr: "This retired keyword described a right-associative operator.",
+  infix: "This retired keyword described a non-associative operator.",
+  prefix: "This retired keyword described a prefix operator.",
   let: "Binds a runtime value in the current scope.",
   const: "Evaluates and binds a compile-time value.",
   sig: "Constrains the declaration immediately following it.",
@@ -649,8 +650,8 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   ")": "Ends a parenthesized expression or scope.",
   "[": "Begins an array value or array pattern.",
   "]": "Ends an array value or array pattern.",
-  "{": "Begins a structural record or an operator section.",
-  "}": "Ends a structural record or operator section.",
+  "{": "Begins a structural record.",
+  "}": "Ends a structural record.",
   ",": "Separates tuple entries, arguments, or array elements.",
   ";": "Separates fields inside a structural record.",
   ".": "Projects a field or introduces a named record field.",
@@ -676,7 +677,7 @@ const OPERATOR_EXAMPLES: Readonly<Record<string, string>> = {
   "<+": "Type <+ { .member = value; }",
 };
 
-function tokenDocumentation(module: Module, token: TokenCursor): string | null {
+function tokenDocumentation(token: TokenCursor): string | null {
   if (token.kind === "ELSE_IF") {
     return "Continues an `if` with another condition after every earlier condition failed.";
   }
@@ -696,7 +697,7 @@ function tokenDocumentation(module: Module, token: TokenCursor): string | null {
   if (token.kind === "INTRINSIC") {
     return "An `@` name is a compiler primitive. Public conveniences normally live in the ordinary prelude instead.";
   }
-  const table = buildFixityTable(module.fixities);
+  const table = buildFixityTable();
   const fixities = [table.infix(token.text), table.prefix(token.text)].filter(
     (fixity): fixity is NonNullable<typeof fixity> => fixity !== undefined,
   );

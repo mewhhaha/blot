@@ -4,7 +4,7 @@
 
 open import "blot:prelude"
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 const Clock = @effect { .now = Unit -> Int; }
 
 let logging =

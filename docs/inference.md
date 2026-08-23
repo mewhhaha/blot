@@ -54,13 +54,13 @@ row and puts it in its own type. Joining two rows is the join `constrain`
 already knows how to compute, because a row is a lattice element like any other.
 
 ```blot
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 const Clock = @effect { .now = Unit -> Int; }
 
 let greet = fn name =>
   result <- Console.write name
   return result
-// Str -> () ~ { Console }
+// Text -> () ~ { Console }
 let quiet = fn n => @int.add n 1            // Int -> Int
 ```
 
@@ -80,7 +80,7 @@ let logged = fn f => fn x =>
 `logged` adds `Console` to whatever its callback performs. Nothing there is
 annotated.
 
-A row is also source: `sig greet = Str -> Unit ~ { Console }` is checked like
+A row is also source: `sig greet = Text -> Unit ~ { Console }` is checked like
 any other signature, by subsumption — so a body may perform fewer effects than
 its signature names, and a bare `->` is the empty row rather than an unwritten
 one. What cannot be written is the `e`. A signature is an upper bound, and an
@@ -162,7 +162,7 @@ the value it was asked to remove.
 
 What a condition proves comes from `compiler/src/predicate_refinement.rs`, and
 the interesting part is that it is derived from the operator's compile-time
-_value_ rather than from its name. `==` is a fixity entry naming `Eq.eq`, and
+_value_ rather than from its name. `==` is a fixity entry naming `Int.eq`, and
 any module may bind that name to anything, so a checker that assumed `==` meant
 equality would prove a false fact about a program that shadowed it — a program
 writable today. Instead a value is accepted only when it is
@@ -176,8 +176,8 @@ Two guards carry the soundness, and both were measured rather than assumed. The
 first is that the operator's value is read out of the _type_ environment, paired
 with the exact `Typing` its binding installed — `context.values` is not written
 by a plain `let` or by a lambda parameter, so reading the operator from there
-would find the prelude's `Eq` under a runtime shadow of it, or under an `Eq` the
-_caller_ supplies. The second is that the other operand must be a single
+would find the prelude's `Int` under a runtime shadow of it, or under an `Int`
+the _caller_ supplies. The second is that the other operand must be a single
 compile-time integer rather than a ground type: intersecting against a whole
 type is sound and complementing against one is not, and `n == m` only ever said
 that `n` equals this `m`.
@@ -205,7 +205,7 @@ dictionary abstraction instead.
 
 **Literal coverage is fail-closed.** A `case` over a declared literal union is
 checked by listing the union's members and subtracting the arms, so `1 | 2 | 3`
-with only a `1` arm is refused. `Int`, `Str`, ranges with an open end, and a
+with only a `1` arm is refused. `Int`, `Text`, ranges with an open end, and a
 target inference has not pinned all require an irrefutable arm. Inference
 uncertainty is not permission to leave a latent no-match trap.
 
@@ -220,7 +220,7 @@ its truth table, so `&&` proves what both halves prove and `||` proves both in
 the branch it does not take — but `not` proves nothing, and two halves speaking
 about different names prove nothing, because a proof narrows one name. Text is
 excluded by the lattice rather than by effort: `Bound` is inclusive and text
-order is dense, so splitting `Str` at `"m"` gives `.."m" | "m"..` and readmits
+order is dense, so splitting `Text` at `"m"` gives `.."m" | "m"..` and readmits
 `"m"`. And a branch whose narrowed type is empty is unreachable; that is not yet
 a diagnostic, so the branch simply keeps the wider type.
 
@@ -255,14 +255,14 @@ meaningless anyway.
 | 22    | `\|\|`                      | right  | `Logic.or`                      |
 | 24    | `&&`                        | right  | `Logic.and`                     |
 | 25    | `->`                        | right  | `@type.arrow`                   |
-| 30    | `==` `!=` `<` `<=` `>` `>=` | none   | `Eq.*`, `Ord.*`                 |
+| 30    | `==` `!=` `<` `<=` `>` `>=` | none   | `Int.*`, `Int.*`                |
 | 40    | `\|` `\\`                   | left   | `Type.union`, `Type.diff`       |
 | 45    | `&`                         | left   | `Type.intersect`                |
 | 50    | `<+`                        | left   | `attach`                        |
 | 55    | `<>`                        | right  | `Text.append`                   |
-| 60    | `+` `-`                     | left   | `Num.add`, `Num.sub`            |
-| 70    | `*` `/` `%`                 | left   | `Num.mul`, `Num.div`, `Num.rem` |
-| 90    | `-` `!` `?` `&`             | prefix | `Num.negate`, `@linear.*`       |
+| 60    | `+` `-`                     | left   | `Int.add`, `Int.sub`            |
+| 70    | `*` `/` `%`                 | left   | `Int.mul`, `Int.div`, `Int.rem` |
+| 90    | `-` `!` `?` `&`             | prefix | `Int.negate`, `@linear.*`       |
 
 `~` sits below the arrow it annotates, so `A -> B ~ { Console }` is
 `(A -> B) ~ { Console }` — the row is what the whole function performs rather
@@ -287,7 +287,7 @@ algebra. Both are ordinary curried functions, so **both arguments are
 evaluated** — there is no laziness for an operator to exploit, and `if` is the
 short-circuiting form. `a && perform ()` performs whatever `a` is.
 
-`==` is the fixity entry naming `Eq.eq`, which the prelude binds to `Ord.eq`
+`==` is the fixity entry naming `Int.eq`, which the prelude binds to `Int.eq`
 over `@int.cmp`, so it compares integers. `Text.cmp` compares text — the
 evaluator used to accept text through `@int.cmp` while the checker rejected it,
 which is exactly the kind of divergence between the two executions that has to

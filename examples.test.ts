@@ -67,10 +67,6 @@ const REJECTIONS: Record<
   // value would never be compared against the `sig`, the second because a
   // variable satisfies every constraint put on it.
   "member_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
-  "member_sig_unknowable": {
-    code: "BLOT_REFLECTION_NOT_INDEXED",
-    stage: "check",
-  },
   "literal_outside_union": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "missing_case": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // A constructor set is covered by subtyping and reports through `constrain`;
@@ -210,6 +206,14 @@ const REJECTIONS: Record<
   },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "refutable_for_pattern": {
+    code: "BLOT_REFUTABLE_FOR_PATTERN",
+    stage: "check",
+  },
+  "removed_operator_section": {
+    code: "BLOT_REMOVED_OPERATOR_SECTION",
+    stage: "check",
+  },
   "rebinding_pattern": {
     code: "BLOT_BAD_REBINDING_TARGET",
     stage: "check",
@@ -244,14 +248,20 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "transformed_sig": { code: "BLOT_TYPE_ERROR", stage: "check" },
-  "spread_of_a_parameter": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "spread_of_a_parameter": {
+    code: "BLOT_OPEN_RECORD_SPREAD",
+    stage: "check",
+  },
   // The other half of the spread rule, and the half that was wrong: a spread
   // whose fields are unknown contributes no names, so keeping the fields
   // written before it typed `{ .tag = 1; ...r; }` as `{ .tag = 1; }` for a call
   // that hands it `{ .tag = "hi"; }`. `blot check` reported `1` and `blot eval`
   // returned `"hi"`. A rule that answers with the narrower of two values it
   // cannot choose between is not incomplete, it is wrong.
-  "spread_after_a_field": { code: "BLOT_SPREAD_MAY_OVERWRITE", stage: "check" },
+  "spread_after_a_field": {
+    code: "BLOT_OPEN_RECORD_SPREAD",
+    stage: "check",
+  },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
   "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },

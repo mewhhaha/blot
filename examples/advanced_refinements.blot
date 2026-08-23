@@ -14,7 +14,7 @@ let at = fn values => fn index => do:
   return 0
 
 // Gamma carries the state tags and effect row; Omega consumes the old state.
-const Audit = @effect { .record = Str -> Unit; }
+const Audit = @effect { .record = Text -> Unit; }
 const Transition = #Closed Int -> #Open Int ~ { Audit }
 
 sig advance = Transition

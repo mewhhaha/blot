@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 
 let choose = fn selected => do:
   <- case selected of

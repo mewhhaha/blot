@@ -23,12 +23,12 @@ open import "blot:prelude"
 // One definition, two implementations, and nothing at run time chooses between
 // them: `measuring` is applied while compiling and the loser is never emitted.
 const measuring = fn T => do:
-  if refines (T, Str):
+  if refines (T, Text):
     return fn x => Text.length x
   else:
     return fn x => x + 0
 
-const measure_text = measuring Str
+const measure_text = measuring Text
 const measure_int = measuring Int
 
 // Each call site is typed against the arrow it actually got. `measure_text 41`
@@ -77,7 +77,7 @@ const count = counting Int
 // The branch that loses captures `down` too, as an ordinary sibling binding. A
 // captured function has no type to bridge to either, so it is typed the same
 // way — otherwise one helper in scope would sink the whole attempt.
-const ignoring = counting Str
+const ignoring = counting Text
 
 return {
   .text_length = text_length;

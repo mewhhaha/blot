@@ -8,6 +8,7 @@ use crate::eval::{
     Computation, Context, Phase, Runtime, closure_free_names, evaluate_expression, evaluate_module,
 };
 use crate::ownership::Produced;
+use crate::protocol::RUNTIME_HIR_SCHEMA;
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
 use crate::value::{
     ChoiceSource, ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue,
@@ -883,7 +884,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 4,
+            schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -1885,7 +1886,7 @@ impl ResidualTrace {
             RuntimeType::SignedInteger64 => "Int",
             RuntimeType::Float32 => "F32",
             RuntimeType::Float64 => "F64",
-            RuntimeType::Text => "Str",
+            RuntimeType::Text => "Text",
             RuntimeType::Vector { .. } => "Vector",
             RuntimeType::Mask { .. } => "Mask",
             RuntimeType::Store { .. } => "Store",
@@ -3264,7 +3265,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 4,
+            schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
@@ -4299,6 +4300,7 @@ impl ResidualTrace {
                 }
                 Ok(first)
             }
+            Value::Extended { inner, .. } => self.type_from_type_value(inner),
             _ => Err(hir_error(&format!(
                 "{} is outside the Rust residual type calculus.",
                 crate::value::show(value)
@@ -7439,7 +7441,7 @@ fn merge_runtime_modules(
     validate_runtime_layouts(&types)?;
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
-        schema_version: 4,
+        schema_version: RUNTIME_HIR_SCHEMA,
         source: source.to_owned(),
         types,
         signatures,
@@ -7843,7 +7845,7 @@ impl HirBuilder {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 4,
+            schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source,
             types: self.types,
             signatures: self.signatures,

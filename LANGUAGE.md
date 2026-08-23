@@ -59,14 +59,14 @@ tag continues with `[`. Section 4.2 defines declaration tags.
 The reserved words are:
 
 ```text
-module with import operators infixl infixr infix prefix
+module with import
 let const sig return
 if else case of rec open
 for in break do compdo fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
-`.else`, `.Num`, and `.0` are all ordinary projections.
+`.else`, `.Int`, and `.0` are all ordinary projections.
 
 ### 2.2 Literals
 
@@ -110,26 +110,26 @@ produces an infinity and one with no defined answer produces a NaN, both of
 which are values a program may go on to use. This is the difference from integer
 arithmetic, where the result would be a number the machine cannot hold.
 
-`Float.cmp` refuses NaN rather than answering, because no ordering accepts it: a
+`F64.cmp` refuses NaN rather than answering, because no ordering accepts it: a
 diagnostic while compiling and a trap while running, the two shapes `@int.div`
 by zero already takes. There is no float equality. Exact comparison is
-`is_equal (Float.cmp a b)` — the same test with the NaN case left in, rather
-than an equality that answers `#False` to a question the format says has no
-answer. `Float.is_nan` is how a program asks first, and it is a primitive
-because comparing is precisely what refuses.
+`is_equal (F64.cmp a b)` — the same test with the NaN case left in, rather than
+an equality that answers `#False` to a question the format says has no answer.
+`F64.is_nan` is how a program asks first, and it is a primitive because
+comparing is precisely what refuses.
 
 `F32` is the narrower float, and a distinct type rather than a precision `F64`
 sometimes has. There is no f32 literal — the grammar has one float token, and
-`Float32.of_float` is what makes the narrowing a step the program takes rather
-than one performed on it. `Float32.widen` goes back, exactly, because every
-`F32` is an `F64`.
+`F32.of_float` is what makes the narrowing a step the program takes rather than
+one performed on it. `F32.widen` goes back, exactly, because every `F32` is an
+`F64`.
 
 `F32x4`, `I32x4`, `I16x8`, and `I8x16` are 128-bit SIMD values. Their lane width
 and count are part of the type; none is a tuple or record that can be projected
-structurally. `Vec4`, `Int32x4`, `Int16x8`, and `Int8x16` are the prelude
-namespaces for their operations. The emitted `wasm-simd128` artifact uses native
-vector instructions. An independent conformance oracle may implement an integer
-vector lane by lane, but it must produce the same value.
+structurally. `F32x4`, `I32x4`, `I16x8`, and `I8x16` are the prelude namespaces
+for their operations. The emitted `wasm-simd128` artifact uses native vector
+instructions. An independent conformance oracle may implement an integer vector
+lane by lane, but it must produce the same value.
 
 Integer lane arithmetic wraps modulo (2^{32}), (2^{16}), or (2^8). Shift amounts
 are reduced modulo the lane width. Operations whose interpretation matters say
@@ -138,37 +138,36 @@ carry signedness. Checked constructors accept `I32`, `I16`, or `I8` as
 appropriate and preserve the integer they receive. The explicitly named
 `of_wrapping`, `splat_wrapping`, and `with_*_wrapping` operations accept `Int`
 and reduce it modulo the lane width. Arithmetic is inherently wrapping.
-`Int32x4.of` constructs four lanes and its named projections and replacements
-are `x`, `y`, `z`, `w` and `with_x`, `with_y`, `with_z`, `with_w`. The narrower
+`I32x4.of` constructs four lanes and its named projections and replacements are
+`x`, `y`, `z`, `w` and `with_x`, `with_y`, `with_z`, `with_w`. The narrower
 namespaces currently construct only with `splat`.
 
-`F32x4` is opaque rather than ordered. `Int`, `Str`, `F64`, and `F32` are ranges
-over an ordered domain; four lanes are not an interval, so there is no bound to
-narrow against and no literal that names one. The only fact about the type is
-its name: `F32x4` matches `F32x4` and nothing else, `@type.reflect` reports it
-as `#Opaque` (§13.4), and `Reflect.refines` therefore answers `#False` for it,
-having nothing to compare.
+`F32x4` is opaque rather than ordered. `Int`, `Text`, `F64`, and `F32` are
+ranges over an ordered domain; four lanes are not an interval, so there is no
+bound to narrow against and no literal that names one. The only fact about the
+type is its name: `F32x4` matches `F32x4` and nothing else, `@type.reflect`
+reports it as `#Opaque` (§13.4), and `Reflect.refines` therefore answers
+`#False` for it, having nothing to compare.
 
 Lane comparisons produce separate opaque `F32x4Mask`, `I32x4Mask`, `I16x8Mask`,
 and `I8x16Mask` types. A mask is accepted only by the matching vector namespace.
 Integer `mask_bits` returns bit (i) for lane (i), while `all` and `any` reduce
 the mask to `Bool`. Masks have no lane projection or module-boundary layout.
-`Vec4.shuffle` selects four constant lanes from two vectors; `Vec4.swizzle` is
+`F32x4.shuffle` selects four constant lanes from two vectors; `F32x4.swizzle` is
 the one-vector spelling. Lane selectors are integers in `0..7` for shuffle and
 `0..3` for swizzle, and must be known while compiling so they can become the
 instruction immediate.
 
-`Int32x4.lane vector selector` selects a lane whose integer selector is in
-`0..3` and known at compile time. A singleton integer type alone is
-insufficient: the selector must be a literal or a `const` value so lowering
-receives an immediate certificate. The named `x`, `y`, `z`, and `w` operations
-remain the shortest spelling for fixed positions.
+`I32x4.lane vector selector` selects a lane whose integer selector is in `0..3`
+and known at compile time. A singleton integer type alone is insufficient: the
+selector must be a literal or a `const` value so lowering receives an immediate
+certificate. The named `x`, `y`, `z`, and `w` operations remain the shortest
+spelling for fixed positions.
 
 There is no implicit conversion between the numeric types, and no operator
 serves more than one. An operator resolves to one binding by name (§4.7), so a
-`+` over both would have to dispatch on a value's type at run time.
-`Float.of_int` and `Float.truncate` cross explicitly; `truncate` rounds toward
-zero.
+`+` over both would have to dispatch on a value's type at run time. `F64.of_int`
+and `F64.truncate` cross explicitly; `truncate` rounds toward zero.
 
 A text literal is delimited by `"`. The defined escapes are:
 
@@ -194,7 +193,8 @@ An operator is a non-empty sequence drawn from:
 `=>`, `:=`, `<-`, `...`, `:`, and `;` are recognized by their grammar position.
 
 The parser does not encode precedence. It produces a flat chain, and semantic
-lowering folds that chain using the active fixity table.
+lowering folds that chain using the fixed table in §7. Operator vocabulary is
+part of the language contract rather than mutable module state.
 
 ## 3. Programs and modules
 
@@ -203,16 +203,13 @@ A file has this order:
 ```blot
 module with parameter    // optional
 
-operators {             // optional
-  infixl 60 (+) = Num.add;
-}
-
 declarations
 return result             // optional
 ```
 
-The `module` header, when present, must be first. The `operators` header, when
-present, follows it. Zero or more declarations follow.
+The `module` header, when present, must be first. Zero or more declarations
+follow. The removed `operators` header is still recognized only so the compiler
+can report `BLOT_REMOVED_OPERATOR_SECTION`; it never changes accepted syntax.
 
 A module is an implicit `do` computation from an optional input to one result.
 Its declarations execute in source order. `return value` exits the module with
@@ -304,7 +301,7 @@ const shader = @include "./shaders/main.wgsl" as_raw
 Schematically, for every result type `a`, its type is:
 
 ```blot
-Str -> ({ .specifier = Str; .path = Str; .text = Str; } -> a) -> a
+Text -> ({ .specifier = Text; .path = Text; .text = Text; } -> a) -> a
 ```
 
 The first argument must be a text literal at the call site. Relative paths are
@@ -327,7 +324,7 @@ const fixed_config = @include "./config.json" as_const_json
 Both produce ordinary Blot values. JSON objects become records, arrays become
 arrays, strings become text, integral numbers become `Int`, other numbers become
 `F64`, booleans become `Bool`, and `null` becomes `()`. `as_json` assigns the
-usual widened type recursively: text is `Str`, integers are `Int`, booleans are
+usual widened type recursively: text is `Text`, integers are `Int`, booleans are
 `Bool`, and array elements are joined into one homogeneous element type. Object
 field names remain structural because they are present in the file.
 `as_const_json` instead preserves every text, integer, and boolean literal in
@@ -428,12 +425,12 @@ dispatch: each `const` bound from it is typed against the branch that ran, and
 the branch that did not run contributes nothing to it.
 
 ```blot
-const measuring = fn T => if refines (T, Str):
+const measuring = fn T => if refines (T, Text):
   return fn x => Text.length x
 else:
   return fn x => x + 0
 
-const measure_text = measuring Str   // Str -> Int, not joined with the other arm
+const measure_text = measuring Text   // Text -> Int, not joined with the other arm
 ```
 
 This applies equally to a compile-time function reached through an imported
@@ -564,7 +561,7 @@ The binding's inferred type must be a subtype of the signature. A signature
 constrains a binding; it does not introduce a name or evaluate at runtime.
 
 A function type includes the effects it performs, so a signature for a binding
-that performs names them: `Str -> Unit ~ { Console }` (§12.4). A bare `->` is
+that performs names them: `Text -> Unit ~ { Console }` (§12.4). A bare `->` is
 the empty row rather than an unwritten one.
 
 ### 4.4 Stable rebinding
@@ -750,11 +747,11 @@ during lowering.
 
 `^name` is a pinned-value pattern. It reads the binding already in lexical
 scope, compares the matched value with it, and binds nothing; in particular, it
-does not shadow `name`. Pins currently admit bindings known to be `Int` or `Str`
-at the pattern, the two scalar domains with exact equality in every execution. A
-structural value still needs a structural pattern. A pin is refutable and never
-contributes to exhaustiveness, even when the binding was initialized from a
-literal, so a case normally needs another arm:
+does not shadow `name`. Pins currently admit bindings known to be `Int` or
+`Text` at the pattern, the two scalar domains with exact equality in every
+execution. A structural value still needs a structural pattern. A pin is
+refutable and never contributes to exhaustiveness, even when the binding was
+initialized from a literal, so a case normally needs another arm:
 
 ```blot
 let wanted = 1
@@ -763,10 +760,9 @@ let label = case actual of
   _ => "other"
 ```
 
-In `for ^name in iterator`, the same refutable-pattern rule skips values that do
-not equal the existing binding. A `for` head is expression-shaped in Baba's CST,
-so lowering recognizes `^name` as a pin after seeing `in` and before folding
-operator fixity. Everywhere else, `^` remains an ordinary custom operator.
+In `for case ^name in iterator`, the same refutable-pattern rule skips values
+that do not equal the existing binding. An ordinary `for ^name in iterator` is
+rejected because ordinary loop heads require irrefutable patterns.
 
 ### 5.1 Ownership qualifiers
 
@@ -810,7 +806,7 @@ Arrays are ordered homogeneous collections:
 not a tuple, a fixed-length vector, a list of alternatives, or an array whose
 length appears in its type. In an inferred type, `['a]` binds one homogeneous
 element variable; each polymorphic call freshens it. In a type-value expression,
-`[Int, Str]` computes `[Int | Str]`. The empty type-value array is `[bottom]`,
+`[Int, Text]` computes `[Int | Text]`. The empty type-value array is `[bottom]`,
 while an ordinary runtime `[]` begins with a fresh element variable and receives
 its element constraint from use. In a recursive homogeneous accumulator, that
 empty origin contributes no inhabitant alternative of its own: yielded or pushed
@@ -867,27 +863,14 @@ reference evaluator materializes the unit field at the call boundary. An exact
 `T | ()` has one HM representation; that sum is not source syntax and does not
 cross the Wasm ABI.
 
-A spread contributes the fields its operand is _known_ to have. Where the
-operand is a shape written nearby, that is all of them. Where it is a parameter,
-it is none of them: `fn r => { ...r; .tag = 1; }` returns a shape with `.tag`
-and nothing else, and reading any other field off the result is an error. Width
-subtyping says what a function may _read_ from a record it is handed; it does
-not carry the unread fields through a spread, which would need a row variable
-this lattice does not have. Naming the fields at the spread avoids the limit
-entirely.
-
-A spread whose fields are not known is rejected where any field is written
-before it. Members apply left to right, so such a spread may replace one of
-them, and nothing decides which value wins until the program runs: in
-`fn r => { .tag = 1; ...r; }` the result's `.tag` is `r`'s where `r` carries one
-and `1` where it does not, and width subtyping is exactly why the checker cannot
-tell — a value typed `{ .x = Int; }` may carry a `.tag` as well. Saying `1`
-would be a claim the run refutes rather than a type too wide, so the shape is
-refused with `BLOT_SPREAD_MAY_OVERWRITE`. Writing the spread before those fields
-decides the question, and so does naming the fields wanted from it. The
-default-then-override idiom this reads as would need a type saying "`r`'s field
-if it has one, this one otherwise", which is presence polymorphism rather than
-width subtyping.
+A spread requires an exact record value: a shape literal, a binding whose value
+is exact, or `@shape.empty`. A parameter known only through width subtyping may
+carry fields absent from its visible type, so spreading it would either discard
+runtime data or require row polymorphism. It is rejected with
+`BLOT_OPEN_RECORD_SPREAD` in every member position. Deconstruct the fields the
+result needs, or construct an exact record before spreading. Exact spreads and
+explicit fields still apply from left to right, so override order remains
+visible in source.
 
 Braces with no leading `.` on their members are an effect row rather than a
 shape:
@@ -1130,22 +1113,12 @@ non-deterministically hanging the compiler.
 
 ## 7. Operators and fixity
 
-The optional operator header extends or overrides the default fixity table:
+Blot has one fixed operator table. Programs cannot declare punctuation or alter
+precedence. A target is still an ordinary qualified binding: using an operator
+requires that target to be in scope, and the table does not implicitly import
+the prelude.
 
-```blot
-operators {
-  infixl 65 (++) = Text.append;
-  infixr 10 ($) = Fn.apply;
-  infix 30 (===) = Eq.eq;
-  prefix 90 (!!) = negate;
-}
-```
-
-The target is a qualified name or intrinsic. Using an operator requires both a
-fixity entry and its target to be in scope. Default fixity does not implicitly
-import the prelude target.
-
-Default fixities, from loosest to tightest:
+Fixed operators, from loosest to tightest:
 
 | level | spelling                    | associativity   | target                          |
 | ----- | --------------------------- | --------------- | ------------------------------- |
@@ -1155,18 +1128,19 @@ Default fixities, from loosest to tightest:
 | 22    | `\|\|`                      | right           | `Logic.or`                      |
 | 24    | `&&`                        | right           | `Logic.and`                     |
 | 25    | `->`                        | right           | `@type.arrow`                   |
-| 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Eq.*`, `Ord.*`                 |
+| 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Int.*`                         |
 | 40    | `\|` `\`                    | left            | `Type.union`, `Type.diff`       |
 | 45    | `&`                         | left            | `Type.intersect`                |
 | 50    | `<+`                        | left            | `attach`                        |
 | 55    | `<>`                        | right           | `Text.append`                   |
-| 60    | `+` `-`                     | left            | `Num.add`, `Num.sub`            |
-| 70    | `*` `/` `%`                 | left            | `Num.mul`, `Num.div`, `Num.rem` |
-| 90    | `-`                         | prefix          | `Num.negate`                    |
+| 60    | `+` `-`                     | left            | `Int.add`, `Int.sub`            |
+| 70    | `*` `/` `%`                 | left            | `Int.mul`, `Int.div`, `Int.rem` |
+| 90    | `-`                         | prefix          | `Int.negate`                    |
 | 90    | `!` `?` `&`                 | prefix          | `@linear.*`                     |
 
-Operators are ordinary eager function calls. In particular, `&&` and `||`
-evaluate both operands; use `if` for short-circuiting.
+Most operators lower to ordinary function calls. `&&` and `||` are the two
+control operators: lowering turns them into `if`, so the right operand is
+evaluated only when the left operand does not determine the result.
 
 `?name` introduces an affine binding when it appears in a pattern. Affine names
 are consumed by ordinary move positions; `?value` is not a separate ownership
@@ -1266,12 +1240,12 @@ let rank = fn level => case level of
 is refused: `3` is a member of the target's type that no arm covers. Adding a
 `3` arm, or any irrefutable arm, accepts it.
 
-A target whose type is not an explicitly enumerable set — `Int`, `Str`, or any
+A target whose type is not an explicitly enumerable set — `Int`, `Text`, or any
 range with an open end — cannot be exhausted by listed literal arms. Such a
 `case` is refused rather than accepted in silence:
 
 ```blot
-sig describe = Int -> Str
+sig describe = Int -> Text
 let describe = fn n => case n of
   1 => "one"
   2 => "two"
@@ -1453,7 +1427,7 @@ branch reached because it was not, the name's type is the part of its declared
 set that the condition allows.
 
 ```blot
-sig name = 1 | 2 | 3 -> Str
+sig name = 1 | 2 | 3 -> Text
 let name = fn n =>
   if n == 1:
     return case n of
@@ -1477,8 +1451,8 @@ intersection type, no complement type, and no difference operation on types.
 the checker can read and recognise as a comparison of two integers. Recognition
 is a property of the function, not of the name it is bound to and not of the
 operator spelled at the call site. `==` is an ordinary fixity entry naming the
-binding `Eq.eq` (§7), so `if n == 1` and `if Eq.eq n 1` prove exactly the same
-thing, and a module that binds `Eq` to something else gets whatever that
+binding `Int.eq` (§7), so `if n == 1` and `if Int.eq n 1` prove exactly the same
+thing, and a module that binds `Int` to something else gets whatever that
 something else actually computes.
 
 A value is recognised when it is `fn p1 => fn p2 => body` and every occurrence
@@ -1558,7 +1532,7 @@ the branch failing to cover a set the condition would have shrunk.
 
 - **A name the compile-time environment cannot see through.** A `let` binding
   and a function parameter give a name a type without giving it a compile-time
-  value, so a `let`-bound or parameter-bound `Eq` is refused rather than read
+  value, so a `let`-bound or parameter-bound `Int` is refused rather than read
   through to an outer one. This is what makes shadowing safe: the checker never
   reasons about a function the program does not call, and an operator record
   supplied by the _caller_ could never be reasoned about at all.
@@ -1581,15 +1555,15 @@ the branch failing to cover a set the condition would have shrunk.
 - **A witness that is another runtime name.** `n == m` says `n` equals this `m`,
   not that `n` is somewhere in `m`'s type. Intersecting against a whole type
   would be sound and complementing against it would not, so neither is done.
-- **A function whose body is not a single comparison.** `Ord.cmp`, `Ord.min` and
-  `Ord.max` are refused, as is any equality written with two comparisons rather
+- **A function whose body is not a single comparison.** `Int.cmp`, `Int.min` and
+  `Int.max` are refused, as is any equality written with two comparisons rather
   than one. Refusal here is a limitation, not a judgement: the function is fine,
   the checker just cannot say what it computes.
 - **A body containing `open` or a recursive binding.** Both bind names that
   appear in no node of the body, so the occurrence count that licenses the whole
   argument cannot see them.
 - **Text.** A text range cannot have a value cut out of its interior: range
-  bounds are inclusive and text order is dense, so splitting `Str` at `"m"`
+  bounds are inclusive and text order is dense, so splitting `Text` at `"m"`
   would give `.."m" | "m"..` and readmit the value it was asked to remove.
   Integers are discrete, so the same split is exact for them and is performed. A
   recognised comparison is over `@int.cmp` in any case, which fails on text.
@@ -1617,6 +1591,9 @@ for iterator:
 
 for pattern in iterator:
   statements
+
+for case pattern in iterator:
+  statements
 ```
 
 An iterator is a shape:
@@ -1628,9 +1605,10 @@ An iterator is a shape:
 }
 ```
 
-The first form ignores each element. The second matches it against `pattern`. An
-irrefutable pattern binds normally. A refutable pattern that does not match
-skips that element rather than failing the loop.
+The first form ignores each element. The second requires an irrefutable pattern
+and binds it. The `for case` form opts into filtering: a refutable pattern that
+does not match skips that element. Keeping the distinction explicit prevents a
+pattern edit from silently changing iteration cardinality.
 
 The names rebound with `:=` in the loop body — including inside a statement
 conditional in that body, but not inside a nested `for` — form an implicit
@@ -1789,7 +1767,7 @@ Examples:
 
 ```blot
 const Bit = 0 | 1
-const Message = #Ready | #Failed Str
+const Message = #Ready | #Failed Text
 const Point = { .x = I32; .y = I32; }
 const Meter = seal ("Meter", I32)
 ```
@@ -1822,14 +1800,13 @@ The checker uses algebraic subtyping and biunification:
 Integer and text literals infer singleton ranges. `identity 42` therefore
 returns type `42`, not merely `Int`.
 
-Float literals do not. `1.5` infers `F64`, and `F64` is the only float type
-there is. A singleton float would put a real number where the lattice keeps a
-bound, and every operation it performs on bounds has no meaning there: there is
-no next float after 1.5 for `difference` to name, nothing for coverage to
-enumerate, and equality is not something to narrow on where NaN and rounding
-exist. So a `case` over floats never becomes exhaustive without an irrefutable
-arm, and a float pattern matches by equality without proving anything about the
-scrutinee.
+F64 literals do not. `1.5` infers `F64`, and `F64` is the only float type there
+is. A singleton float would put a real number where the lattice keeps a bound,
+and every operation it performs on bounds has no meaning there: there is no next
+float after 1.5 for `difference` to name, nothing for coverage to enumerate, and
+equality is not something to narrow on where NaN and rounding exist. So a `case`
+over floats never becomes exhaustive without an irrefutable arm, and a float
+pattern matches by equality without proving anything about the scrutinee.
 
 Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
@@ -1872,12 +1849,12 @@ trait-like behavior by width subtyping, while effect rows describe callable
 behavior separately from parameter and result representation:
 
 ```blot
-const Named = { .name = Str; }
+const Named = { .name = Text; }
 
-sig label = @forall (fn T => Named -> T -> Str)
+sig label = @forall (fn T => Named -> T -> Text)
 let label = fn named => fn _ => named.name
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 sig map_logged =
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
@@ -1954,7 +1931,7 @@ Compiler output uses notation that is not additional source syntax:
 
 | display                     | meaning                          |
 | --------------------------- | -------------------------------- |
-| `Int`, `Str`, `1`, `"x"`    | ranges and singleton ranges      |
+| `Int`, `Text`, `1`, `"x"`   | ranges and singleton ranges      |
 | `0..9`, `0..`               | bounded and half-bounded ranges  |
 | `{ .x = Int; }`             | structural record                |
 | `[Int]`                     | homogeneous array                |
@@ -2038,22 +2015,16 @@ source layout descriptions, logical refinements, and allocator evidence remain
 coherent without pretending they are the same type fact.
 
 A namespace member is a compile-time value, and projecting one is typed by that
-value rather than by the field rule. A member that is itself a type projects to
-that type. A member function with no recoverable arrow projects to an inference
-variable marked as available only after specialization. Calling one is typed by
-evaluating the whole application at compile time, and the value produced is the
-result type. The arguments must therefore be values the checker can compute: a
-literal, a `const`, or a binding whose value it already computed to type an
-earlier member call. If this pass cannot evaluate the call, the marked variable
-may flow until a concrete specialization revisits it, but it cannot authorize a
-runtime operation or prove an arbitrary `sig`. This is not `⊤`: semantic `top`
-admits every value, while unavailable evidence admits no conclusion.
+value rather than by the ordinary record-field rule. A member that is itself a
+type projects to that type. A callable member retains the arrow inferred for its
+closure or primitive, so an ordinary runtime call is checked by the same
+application rule as any other function. If all inputs are compile-time values,
+evaluation may additionally compute the result value and refine its type; that
+staging opportunity is an optimization and never a prerequisite for accepting
+the call.
 
-The same application rule specializes a callable field of an ordinary record
-whose value is known at compile time. Unlike an attached namespace, that record
-also has an ordinary structural type. Consequently an unevaluable call falls
-back to its inferred arrow rather than to a staged-only result. This remains
-true when the record is reached through a namespace member:
+The same application rule handles a callable field of an ordinary record. This
+remains true when the record is reached through a namespace member:
 `World.Position.insert entity` types `Position` as the attached record and
 `insert` as its ordinary callable field. Compile-time projection follows the
 whole chain; it does not force games to bind each intermediate record before
@@ -2400,7 +2371,7 @@ source rather than adding another `@region` primitive.
 
 `OrderedTextMap` is an ordinary prelude adapter over `Slice`, not a second
 compiler primitive family. `OrderedTextMap.entry V` is an attached structural
-type stored as the tuple `(Str, V)`; `OrderedTextMap.of V` is the region type
+type stored as the tuple `(Text, V)`; `OrderedTextMap.of V` is the region type
 whose elements have that entry type.
 
 An input is valid when every adjacent key pair is strictly increasing under
@@ -2447,7 +2418,7 @@ An effect is a compile-time value built from a shape of operation types:
 
 ```blot
 const Console = @effect {
-  .write = Str -> Unit;
+  .write = Text -> Unit;
 }
 ```
 
@@ -2572,7 +2543,7 @@ A function type carries the row it performs, and a `sig` writes that row the way
 the checker prints it:
 
 ```blot
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 
 sig map_logged =
   (Int -> Int ~ { ..e }) ->
@@ -2783,7 +2754,7 @@ ownership: replacing or removing an owned value does not silently discard it.
 Starting from `empty`, these operations keep keys unique. A manually built
 association array with duplicate keys has defined first-match behavior; `put` or
 `remove` affects only that visible entry. `Dict` is `Map.with` text equality, so
-`Dict.of V` remains the concise type constructor for `(Str, V)` maps.
+`Dict.of V` remains the concise type constructor for `(Text, V)` maps.
 `OrderedTextMap` is the distinct owned, strictly ordered API described in §11.4;
 it does not change `Map` or `Dict` representation or iteration order.
 
@@ -2985,20 +2956,20 @@ canonical requirement as representation evidence, so an empty array refined to
 ```blot
 // Canonical requirements refine unknowns and grant the operations they name.
 let name_of = fn value =>
-  let named = @satisfies value { .name = Str; }
+  let named = @satisfies value { .name = Text; }
   return named.name
 
 let int_store = fn values => @satisfies values [Int]
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 let command = fn callback =>
-  @satisfies callback (Str -> Unit ~ { Console })
+  @satisfies callback (Text -> Unit ~ { Console })
 
 // Predicates compose over a closed inferred type.
 const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
-const has_name = fn type => refines (type, { .name = Str; })
+const has_name = fn type => refines (type, { .name = Text; })
 const named_shape = fn type => is_shape type && has_name type
 
 let person = { .name = "Ada"; .age = 36; }
@@ -3006,7 +2977,7 @@ let checked = @satisfies person named_shape
 
 // Requirements can themselves be staged and specialized.
 const require = fn requirement => fn value => @satisfies value requirement
-let also_checked = require { .name = Str; } person
+let also_checked = require { .name = Text; } person
 ```
 
 The distinction is semantic, not syntactic sugar. Canonical values—integer
@@ -3117,7 +3088,7 @@ const is_shape = fn type => case reflect type of
   _ => False
 const is_named_shape = both_types (
   is_shape,
-  fn type => refines (type, { .name = Str; })
+  fn type => refines (type, { .name = Text; })
 )
 ```
 
@@ -3141,12 +3112,18 @@ authority without copying bytes and rejects embedded non-Store resources.
 The standard prelude is ordinary Blot source at `blot:prelude`. Its public
 record currently exports:
 
+Focused modules `blot:array`, `blot:collections`, `blot:iter`, `blot:memory`,
+`blot:sort`, and `blot:types` expose smaller ordinary records over the same
+values. They are import conveniences, not privileged scopes or independent
+implementations. [STDLIB.md](STDLIB.md) is the generated exact export index.
+
 - function tools: `Fn`, `identity`, `always`, `compose`, `flip`, `freeze`;
 - declaration-tag tools: `tag`, `derive`, `test`, and `assert.reuse`;
 - booleans: `Bool`, `True`, `False`, `Logic`, `not`, `expect`;
-- ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`,
-  `Ord`, `Eq`, `Num`;
-- floats and lanes: `Float`, `Float32`, and `Vec4`;
+- ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`, and
+  the operations attached to `Int`;
+- floats and lanes: operations attached to `F64`, `F32`, `F32x4`, `I32x4`,
+  `I16x8`, and `I8x16`;
 - branch hints: `likely` and `unlikely` (§15.1);
 - structural interfaces: `Empty`, `Length`, `Semigroup`, `Monoid`, `Mappable`,
   `Foldable`, `Filterable`, and `Iterable`;
@@ -3164,7 +3141,7 @@ record currently exports:
 - storage tools: `struct`, `reorder`, `layout`, `aligned`, `bit_width`, and
   `packed`; and
 - standard types and integer range constructors: `I`, `I8`, `I16`, `I32`, `I64`,
-  `U`, `U8`, `U16`, `U32`, `U64`, `Nat`, `Int`, `Str`, `Unit`, `F64`, `F32`,
+  `U`, `U8`, `U16`, `U32`, `U64`, `Nat`, `Int`, `Text`, `Unit`, `F64`, `F32`,
   `F32x4`, and `F32x4Mask`.
 
 `Empty T`, `Length T`, `Semigroup T`, and `Monoid T` are structural interface
@@ -3178,25 +3155,15 @@ const Monoid = fn T => { .empty = T; .append = T -> T -> T; }
 ```
 
 They do not perform implicit dispatch. An implementation is an ordinary record
-passed explicitly or named directly. `Text` satisfies both `Length Str` and
-`Monoid Str`. `Array` satisfies `Length [T]` and `Monoid [T]`; its `length`
+passed explicitly or named directly. `Text` satisfies both `Length Text` and
+`Monoid Text`. `Array` satisfies `Length [T]` and `Monoid [T]`; its `length`
 implementation borrows the array, while its `append` is prelude source over
 `fold` and `@array.push`. `Arena` supplies `singleton`, affine `insert`,
 borrowed `length`, and safe `get` over the same array representation. Ownership
 remains a separate flow property rather than part of the structural interface
-type. The default `<>` remains the concrete text operation `Text.append`. A
-module that wants the same spelling for arrays declares `Array.append` as its
-operator target. Left association also matches the source operation's
-left-to-right accumulation and avoids building the whole right-hand join before
-the left-hand one begins:
-
-```blot
-operators {
-  infixl 55 (<>) = Array.append;
-}
-
-let joined = left <> middle <> right
-```
+type. The fixed `<>` is the concrete text operation `Text.append`; arrays use
+the named `Array.append` operation. Fixed vocabulary keeps parsing, formatting,
+tooling, and review independent of a module-local operator environment.
 
 Collection interfaces are structural too:
 
@@ -3241,7 +3208,7 @@ explicitly and removes mapped duplicates:
 set.map_with (values, mapped_equal, transform)
 ```
 
-`Map.with` and `Set.with` require curried equality. `Ord.eq` already has that
+`Map.with` and `Set.with` require curried equality. `Int.eq` already has that
 shape; text equality can be adapted explicitly:
 
 ```blot
@@ -3461,17 +3428,13 @@ The byte-level layouts and host calling example are in
 ```blot
 module with init
 
-operators {
-  infixl 65 (++) = Text.append;
-}
-
 open import "blot:prelude"
 
 const Console = @effect.host {
-  .write = Str -> Unit;
+  .write = Text -> Unit;
 }
 
-const Message = #Ready | #Failed Str
+const Message = #Ready | #Failed Text
 
 let describe = fn message => case message of
   #Ready => "ready"
@@ -3484,7 +3447,7 @@ for ever:
     break
 
 let report = fn () =>
-  let text = describe #Ready ++ Text.of_int attempts
+  let text = describe #Ready <> Text.of_int attempts
   <- Console.write text
   return text
 

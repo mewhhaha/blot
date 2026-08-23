@@ -458,6 +458,7 @@ struct TypeEnvironment {
     names: Rc<BTreeMap<String, Typing>>,
     phases: Rc<BTreeMap<String, Phase>>,
     stable_names: Rc<BTreeMap<String, Typing>>,
+    exact_records: Rc<BTreeSet<String>>,
     opens: Rc<Vec<OpenedTypes>>,
     forward: Rc<BTreeSet<String>>,
     parent: Option<Rc<TypeEnvironment>>,
@@ -482,6 +483,7 @@ impl TypeEnvironment {
             names: Rc::new(BTreeMap::new()),
             phases: Rc::new(BTreeMap::new()),
             stable_names: Rc::new(BTreeMap::new()),
+            exact_records: Rc::new(BTreeSet::new()),
             opens: Rc::new(Vec::new()),
             forward: Rc::new(BTreeSet::new()),
             parent: Some(parent),
@@ -530,6 +532,15 @@ impl TypeEnvironment {
         self.parent.as_ref()?.binding_phase(name)
     }
 
+    fn is_exact_record(&self, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return self.exact_records.contains(name);
+        }
+        self.parent
+            .as_ref()
+            .is_some_and(|parent| parent.is_exact_record(name))
+    }
+
     fn is_forward(&self, name: &str) -> bool {
         self.forward.contains(name)
             || self
@@ -564,7 +575,7 @@ pub struct CachedModuleInterface {
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 10;
+pub(crate) use crate::protocol::CHECKED_MODULE_CERTIFICATE_SCHEMA;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -2273,7 +2284,15 @@ impl Checker {
                 for bound in recursive_bounds {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
+                let exact_record = self.exact_record_expression(module, value, types);
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
+                if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize] {
+                    if exact_record {
+                        Rc::make_mut(&mut types.exact_records).insert(name.clone());
+                    } else {
+                        Rc::make_mut(&mut types.exact_records).remove(name);
+                    }
+                }
                 let binding_phase = if kind == DeclarationKind::Const {
                     Phase::Comptime
                 } else {
@@ -2343,8 +2362,14 @@ impl Checker {
                 let inferred_type = stable_rebinding_type(inferred.type_.clone());
                 self.constrain(inferred_type.clone(), previous.clone(), span)?;
                 self.constrain(previous.clone(), inferred_type, span)?;
+                let exact_record = self.exact_record_expression(module, value, types);
                 Rc::make_mut(&mut types.names).insert(name.clone(), Typing::Mono(previous));
                 Rc::make_mut(&mut types.phases).insert(name.clone(), Phase::Runtime);
+                if exact_record {
+                    Rc::make_mut(&mut types.exact_records).insert(name.clone());
+                } else {
+                    Rc::make_mut(&mut types.exact_records).remove(&name);
+                }
                 match self.evaluate(path, value, values, Phase::Runtime) {
                     Ok(value_) => {
                         values.names.borrow_mut().insert(name, value_);
@@ -2951,6 +2976,9 @@ impl Checker {
                     .ok()
                     .and_then(|target_value| {
                         if let Some(member) = static_member(&target_value, &name) {
+                            if let Value::Primitive { name, .. } = &member {
+                                return primitive_type(self, name);
+                            }
                             if let Some(type_) = self.bridge(&member) {
                                 return Some(type_);
                             }
@@ -3095,6 +3123,13 @@ impl Checker {
                             effects = self.join_effects(effects, inferred.effects)?;
                         }
                         ShapeMember::Spread { value } => {
+                            if !self.exact_record_expression(module, value, environment) {
+                                return Err(Diagnostic::new(
+                                    "BLOT_OPEN_RECORD_SPREAD",
+                                    "A record spread must carry an exact, closed field set.",
+                                    span,
+                                ));
+                            }
                             let inferred =
                                 self.infer(path, module, value, environment, values, dependencies)?;
                             let settled = self.settle(inferred.type_, true);
@@ -3341,6 +3376,28 @@ impl Checker {
         }
     }
 
+    fn exact_record_expression(
+        &self,
+        module: &Module,
+        expression: ExpressionId,
+        environment: &TypeEnvironment,
+    ) -> bool {
+        match &module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => environment.is_exact_record(name),
+            Expression::Shape { members, .. } => members.iter().all(|member| match member {
+                ShapeMember::Field { .. } => true,
+                ShapeMember::Spread { value } => {
+                    self.exact_record_expression(module, *value, environment)
+                }
+            }),
+            Expression::Intrinsic { name, .. } => name == "@shape.empty",
+            Expression::Block { result, .. } => {
+                self.exact_record_expression(module, *result, environment)
+            }
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn infer_against(
         &self,
@@ -3353,21 +3410,6 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         span: Span,
     ) -> Result<Inferred, Diagnostic> {
-        let (callee, _) = application_spine_ids(module, expression);
-        if let Expression::Field { target, .. } = &module.arena.expressions[callee.0 as usize]
-            && self
-                .evaluate(path, *target, values, Phase::Comptime)
-                .is_ok_and(|value| matches!(value, Value::Extended { .. }))
-            && self
-                .evaluate(path, expression, values, Phase::Comptime)
-                .is_err()
-        {
-            return Err(Diagnostic::new(
-                "BLOT_REFLECTION_NOT_INDEXED",
-                "A result available only after compile-time specialization cannot prove a runtime requirement.",
-                span,
-            ));
-        }
         if let Expression::Rec { lambda, .. } = module.arena.expressions[expression.0 as usize] {
             let inferred = self.infer_against(
                 path,
@@ -3575,6 +3617,18 @@ impl Checker {
         };
         if let Some((_, recursive)) = recursive {
             self.constrain(function.clone(), recursive, closure_ast.span)?;
+        }
+        self.closure_types
+            .borrow_mut()
+            .entry((closure_module.to_owned(), body))
+            .or_insert_with(|| function.clone());
+        if let Some(signature) = self.reify_runtime_type(&self.residual_signature(function.clone()))
+        {
+            self.context
+                .closure_signatures
+                .borrow_mut()
+                .entry((closure_module.to_owned(), body))
+                .or_insert(signature);
         }
         Ok(function)
     }
@@ -5215,7 +5269,7 @@ impl Checker {
                     return Err(Diagnostic::new(
                         "BLOT_UNMATCHABLE_PIN",
                         format!(
-                            "Pinned `{name}` must have a known Int or Str type, found {}.",
+                            "Pinned `{name}` must have a known Int or Text type, found {}.",
                             self.show(&type_)
                         ),
                         *span,
@@ -5592,7 +5646,7 @@ impl Checker {
                 domain: Domain::Text,
                 low: None,
                 high: None,
-            } => "Str".to_owned(),
+            } => "Text".to_owned(),
             Type::Range {
                 domain: Domain::Float,
                 ..
@@ -6499,6 +6553,44 @@ fn comparison_refinements(
     values: &ValueEnvironment,
     checker: &Checker,
 ) -> Option<(String, Type, Type)> {
+    if let Expression::If {
+        branches,
+        fallback: Some(fallback),
+        ..
+    } = &module.arena.expressions[expression.0 as usize]
+        && let [branch] = branches.as_slice()
+    {
+        let left = comparison_refinements(module, branch.condition, environment, values, checker)?;
+        let (right_expression, junction) = match (
+            &module.arena.expressions[branch.consequence.0 as usize],
+            &module.arena.expressions[fallback.0 as usize],
+        ) {
+            (_, Expression::Tag { name, .. }) if name == "False" => {
+                (branch.consequence, crate::recognise::Junction::And)
+            }
+            (Expression::Tag { name, .. }, _) if name == "True" => {
+                (*fallback, crate::recognise::Junction::Or)
+            }
+            _ => return None,
+        };
+        let right = comparison_refinements(module, right_expression, environment, values, checker)?;
+        if left.0 != right.0 {
+            return None;
+        }
+        let original = checker.settle(checker.instantiate(environment.lookup(&left.0)?), true);
+        return match junction {
+            crate::recognise::Junction::And => Some((
+                left.0,
+                intersect_integer_types(&left.1, &right.1)?,
+                original,
+            )),
+            crate::recognise::Junction::Or => Some((
+                left.0,
+                original,
+                intersect_integer_types(&left.2, &right.2)?,
+            )),
+        };
+    }
     let (callee, arguments) = application_spine_ids(module, expression);
     let operator = comptime_expression_value(module, callee, values)?;
 

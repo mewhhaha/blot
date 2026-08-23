@@ -28,18 +28,18 @@ const M = import "./math.blot"
 
 // There is one float token in the grammar and it reads as an `F64`, so every
 // single-precision constant below is a narrowing the module wrote down.
-const lane = Float32.of_float
+const lane = F32.of_float
 
 const ZERO = lane 0.0
 const ONE = lane 1.0
 
 // Whole units on the far side of a module boundary are thousandths on the wire.
 // One conversion at the edge, and nothing downstream knows.
-const unit = fn value => Float32.div (Float32.of_int value) (lane 1000.0)
+const unit = fn value => F32.div (F32.of_int value) (lane 1000.0)
 
 // A world point out of the host's thousandths. Its fourth lane is 1, which is
 // what lets a camera row's translation reach it.
-const point = fn (x, y, z) => Vec4.of (unit x, unit y, unit z, ONE)
+const point = fn (x, y, z) => F32x4.of (unit x, unit y, unit z, ONE)
 
 // --- the host boundary ------------------------------------------------------
 
@@ -55,7 +55,7 @@ const Canvas =
     .cx = Int; .cy = Int;
     .depth = Int;
     .shade = Int;
-    .colour = Str;
+    .colour = Text;
     } -> Unit;
     // A 2D texture, always square to the screen. Under an orthographic lens this
     // is a plain sprite; under a perspective one it is a billboard, and the only
@@ -64,7 +64,7 @@ const Canvas =
     .x = Int; .y = Int;
     .size = Int;
     .depth = Int;
-    .texture = Str;
+    .texture = Text;
     } -> Unit;
     .present = Unit -> Unit;
   }
@@ -96,8 +96,8 @@ const NEAR = lane 0.25
 // The screen centre, and the axes a view point is measured along to reach it. A
 // screen's y counts down and a world's counts up, so the flip rides in the axis
 // vector rather than in a subtraction that only one of the two lanes wants.
-const SCREEN_CENTRE = Vec4.of (CX, CY, ZERO, ZERO)
-const FOCAL_AXES = Vec4.of (FOCAL, Float32.negate FOCAL, ZERO, ZERO)
+const SCREEN_CENTRE = F32x4.of (CX, CY, ZERO, ZERO)
+const FOCAL_AXES = F32x4.of (FOCAL, F32.negate FOCAL, ZERO, ZERO)
 
 // --- geometry ---------------------------------------------------------------
 //
@@ -110,35 +110,35 @@ const FOCAL_AXES = Vec4.of (FOCAL, Float32.negate FOCAL, ZERO, ZERO)
 // whose fourth lane is 1, is the step that makes a corner a point.
 
 const HALF = lane 0.5
-const NEG_HALF = Float32.negate HALF
-const NEG_ONE = Float32.negate ONE
+const NEG_HALF = F32.negate HALF
+const NEG_ONE = F32.negate ONE
 
 const corners =
   [
-    Vec4.of (NEG_HALF, NEG_HALF, NEG_HALF, ZERO),
-    Vec4.of (HALF, NEG_HALF, NEG_HALF, ZERO),
-    Vec4.of (HALF, HALF, NEG_HALF, ZERO),
-    Vec4.of (NEG_HALF, HALF, NEG_HALF, ZERO),
-    Vec4.of (NEG_HALF, NEG_HALF, HALF, ZERO),
-    Vec4.of (HALF, NEG_HALF, HALF, ZERO),
-    Vec4.of (HALF, HALF, HALF, ZERO),
-    Vec4.of (NEG_HALF, HALF, HALF, ZERO)
+    F32x4.of (NEG_HALF, NEG_HALF, NEG_HALF, ZERO),
+    F32x4.of (HALF, NEG_HALF, NEG_HALF, ZERO),
+    F32x4.of (HALF, HALF, NEG_HALF, ZERO),
+    F32x4.of (NEG_HALF, HALF, NEG_HALF, ZERO),
+    F32x4.of (NEG_HALF, NEG_HALF, HALF, ZERO),
+    F32x4.of (HALF, NEG_HALF, HALF, ZERO),
+    F32x4.of (HALF, HALF, HALF, ZERO),
+    F32x4.of (NEG_HALF, HALF, HALF, ZERO)
   ]
 
 const faces =
   [
-    { .a = 1; .b = 0; .c = 3; .d = 2; .n = Vec4.of (ZERO, ZERO, NEG_ONE, ZERO); },
-    { .a = 4; .b = 5; .c = 6; .d = 7; .n = Vec4.of (ZERO, ZERO, ONE, ZERO); },
-    { .a = 0; .b = 4; .c = 7; .d = 3; .n = Vec4.of (NEG_ONE, ZERO, ZERO, ZERO); },
-    { .a = 5; .b = 1; .c = 2; .d = 6; .n = Vec4.of (ONE, ZERO, ZERO, ZERO); },
-    { .a = 3; .b = 7; .c = 6; .d = 2; .n = Vec4.of (ZERO, ONE, ZERO, ZERO); },
-    { .a = 0; .b = 1; .c = 5; .d = 4; .n = Vec4.of (ZERO, NEG_ONE, ZERO, ZERO); }
+    { .a = 1; .b = 0; .c = 3; .d = 2; .n = F32x4.of (ZERO, ZERO, NEG_ONE, ZERO); },
+    { .a = 4; .b = 5; .c = 6; .d = 7; .n = F32x4.of (ZERO, ZERO, ONE, ZERO); },
+    { .a = 0; .b = 4; .c = 7; .d = 3; .n = F32x4.of (NEG_ONE, ZERO, ZERO, ZERO); },
+    { .a = 5; .b = 1; .c = 2; .d = 6; .n = F32x4.of (ONE, ZERO, ZERO, ZERO); },
+    { .a = 3; .b = 7; .c = 6; .d = 2; .n = F32x4.of (ZERO, ONE, ZERO, ZERO); },
+    { .a = 0; .b = 1; .c = 5; .d = 4; .n = F32x4.of (ZERO, NEG_ONE, ZERO, ZERO); }
   ]
 
 // A fixed light, normalized in advance so shading stays one dot product. A
 // direction, so its fourth lane is 0 and a normal's fourth lane never reaches
 // the sum whatever it holds.
-const LIGHT = Vec4.of (lane 0.53, lane 0.76, lane 0.38, ZERO)
+const LIGHT = F32x4.of (lane 0.53, lane 0.76, lane 0.38, ZERO)
 
 // --- transforms -------------------------------------------------------------
 
@@ -153,24 +153,24 @@ const rotation_of = fn angle => do:
   let s = M.sin angle
   let c = M.cos angle
   return {
-    .to_x = Vec4.of (c, ZERO, s, ZERO);
-    .to_z = Vec4.of (Float32.negate s, ZERO, c, ZERO);
+    .to_x = F32x4.of (c, ZERO, s, ZERO);
+    .to_z = F32x4.of (F32.negate s, ZERO, c, ZERO);
   }
 
 const turn_y = fn (point, rotation) => do:
-  return Vec4.of (
-    Vec4.dot point rotation.to_x,
-    Vec4.y point,
-    Vec4.dot point rotation.to_z,
-    Vec4.w point
+  return F32x4.of (
+    F32x4.dot point rotation.to_x,
+    F32x4.y point,
+    F32x4.dot point rotation.to_z,
+    F32x4.w point
   )
 
 // World to view: one dot per view coordinate, against the camera's own axes.
 const to_view = fn (point, camera) => do:
-  return Vec4.of (
-    Vec4.dot point camera.right,
-    Vec4.dot point camera.up,
-    Vec4.dot point camera.forward,
+  return F32x4.of (
+    F32x4.dot point camera.right,
+    F32x4.dot point camera.up,
+    F32x4.dot point camera.forward,
     ONE
   )
 
@@ -178,10 +178,10 @@ const to_view = fn (point, camera) => do:
 // against: focal axes over its own depth, or zoom axes and no divide at all.
 // That is the whole of "2D is an orthographic camera".
 const to_screen = fn (view, camera) => case camera.lens == 0 of
-  #True => Vec4.add
+  #True => F32x4.add
       SCREEN_CENTRE
-      (Vec4.div (Vec4.mul view FOCAL_AXES) (Vec4.splat (Vec4.z view)))
-  #False => Vec4.add SCREEN_CENTRE (Vec4.mul view camera.zoom_axes)
+      (F32x4.div (F32x4.mul view FOCAL_AXES) (F32x4.splat (F32x4.z view)))
+  #False => F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
 
 // Where the camera sits, and the three rows that take a world point to it.
 // Built once a frame rather than per vertex, because every vertex wants the
@@ -194,22 +194,22 @@ const camera_of = fn (yaw, pitch, distance, lens) => do:
   // Pixels across one world unit, which is what the perspective divide works
   // out to at the camera's own distance — so switching lenses holds the scene
   // at roughly the size it already was, and pulling back still zooms out.
-  let zoom = Float32.div FOCAL distance
+  let zoom = F32.div FOCAL distance
   return {
-    .eye = Vec4.of (
-    Float32.mul distance (Float32.mul cos_pitch sin_yaw),
-    Float32.mul distance sin_pitch,
-    Float32.mul distance (Float32.mul cos_pitch cos_yaw),
+    .eye = F32x4.of (
+    F32.mul distance (F32.mul cos_pitch sin_yaw),
+    F32.mul distance sin_pitch,
+    F32.mul distance (F32.mul cos_pitch cos_yaw),
     ONE
   );
     // `right` and `up` span the screen and `forward` grows away from the eye,
     // which is the sign the divide, the near test, and the host's sort all
     // want — so it is settled here rather than three times downstream.
-    .right = Vec4.of (cos_yaw, ZERO, Float32.negate sin_yaw, ZERO);
-    .up = Vec4.of (
-    Float32.negate (Float32.mul sin_pitch sin_yaw),
+    .right = F32x4.of (cos_yaw, ZERO, F32.negate sin_yaw, ZERO);
+    .up = F32x4.of (
+    F32.negate (F32.mul sin_pitch sin_yaw),
     cos_pitch,
-    Float32.negate (Float32.mul sin_pitch cos_yaw),
+    F32.negate (F32.mul sin_pitch cos_yaw),
     ZERO
   );
     // A row's fourth lane is its translation, and the eye is the whole of it.
@@ -217,15 +217,15 @@ const camera_of = fn (yaw, pitch, distance, lens) => do:
     // only ever moves along `forward`, so the two screen rows translate by
     // nothing and the depth row translates by the orbit radius. Subtracting the
     // eye per vertex would arrive at these same three numbers.
-    .forward = Vec4.of (
-    Float32.negate (Float32.mul cos_pitch sin_yaw),
-    Float32.negate sin_pitch,
-    Float32.negate (Float32.mul cos_pitch cos_yaw),
+    .forward = F32x4.of (
+    F32.negate (F32.mul cos_pitch sin_yaw),
+    F32.negate sin_pitch,
+    F32.negate (F32.mul cos_pitch cos_yaw),
     distance
   );
     .lens = lens;
     .zoom = zoom;
-    .zoom_axes = Vec4.of (zoom, Float32.negate zoom, ZERO, ZERO);
+    .zoom_axes = F32x4.of (zoom, F32.negate zoom, ZERO, ZERO);
   }
 
 // --- drawing ----------------------------------------------------------------
@@ -234,11 +234,11 @@ const camera_of = fn (yaw, pitch, distance, lens) => do:
 // the 0..255 the host multiplies the colour by. The dot product is what the
 // four lanes are for — one multiply and one horizontal sum.
 const shade_of = fn normal => do:
-  let dot = Vec4.dot normal LIGHT
-  let lit = case is_less (Float32.cmp dot ZERO) of
+  let dot = F32x4.dot normal LIGHT
+  let lit = case is_less (F32.cmp dot ZERO) of
     #True => ZERO
     #False => dot
-  return 60 + Float32.truncate (Float32.mul lit (lane 195.0))
+  return 60 + F32.truncate (F32.mul lit (lane 195.0))
 
 // One face of one box: place its corners, project them, and hand the host two
 // triangles. A face pointing away, or crossing the near plane, is dropped
@@ -253,9 +253,9 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
   let corner = fn index => do:
     let local = case Array.get (corners, index) of
       #Some value => value
-      #None => Vec4.splat ZERO
-    let spun = turn_y (Vec4.scale (local, scale), rotation)
-    return to_view (Vec4.add spun position, camera)
+      #None => F32x4.splat ZERO
+    let spun = turn_y (F32x4.scale (local, scale), rotation)
+    return to_view (F32x4.add spun position, camera)
   let a = corner face.a
   let b = corner face.b
   let c = corner face.c
@@ -264,25 +264,25 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
   // Backface culling: a face is visible when its normal leans towards the
   // camera. Comparing against the box's centre rather than the face's own is
   // exact enough for convex geometry and costs one subtract and one dot.
-  let outward = Vec4.dot normal (Vec4.sub position camera.eye)
+  let outward = F32x4.dot normal (F32x4.sub position camera.eye)
   // The four view depths, read once. There is no lane-wise comparison, so the
   // near test wants them as scalars — and having them as scalars is what lets
   // the depth below be one more vector rather than three adds.
-  let za = Vec4.z a
-  let zb = Vec4.z b
-  let zc = Vec4.z c
-  let zd = Vec4.z d
-  let near = fn z => is_less (Float32.cmp z NEAR)
+  let za = F32x4.z a
+  let zb = F32x4.z b
+  let zc = F32x4.z c
+  let zd = F32x4.z d
+  let near = fn z => is_less (F32.cmp z NEAR)
   let behind = near za || near zb || near zc || near zd
-  let hidden = is_greater (Float32.cmp outward ZERO)
+  let hidden = is_greater (F32.cmp outward ZERO)
   <- case behind || hidden of
     #True => ()
     #False => do:
       // Pixels, and the last place a float exists in this function. `Canvas` is
       // a module import, so its record is the boundary a float cannot cross.
       let pixel = fn point => {
-        .x = Float32.truncate (Vec4.x point);
-        .y = Float32.truncate (Vec4.y point);
+        .x = F32.truncate (F32x4.x point);
+        .y = F32.truncate (F32x4.y point);
       }
       let pa = pixel (to_screen (a, camera))
       let pb = pixel (to_screen (b, camera))
@@ -292,8 +292,8 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
       // integer boundary. The mean of four and the millimetre scale are one
       // constant — a quarter of a thousand — after the horizontal sum.
       let depth =
-        Float32.truncate
-          (Float32.mul (Vec4.sum (Vec4.of (za, zb, zc, zd))) (lane 250.0))
+        F32.truncate
+          (F32.mul (F32x4.sum (F32x4.of (za, zb, zc, zd))) (lane 250.0))
       let shade = shade_of normal
       <- Canvas.tri {
         .ax = pa.x; .ay = pa.y;
@@ -323,19 +323,19 @@ const draw_mesh = fn (position, angle, scale, colour, camera) => do:
 // difference `to_screen` makes.
 const draw_sprite = fn (position, scale, texture, camera) => do:
   let view = to_view (position, camera)
-  let depth = Vec4.z view
-  <- case is_less (Float32.cmp depth NEAR) of
+  let depth = F32x4.z view
+  <- case is_less (F32.cmp depth NEAR) of
     #True => ()
     #False => do:
       let point = to_screen (view, camera)
       let size = case camera.lens == 0 of
-        #True => Float32.div (Float32.mul scale FOCAL) depth
-        #False => Float32.mul scale camera.zoom
+        #True => F32.div (F32.mul scale FOCAL) depth
+        #False => F32.mul scale camera.zoom
       <- Canvas.sprite {
-        .x = Float32.truncate (Vec4.x point);
-        .y = Float32.truncate (Vec4.y point);
-        .size = Float32.truncate size;
-        .depth = Float32.truncate (Float32.mul depth (lane 1000.0));
+        .x = F32.truncate (F32x4.x point);
+        .y = F32.truncate (F32x4.y point);
+        .size = F32.truncate size;
+        .depth = F32.truncate (F32.mul depth (lane 1000.0));
         .texture = texture;
       }
 
@@ -351,8 +351,8 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
 // can only do while the record does not leave.
 sig frame =
   ({
-    .mesh = (F32x4, Int, F32, Str) -> Unit ~ { Canvas };
-    .sprite = (F32x4, F32, Str) -> Unit ~ { Canvas };
+    .mesh = (F32x4, Int, F32, Text) -> Unit ~ { Canvas };
+    .sprite = (F32x4, F32, Text) -> Unit ~ { Canvas };
     } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint => do:
   <- Canvas.clear ()

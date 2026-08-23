@@ -147,6 +147,7 @@ export type LiteralKind =
   | ":="
   | "<-"
   | "for"
+  | "case"
   | ":"
   | "in"
   | "break"
@@ -158,7 +159,6 @@ export type LiteralKind =
   | "import"
   | "if"
   | "else"
-  | "case"
   | "of"
   | "do"
   | "compdo"
@@ -403,6 +403,7 @@ export interface IterationCursor extends RuleCursorBase<"iteration"> {
   field(name: "body"): StatementSuiteCursor;
   field(name: "drawn"): IterationSourceCursor | null;
   field(name: "head"): ValueCursor;
+  field(name: "kind"): TokenCursor<"literal", "case"> | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }

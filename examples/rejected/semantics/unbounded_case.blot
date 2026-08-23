@@ -2,7 +2,7 @@
 // choice is to narrow the type or write an irrefutable arm.
 open import "blot:prelude"
 
-sig describe = Int -> Str
+sig describe = Int -> Text
 let describe = fn n => case n of
   1 => "one"
   2 => "two"

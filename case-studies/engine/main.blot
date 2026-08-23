@@ -53,7 +53,7 @@ const Assets =
       .x = Int; .y = Int; .z = Int;
       .scale = Int;
       .spin = Int;
-      .colour = Str;
+      .colour = Text;
     };
   }
 
@@ -80,7 +80,7 @@ const Transform =
     .spin = Int;
     .scale = F32;
   }
-const Model = { .kind = Int; .colour = Str; }
+const Model = { .kind = Int; .colour = Text; }
 
 // --- systems ----------------------------------------------------------------
 

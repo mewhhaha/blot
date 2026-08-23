@@ -1468,6 +1468,10 @@ fn vector_shuffle(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic
 fn union(left: Value, right: Value) -> Value {
     let mut members = Vec::new();
     fn add(members: &mut Vec<Value>, value: Value) {
+        if let Value::Extended { inner, .. } = value {
+            add(members, *inner);
+            return;
+        }
         if let Value::Union(nested) = value {
             for value in nested {
                 add(members, value);
@@ -1486,6 +1490,8 @@ fn union(left: Value, right: Value) -> Value {
 }
 
 fn intersect(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnostic> {
+    let left = transparent_type(left);
+    let right = transparent_type(right);
     let left = match left {
         Value::Union(values) => values.clone(),
         value => vec![value.clone()],
@@ -1524,6 +1530,8 @@ fn intersect(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnosti
 }
 
 fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnostic> {
+    let left = transparent_type(left);
+    let right = transparent_type(right);
     if equal(left, right) {
         return Err(Diagnostic::new(
             "BLOT_EMPTY_TYPE",
@@ -1580,6 +1588,13 @@ fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnost
         return Ok(pieces.into_iter().skip(1).fold(first, union));
     }
     Ok(left.clone())
+}
+
+fn transparent_type(mut value: &Value) -> &Value {
+    while let Value::Extended { inner, .. } = value {
+        value = inner;
+    }
+    value
 }
 
 fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {

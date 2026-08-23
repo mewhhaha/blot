@@ -1,6 +1,6 @@
 // A written arrow with no `~` is the claim that the function performs nothing,
 // not the absence of a claim. `notify` performs `Console`, so its `sig` has to
-// say `Str -> Unit ~ { Console }`.
+// say `Text -> Unit ~ { Console }`.
 //
 // The alternative — reading a bare arrow as "says nothing about effects" —
 // would make the row a fresh variable that every later constraint satisfies,
@@ -11,10 +11,10 @@ open import "blot:prelude"
 
 const Console =
   @effect {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
-sig notify = Str -> Unit
+sig notify = Text -> Unit
 let notify = fn message => do:
   result <- Console.write message
   return result

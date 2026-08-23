@@ -2,8 +2,8 @@ open import "blot:prelude"
 
 const Terminal =
   @effect.host {
-    .read_line = Unit -> Str;
-    .write = Str -> Unit;
+    .read_line = Unit -> Text;
+    .write = Text -> Unit;
   }
 
 <- Terminal.write "What is your name?"

@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Draw =
   @effect {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 let element = fn name => fn _properties => fn children => do:
@@ -28,7 +28,7 @@ let icon = Render.icon
 
 sig Button =
   {
-    .label = Str;
+    .label = Text;
     .disabled? = Bool;
     .order? = Int;
   } -> [Unit -> Unit ~ { Draw }] -> Unit ~ { Draw }

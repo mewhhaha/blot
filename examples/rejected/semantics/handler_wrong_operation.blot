@@ -4,7 +4,7 @@
 
 open import "blot:prelude"
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 let handler =
   { .wrote = fn (m, ?resume) => do:
     result <- resume ()

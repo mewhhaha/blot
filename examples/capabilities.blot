@@ -12,7 +12,7 @@ open import "blot:prelude"
 
 const Console =
   @effect {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 // A host capability is simply a handler blot did not write. Here the handler is

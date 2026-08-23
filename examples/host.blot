@@ -13,7 +13,7 @@ open import "blot:prelude"
 
 const Console =
   @effect.host {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 // Nothing here says "effectful". The row is inferred, and `report` comes out as

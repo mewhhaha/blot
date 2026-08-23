@@ -1,17 +1,17 @@
 open import "blot:prelude"
 
-let values = Int32x4.of_wrapping (5, 7, -8, 9)
-let shifted = Int32x4.shift_left values 1
-let bounded = Int32x4.max_signed shifted (Int32x4.splat_wrapping (@int.neg 12))
-let words = Int16x8.add (Int16x8.splat 32767) (Int16x8.splat 1)
-let bytes = Int8x16.add (Int8x16.splat 127) (Int8x16.splat 1)
+let values = I32x4.of_wrapping (5, 7, -8, 9)
+let shifted = I32x4.shift_left values 1
+let bounded = I32x4.max_signed shifted (I32x4.splat_wrapping (@int.neg 12))
+let words = I16x8.add (I16x8.splat 32767) (I16x8.splat 1)
+let bytes = I8x16.add (I8x16.splat 127) (I8x16.splat 1)
 const selected = 2
-let wrapped = Int8x16.splat_wrapping 128
+let wrapped = I8x16.splat_wrapping 128
 
 return {
-  .wide = Int32x4.x bounded;
-  .selected = Int32x4.lane values selected;
-  .words = Int16x8.mask_bits (Int16x8.less_signed words (Int16x8.splat 0));
-  .bytes = Int8x16.mask_bits (Int8x16.less_signed bytes (Int8x16.splat 0));
-  .wrapped = Int8x16.mask_bits (Int8x16.less_signed wrapped (Int8x16.splat 0));
+  .wide = I32x4.x bounded;
+  .selected = I32x4.lane values selected;
+  .words = I16x8.mask_bits (I16x8.less_signed words (I16x8.splat 0));
+  .bytes = I8x16.mask_bits (I8x16.less_signed bytes (I8x16.splat 0));
+  .wrapped = I8x16.mask_bits (I8x16.less_signed wrapped (I8x16.splat 0));
 }

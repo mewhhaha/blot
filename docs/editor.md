@@ -40,8 +40,7 @@ even when no local definition location is available. Hover inference is cached
 for the open document version. A shape field definition describes the selected
 field rather than the expression on its right. An attached member projection
 uses its qualified name and includes its compact local definition; an attached
-function projects as `⊤`, matching the namespace typing rule, even though a
-compile-time call can infer a more precise result.
+function shows its inferred arrow just like an ordinary callable field.
 
 Every concrete syntax token also has a fallback description. Keywords explain
 their control or binding role, delimiters explain the structure they open or
@@ -105,11 +104,10 @@ only calls a self-rebinding a no-op when removing it preserves the public type
 and effect row. Statement `if` suites remain control flow rather than value
 conditionals and do not receive value-conditional rules.
 
-Operator spelling is checked against the complete active fixity table. The
-default-rule test enumerates every default infix and prefix target, including
-function arrows, effect rows, numeric and comparison operations, set algebra,
-and ownership prefixes, and requires a parseable action for each. Declared
-fixities use the same path.
+Operator spelling is checked against the complete fixed operator table. The
+default-rule test enumerates every infix and prefix target, including function
+arrows, effect rows, numeric and comparison operations, set algebra, and
+ownership prefixes, and requires a parseable action for each.
 
 Effects and structural interfaces need no parallel lint AST. An effect, its
 written row, and `Empty`, `Length`, `Semigroup`, or `Monoid` are ordinary

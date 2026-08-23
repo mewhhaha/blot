@@ -152,18 +152,18 @@ let increment = fn value =>
 let accept_ints = fn values => @satisfies values [Int]
 
 // Trait-like behavior is a record constraint plus width subtyping.
-const Renderable = { .render = Unit -> Str; }
+const Renderable = { .render = Unit -> Text; }
 let render = fn value =>
   let renderable = @satisfies value Renderable
   return renderable.render ()
 
 // Higher-order behavior includes the callback's effect row.
-const Console = @effect { .write = Str -> Unit; }
-const Command = Str -> Unit ~ { Console }
+const Console = @effect { .write = Text -> Unit; }
+const Command = Text -> Unit ~ { Console }
 let install = fn callback => @satisfies callback Command
 
 // Variants and nominal seals are the same kind of canonical requirement.
-const Message = #Ready | #Failed Str
+const Message = #Ready | #Failed Text
 const UserId = seal ("UserId", Int)
 let accept_message = fn value => @satisfies value Message
 let accept_user = fn value => @satisfies value UserId
@@ -173,7 +173,7 @@ Requirements may be abstracted by a staged function:
 
 ```blot
 const require = fn requirement => fn value => @satisfies value requirement
-let checked = require { .name = Str; } { .name = "Ada"; .age = 36; }
+let checked = require { .name = Text; } { .name = "Ada"; .age = 36; }
 ```
 
 The `const` is semantically important: specialization supplies the requirement
@@ -192,7 +192,7 @@ const both = fn (left, right) => fn type => left type && right type
 const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
-const has_name = fn type => refines (type, { .name = Str; })
+const has_name = fn type => refines (type, { .name = Text; })
 const named_shape = both (is_shape, has_name)
 
 let person = { .name = "Ada"; .age = 36; }

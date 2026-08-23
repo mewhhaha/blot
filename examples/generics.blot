@@ -24,7 +24,7 @@ const adding = fn T => do:
 const add_i32 = adding I32
 const add_u8 = adding U8
 
-// `adding Str` here would stop the build with that message. `examples/rejected/
+// `adding Text` here would stop the build with that message. `examples/rejected/
 // semantics/generic_refused.blot` is that program.
 
 // --- constrained on an interface --------------------------------------------
@@ -48,7 +48,7 @@ const x_of_3 = projecting Point3
 //
 // `reflect` gives the case and the parts, so a generic function can *branch* on
 // what it was instantiated with rather than only accept or refuse. A range
-// carries its domain, which is what makes `Int` and `Str` distinguishable at
+// carries its domain, which is what makes `Int` and `Text` distinguishable at
 // all — both are unbounded in both directions.
 
 const describing = fn T => case reflect T of
@@ -68,7 +68,7 @@ const describing = fn T => case reflect T of
 // reaches WebAssembly is the `@int.add` it selected.
 const described_int = describing I32
 const described_double = describing F64
-const described_text = describing Str
+const described_text = describing Text
 const described_record = describing Point2
 const described_arrow = describing (I32 -> I32)
 
@@ -79,7 +79,7 @@ return {
   .x3 = x_of_3 { .x = 5; .y = 6; .z = 7; };
 
   .int_is_int = refines (I32, Int);
-  .text_is_not_int = refines (Str, Int);
+  .text_is_not_int = refines (Text, Int);
   // Neither direction. `reflect` reported every non-text domain as `#Int`
   // until the language had more than one of them, which made these both true.
   .double_is_not_int = refines (F64, Int);

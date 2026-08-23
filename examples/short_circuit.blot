@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+return {
+  .and = False && ((1 / 0) == 0);
+  .or = True || ((1 / 0) == 0);
+}

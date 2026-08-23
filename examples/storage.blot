@@ -7,7 +7,7 @@
 // nothing about the namespace reaches the lattice.
 //
 // The storage is a tuple rather than an array because a tuple keeps one type
-// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// per slot. `[I32, Text]` collapses to "an array of int-or-text" the moment
 // inference looks at it, and storage that is imprecise is not predictable
 // storage.
 
@@ -32,7 +32,7 @@ let (across, up) = somewhere
 // other — so choosing a placement is an operation on the shape, and `struct`
 // needs no second entry point for it.
 
-const Record = { .flag = U8; .id = I32; .code = U8; .name = Str; }
+const Record = { .flag = U8; .id = I32; .code = U8; .name = Text; }
 
 const byte_width = fn t => case refines (t, U8) of
   #True => 1

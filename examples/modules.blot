@@ -13,7 +13,7 @@ const prelude = import "blot:prelude"
 
 // The prelude is an ordinary module. Importing it without opening it keeps its
 // exports behind the `prelude` name.
-let explicit = prelude.Num.add 20 22
+let explicit = prelude.Int.add 20 22
 
 return {
   .run = application.run;

@@ -16,7 +16,7 @@ open import "blot:prelude"
 
 const Console =
   @effect.host {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 // A `let` is generalized, so nothing here fixes the shape of `v`.

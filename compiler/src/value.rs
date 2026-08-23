@@ -1309,7 +1309,7 @@ pub fn show(value: &Value) -> String {
             if matches!(low.as_ref(), Value::Unbounded) && matches!(high.as_ref(), Value::Unbounded)
             {
                 return match domain {
-                    Some(Domain::Text) => "Str".to_owned(),
+                    Some(Domain::Text) => "Text".to_owned(),
                     Some(Domain::Float) => "F64".to_owned(),
                     Some(Domain::Float32) => "F32".to_owned(),
                     Some(Domain::Int) | None => "..".to_owned(),
@@ -1379,7 +1379,7 @@ mod show_tests {
                 high: Box::new(Value::Unbounded),
                 domain: Some(Domain::Text),
             }),
-            "Str"
+            "Text"
         );
         assert_eq!(
             show(&Value::Sealed {

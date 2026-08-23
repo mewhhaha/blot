@@ -167,7 +167,7 @@ return copy
   {
     name: "an explicit primitive function prefers its operator",
     code: "BLOT_LINT_OPERATOR_SPELLING",
-    source: `return Num.rem 5 2
+    source: `return Int.rem 5 2
 `,
   },
   {
@@ -287,7 +287,7 @@ Deno.test("a registered rule receives typed AST and concrete syntax visits", asy
   let sawResult = false;
   const rule: LintRule = {
     name: "chosen-name",
-    code: "TEST_CHOSEN_NAME",
+    code: "BLOT_LINT_TEST_CHOSEN_NAME",
     severity: "hint",
     create(context) {
       return {
@@ -306,7 +306,7 @@ Deno.test("a registered rule receives typed AST and concrete syntax visits", asy
     lintModule(parsed.module, source, parsed.cst, [rule]).map(
       (diagnostic) => diagnostic.code,
     ),
-    ["TEST_CHOSEN_NAME"],
+    ["BLOT_LINT_TEST_CHOSEN_NAME"],
   );
   assert(sawResult);
 });
@@ -416,9 +416,9 @@ let composed = run
   |> @handle (Console, handler)
 return (
   Empty Int,
-  Length Str,
+  Length Text,
   Semigroup Int,
-  Monoid Str,
+  Monoid Text,
   @handle (Console, run, handler),
   composed,
   Unit -> Unit ~ { Console }
@@ -429,7 +429,7 @@ return (
   const seen = new Set<string>();
   const rule: LintRule = {
     name: "surface-coverage",
-    code: "TEST_SURFACE_COVERAGE",
+    code: "BLOT_LINT_TEST_SURFACE_COVERAGE",
     severity: "hint",
     create() {
       return {

@@ -5271,7 +5271,7 @@ fn trusted_borrow_operation(function: ExpressionId, module: &Module) -> bool {
             matches!(
                 &module.arena.expressions[target.0 as usize],
                 Expression::Var { name: namespace, .. }
-                    if (namespace == "Num" || namespace == "Text")
+                    if (namespace == "Int" || namespace == "Text")
                         || ((namespace == "Array" || namespace == "Arena")
                             && matches!(name.as_str(), "get" | "length"))
             )
@@ -5286,7 +5286,7 @@ fn trusted_scalar_operation(function: ExpressionId, module: &Module) -> bool {
         Expression::Intrinsic { .. } => true,
         Expression::Field { target, .. } => matches!(
             &module.arena.expressions[target.0 as usize],
-            Expression::Var { name, .. } if name == "Num" || name == "Array"
+            Expression::Var { name, .. } if name == "Int" || name == "Array"
         ),
         _ => false,
     }

@@ -11,13 +11,13 @@ const is_shape = fn type => case reflect type of
   #Shape _ => True
   _ => False
 
-const has_name = fn type => refines (type, { .name = Str; })
+const has_name = fn type => refines (type, { .name = Text; })
 const is_named_shape = both_types (is_shape, has_name)
 
 // This value exists at run time, but its inferred type is closed and can be
 // handed to the source predicate while compiling. The assertion erases.
 let person = { .name = "Ada"; .age = 36; }
-let structural = @satisfies person { .name = Str; }
+let structural = @satisfies person { .name = Text; }
 let checked = @satisfies structural is_named_shape
 
 // Binder identities are private. These are equal because equality is
@@ -45,7 +45,7 @@ const EffectPolymorphic =
 
 const composed_duck_predicate =
   is_named_shape {
-    .name = Str;
+    .name = Text;
     .age = Int;
   }
 const alpha_equal = type_equal (Identity, RenamedIdentity)
@@ -54,8 +54,8 @@ const effect_generic_is_function = is_function EffectPolymorphic
 const int_result_is_i32 = case identity_result_at I32 of
   #Some result => type_equal (result, I32)
   #None => False
-const text_result_is_text = case identity_result_at Str of
-  #Some result => type_equal (result, Str)
+const text_result_is_text = case identity_result_at Text of
+  #Some result => type_equal (result, Text)
   #None => False
 
 return {

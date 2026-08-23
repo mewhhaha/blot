@@ -4,7 +4,7 @@
 open import "blot:prelude"
 
 sig replace_keep =
-  (OrderedTextMap.of Int, Str, Int) -> (OrderedTextMap.of Int, Int)
+  (OrderedTextMap.of Int, Text, Int) -> (OrderedTextMap.of Int, Int)
 let replace_keep = fn (!entries, key, value) => do:
   return case OrderedTextMap.replace ((!entries), key, value) of
     #MapReplaced (previous, !updated) => (updated, previous)

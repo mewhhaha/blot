@@ -33,7 +33,7 @@ for value in halving 8:
 // A refutable binder is the `case` it looks like, with the other arm handing
 // the accumulator back — so filtering compiles too.
 let kept = 0
-for #Some n in Iter.items [Some 3, None, Some 4]:
+for case #Some n in Iter.items [Some 3, None, Some 4]:
   kept := kept + n
 
 return total + ticks + shrunk + kept - 29

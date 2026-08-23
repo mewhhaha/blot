@@ -15,19 +15,19 @@ open import "blot:prelude"
 
 // --- arithmetic -------------------------------------------------------------
 //
-// `Float.add` rather than `+`. An operator resolves to one binding by name, so
+// `F64.add` rather than `+`. An operator resolves to one binding by name, so
 // a single `+` over both numeric types would have to dispatch on a value's
 // type at run time, which is the typeclass machinery this language does not
 // have. A module that wants an operator for these says so in its own header.
 
 sig quarter = F64
-let quarter = Float.div 1.0 4.0
+let quarter = F64.div 1.0 4.0
 
 sig sum = F64
-let sum = Float.add 1.5 2.25
+let sum = F64.add 1.5 2.25
 
 sig scaled = F64
-let scaled = Float.mul quarter 8.0
+let scaled = F64.mul quarter 8.0
 
 // --- crossing between the two -----------------------------------------------
 //
@@ -35,41 +35,41 @@ let scaled = Float.mul quarter 8.0
 // WebAssembly's saturating conversion does.
 
 sig widened = F64
-let widened = Float.of_int 7
+let widened = F64.of_int 7
 
 sig narrowed = Int
-let narrowed = Float.truncate 3.75
+let narrowed = F64.truncate 3.75
 
 sig negative = Int
-let negative = Float.truncate (Float.negate 3.75)
+let negative = F64.truncate (F64.negate 3.75)
 
 // --- comparison, and the value no ordering accepts --------------------------
 //
-// There is no `Float.eq`. Exact comparison is `is_equal (Float.cmp a b)`, and
+// There is no `F64.eq`. Exact comparison is `is_equal (F64.cmp a b)`, and
 // that is not a shorthand missing — it is the same test with the NaN case left
 // in. An equality that answered `#False` for NaN would be answering a question
 // the format says has no answer, and it would look exactly like the integer
 // `==` that `0.1 + 0.2 == 0.3` is famous for failing.
 //
-// So `Float.cmp` refuses a NaN, in both executions: a diagnostic while
+// So `F64.cmp` refuses a NaN, in both executions: a diagnostic while
 // compiling and a trap while running, the way `@int.div` by zero already does.
-// A program that might hold one asks `Float.is_nan` first, and that question
+// A program that might hold one asks `F64.is_nan` first, and that question
 // needs a primitive precisely because comparing is what refuses.
 
 sig ordered = Bool
-let ordered = is_less (Float.cmp 1.5 2.5)
+let ordered = is_less (F64.cmp 1.5 2.5)
 
 sig same = Bool
-let same = is_equal (Float.cmp 0.5 (Float.div 1.0 2.0))
+let same = is_equal (F64.cmp 0.5 (F64.div 1.0 2.0))
 
 sig tenth_is_exact = Bool
-let tenth_is_exact = is_equal (Float.cmp (Float.add 0.1 0.2) 0.3)
+let tenth_is_exact = is_equal (F64.cmp (F64.add 0.1 0.2) 0.3)
 
 sig nan_is_nan = Bool
-let nan_is_nan = Float.is_nan (Float.div 0.0 0.0)
+let nan_is_nan = F64.is_nan (F64.div 0.0 0.0)
 
 sig ordinary_is_not = Bool
-let ordinary_is_not = Float.is_nan 1.0
+let ordinary_is_not = F64.is_nan 1.0
 
 // --- a root, written in blot ------------------------------------------------
 //
@@ -78,12 +78,12 @@ let ordinary_is_not = Float.is_nan 1.0
 // cannot write, which this is not.
 
 sig root = Int
-let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0)
+let root = F64.truncate (F64.mul (F64.sqrt 2.0) 1000.0)
 
 // --- the narrower one -------------------------------------------------------
 //
 // `F32` is a distinct type reached by conversion. There is no f32 literal: the
-// grammar has one float token, and `Float32.of_float` is what makes the loss of
+// grammar has one float token, and `F32.of_float` is what makes the loss of
 // precision a step the program takes rather than one performed on it.
 //
 // It is a separate type rather than a precision `F64` sometimes has, so mixing
@@ -91,28 +91,28 @@ let root = Float.truncate (Float.mul (Float.sqrt 2.0) 1000.0)
 // the lane type a four-wide vector needs.
 
 sig third_64 = Int
-let third_64 = Float.truncate (Float.mul (Float.div 1.0 3.0) 1000000000.0)
+let third_64 = F64.truncate (F64.mul (F64.div 1.0 3.0) 1000000000.0)
 
 // The same division, in single precision, widened back to compare. The digits
 // stop earlier, which is the whole difference between the two types.
 sig third_32 = Int
 let third_32 =
-  Float.truncate (Float.mul
-    (Float32.widen (Float32.div (Float32.of_int 1) (Float32.of_int 3)))
+  F64.truncate (F64.mul
+    (F32.widen (F32.div (F32.of_int 1) (F32.of_int 3)))
   1000000000.0)
 
 // A double that is exact in f32 survives the round trip; one that is not does
 // not. This is the pair that shows the narrowing is real rather than a label.
 sig exact_round_trip = Bool
 let exact_round_trip =
-  is_equal (Float.cmp
-    (Float32.widen (Float32.of_float 0.5))
+  is_equal (F64.cmp
+    (F32.widen (F32.of_float 0.5))
   0.5)
 
 sig lossy_round_trip = Bool
 let lossy_round_trip =
-  is_equal (Float.cmp
-    (Float32.widen (Float32.of_float 0.1))
+  is_equal (F64.cmp
+    (F32.widen (F32.of_float 0.1))
   0.1)
 
 // --- the boundary -----------------------------------------------------------
@@ -128,10 +128,10 @@ let lossy_round_trip =
 // `BLOT_VECTOR_AT_BOUNDARY`; extract a lane or select a vector first.
 
 return {
-  .quarter = Float.truncate (Float.mul quarter 100.0);
-  .sum = Float.truncate (Float.mul sum 100.0);
-  .scaled = Float.truncate scaled;
-  .widened = Float.truncate widened;
+  .quarter = F64.truncate (F64.mul quarter 100.0);
+  .sum = F64.truncate (F64.mul sum 100.0);
+  .scaled = F64.truncate scaled;
+  .widened = F64.truncate widened;
   .narrowed = narrowed;
   .negative = negative;
 

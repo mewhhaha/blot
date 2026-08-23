@@ -4,8 +4,7 @@
 // strict-only generated-Wasm island parser.
 
 import type { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
-import type { Diagnostic } from "../diagnostic.ts";
-import { BlotError } from "../diagnostic.ts";
+import { BlotError, type Diagnostic, diagnosticCode } from "../diagnostic.ts";
 import type { Module } from "./ast.ts";
 import { babaRuntime, disposeBabaRuntime } from "./baba_runtime.ts";
 import type { Rule } from "./cursor.ts";
@@ -44,7 +43,7 @@ export async function parseConcrete(
     return {
       ok: false,
       diagnostics: lexed.diagnostics.map((diagnostic) => ({
-        code: diagnostic.code,
+        code: diagnosticCode(diagnostic.code),
         message: diagnostic.message,
         span: {
           start: elaborated.layout.originalOffset(diagnostic.span.start),
@@ -62,7 +61,7 @@ export async function parseConcrete(
     return {
       ok: false,
       diagnostics: result.diagnostics.map((diagnostic) => ({
-        code: diagnostic.code,
+        code: diagnosticCode(diagnostic.code),
         message: diagnostic.message,
         span: {
           start: elaborated.layout.originalOffset(diagnostic.start),

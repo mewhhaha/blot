@@ -5,11 +5,11 @@
 
 open import "blot:prelude"
 
-const Result = #Accepted Int | #Rejected Str
+const Result = #Accepted Int | #Rejected Text
 const Summary =
   {
     .accepted = [Int];
-    .errors = [Str];
+    .errors = [Text];
   }
 
 sig validate = Int -> Result
@@ -17,7 +17,7 @@ let validate = fn value => do:
   if value <= 0:
     return #Rejected "not positive"
   else:
-    if Num.rem value 2 == 0:
+    if Int.rem value 2 == 0:
       return #Accepted value
     else:
       return #Rejected "not even"

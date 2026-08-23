@@ -378,7 +378,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   try {
     await writeFile(
       path,
-      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (Float.of_int value)\nreturn ()\n',
+      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (F64.of_int value)\nreturn ()\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);
