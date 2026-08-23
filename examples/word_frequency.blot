@@ -1,0 +1,33 @@
+// Count a pre-tokenized stream of words with an immutable text dictionary.
+//
+// Text currently has no split or tokenization operation, so this example starts
+// at the reusable aggregation boundary rather than pretending parsing exists.
+
+open import "blot:prelude"
+
+const Frequencies = Map.of (Text, Int)
+
+sig increment = (Frequencies, Text) -> Frequencies
+let increment = fn (frequencies, word) => do:
+  let count = case Dict.get (frequencies, word) of
+    #Some value => value
+    #None => 0
+  return (Dict.put (frequencies, word, count + 1)).1
+
+sig words = [Text]
+let words =
+  ["red", "blue", "red", "green", "blue", "red"]
+sig frequencies = Frequencies
+let frequencies = fold (words, Dict.empty, increment)
+
+sig count = Text -> Int
+let count = fn word => case Dict.get (frequencies, word) of
+  #Some value => value
+  #None => 0
+
+return {
+  .red = count "red";
+  .blue = count "blue";
+  .green = count "green";
+  .missing = count "violet";
+}

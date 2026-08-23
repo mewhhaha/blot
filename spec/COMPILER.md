@@ -164,13 +164,22 @@ diagnostic, hotspot, and public-library surfaces so growth is reviewed as an
 explicit contract change.
 
 The distribution has one host adapter with the resident `Compiler` shape:
-`check`, `checkSource`, `prepare`, `compile`, and `destroy`. The adapter
-resolves the exact source graph, installs every source or portable-AST module
-and include in one Rust session, and configures import edges before requesting a
-semantic phase. Its transport is not a fourth failure class: located source
-failures become ordinary source diagnostics, explicit target refusals become
-`TargetRefusal`, and failures after successful checking or Runtime-HIR
-validation become `InvariantFailure` without fabricated spans.
+`check`, `checkSource`, `analyze`, `prepare`, `compile`, and `destroy`. The
+adapter resolves the exact source graph, installs every source or portable-AST
+module and include in one Rust session, and configures import edges before
+requesting a semantic phase. Its transport is not a fourth failure class:
+located source failures become ordinary source diagnostics, explicit target
+refusals become `TargetRefusal`, and failures after successful checking or
+Runtime-HIR validation become `InvariantFailure` without fabricated spans.
+
+`analyze` may additionally expose resident checker work schema 1. Its counters
+measure the uncached semantic check performed by that session and include any
+dependencies checked as part of the root request. A result restored from a
+distributed interface may report `work: null` because the originating process
+work is unavailable. Work counters are neither source facts nor compiler
+certificates: they do not enter cache keys, module snapshots, Runtime HIR, ABI
+manifests, or emitted artifacts, and consumers may not use them to accept or
+reject a program.
 
 ## 3. Pass contract
 

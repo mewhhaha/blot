@@ -1,0 +1,77 @@
+// Derive an invoice report from ordinary immutable line-item records.
+//
+// A fold computes the aggregate in one pass while map keeps the independently
+// useful line totals visible. Money uses integer minor units in this example.
+
+open import "blot:prelude"
+
+const Line =
+  {
+    .description = Text;
+    .quantity = Int;
+    .unit_price = Int;
+    .taxable = Bool;
+  }
+
+const Totals =
+  {
+    .subtotal = Int;
+    .tax = Int;
+    .items = Int;
+  }
+
+sig line_total = Line -> Int
+let line_total = fn line => line.quantity * line.unit_price
+
+sig add_line = (Totals, Line) -> Totals
+let add_line = fn (totals, line) => do:
+  let amount = line_total line
+  let tax = case line.taxable of
+    #True => Int.div amount 5
+    #False => 0
+  return {
+    .subtotal = totals.subtotal + amount;
+    .tax = totals.tax + tax;
+    .items = totals.items + line.quantity;
+  }
+
+sig lines = [Line]
+let lines =
+  [
+    {
+      .description = "notebook";
+      .quantity = 2;
+      .unit_price = 1200;
+      .taxable = True;
+    },
+    {
+      .description = "shipping";
+      .quantity = 1;
+      .unit_price = 500;
+      .taxable = False;
+    },
+    {
+      .description = "pen";
+      .quantity = 3;
+      .unit_price = 200;
+      .taxable = True;
+    }
+  ]
+
+sig line_totals = [Int]
+let line_totals = map (lines, line_total)
+sig totals = Totals
+let totals =
+  fold (
+    lines,
+    { .subtotal = 0; .tax = 0; .items = 0; },
+    add_line
+  )
+
+return {
+  .line_totals = line_totals;
+  .subtotal = totals.subtotal;
+  .tax = totals.tax;
+  .grand_total = totals.subtotal + totals.tax;
+  .items = totals.items;
+}

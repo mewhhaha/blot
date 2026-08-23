@@ -1,0 +1,1 @@
+{ .line_totals = [2400, 500, 600]; .subtotal = 3500; .tax = 600; .grand_total = 4100; .items = 6; }

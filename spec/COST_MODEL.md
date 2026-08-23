@@ -104,6 +104,30 @@ once per transaction, while failed union choices add the work of the candidates
 actually explored. Runtime validation, Core construction, and emission should be
 linear in their artifact sizes.
 
+The type-mechanics scaling experiment varies one source dimension `N` at a time.
+An ordinary declaration chain, one wide structural requirement, `N` independent
+polymorphic instantiations, `N` fixed-size predicate refinements, a chain of `N`
+generic wrappers, a chain carrying one array-length measure, and `N` independent
+structural proof packages should each add `O(N)` AST nodes, finite members,
+constraints, or boundary observations. A one-column closed union with `N`
+constructors and `N` arms should likewise be linear after constructor-set
+normalization. Superlinear wall time is not by itself a complexity proof, but a
+stable doubling ratio above two identifies a phase and source family that needs
+an internal counter or profile. The reproducible boundary and current evidence
+live in
+[`experiments/type-scaling/README.md`](../experiments/type-scaling/README.md).
+
+Resident analysis schema 1 reports deterministic counters for unique interned
+type nodes, recursive interning attempts, constraints, settle/freshen/union
+visits, boundary materializations, closure free-name candidates, and values
+actually bridged. These counters are process observations, not certificates and
+not ABI facts. The scaling gate counts semantic decisions—constraints, boundary
+materializations, and capture selection—separately from recursive graph visits.
+The latter remain visible in the report because a shared constant-time visit may
+still reveal a representation target even when it no longer dominates wall time.
+Timing and both counter classes must be reported; one must not be relabeled as
+the other.
+
 Progressive Runtime-HIR construction visits each settled Core node once and
 stores `O(H_s)` compact builder state. Preparation subsequently visits the `H_p`
 pending nodes plus the final graph validation, rather than repeating all settled
@@ -176,6 +200,12 @@ worklist and journalled transactions rather than whole-graph clones. Persistent
 environments share unchanged lexical parents. These layouts enable scalar cache
 locality first; SIMD is justified only when a contiguous finite-set scan remains
 a measured dominant cost.
+
+The live Rust type view may remain recursive where pass code benefits from
+structural matching, but its immutable recursive edges and finite member lists
+must be shared. A clone then preserves the existing graph rather than rebuilding
+it. Interned `TypeId` remains authoritative for mutable constraint adjacency;
+the shared view does not introduce another equality or inference judgment.
 
 Opening an immutable compile-time record is represented by a shared field table
 plus a target-to-source index. For `F` opened names and recursively sized values

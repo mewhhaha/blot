@@ -26,6 +26,7 @@ import {
   type CompilerTransportFailure,
   type CompilerTypeFact,
   CompilerWasm,
+  type CompilerWork,
 } from "./wasm.ts";
 
 const bundledCompiler = new URL(
@@ -63,6 +64,7 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly types: readonly CompilerTypeFact[];
   readonly tags: readonly CompilerTagFact[];
   readonly ownership: readonly CompilerOwnershipFact[];
+  readonly work: CompilerWork | null;
 }
 
 export interface CompilerOptions {
@@ -425,6 +427,7 @@ export class Compiler implements CompilerHost {
       types: result.types.slice(),
       tags: result.tags.slice(),
       ownership: result.ownership.slice(),
+      work: result.work,
     };
   }
 

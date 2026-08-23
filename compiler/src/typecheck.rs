@@ -5,6 +5,10 @@ use std::rc::Rc;
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 
+thread_local! {
+    static UNION_VISITS: Cell<u64> = const { Cell::new(0) };
+}
+
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
     PatternId, Qualifier, ShapeMember, Span,
@@ -21,6 +25,60 @@ use crate::value::{
 
 type VariableId = u32;
 
+#[derive(Debug)]
+/// An immutable type edge whose clone preserves the checker's shared graph.
+pub struct TypeList<T>(Rc<Vec<T>>);
+
+impl<T> Clone for TypeList<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> TypeList<T> {
+    fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T> std::ops::Deref for TypeList<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> From<Vec<T>> for TypeList<T> {
+    fn from(values: Vec<T>) -> Self {
+        Self(Rc::new(values))
+    }
+}
+
+impl<T> FromIterator<T> for TypeList<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(values: I) -> Self {
+        Self(Rc::new(values.into_iter().collect()))
+    }
+}
+
+impl<T: Clone> IntoIterator for TypeList<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Rc::unwrap_or_clone(self.0).into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a TypeList<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Domain {
     Int,
@@ -35,7 +93,7 @@ pub enum Type {
     Rigid(VariableId),
     Forall {
         variables: Vec<VariableId>,
-        body: Box<Type>,
+        body: Rc<Type>,
     },
     Range {
         domain: Domain,
@@ -45,24 +103,24 @@ pub enum Type {
     Unit,
     Function {
         deferred: bool,
-        parameter: Box<Type>,
-        effects: Box<Type>,
-        result: Box<Type>,
+        parameter: Rc<Type>,
+        effects: Rc<Type>,
+        result: Rc<Type>,
     },
-    Record(Vec<(String, Type)>),
-    Array(Box<Type>),
-    Region(Box<Type>),
-    Scratch(Box<Type>),
+    Record(TypeList<(String, Type)>),
+    Array(Rc<Type>),
+    Region(Rc<Type>),
+    Scratch(Rc<Type>),
     Variant {
-        cases: Vec<(String, Type)>,
+        cases: TypeList<(String, Type)>,
         open: bool,
     },
     Effects(BTreeSet<String>),
     OpenEffects {
         labels: BTreeSet<String>,
-        tail: Box<Type>,
+        tail: Rc<Type>,
     },
-    Union(Vec<Type>),
+    Union(TypeList<Type>),
     Opaque(String),
     Top,
     Bottom,
@@ -132,10 +190,12 @@ enum ConstraintTypeNode {
 struct ConstraintTypeArena {
     nodes: Vec<ConstraintTypeNode>,
     interned: HashMap<ConstraintTypeNode, ConstraintTypeId>,
+    intern_attempts: u64,
 }
 
 impl ConstraintTypeArena {
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
+        self.intern_attempts += 1;
         let node = match type_ {
             Type::Variable(id) => ConstraintTypeNode::Variable(*id),
             Type::Rigid(id) => ConstraintTypeNode::Rigid(*id),
@@ -203,7 +263,7 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Rigid(id) => Type::Rigid(*id),
             ConstraintTypeNode::Forall { variables, body } => Type::Forall {
                 variables: variables.clone(),
-                body: Box::new(self.expand(*body)),
+                body: Rc::new(self.expand(*body)),
             },
             ConstraintTypeNode::Range { domain, low, high } => Type::Range {
                 domain: *domain,
@@ -218,9 +278,9 @@ impl ConstraintTypeArena {
                 result,
             } => Type::Function {
                 deferred: *deferred,
-                parameter: Box::new(self.expand(*parameter)),
-                effects: Box::new(self.expand(*effects)),
-                result: Box::new(self.expand(*result)),
+                parameter: Rc::new(self.expand(*parameter)),
+                effects: Rc::new(self.expand(*effects)),
+                result: Rc::new(self.expand(*result)),
             },
             ConstraintTypeNode::Record(fields) => Type::Record(
                 fields
@@ -228,9 +288,9 @@ impl ConstraintTypeArena {
                     .map(|(name, type_)| (name.clone(), self.expand(*type_)))
                     .collect(),
             ),
-            ConstraintTypeNode::Array(element) => Type::Array(Box::new(self.expand(*element))),
-            ConstraintTypeNode::Region(element) => Type::Region(Box::new(self.expand(*element))),
-            ConstraintTypeNode::Scratch(element) => Type::Scratch(Box::new(self.expand(*element))),
+            ConstraintTypeNode::Array(element) => Type::Array(Rc::new(self.expand(*element))),
+            ConstraintTypeNode::Region(element) => Type::Region(Rc::new(self.expand(*element))),
+            ConstraintTypeNode::Scratch(element) => Type::Scratch(Rc::new(self.expand(*element))),
             ConstraintTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
@@ -241,7 +301,7 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Effects(labels) => Type::Effects(labels.clone()),
             ConstraintTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels: labels.clone(),
-                tail: Box::new(self.expand(*tail)),
+                tail: Rc::new(self.expand(*tail)),
             },
             ConstraintTypeNode::Union(members) => {
                 Type::Union(members.iter().map(|member| self.expand(*member)).collect())
@@ -455,6 +515,40 @@ enum BoundDirection {
 struct BoundInsertion {
     variable: VariableId,
     direction: BoundDirection,
+}
+
+#[derive(Clone)]
+struct ResidualVariable {
+    type_: Type,
+    unresolved: BTreeSet<VariableId>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompilerWork {
+    schema: u32,
+    type_nodes: u64,
+    type_interns: u64,
+    constraints: u64,
+    settle_visits: u64,
+    freshen_visits: u64,
+    union_visits: u64,
+    boundary_materializations: u64,
+    capture_candidates: u64,
+    captures_bridged: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct WorkSnapshot {
+    type_nodes: u64,
+    type_interns: u64,
+    constraints: u64,
+    settle_visits: u64,
+    freshen_visits: u64,
+    union_visits: u64,
+    boundary_materializations: u64,
+    capture_candidates: u64,
+    captures_bridged: u64,
 }
 
 #[derive(Clone)]
@@ -905,6 +999,15 @@ pub struct Checker {
     context: Rc<Context>,
     variables: RefCell<Vec<Variable>>,
     constraint_types: RefCell<ConstraintTypeArena>,
+    settled_variables: RefCell<HashMap<(VariableId, bool), Type>>,
+    residual_variables: RefCell<HashMap<VariableId, ResidualVariable>>,
+    constraints: Cell<u64>,
+    settle_visits: Cell<u64>,
+    freshen_visits: Cell<u64>,
+    boundary_materializations: Cell<u64>,
+    capture_candidates: Cell<u64>,
+    captures_bridged: Cell<u64>,
+    module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     next_skolem: Cell<VariableId>,
     next_representation_hole: Cell<VariableId>,
@@ -945,6 +1048,15 @@ impl Checker {
             context,
             variables: RefCell::new(Vec::new()),
             constraint_types: RefCell::new(ConstraintTypeArena::default()),
+            settled_variables: RefCell::new(HashMap::new()),
+            residual_variables: RefCell::new(HashMap::new()),
+            constraints: Cell::new(0),
+            settle_visits: Cell::new(0),
+            freshen_visits: Cell::new(0),
+            boundary_materializations: Cell::new(0),
+            capture_candidates: Cell::new(0),
+            captures_bridged: Cell::new(0),
+            module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             next_skolem: Cell::new(0x8000_0000),
             next_representation_hole: Cell::new(u32::MAX),
@@ -967,6 +1079,38 @@ impl Checker {
         }
     }
 
+    fn work_snapshot(&self) -> WorkSnapshot {
+        let types = self.constraint_types.borrow();
+        WorkSnapshot {
+            type_nodes: types.nodes.len() as u64,
+            type_interns: types.intern_attempts,
+            constraints: self.constraints.get(),
+            settle_visits: self.settle_visits.get(),
+            freshen_visits: self.freshen_visits.get(),
+            union_visits: UNION_VISITS.with(Cell::get),
+            boundary_materializations: self.boundary_materializations.get(),
+            capture_candidates: self.capture_candidates.get(),
+            captures_bridged: self.captures_bridged.get(),
+        }
+    }
+
+    fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
+        let after = self.work_snapshot();
+        CompilerWork {
+            schema: 1,
+            type_nodes: after.type_nodes - before.type_nodes,
+            type_interns: after.type_interns - before.type_interns,
+            constraints: after.constraints - before.constraints,
+            settle_visits: after.settle_visits - before.settle_visits,
+            freshen_visits: after.freshen_visits - before.freshen_visits,
+            union_visits: after.union_visits - before.union_visits,
+            boundary_materializations: after.boundary_materializations
+                - before.boundary_materializations,
+            capture_candidates: after.capture_candidates - before.capture_candidates,
+            captures_bridged: after.captures_bridged - before.captures_bridged,
+        }
+    }
+
     pub fn check(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
         if let Some(checked) = self.modules.borrow().get(path) {
             return checked.clone();
@@ -985,6 +1129,11 @@ impl Checker {
                 Span { start: 0, end: 0 },
             ));
         }
+        let work_before = self
+            .active
+            .borrow()
+            .is_empty()
+            .then(|| self.work_snapshot());
         self.active.borrow_mut().push(path.to_owned());
         let result = self
             .check_uncached(path)
@@ -1002,6 +1151,10 @@ impl Checker {
             self.module_interfaces
                 .borrow_mut()
                 .insert(path.to_owned(), interface);
+        }
+        if let Some(work_before) = work_before {
+            let work = self.work_since(work_before);
+            self.module_work.borrow_mut().insert(path.to_owned(), work);
         }
         result
     }
@@ -1110,6 +1263,9 @@ impl Checker {
             .borrow_mut()
             .retain(|(path, _), _| !paths.contains(path));
         self.ownership_facts
+            .borrow_mut()
+            .retain(|path, _| !paths.contains(path));
+        self.module_work
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
         self.recursive_closure_bodies
@@ -1231,6 +1387,7 @@ impl Checker {
             "types": types,
             "tags": tags,
             "ownership": ownership,
+            "work": self.module_work.borrow().get(path),
         })
     }
 
@@ -1329,9 +1486,9 @@ impl Checker {
                 specifier.clone(),
                 Type::Function {
                     deferred: false,
-                    parameter: Box::new(checked.parameter.unwrap_or(Type::Unit)),
-                    effects: Box::new(checked.effects),
-                    result: Box::new(checked.result),
+                    parameter: Rc::new(checked.parameter.unwrap_or(Type::Unit)),
+                    effects: Rc::new(checked.effects),
+                    result: Rc::new(checked.result),
                 },
             );
         }
@@ -1676,7 +1833,7 @@ impl Checker {
                 }
                 Type::Forall {
                     variables: fresh_variables,
-                    body: Box::new(body),
+                    body: Rc::new(body),
                 }
             }
             FlatTypeNode::Function {
@@ -1686,9 +1843,9 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred: *deferred,
-                parameter: Box::new(self.inflate_interface_type(arena, *parameter, rigids)),
-                effects: Box::new(self.inflate_interface_type(arena, *effects, rigids)),
-                result: Box::new(self.inflate_interface_type(arena, *result, rigids)),
+                parameter: Rc::new(self.inflate_interface_type(arena, *parameter, rigids)),
+                effects: Rc::new(self.inflate_interface_type(arena, *effects, rigids)),
+                result: Rc::new(self.inflate_interface_type(arena, *result, rigids)),
             },
             FlatTypeNode::Record(fields) => Type::Record(
                 fields
@@ -1701,13 +1858,13 @@ impl Checker {
                     })
                     .collect(),
             ),
-            FlatTypeNode::Array(element) => Type::Array(Box::new(
+            FlatTypeNode::Array(element) => Type::Array(Rc::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
-            FlatTypeNode::Region(element) => Type::Region(Box::new(
+            FlatTypeNode::Region(element) => Type::Region(Rc::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
-            FlatTypeNode::Scratch(element) => Type::Scratch(Box::new(
+            FlatTypeNode::Scratch(element) => Type::Scratch(Rc::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
             FlatTypeNode::Variant { cases, open } => Type::Variant {
@@ -1737,7 +1894,7 @@ impl Checker {
             FlatTypeNode::Effects(labels) => Type::Effects(labels.clone()),
             FlatTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels: labels.clone(),
-                tail: Box::new(self.inflate_interface_type(arena, *tail, rigids)),
+                tail: Rc::new(self.inflate_interface_type(arena, *tail, rigids)),
             },
             FlatTypeNode::Opaque(name) => Type::Opaque(name.clone()),
             FlatTypeNode::Top => Type::Top,
@@ -2417,14 +2574,14 @@ impl Checker {
                 };
                 let inferred_fields = match self.settle(inferred.type_.clone(), true) {
                     Type::Record(fields) => fields,
-                    _ => Vec::new(),
+                    _ => Vec::new().into(),
                 };
                 let mut type_positions_by_source = inferred_fields
                     .iter()
                     .enumerate()
                     .map(|(position, (name, _))| (name.clone(), position))
                     .collect::<HashMap<_, _>>();
-                let mut inferred_fields = inferred_fields;
+                let mut inferred_fields = inferred_fields.to_vec();
                 let mut type_positions_by_target = BTreeMap::new();
                 let mut value_sources_by_target = BTreeMap::new();
                 for (source, value) in &fields {
@@ -2442,7 +2599,7 @@ impl Checker {
                     value_sources_by_target.insert(source.clone(), source.clone());
                 }
                 Rc::make_mut(&mut types.opens).push(OpenedTypes {
-                    fields: Rc::new(inferred_fields),
+                    fields: Rc::new(inferred_fields.to_vec()),
                     positions_by_target: Rc::new(type_positions_by_target),
                 });
                 values
@@ -2515,7 +2672,7 @@ impl Checker {
             })),
             Expression::Unit { .. } => Ok(Inferred::pure(Type::Unit)),
             Expression::Tag { name, .. } => Ok(Inferred::pure(Type::Variant {
-                cases: vec![(name, Type::Unit)],
+                cases: vec![(name, Type::Unit)].into(),
                 open: false,
             })),
             Expression::Var { name, .. } => {
@@ -2629,9 +2786,9 @@ impl Checker {
                             function_type,
                             Type::Function {
                                 deferred,
-                                parameter: Box::new(argument),
-                                effects: Box::new(performed.clone()),
-                                result: Box::new(result.clone()),
+                                parameter: Rc::new(argument),
+                                effects: Rc::new(performed.clone()),
+                                result: Rc::new(result.clone()),
                             },
                             span,
                         )?;
@@ -2689,9 +2846,9 @@ impl Checker {
                         function_type,
                         Type::Function {
                             deferred,
-                            parameter: Box::new(argument_type.type_),
-                            effects: Box::new(performed.clone()),
-                            result: Box::new(result.clone()),
+                            parameter: Rc::new(argument_type.type_),
+                            effects: Rc::new(performed.clone()),
+                            result: Rc::new(result.clone()),
                         },
                         span,
                     )?;
@@ -2726,7 +2883,7 @@ impl Checker {
                     {
                         self.constrain(
                             target.type_,
-                            Type::Record(vec![(name, field.clone())]),
+                            Type::Record(vec![(name, field.clone())].into()),
                             span,
                         )?;
                     } else if self.phase.get() == Phase::Runtime
@@ -2836,7 +2993,7 @@ impl Checker {
                         self.infer(path, module, argument, environment, values, dependencies)?;
                     return Ok(Inferred {
                         type_: Type::Variant {
-                            cases: vec![(name.clone(), argument.type_)],
+                            cases: vec![(name.clone(), argument.type_)].into(),
                             open: false,
                         },
                         effects: argument.effects,
@@ -2895,9 +3052,9 @@ impl Checker {
                         function,
                         Type::Function {
                             deferred,
-                            parameter: Box::new(argument.type_.clone()),
-                            effects: Box::new(performed.clone()),
-                            result: Box::new(result.clone()),
+                            parameter: Rc::new(argument.type_.clone()),
+                            effects: Rc::new(performed.clone()),
+                            result: Rc::new(result.clone()),
                         },
                         span,
                     )?;
@@ -2935,9 +3092,9 @@ impl Checker {
                     function.type_,
                     Type::Function {
                         deferred,
-                        parameter: Box::new(argument_type.clone()),
-                        effects: Box::new(performed.clone()),
-                        result: Box::new(result.clone()),
+                        parameter: Rc::new(argument_type.clone()),
+                        effects: Rc::new(performed.clone()),
+                        result: Rc::new(result.clone()),
                     },
                     span,
                 )?;
@@ -2977,9 +3134,9 @@ impl Checker {
                         selected,
                         Type::Function {
                             deferred,
-                            parameter: Box::new(argument_type),
-                            effects: Box::new(selected_performed.clone()),
-                            result: Box::new(selected_result.clone()),
+                            parameter: Rc::new(argument_type),
+                            effects: Rc::new(selected_performed.clone()),
+                            result: Rc::new(selected_result.clone()),
                         },
                         span,
                     )?;
@@ -3047,7 +3204,7 @@ impl Checker {
                     let field = self.fresh();
                     self.constrain(
                         target.type_,
-                        Type::Record(vec![(name, field.clone())]),
+                        Type::Record(vec![(name, field.clone())].into()),
                         span,
                     )?;
                     Ok(Inferred {
@@ -3075,9 +3232,9 @@ impl Checker {
                 let body = self.infer(path, module, body_id, &scope, values, dependencies)?;
                 let type_ = Type::Function {
                     deferred,
-                    parameter: Box::new(parameter_type),
-                    effects: Box::new(body.effects),
-                    result: Box::new(body.type_),
+                    parameter: Rc::new(parameter_type),
+                    effects: Rc::new(body.effects),
+                    result: Rc::new(body.type_),
                 };
                 self.closure_types
                     .borrow_mut()
@@ -3095,7 +3252,7 @@ impl Checker {
                     effects = self.join_effects(effects, inferred.effects)?;
                 }
                 Ok(Inferred {
-                    type_: Type::Record(fields),
+                    type_: Type::Record(fields.into()),
                     effects,
                 })
             }
@@ -3114,7 +3271,7 @@ impl Checker {
                     if element.spread {
                         self.constrain(
                             inferred.type_,
-                            Type::Array(Box::new(element_type.clone())),
+                            Type::Array(Rc::new(element_type.clone())),
                             span,
                         )?;
                     } else {
@@ -3123,7 +3280,7 @@ impl Checker {
                     effects = self.join_effects(effects, inferred.effects)?;
                 }
                 Ok(Inferred {
-                    type_: Type::Array(Box::new(element_type)),
+                    type_: Type::Array(Rc::new(element_type)),
                     effects,
                 })
             }
@@ -3189,7 +3346,7 @@ impl Checker {
                     }
                 }
                 Ok(Inferred {
-                    type_: Type::Record(fields),
+                    type_: Type::Record(fields.into()),
                     effects,
                 })
             }
@@ -3507,7 +3664,7 @@ impl Checker {
                 dependencies,
                 span,
             )?;
-            self.constrain(body.effects, *expected_effects, span)?;
+            self.constrain(body.effects, Rc::unwrap_or_clone(expected_effects), span)?;
             return Ok(Inferred::pure(expected));
         }
         let signed_closure_body = match module.arena.expressions[expression.0 as usize] {
@@ -3579,36 +3736,26 @@ impl Checker {
                 )
             })?;
         let closure_ast = closure_loaded.module;
+        let free_names =
+            closure_free_names(&self.context, closure_module, parameter, body, self_name)?
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        self.capture_candidates
+            .set(self.capture_candidates.get() + free_names.len() as u64);
         let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-        let mut captured = Vec::new();
-        let mut value_scope = Some(closure_values.clone());
-        while let Some(values) = value_scope {
-            captured.push(values.clone());
-            value_scope = values.parent.clone();
-        }
-        for values in captured.into_iter().rev() {
-            for (name, value) in values.names.borrow().iter() {
-                let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
-                Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
-                let phase = if closure_module == path {
-                    environment.binding_phase(name).unwrap_or(Phase::Comptime)
-                } else {
-                    Phase::Comptime
-                };
-                Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
-            }
-            for opened in values.opens.borrow().iter() {
-                for (name, value) in opened.iter() {
-                    let type_ = self.bridge(value).unwrap_or_else(|| self.fresh());
-                    Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
-                    let phase = if closure_module == path {
-                        environment.binding_phase(name).unwrap_or(Phase::Comptime)
-                    } else {
-                        Phase::Comptime
-                    };
-                    Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
-                }
-            }
+        for name in free_names {
+            let Some(value) = lookup(closure_values, &name) else {
+                continue;
+            };
+            self.captures_bridged.set(self.captures_bridged.get() + 1);
+            let type_ = self.bridge(&value).unwrap_or_else(|| self.fresh());
+            let phase = if closure_module == path {
+                environment.binding_phase(&name).unwrap_or(Phase::Comptime)
+            } else {
+                Phase::Comptime
+            };
+            Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+            Rc::make_mut(&mut scope.phases).insert(name, phase);
         }
         let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));
         if let Some((name, type_)) = &recursive {
@@ -3647,9 +3794,9 @@ impl Checker {
         let inferred = inferred?;
         let function = Type::Function {
             deferred,
-            parameter: Box::new(parameter_type),
-            effects: Box::new(inferred.effects),
-            result: Box::new(inferred.type_),
+            parameter: Rc::new(parameter_type),
+            effects: Rc::new(inferred.effects),
+            result: Rc::new(inferred.type_),
         };
         if let Some((_, recursive)) = recursive {
             self.constrain(function.clone(), recursive, closure_ast.span)?;
@@ -3658,14 +3805,6 @@ impl Checker {
             .borrow_mut()
             .entry((closure_module.to_owned(), body))
             .or_insert_with(|| function.clone());
-        if let Some(signature) = self.reify_runtime_type(&self.residual_signature(function.clone()))
-        {
-            self.context
-                .closure_signatures
-                .borrow_mut()
-                .entry((closure_module.to_owned(), body))
-                .or_insert(signature);
-        }
         Ok(function)
     }
 
@@ -3765,10 +3904,10 @@ impl Checker {
     ) -> Result<Inferred, Diagnostic> {
         let Expression::Tuple { elements, .. } = &module.arena.expressions[argument.0 as usize]
         else {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
+            return self.type_error(Type::Unit, Type::Record(Vec::new().into()), span);
         };
         if elements.len() != 3 {
-            return self.type_error(Type::Unit, Type::Record(Vec::new()), span);
+            return self.type_error(Type::Unit, Type::Record(Vec::new().into()), span);
         }
         let effect_expression = elements[0];
         let thunk_expression = elements[1];
@@ -3835,9 +3974,9 @@ impl Checker {
             thunk.type_,
             Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Unit),
-                effects: Box::new(performed.clone()),
-                result: Box::new(computation_result.clone()),
+                parameter: Rc::new(Type::Unit),
+                effects: Rc::new(performed.clone()),
+                result: Rc::new(computation_result.clone()),
             },
             span,
         )?;
@@ -3846,7 +3985,7 @@ impl Checker {
                 continue;
             };
             if let Type::Forall { variables, body } = signature {
-                signature = self.instantiate_forall(variables, *body);
+                signature = self.instantiate_forall(variables, Rc::unwrap_or_clone(body));
             }
             let Type::Function {
                 parameter, result, ..
@@ -3857,36 +3996,42 @@ impl Checker {
             let continuation = Type::Function {
                 deferred: false,
                 parameter: result,
-                effects: Box::new(handler_row.clone()),
-                result: Box::new(handled_result.clone()),
+                effects: Rc::new(handler_row.clone()),
+                result: Rc::new(handled_result.clone()),
             };
             let clause = Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Record(vec![
-                    ("0".to_owned(), *parameter),
-                    ("1".to_owned(), continuation),
-                ])),
-                effects: Box::new(handler_row.clone()),
-                result: Box::new(handled_result.clone()),
+                parameter: Rc::new(Type::Record(
+                    vec![
+                        ("0".to_owned(), Rc::unwrap_or_clone(parameter)),
+                        ("1".to_owned(), continuation),
+                    ]
+                    .into(),
+                )),
+                effects: Rc::new(handler_row.clone()),
+                result: Rc::new(handled_result.clone()),
             };
             self.constrain(
                 handler.type_.clone(),
-                Type::Record(vec![(name.clone(), clause)]),
+                Type::Record(vec![(name.clone(), clause)].into()),
                 span,
             )?;
         }
         if handler_fields.get("return").is_some() {
             self.constrain(
                 handler.type_.clone(),
-                Type::Record(vec![(
-                    "return".to_owned(),
-                    Type::Function {
-                        deferred: false,
-                        parameter: Box::new(computation_result),
-                        effects: Box::new(handler_row.clone()),
-                        result: Box::new(handled_result.clone()),
-                    },
-                )]),
+                Type::Record(
+                    vec![(
+                        "return".to_owned(),
+                        Type::Function {
+                            deferred: false,
+                            parameter: Rc::new(computation_result),
+                            effects: Rc::new(handler_row.clone()),
+                            result: Rc::new(handled_result.clone()),
+                        },
+                    )]
+                    .into(),
+                ),
                 span,
             )?;
         } else {
@@ -3935,6 +4080,7 @@ impl Checker {
     }
 
     fn freshen(&self, type_: Type, level: u32, fresh: &mut HashMap<VariableId, Type>) -> Type {
+        self.freshen_visits.set(self.freshen_visits.get() + 1);
         match type_ {
             Type::Variable(id) if self.variables.borrow()[id as usize].level > level => {
                 if let Some(type_) = fresh.get(&id) {
@@ -3972,7 +4118,7 @@ impl Checker {
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Box::new(self.freshen(*body, level, fresh)),
+                body: Rc::new(self.freshen(Rc::unwrap_or_clone(body), level, fresh)),
             },
             Type::Function {
                 deferred,
@@ -3981,9 +4127,9 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred,
-                parameter: Box::new(self.freshen(*parameter, level, fresh)),
-                effects: Box::new(self.freshen(*effects, level, fresh)),
-                result: Box::new(self.freshen(*result, level, fresh)),
+                parameter: Rc::new(self.freshen(Rc::unwrap_or_clone(parameter), level, fresh)),
+                effects: Rc::new(self.freshen(Rc::unwrap_or_clone(effects), level, fresh)),
+                result: Rc::new(self.freshen(Rc::unwrap_or_clone(result), level, fresh)),
             },
             Type::Record(fields) => Type::Record(
                 fields
@@ -3991,12 +4137,24 @@ impl Checker {
                     .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
                     .collect(),
             ),
-            Type::Array(element) => Type::Array(Box::new(self.freshen(*element, level, fresh))),
-            Type::Region(element) => Type::Region(Box::new(self.freshen(*element, level, fresh))),
-            Type::Scratch(element) => Type::Scratch(Box::new(self.freshen(*element, level, fresh))),
+            Type::Array(element) => Type::Array(Rc::new(self.freshen(
+                Rc::unwrap_or_clone(element),
+                level,
+                fresh,
+            ))),
+            Type::Region(element) => Type::Region(Rc::new(self.freshen(
+                Rc::unwrap_or_clone(element),
+                level,
+                fresh,
+            ))),
+            Type::Scratch(element) => Type::Scratch(Rc::new(self.freshen(
+                Rc::unwrap_or_clone(element),
+                level,
+                fresh,
+            ))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Box::new(self.freshen(*tail, level, fresh)),
+                tail: Rc::new(self.freshen(Rc::unwrap_or_clone(tail), level, fresh)),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -4127,7 +4285,7 @@ impl Checker {
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Box::new(self.extrude(*body, polarity, level, copies)),
+                body: Rc::new(self.extrude(Rc::unwrap_or_clone(body), polarity, level, copies)),
             },
             Type::Function {
                 deferred,
@@ -4136,9 +4294,19 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred,
-                parameter: Box::new(self.extrude(*parameter, !polarity, level, copies)),
-                effects: Box::new(self.extrude(*effects, polarity, level, copies)),
-                result: Box::new(self.extrude(*result, polarity, level, copies)),
+                parameter: Rc::new(self.extrude(
+                    Rc::unwrap_or_clone(parameter),
+                    !polarity,
+                    level,
+                    copies,
+                )),
+                effects: Rc::new(self.extrude(
+                    Rc::unwrap_or_clone(effects),
+                    polarity,
+                    level,
+                    copies,
+                )),
+                result: Rc::new(self.extrude(Rc::unwrap_or_clone(result), polarity, level, copies)),
             },
             Type::Record(fields) => Type::Record(
                 fields
@@ -4146,18 +4314,27 @@ impl Checker {
                     .map(|(name, field)| (name, self.extrude(field, polarity, level, copies)))
                     .collect(),
             ),
-            Type::Array(element) => {
-                Type::Array(Box::new(self.extrude(*element, polarity, level, copies)))
-            }
-            Type::Region(element) => {
-                Type::Region(Box::new(self.extrude(*element, polarity, level, copies)))
-            }
-            Type::Scratch(element) => {
-                Type::Scratch(Box::new(self.extrude(*element, polarity, level, copies)))
-            }
+            Type::Array(element) => Type::Array(Rc::new(self.extrude(
+                Rc::unwrap_or_clone(element),
+                polarity,
+                level,
+                copies,
+            ))),
+            Type::Region(element) => Type::Region(Rc::new(self.extrude(
+                Rc::unwrap_or_clone(element),
+                polarity,
+                level,
+                copies,
+            ))),
+            Type::Scratch(element) => Type::Scratch(Rc::new(self.extrude(
+                Rc::unwrap_or_clone(element),
+                polarity,
+                level,
+                copies,
+            ))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Box::new(self.extrude(*tail, polarity, level, copies)),
+                tail: Rc::new(self.extrude(Rc::unwrap_or_clone(tail), polarity, level, copies)),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -4186,6 +4363,8 @@ impl Checker {
     }
 
     fn record_bound_insertion(&self, variable: VariableId, direction: BoundDirection) {
+        self.settled_variables.borrow_mut().clear();
+        self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().push(BoundInsertion {
             variable,
             direction,
@@ -4300,6 +4479,7 @@ impl Checker {
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
+        self.constraints.set(self.constraints.get() + 1);
         if self.constraint_types.borrow().same(left, right) {
             return Ok(());
         }
@@ -4380,7 +4560,7 @@ impl Checker {
                         }
                         return self.type_error(
                             self.expand_constraint(left),
-                            Type::Record(vec![(name, right_type)]),
+                            Type::Record(vec![(name, right_type)].into()),
                             span,
                         );
                     };
@@ -4493,7 +4673,7 @@ impl Checker {
                 if !same_tail {
                     let right_row = self.constraint_type(&Type::OpenEffects {
                         labels: right_labels,
-                        tail: Box::new(self.expand_constraint(right_tail)),
+                        tail: Rc::new(self.expand_constraint(right_tail)),
                     });
                     self.constrain_ids(left_tail, right_row, span, seen)?;
                 }
@@ -4635,7 +4815,7 @@ impl Checker {
     }
 
     fn settle(&self, type_: Type, positive: bool) -> Type {
-        self.settle_seen(type_, positive, &mut HashSet::new())
+        self.settle_seen(type_, positive, &mut HashSet::new(), &mut true)
     }
 
     fn residual_signature(&self, type_: Type) -> Type {
@@ -4643,6 +4823,8 @@ impl Checker {
     }
 
     fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {
+        self.boundary_materializations
+            .set(self.boundary_materializations.get() + 1);
         let mut unresolved = BTreeSet::new();
         let mut recursive = HashSet::new();
         let body = self.residual_signature_type(
@@ -4704,7 +4886,7 @@ impl Checker {
         } else {
             Type::Forall {
                 variables: unresolved.into_iter().collect(),
-                body: Box::new(body),
+                body: Rc::new(body),
             }
         };
         (signature, !recursive.is_empty())
@@ -4730,6 +4912,10 @@ impl Checker {
                 if let Some(type_) = resolved.get(&id) {
                     return type_.clone();
                 }
+                if let Some(cached) = self.residual_variables.borrow().get(&id) {
+                    unresolved.extend(cached.unresolved.iter().copied());
+                    return cached.type_.clone();
+                }
                 if !seen.insert(id) {
                     unresolved.insert(id);
                     recursive.insert(id);
@@ -4738,6 +4924,8 @@ impl Checker {
                 let resolved_before_evidence = resolved.clone();
                 let unresolved_before_evidence = unresolved.clone();
                 let recursive_before_evidence = recursive.clone();
+                let cache_unresolved_before = unresolved.clone();
+                let cache_recursive_before = recursive.clone();
                 let variable = self.variables.borrow()[id as usize].clone();
                 let mut lower_evidence = variable
                     .lower
@@ -4796,13 +4984,30 @@ impl Checker {
                 }
                 seen.remove(&id);
                 resolved.insert(id, result.clone());
+                if recursive.is_subset(&cache_recursive_before) {
+                    let unresolved = unresolved
+                        .difference(&cache_unresolved_before)
+                        .copied()
+                        .collect();
+                    self.residual_variables.borrow_mut().insert(
+                        id,
+                        ResidualVariable {
+                            type_: result.clone(),
+                            unresolved,
+                        },
+                    );
+                }
                 result
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Box::new(
-                    self.residual_signature_type(*body, seen, resolved, unresolved, recursive),
-                ),
+                body: Rc::new(self.residual_signature_type(
+                    Rc::unwrap_or_clone(body),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                )),
             },
             Type::Function {
                 deferred,
@@ -4811,13 +5016,21 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred,
-                parameter: Box::new(
-                    self.residual_signature_type(*parameter, seen, resolved, unresolved, recursive),
-                ),
-                effects: Box::new(self.settle(*effects, true)),
-                result: Box::new(
-                    self.residual_signature_type(*result, seen, resolved, unresolved, recursive),
-                ),
+                parameter: Rc::new(self.residual_signature_type(
+                    Rc::unwrap_or_clone(parameter),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                )),
+                effects: Rc::new(self.settle(Rc::unwrap_or_clone(effects), true)),
+                result: Rc::new(self.residual_signature_type(
+                    Rc::unwrap_or_clone(result),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                )),
             },
             Type::Record(fields) => Type::Record(
                 fields
@@ -4832,20 +5045,36 @@ impl Checker {
                     })
                     .collect(),
             ),
-            Type::Array(element) => Type::Array(Box::new(
-                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
-            )),
-            Type::Region(element) => Type::Region(Box::new(
-                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
-            )),
-            Type::Scratch(element) => Type::Scratch(Box::new(
-                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
-            )),
+            Type::Array(element) => Type::Array(Rc::new(self.residual_signature_type(
+                Rc::unwrap_or_clone(element),
+                seen,
+                resolved,
+                unresolved,
+                recursive,
+            ))),
+            Type::Region(element) => Type::Region(Rc::new(self.residual_signature_type(
+                Rc::unwrap_or_clone(element),
+                seen,
+                resolved,
+                unresolved,
+                recursive,
+            ))),
+            Type::Scratch(element) => Type::Scratch(Rc::new(self.residual_signature_type(
+                Rc::unwrap_or_clone(element),
+                seen,
+                resolved,
+                unresolved,
+                recursive,
+            ))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Box::new(
-                    self.residual_signature_type(*tail, seen, resolved, unresolved, recursive),
-                ),
+                tail: Rc::new(self.residual_signature_type(
+                    Rc::unwrap_or_clone(tail),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                )),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
@@ -4883,7 +5112,7 @@ impl Checker {
                     }
                 }
                 if control_cases.is_empty() {
-                    Type::Union(members)
+                    Type::Union(members.into())
                 } else {
                     Type::Variant {
                         cases: control_cases
@@ -4905,10 +5134,21 @@ impl Checker {
         }
     }
 
-    fn settle_seen(&self, type_: Type, positive: bool, seen: &mut HashSet<VariableId>) -> Type {
+    fn settle_seen(
+        &self,
+        type_: Type,
+        positive: bool,
+        seen: &mut HashSet<VariableId>,
+        cacheable: &mut bool,
+    ) -> Type {
+        self.settle_visits.set(self.settle_visits.get() + 1);
         match type_ {
             Type::Variable(id) => {
+                if let Some(settled) = self.settled_variables.borrow().get(&(id, positive)) {
+                    return settled.clone();
+                }
                 if !seen.insert(id) {
+                    *cacheable = false;
                     return if positive { Type::Bottom } else { Type::Top };
                 }
                 let variable = self.variables.borrow()[id as usize].clone();
@@ -4920,24 +5160,33 @@ impl Checker {
                 let mut settled = bounds
                     .into_iter()
                     .map(|bound| self.expand_constraint(bound))
-                    .map(|bound| self.settle_seen(bound, positive, seen))
+                    .map(|bound| self.settle_seen(bound, positive, seen, cacheable))
                     .collect::<Vec<_>>();
                 seen.remove(&id);
-                if settled.is_empty() {
-                    return if positive { Type::Bottom } else { Type::Top };
-                }
-                if settled.len() == 1 {
-                    return settled.remove(0);
-                }
-                if positive {
+                let settled = if settled.is_empty() {
+                    if positive { Type::Bottom } else { Type::Top }
+                } else if settled.len() == 1 {
+                    settled.remove(0)
+                } else if positive {
                     join_types(settled)
                 } else {
                     meet_types(settled)
+                };
+                if *cacheable {
+                    self.settled_variables
+                        .borrow_mut()
+                        .insert((id, positive), settled.clone());
                 }
+                settled
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Box::new(self.settle_seen(*body, positive, seen)),
+                body: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(body),
+                    positive,
+                    seen,
+                    cacheable,
+                )),
             },
             Type::Function {
                 deferred,
@@ -4946,40 +5195,69 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred,
-                parameter: Box::new(self.settle_seen(*parameter, !positive, seen)),
-                effects: Box::new(self.settle_seen(*effects, positive, seen)),
-                result: Box::new(self.settle_seen(*result, positive, seen)),
+                parameter: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(parameter),
+                    !positive,
+                    seen,
+                    cacheable,
+                )),
+                effects: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(effects),
+                    positive,
+                    seen,
+                    cacheable,
+                )),
+                result: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(result),
+                    positive,
+                    seen,
+                    cacheable,
+                )),
             },
             Type::Record(fields) => Type::Record(
                 fields
                     .into_iter()
-                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen)))
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
                     .collect(),
             ),
-            Type::Array(element) => {
-                Type::Array(Box::new(self.settle_seen(*element, positive, seen)))
-            }
-            Type::Region(element) => {
-                Type::Region(Box::new(self.settle_seen(*element, positive, seen)))
-            }
-            Type::Scratch(element) => {
-                Type::Scratch(Box::new(self.settle_seen(*element, positive, seen)))
-            }
+            Type::Array(element) => Type::Array(Rc::new(self.settle_seen(
+                Rc::unwrap_or_clone(element),
+                positive,
+                seen,
+                cacheable,
+            ))),
+            Type::Region(element) => Type::Region(Rc::new(self.settle_seen(
+                Rc::unwrap_or_clone(element),
+                positive,
+                seen,
+                cacheable,
+            ))),
+            Type::Scratch(element) => Type::Scratch(Rc::new(self.settle_seen(
+                Rc::unwrap_or_clone(element),
+                positive,
+                seen,
+                cacheable,
+            ))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Box::new(self.settle_seen(*tail, positive, seen)),
+                tail: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(tail),
+                    positive,
+                    seen,
+                    cacheable,
+                )),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
-                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen)))
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
                     .collect(),
                 open,
             },
             Type::Union(members) => Type::Union(
                 members
                     .into_iter()
-                    .map(|member| self.settle_seen(member, positive, seen))
+                    .map(|member| self.settle_seen(member, positive, seen, cacheable))
                     .collect(),
             ),
             other => other,
@@ -5071,7 +5349,7 @@ impl Checker {
                         phase,
                     );
                 }
-                let _ = self.constrain(type_, Type::Array(Box::new(element)), module.span);
+                let _ = self.constrain(type_, Type::Array(Rc::new(element)), module.span);
             }
             Pattern::Constructor { name, payload, .. } => {
                 let payload_type = if let Some(payload) = payload {
@@ -5089,7 +5367,7 @@ impl Checker {
                 };
                 let _ = self.constrain(
                     Type::Variant {
-                        cases: vec![(name.clone(), payload_type)],
+                        cases: vec![(name.clone(), payload_type)].into(),
                         open: false,
                     },
                     type_,
@@ -5179,7 +5457,7 @@ impl Checker {
                     })
                     .collect(),
             ),
-            Pattern::Array { elements, .. } => Type::Array(Box::new(union_types(
+            Pattern::Array { elements, .. } => Type::Array(Rc::new(union_types(
                 elements
                     .iter()
                     .filter_map(|pattern| self.pattern_type(module, *pattern, environment))
@@ -5191,7 +5469,8 @@ impl Checker {
                     payload
                         .and_then(|payload| self.pattern_type(module, payload, environment))
                         .unwrap_or(Type::Unit),
-                )],
+                )]
+                .into(),
                 open: false,
             },
             Pattern::Shape { fields, .. } => Type::Record(
@@ -5493,32 +5772,30 @@ impl Checker {
                     .map(|(name, value)| (name.clone(), self.bridge_runtime_value(value)))
                     .collect(),
             ),
-            Value::RegionType(element) => {
-                Type::Region(Box::new(self.bridge_runtime_value(element)))
-            }
+            Value::RegionType(element) => Type::Region(Rc::new(self.bridge_runtime_value(element))),
             Value::ScratchType(element) => {
-                Type::Scratch(Box::new(self.bridge_runtime_value(element)))
+                Type::Scratch(Rc::new(self.bridge_runtime_value(element)))
             }
-            Value::Scratch { values, .. } => Type::Scratch(Box::new(join_types(
+            Value::Scratch { values, .. } => Type::Scratch(Rc::new(join_types(
                 values
                     .iter()
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
-            Value::Region { store, start, end } => Type::Region(Box::new(join_types(
+            Value::Region { store, start, end } => Type::Region(Rc::new(join_types(
                 store.borrow()[*start..*end]
                     .iter()
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
             Value::RegionRejoin { .. } => Type::Opaque("Rejoin".to_owned()),
-            Value::Array(elements) => Type::Array(Box::new(join_types(
+            Value::Array(elements) => Type::Array(Rc::new(join_types(
                 elements
                     .iter()
                     .map(|value| self.bridge_runtime_value(value))
                     .collect(),
             ))),
-            Value::EmptyArray { .. } => Type::Array(Box::new(self.fresh_empty_array_element())),
+            Value::EmptyArray { .. } => Type::Array(Rc::new(self.fresh_empty_array_element())),
             Value::Tag { name, payload } => Type::Variant {
                 cases: vec![(
                     name.clone(),
@@ -5526,7 +5803,8 @@ impl Checker {
                         .as_deref()
                         .map(|payload| self.bridge_runtime_value(payload))
                         .unwrap_or(Type::Unit),
-                )],
+                )]
+                .into(),
                 open: false,
             },
             _ => self.bridge(value).unwrap_or(Type::Top),
@@ -5552,31 +5830,32 @@ impl Checker {
                 fields
                     .iter()
                     .map(|(name, value)| Some((name.clone(), self.bridge(value)?)))
-                    .collect::<Option<Vec<_>>>()?,
+                    .collect::<Option<Vec<_>>>()?
+                    .into(),
             )),
-            Value::RegionType(element) => Some(Type::Region(Box::new(self.bridge(element)?))),
-            Value::ScratchType(element) => Some(Type::Scratch(Box::new(self.bridge(element)?))),
-            Value::Scratch { values, .. } => Some(Type::Scratch(Box::new(join_types(
+            Value::RegionType(element) => Some(Type::Region(Rc::new(self.bridge(element)?))),
+            Value::ScratchType(element) => Some(Type::Scratch(Rc::new(self.bridge(element)?))),
+            Value::Scratch { values, .. } => Some(Type::Scratch(Rc::new(join_types(
                 values
                     .iter()
                     .map(|value| self.bridge(value))
                     .collect::<Option<Vec<_>>>()?,
             )))),
-            Value::Region { store, start, end } => Some(Type::Region(Box::new(union_types(
+            Value::Region { store, start, end } => Some(Type::Region(Rc::new(union_types(
                 store.borrow()[*start..*end]
                     .iter()
                     .filter_map(|value| self.bridge(value))
                     .collect(),
             )))),
             Value::RegionRejoin { .. } => Some(Type::Opaque("Rejoin".to_owned())),
-            Value::Array(elements) => Some(Type::Array(Box::new(union_types(
+            Value::Array(elements) => Some(Type::Array(Rc::new(union_types(
                 elements
                     .iter()
                     .filter_map(|value| self.bridge(value))
                     .collect(),
             )))),
             Value::EmptyArray { .. } => {
-                Some(Type::Array(Box::new(self.fresh_empty_array_element())))
+                Some(Type::Array(Rc::new(self.fresh_empty_array_element())))
             }
             Value::Tag { name, payload } => Some(Type::Variant {
                 cases: vec![(
@@ -5585,7 +5864,8 @@ impl Checker {
                         .as_deref()
                         .and_then(|value| self.bridge(value))
                         .unwrap_or(Type::Unit),
-                )],
+                )]
+                .into(),
                 open: false,
             }),
             Value::Range { low, high, domain } => Some(Type::Range {
@@ -5625,20 +5905,20 @@ impl Checker {
                 let effects = match effect_tail {
                     Some(tail) => Type::OpenEffects {
                         labels,
-                        tail: Box::new(Type::Rigid(*tail)),
+                        tail: Rc::new(Type::Rigid(*tail)),
                     },
                     None => Type::Effects(labels),
                 };
                 Some(Type::Function {
                     deferred: *deferred,
-                    parameter: Box::new(self.bridge(domain)?),
-                    effects: Box::new(effects),
-                    result: Box::new(self.bridge(codomain)?),
+                    parameter: Rc::new(self.bridge(domain)?),
+                    effects: Rc::new(effects),
+                    result: Rc::new(self.bridge(codomain)?),
                 })
             }
             Value::Forall { variable, body } => Some(Type::Forall {
                 variables: vec![*variable],
-                body: Box::new(self.bridge(body)?),
+                body: Rc::new(self.bridge(body)?),
             }),
             Value::Effect { id, name, .. } => Some(Type::Opaque(format!("Effect:{id}:{name}"))),
             Value::Extended { inner, .. } => self.bridge(inner),
@@ -5674,13 +5954,20 @@ impl Checker {
             return None;
         }
         match signature {
-            Type::Forall { variables, body } => Some(self.instantiate_forall(variables, *body)),
+            Type::Forall { variables, body } => {
+                Some(self.instantiate_forall(variables, Rc::unwrap_or_clone(body)))
+            }
             signature => Some(signature),
         }
     }
 
     fn show(&self, type_: &Type) -> String {
-        match self.settle(type_.clone(), true) {
+        let settled = self.settle(type_.clone(), true);
+        self.show_settled(&settled)
+    }
+
+    fn show_settled(&self, type_: &Type) -> String {
+        match type_ {
             Type::Variable(id) => format!("'t{id}"),
             Type::Rigid(id) => format!("'s{id}"),
             Type::Forall { variables, body } => {
@@ -5695,14 +5982,14 @@ impl Checker {
                     .join(" ");
                 format!(
                     "forall {names}. {}",
-                    self.show(&substitute_rigid(*body, &replacements))
+                    self.show_settled(&substitute_rigid(body.as_ref().clone(), &replacements))
                 )
             }
             Type::Range {
                 domain: Domain::Int,
                 low: Some(Scalar::Int(low)),
                 high: Some(Scalar::Int(high)),
-            } if low == BigInt::from(i64::MIN) && high == BigInt::from(i64::MAX) => {
+            } if low == &BigInt::from(i64::MIN) && high == &BigInt::from(i64::MAX) => {
                 "Int".to_owned()
             }
             Type::Range {
@@ -5722,8 +6009,10 @@ impl Checker {
                 low: Some(low),
                 high: Some(high),
                 ..
-            } if low == high => show_bound(Some(low)),
-            Type::Range { low, high, .. } => format!("{}..{}", show_bound(low), show_bound(high)),
+            } if low == high => show_bound(Some(low.clone())),
+            Type::Range { low, high, .. } => {
+                format!("{}..{}", show_bound(low.clone()), show_bound(high.clone()))
+            }
             Type::Unit => "Unit".to_owned(),
             Type::Function {
                 deferred,
@@ -5731,59 +6020,59 @@ impl Checker {
                 effects,
                 result,
             } => {
-                let arrow = if deferred { " ~> " } else { " -> " };
+                let arrow = if *deferred { " ~> " } else { " -> " };
                 format!(
                     "{}{arrow}{}{}",
-                    self.show(&parameter),
-                    self.show(&result),
-                    show_effects(&effects)
+                    self.show_settled(parameter),
+                    self.show_settled(result),
+                    show_effects(effects)
                 )
             }
             Type::Record(fields) => format!(
                 "{{ {} }}",
                 fields
                     .iter()
-                    .map(|(name, type_)| format!(".{name} = {}", self.show(type_)))
+                    .map(|(name, type_)| format!(".{name} = {}", self.show_settled(type_)))
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
             Type::Array(element) => {
-                let shown = self.show(&element);
+                let shown = self.show_settled(element);
                 if matches!(element.as_ref(), Type::Union(_)) && shown.contains(" | ") {
                     format!("[({shown})]")
                 } else {
                     format!("[{shown}]")
                 }
             }
-            Type::Region(element) => format!("Region {}", self.show(&element)),
-            Type::Scratch(element) => format!("Scratch {}", self.show(&element)),
+            Type::Region(element) => format!("Region {}", self.show_settled(element)),
+            Type::Scratch(element) => format!("Scratch {}", self.show_settled(element)),
             Type::Variant { cases, .. } => cases
                 .iter()
                 .map(|(name, payload)| {
                     if matches!(payload, Type::Unit) {
                         format!("#{name}")
                     } else {
-                        format!("#{name} {}", self.show(payload))
+                        format!("#{name} {}", self.show_settled(payload))
                     }
                 })
                 .collect::<Vec<_>>()
                 .join(" | "),
             Type::Effects(labels) => format!(
                 "{{ {} }}",
-                labels.into_iter().collect::<Vec<_>>().join(", ")
+                labels.iter().cloned().collect::<Vec<_>>().join(", ")
             ),
             Type::OpenEffects { labels, tail } => {
-                let mut parts = labels.into_iter().collect::<Vec<_>>();
-                parts.push(format!("..{}", self.show(&tail)));
+                let mut parts = labels.iter().cloned().collect::<Vec<_>>();
+                parts.push(format!("..{}", self.show_settled(tail)));
                 format!("{{ {} }}", parts.join(", "))
             }
             Type::Union(members) => show_union(
-                union_members(&members)
+                union_members(members)
                     .into_iter()
-                    .map(|member| self.show(member))
+                    .map(|member| self.show_settled(member))
                     .collect::<Vec<_>>(),
             ),
-            Type::Opaque(name) => name,
+            Type::Opaque(name) => name.clone(),
             Type::Top => "⊤".to_owned(),
             Type::Bottom => "⊥".to_owned(),
         }
@@ -5797,7 +6086,7 @@ impl Checker {
                 for (index, variable) in variables.into_iter().enumerate() {
                     replacements.insert(variable, Type::Opaque(type_variable_name(index)));
                 }
-                *body
+                Rc::unwrap_or_clone(body)
             }
             body => body,
         };
@@ -6178,115 +6467,126 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned()),
         ),
         "@scratch.with_capacity" => {
-            curried(vec![int.clone()], Type::Scratch(Box::new(checker.fresh())))
+            curried(vec![int.clone()], Type::Scratch(Rc::new(checker.fresh())))
         }
         "@scratch.push" => {
             let element = checker.fresh();
-            let scratch = Type::Scratch(Box::new(element.clone()));
+            let scratch = Type::Scratch(Rc::new(element.clone()));
             curried(vec![scratch.clone(), element], scratch)
         }
         "@scratch.finish" => {
             let element = checker.fresh();
             curried(
-                vec![Type::Scratch(Box::new(element.clone()))],
-                Type::Array(Box::new(element)),
+                vec![Type::Scratch(Rc::new(element.clone()))],
+                Type::Array(Rc::new(element)),
             )
         }
         "@scratch.recycle" => {
             let element = checker.fresh();
             curried(
-                vec![Type::Array(Box::new(element.clone()))],
-                Type::Scratch(Box::new(element)),
+                vec![Type::Array(Rc::new(element.clone()))],
+                Type::Scratch(Rc::new(element)),
             )
         }
         "@region.copy" => {
             let element = checker.fresh();
             curried(
-                vec![Type::Array(Box::new(element.clone()))],
-                Type::Region(Box::new(element)),
+                vec![Type::Array(Rc::new(element.clone()))],
+                Type::Region(Rc::new(element)),
             )
         }
-        "@region.length" => curried(vec![Type::Region(Box::new(checker.fresh()))], int.clone()),
+        "@region.length" => curried(vec![Type::Region(Rc::new(checker.fresh()))], int.clone()),
         "@region.get" => {
             let element = checker.fresh();
             curried(
-                vec![Type::Region(Box::new(element.clone())), int.clone()],
+                vec![Type::Region(Rc::new(element.clone())), int.clone()],
                 Type::Variant {
                     cases: vec![
                         ("Some".to_owned(), element),
                         ("None".to_owned(), Type::Unit),
-                    ],
+                    ]
+                    .into(),
                     open: false,
                 },
             )
         }
         "@region.set" => {
             let element = checker.fresh();
-            let region = Type::Region(Box::new(element.clone()));
+            let region = Type::Region(Rc::new(element.clone()));
             curried(
                 vec![region.clone(), int.clone(), element],
                 Type::Variant {
                     cases: vec![
                         ("Updated".to_owned(), region.clone()),
                         ("SetOutOfBounds".to_owned(), region),
-                    ],
+                    ]
+                    .into(),
                     open: false,
                 },
             )
         }
         "@region.replace" => {
             let element = checker.fresh();
-            let region = Type::Region(Box::new(element.clone()));
-            let payload = Type::Record(vec![
-                ("0".to_owned(), element.clone()),
-                ("1".to_owned(), region.clone()),
-            ]);
+            let region = Type::Region(Rc::new(element.clone()));
+            let payload = Type::Record(
+                vec![
+                    ("0".to_owned(), element.clone()),
+                    ("1".to_owned(), region.clone()),
+                ]
+                .into(),
+            );
             curried(
                 vec![region, int.clone(), element],
                 Type::Variant {
                     cases: vec![
                         ("Replaced".to_owned(), payload.clone()),
                         ("ReplaceOutOfBounds".to_owned(), payload),
-                    ],
+                    ]
+                    .into(),
                     open: false,
                 },
             )
         }
         "@region.swap" => {
-            let region = Type::Region(Box::new(checker.fresh()));
+            let region = Type::Region(Rc::new(checker.fresh()));
             curried(
                 vec![region.clone(), int.clone(), int.clone()],
                 Type::Variant {
                     cases: vec![
                         ("Updated".to_owned(), region.clone()),
                         ("SwapOutOfBounds".to_owned(), region),
-                    ],
+                    ]
+                    .into(),
                     open: false,
                 },
             )
         }
         "@region.split" => {
-            let region = Type::Region(Box::new(checker.fresh()));
+            let region = Type::Region(Rc::new(checker.fresh()));
             curried(
                 vec![region.clone(), int.clone()],
                 Type::Variant {
                     cases: vec![
                         (
                             "Split".to_owned(),
-                            Type::Record(vec![
-                                ("0".to_owned(), region.clone()),
-                                ("1".to_owned(), region.clone()),
-                                ("2".to_owned(), Type::Opaque("Rejoin".to_owned())),
-                            ]),
+                            Type::Record(
+                                vec![
+                                    ("0".to_owned(), region.clone()),
+                                    ("1".to_owned(), region.clone()),
+                                    ("2".to_owned(), Type::Opaque("Rejoin".to_owned())),
+                                ]
+                                .into(),
+                            ),
                         ),
                         ("SplitOutOfBounds".to_owned(), region),
-                    ],
+                    ]
+                    .into(),
                     open: false,
                 },
             )
         }
         "@region.join" => {
-            let region = Type::Region(Box::new(checker.fresh()));
+            let region = Type::Region(Rc::new(checker.fresh()));
             curried(
                 vec![
                     Type::Opaque("Rejoin".to_owned()),
@@ -6300,41 +6600,40 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             let witness = Type::Opaque("Rejoin".to_owned());
             curried(
                 vec![witness.clone(), witness.clone()],
-                Type::Record(vec![
-                    ("0".to_owned(), witness.clone()),
-                    ("1".to_owned(), witness),
-                ]),
+                Type::Record(
+                    vec![("0".to_owned(), witness.clone()), ("1".to_owned(), witness)].into(),
+                ),
             )
         }
         "@region.freeze" => {
             let element = checker.fresh();
             curried(
-                vec![Type::Region(Box::new(element.clone()))],
-                Type::Array(Box::new(element)),
+                vec![Type::Region(Rc::new(element.clone()))],
+                Type::Array(Rc::new(element)),
             )
         }
-        "@array.empty" => Type::Array(Box::new(checker.fresh_empty_array_element())),
-        "@array.len" => curried(vec![Type::Array(Box::new(checker.fresh()))], int),
+        "@array.empty" => Type::Array(Rc::new(checker.fresh_empty_array_element())),
+        "@array.len" => curried(vec![Type::Array(Rc::new(checker.fresh()))], int),
         "@array.copy" => {
-            let array = Type::Array(Box::new(checker.fresh()));
+            let array = Type::Array(Rc::new(checker.fresh()));
             curried(vec![array.clone()], array)
         }
         "@array.get" => {
             let element = checker.fresh();
-            curried(vec![Type::Array(Box::new(element.clone())), int], element)
+            curried(vec![Type::Array(Rc::new(element.clone())), int], element)
         }
         "@array.set" => {
             let element = checker.fresh();
-            let array = Type::Array(Box::new(element.clone()));
+            let array = Type::Array(Rc::new(element.clone()));
             curried(vec![array.clone(), int, element], array)
         }
         "@array.push" => {
             let element = checker.fresh();
-            let array = Type::Array(Box::new(element.clone()));
+            let array = Type::Array(Rc::new(element.clone()));
             curried(vec![array.clone(), element], array)
         }
-        "@shape.empty" => Type::Record(Vec::new()),
-        "@shape.names" => curried(vec![checker.fresh()], Type::Array(Box::new(text))),
+        "@shape.empty" => Type::Record(Vec::new().into()),
+        "@shape.names" => curried(vec![checker.fresh()], Type::Array(Rc::new(text))),
         "@shape.has" => curried(vec![checker.fresh(), text], bool_),
         "@shape.get" | "@shape.remove" => curried(vec![checker.fresh(), text], checker.fresh()),
         "@shape.set" => curried(
@@ -6366,7 +6665,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@type.seal" => curried(vec![text, checker.fresh()], Type::Opaque("Type".to_owned())),
         "@linear.freeze" => {
-            let array = Type::Array(Box::new(checker.fresh()));
+            let array = Type::Array(Rc::new(checker.fresh()));
             curried(vec![array.clone()], array)
         }
         "@type.open" | "@linear.own" | "@linear.maybe" | "@linear.borrow" | "@assert.reuse"
@@ -6393,9 +6692,9 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                     text,
                     Type::Function {
                         deferred: false,
-                        parameter: Box::new(checker.fresh()),
-                        effects: Box::new(Type::Effects(BTreeSet::new())),
-                        result: Box::new(result.clone()),
+                        parameter: Rc::new(checker.fresh()),
+                        effects: Rc::new(Type::Effects(BTreeSet::new())),
+                        result: Rc::new(result.clone()),
                     },
                 ],
                 result,
@@ -6409,22 +6708,25 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         ),
         "@array.take" => {
             let element = checker.fresh();
-            let array = Type::Array(Box::new(element.clone()));
+            let array = Type::Array(Rc::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Record(vec![("0".to_owned(), element), ("1".to_owned(), array)]),
+                Type::Record(vec![("0".to_owned(), element), ("1".to_owned(), array)].into()),
             )
         }
         "@array.split" => {
             let element = checker.fresh();
-            let array = Type::Array(Box::new(element.clone()));
+            let array = Type::Array(Rc::new(element.clone()));
             curried(
                 vec![array.clone(), int],
-                Type::Record(vec![
-                    ("0".to_owned(), array.clone()),
-                    ("1".to_owned(), element),
-                    ("2".to_owned(), array),
-                ]),
+                Type::Record(
+                    vec![
+                        ("0".to_owned(), array.clone()),
+                        ("1".to_owned(), element),
+                        ("2".to_owned(), array),
+                    ]
+                    .into(),
+                ),
             )
         }
         "@array.indexed" => {
@@ -6434,26 +6736,36 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                     ("None".to_owned(), Type::Unit),
                     (
                         "Some".to_owned(),
-                        Type::Record(vec![
-                            (
-                                "0".to_owned(),
-                                Type::Record(vec![
-                                    ("0".to_owned(), int.clone()),
-                                    ("1".to_owned(), element.clone()),
-                                ]),
-                            ),
-                            ("1".to_owned(), int.clone()),
-                        ]),
+                        Type::Record(
+                            vec![
+                                (
+                                    "0".to_owned(),
+                                    Type::Record(
+                                        vec![
+                                            ("0".to_owned(), int.clone()),
+                                            ("1".to_owned(), element.clone()),
+                                        ]
+                                        .into(),
+                                    ),
+                                ),
+                                ("1".to_owned(), int.clone()),
+                            ]
+                            .into(),
+                        ),
                     ),
-                ],
+                ]
+                .into(),
                 open: false,
             };
             curried(
-                vec![Type::Array(Box::new(element))],
-                Type::Record(vec![
-                    ("state".to_owned(), int.clone()),
-                    ("step".to_owned(), curried(vec![int], step_result)),
-                ]),
+                vec![Type::Array(Rc::new(element))],
+                Type::Record(
+                    vec![
+                        ("state".to_owned(), int.clone()),
+                        ("step".to_owned(), curried(vec![int], step_result)),
+                    ]
+                    .into(),
+                ),
             )
         }
         _ => return None,
@@ -6467,9 +6779,9 @@ fn curried(parameters: Vec<Type>, result: Type) -> Type {
         .rev()
         .fold(result, |result, parameter| Type::Function {
             deferred: false,
-            parameter: Box::new(parameter),
-            effects: Box::new(Type::Effects(BTreeSet::new())),
-            result: Box::new(result),
+            parameter: Rc::new(parameter),
+            effects: Rc::new(Type::Effects(BTreeSet::new())),
+            result: Rc::new(result),
         })
 }
 
@@ -6880,7 +7192,7 @@ fn integer_intervals_type(mut intervals: Vec<IntegerInterval>) -> Type {
     } else {
         let mut all = vec![first];
         all.extend(remaining);
-        Type::Union(all)
+        Type::Union(all.into())
     }
 }
 
@@ -6917,7 +7229,10 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
             }
             Type::Forall {
                 variables,
-                body: Box::new(substitute_rigid(*body, &inner_replacements)),
+                body: Rc::new(substitute_rigid(
+                    Rc::unwrap_or_clone(body),
+                    &inner_replacements,
+                )),
             }
         }
         Type::Function {
@@ -6927,9 +7242,12 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
             result,
         } => Type::Function {
             deferred,
-            parameter: Box::new(substitute_rigid(*parameter, replacements)),
-            effects: Box::new(substitute_rigid(*effects, replacements)),
-            result: Box::new(substitute_rigid(*result, replacements)),
+            parameter: Rc::new(substitute_rigid(
+                Rc::unwrap_or_clone(parameter),
+                replacements,
+            )),
+            effects: Rc::new(substitute_rigid(Rc::unwrap_or_clone(effects), replacements)),
+            result: Rc::new(substitute_rigid(Rc::unwrap_or_clone(result), replacements)),
         },
         Type::Record(fields) => Type::Record(
             fields
@@ -6937,12 +7255,21 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
                 .map(|(name, field)| (name, substitute_rigid(field, replacements)))
                 .collect(),
         ),
-        Type::Array(element) => Type::Array(Box::new(substitute_rigid(*element, replacements))),
-        Type::Region(element) => Type::Region(Box::new(substitute_rigid(*element, replacements))),
-        Type::Scratch(element) => Type::Scratch(Box::new(substitute_rigid(*element, replacements))),
+        Type::Array(element) => Type::Array(Rc::new(substitute_rigid(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
+        Type::Region(element) => Type::Region(Rc::new(substitute_rigid(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
+        Type::Scratch(element) => Type::Scratch(Rc::new(substitute_rigid(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
             labels,
-            tail: Box::new(substitute_rigid(*tail, replacements)),
+            tail: Rc::new(substitute_rigid(Rc::unwrap_or_clone(tail), replacements)),
         },
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
@@ -6980,7 +7307,7 @@ enum Witness {
     Unit,
     Int(BigInt),
     Text(String),
-    Constructor(String, Option<Box<Witness>>),
+    Constructor(String, Option<Rc<Witness>>),
     Tuple(Vec<Witness>),
     Shape(BTreeMap<String, Witness>),
 }
@@ -7025,7 +7352,7 @@ fn enumerate_type(type_: &Type, limit: usize) -> Option<Vec<Witness>> {
             let mut witnesses = Vec::new();
             for (name, payload) in cases {
                 for payload in enumerate_type(payload, limit)? {
-                    witnesses.push(Witness::Constructor(name.clone(), Some(Box::new(payload))));
+                    witnesses.push(Witness::Constructor(name.clone(), Some(Rc::new(payload))));
                     if witnesses.len() > limit {
                         return None;
                     }
@@ -7037,7 +7364,7 @@ fn enumerate_type(type_: &Type, limit: usize) -> Option<Vec<Witness>> {
             let mut witnesses = Vec::new();
             for (name, payload) in cases {
                 for payload in enumerate_type(payload, limit)? {
-                    witnesses.push(Witness::Constructor(name.clone(), Some(Box::new(payload))));
+                    witnesses.push(Witness::Constructor(name.clone(), Some(Rc::new(payload))));
                     if witnesses.len() > limit {
                         return Some(vec![Witness::Unknown]);
                     }
@@ -7169,7 +7496,7 @@ fn merged_variant_constraint(types: &[Type], open: bool) -> Option<Type> {
         return None;
     }
     Some(Type::Variant {
-        cases: merge_fields(cases),
+        cases: merge_fields(cases).into(),
         open,
     })
 }
@@ -7387,13 +7714,14 @@ fn effect_label(value: &Value) -> Option<String> {
 
 fn add_function_effect(type_: &mut Type, label: String) {
     if let Type::Forall { body, .. } = type_ {
-        add_function_effect(body, label);
+        add_function_effect(Rc::make_mut(body), label);
         return;
     }
     let Type::Function { effects, .. } = type_ else {
         return;
     };
-    match effects.as_mut() {
+    let effects = Rc::make_mut(effects);
+    match effects {
         Type::Effects(labels) => {
             labels.insert(label);
         }
@@ -7401,7 +7729,7 @@ fn add_function_effect(type_: &mut Type, label: String) {
             labels.insert(label);
         }
         Type::Bottom => {
-            **effects = Type::Effects(BTreeSet::from([label]));
+            *effects = Type::Effects(BTreeSet::from([label]));
         }
         _ => {}
     }
@@ -8007,116 +8335,19 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
     }
 }
 
-fn closed_type_key(type_: &Type) -> String {
-    fn scalar(value: Option<&Scalar>) -> String {
-        match value {
-            None => "*".to_owned(),
-            Some(Scalar::Int(value)) => format!("i{value}"),
-            Some(Scalar::Text(value)) => format!("s{value:?}"),
-        }
-    }
-
-    fn fields(
-        name: &str,
-        values: &[(String, Type)],
-        binders: &mut HashMap<VariableId, usize>,
-    ) -> String {
-        let mut keyed = values
-            .iter()
-            .map(|(field, type_)| format!("{field:?}:{}", visit(type_, binders)))
-            .collect::<Vec<_>>();
-        keyed.sort();
-        format!("{name}{{{}}}", keyed.join(","))
-    }
-
-    fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> String {
-        match type_ {
-            Type::Variable(id) => format!("?{id}"),
-            Type::Rigid(id) => binders
-                .get(id)
-                .map_or_else(|| format!("!{id}"), |index| format!("^{index}")),
-            Type::Forall { variables, body } => {
-                let previous = binders.clone();
-                let depth = binders.len();
-                for (index, variable) in variables.iter().enumerate() {
-                    binders.insert(*variable, depth + index);
-                }
-                let body = visit(body, binders);
-                *binders = previous;
-                format!("all{}({body})", variables.len())
-            }
-            Type::Range { domain, low, high } => {
-                format!(
-                    "range({domain:?},{},{})",
-                    scalar(low.as_ref()),
-                    scalar(high.as_ref())
-                )
-            }
-            Type::Unit => "unit".to_owned(),
-            Type::Function {
-                deferred,
-                parameter,
-                effects,
-                result,
-            } => format!(
-                "fun({deferred},{},{},{})",
-                visit(parameter, binders),
-                visit(effects, binders),
-                visit(result, binders)
-            ),
-            Type::Record(values) => fields("record", values, binders),
-            Type::Array(element) => format!("array({})", visit(element, binders)),
-            Type::Region(element) => format!("region({})", visit(element, binders)),
-            Type::Scratch(element) => format!("scratch({})", visit(element, binders)),
-            Type::Variant { cases, open } => {
-                format!("variant({open}){}", fields("", cases, binders))
-            }
-            Type::Effects(labels) => {
-                format!(
-                    "effects{{{}}}",
-                    labels
-                        .iter()
-                        .map(|label| format!("{label:?}"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )
-            }
-            Type::OpenEffects { labels, tail } => format!(
-                "open-effects{{{};{}}}",
-                labels
-                    .iter()
-                    .map(|label| format!("{label:?}"))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                visit(tail, binders)
-            ),
-            Type::Union(members) => {
-                let mut keys = members
-                    .iter()
-                    .map(|member| visit(member, binders))
-                    .collect::<Vec<_>>();
-                keys.sort();
-                format!("union{{{}}}", keys.join(","))
-            }
-            Type::Opaque(name) => format!("opaque({name:?})"),
-            Type::Top => "top".to_owned(),
-            Type::Bottom => "bottom".to_owned(),
-        }
-    }
-
-    visit(type_, &mut HashMap::new())
-}
-
 fn union_types(types: Vec<Type>) -> Type {
-    fn append(members: &mut Vec<(String, Type)>, type_: Type) -> bool {
+    fn append(members: &mut Vec<Type>, type_: Type) -> bool {
+        UNION_VISITS.with(|visits| visits.set(visits.get() + 1));
         match type_ {
             Type::Bottom => true,
             Type::Top => false,
             Type::Union(nested) => nested.into_iter().all(|member| append(members, member)),
             type_ => {
-                let key = closed_type_key(&type_);
-                if !members.iter().any(|(existing, _)| existing == &key) {
-                    members.push((key, type_));
+                if !members
+                    .iter()
+                    .any(|existing| same_closed_type(existing, &type_))
+                {
+                    members.push(type_);
                 }
                 true
             }
@@ -8127,15 +8358,155 @@ fn union_types(types: Vec<Type>) -> Type {
     if !types.into_iter().all(|type_| append(&mut members, type_)) {
         return Type::Top;
     }
-    let mut members = members
-        .into_iter()
-        .map(|(_, member)| member)
-        .collect::<Vec<_>>();
     match members.len() {
         0 => Type::Bottom,
         1 => members.pop().expect("one union member exists"),
-        _ => Type::Union(members),
+        _ => Type::Union(members.into()),
     }
+}
+
+fn same_closed_type(left: &Type, right: &Type) -> bool {
+    fn fields(
+        left: &[(String, Type)],
+        right: &[(String, Type)],
+        binders: &mut Vec<(VariableId, VariableId)>,
+    ) -> bool {
+        left.len() == right.len()
+            && left.iter().all(|(name, type_)| {
+                right
+                    .iter()
+                    .find(|(candidate, _)| candidate == name)
+                    .is_some_and(|(_, candidate)| visit(type_, candidate, binders))
+            })
+    }
+
+    fn visit(left: &Type, right: &Type, binders: &mut Vec<(VariableId, VariableId)>) -> bool {
+        fn edge(
+            left: &Rc<Type>,
+            right: &Rc<Type>,
+            binders: &mut Vec<(VariableId, VariableId)>,
+        ) -> bool {
+            Rc::ptr_eq(left, right) || visit(left, right, binders)
+        }
+
+        match (left, right) {
+            (Type::Variable(left), Type::Variable(right)) => left == right,
+            (Type::Rigid(left), Type::Rigid(right)) => {
+                if let Some(bound_left) =
+                    binders.iter().rev().find_map(|(bound_left, bound_right)| {
+                        (bound_right == right).then_some(bound_left)
+                    })
+                {
+                    return bound_left == left;
+                }
+                if binders
+                    .iter()
+                    .any(|(bound_left, bound_right)| bound_left == left || bound_right == right)
+                {
+                    return false;
+                }
+                left == right
+            }
+            (
+                Type::Forall {
+                    variables: left_variables,
+                    body: left_body,
+                },
+                Type::Forall {
+                    variables: right_variables,
+                    body: right_body,
+                },
+            ) => {
+                if left_variables.len() != right_variables.len() {
+                    return false;
+                }
+                let previous = binders.len();
+                binders.extend(
+                    left_variables
+                        .iter()
+                        .zip(right_variables)
+                        .map(|(left, right)| (*left, *right)),
+                );
+                let same = edge(left_body, right_body, binders);
+                binders.truncate(previous);
+                same
+            }
+            (
+                Type::Range {
+                    domain: left_domain,
+                    low: left_low,
+                    high: left_high,
+                },
+                Type::Range {
+                    domain: right_domain,
+                    low: right_low,
+                    high: right_high,
+                },
+            ) => left_domain == right_domain && left_low == right_low && left_high == right_high,
+            (Type::Unit, Type::Unit) | (Type::Top, Type::Top) | (Type::Bottom, Type::Bottom) => {
+                true
+            }
+            (
+                Type::Function {
+                    deferred: left_deferred,
+                    parameter: left_parameter,
+                    effects: left_effects,
+                    result: left_result,
+                },
+                Type::Function {
+                    deferred: right_deferred,
+                    parameter: right_parameter,
+                    effects: right_effects,
+                    result: right_result,
+                },
+            ) => {
+                left_deferred == right_deferred
+                    && edge(left_parameter, right_parameter, binders)
+                    && edge(left_effects, right_effects, binders)
+                    && edge(left_result, right_result, binders)
+            }
+            (Type::Record(left), Type::Record(right)) => {
+                left.ptr_eq(right) || fields(left, right, binders)
+            }
+            (Type::Array(left), Type::Array(right))
+            | (Type::Region(left), Type::Region(right))
+            | (Type::Scratch(left), Type::Scratch(right)) => edge(left, right, binders),
+            (
+                Type::Variant {
+                    cases: left,
+                    open: left_open,
+                },
+                Type::Variant {
+                    cases: right,
+                    open: right_open,
+                },
+            ) => left_open == right_open && (left.ptr_eq(right) || fields(left, right, binders)),
+            (Type::Effects(left), Type::Effects(right)) => left == right,
+            (
+                Type::OpenEffects {
+                    labels: left_labels,
+                    tail: left_tail,
+                },
+                Type::OpenEffects {
+                    labels: right_labels,
+                    tail: right_tail,
+                },
+            ) => left_labels == right_labels && edge(left_tail, right_tail, binders),
+            (Type::Union(left), Type::Union(right)) => {
+                left.ptr_eq(right)
+                    || left.len() == right.len()
+                        && left.iter().all(|member| {
+                            right
+                                .iter()
+                                .any(|candidate| visit(member, candidate, binders))
+                        })
+            }
+            (Type::Opaque(left), Type::Opaque(right)) => left == right,
+            _ => false,
+        }
+    }
+
+    visit(left, right, &mut Vec::new())
 }
 
 fn join_types(types: Vec<Type>) -> Type {
@@ -8157,14 +8528,14 @@ fn join_types(types: Vec<Type>) -> Type {
     }
     if !variants.is_empty() && ranges.is_empty() && other.is_empty() {
         return Type::Variant {
-            cases: merge_fields(variants),
+            cases: merge_fields(variants).into(),
             open: false,
         };
     }
     other.extend(ranges);
     if !variants.is_empty() {
         other.push(Type::Variant {
-            cases: merge_fields(variants),
+            cases: merge_fields(variants).into(),
             open: false,
         });
     }
@@ -8186,7 +8557,7 @@ fn meet_types(mut types: Vec<Type>) -> Type {
         })
         .collect::<Vec<_>>();
     if records.len() == types.len() {
-        return Type::Record(merge_fields(records.into_iter().flatten().collect()));
+        return Type::Record(merge_fields(records.into_iter().flatten().collect()).into());
     }
     Type::Top
 }
@@ -8880,10 +9251,13 @@ mod tests {
 
     #[test]
     fn residual_bottom_positions_get_distinct_representation_holes() {
-        let signature = reify_type(&Type::Record(vec![
-            ("left".to_owned(), Type::Bottom),
-            ("right".to_owned(), Type::Bottom),
-        ]))
+        let signature = reify_type(&Type::Record(
+            vec![
+                ("left".to_owned(), Type::Bottom),
+                ("right".to_owned(), Type::Bottom),
+            ]
+            .into(),
+        ))
         .expect("bottom positions should reify as representation holes");
         let Value::Shape(fields) = signature else {
             panic!("record signature did not reify as a shape");
@@ -8899,10 +9273,13 @@ mod tests {
 
     #[test]
     fn residual_top_positions_get_distinct_representation_holes() {
-        let signature = reify_type(&Type::Record(vec![
-            ("left".to_owned(), Type::Top),
-            ("right".to_owned(), Type::Top),
-        ]))
+        let signature = reify_type(&Type::Record(
+            vec![
+                ("left".to_owned(), Type::Top),
+                ("right".to_owned(), Type::Top),
+            ]
+            .into(),
+        ))
         .expect("top positions should reify as representation holes");
         let Value::Shape(fields) = signature else {
             panic!("record signature did not reify as a shape");
@@ -8923,8 +9300,8 @@ mod tests {
         let Type::Variable(variable) = recursive.clone() else {
             unreachable!("fresh always returns a variable")
         };
-        let store = Type::Array(Box::new(int_type()));
-        let recursive_bound = checker.constraint_type(&Type::Array(Box::new(recursive.clone())));
+        let store = Type::Array(Rc::new(int_type()));
+        let recursive_bound = checker.constraint_type(&Type::Array(Rc::new(recursive.clone())));
         let store_bound = checker.constraint_type(&store);
         {
             let mut variables = checker.variables.borrow_mut();
@@ -8949,7 +9326,8 @@ mod tests {
             cases: vec![
                 ("Nil".to_owned(), Type::Unit),
                 ("Cons".to_owned(), recursive.clone()),
-            ],
+            ]
+            .into(),
             open: false,
         });
         checker.variables.borrow_mut()[variable as usize].lower = vec![recursive_bound];
@@ -8963,12 +9341,12 @@ mod tests {
     #[test]
     fn residual_region_signature_reifies_for_recursive_lowering() {
         let checker = Checker::new(Rc::new(Context::default()));
-        let region = Type::Region(Box::new(int_type()));
+        let region = Type::Region(Rc::new(int_type()));
         let signature = Type::Function {
             deferred: false,
-            parameter: Box::new(region.clone()),
-            effects: Box::new(Type::Effects(BTreeSet::new())),
-            result: Box::new(region),
+            parameter: Rc::new(region.clone()),
+            effects: Rc::new(Type::Effects(BTreeSet::new())),
+            result: Rc::new(region),
         };
 
         let Some(Value::Arrow {
@@ -8988,7 +9366,7 @@ mod tests {
         let Type::Variable(variable) = recursive.clone() else {
             unreachable!("fresh always returns a variable")
         };
-        let store = Type::Array(Box::new(int_type()));
+        let store = Type::Array(Rc::new(int_type()));
         let recursive_bound = checker.constraint_type(&recursive);
         let store_bound = checker.constraint_type(&store);
         checker.variables.borrow_mut()[variable as usize].lower =
@@ -9002,13 +9380,13 @@ mod tests {
     #[test]
     fn residual_control_union_keeps_its_synthetic_envelope() {
         let checker = Checker::new(Rc::new(Context::default()));
-        let state = Type::Record(vec![("value".to_owned(), int_type())]);
+        let state = Type::Record(vec![("value".to_owned(), int_type())].into());
         let control = Type::Variant {
-            cases: vec![("LoopContinue$1$2".to_owned(), state.clone())],
+            cases: vec![("LoopContinue$1$2".to_owned(), state.clone())].into(),
             open: false,
         };
 
-        let residual = checker.residual_signature(Type::Union(vec![state, control.clone()]));
+        let residual = checker.residual_signature(Type::Union(vec![state, control.clone()].into()));
 
         assert!(same_type(&residual, &control));
     }
@@ -9018,7 +9396,7 @@ mod tests {
         let checked = CheckedModule {
             result: Type::Forall {
                 variables: vec![7],
-                body: Box::new(Type::Rigid(7)),
+                body: Rc::new(Type::Rigid(7)),
             },
             effects: Type::Effects(BTreeSet::new()),
             parameter: None,
@@ -9128,11 +9506,17 @@ mod tests {
         let Type::Variable(variable_id) = variable.clone() else {
             unreachable!("fresh always returns a variable")
         };
-        let left = Type::Record(vec![("value".to_owned(), variable)]);
-        let right = Type::Union(vec![Type::Record(vec![
-            ("value".to_owned(), int_type()),
-            ("missing".to_owned(), int_type()),
-        ])]);
+        let left = Type::Record(vec![("value".to_owned(), variable)].into());
+        let right = Type::Union(
+            vec![Type::Record(
+                vec![
+                    ("value".to_owned(), int_type()),
+                    ("missing".to_owned(), int_type()),
+                ]
+                .into(),
+            )]
+            .into(),
+        );
 
         let result = checker.constrain(left, right, Span { start: 0, end: 0 });
 
@@ -9149,14 +9533,20 @@ mod tests {
         let Type::Variable(variable_id) = variable.clone() else {
             unreachable!("fresh always returns a variable")
         };
-        let left = Type::Record(vec![("value".to_owned(), variable)]);
-        let right = Type::Union(vec![
-            Type::Record(vec![
-                ("value".to_owned(), int_type()),
-                ("missing".to_owned(), int_type()),
-            ]),
-            Type::Record(vec![("value".to_owned(), text_type())]),
-        ]);
+        let left = Type::Record(vec![("value".to_owned(), variable)].into());
+        let right = Type::Union(
+            vec![
+                Type::Record(
+                    vec![
+                        ("value".to_owned(), int_type()),
+                        ("missing".to_owned(), int_type()),
+                    ]
+                    .into(),
+                ),
+                Type::Record(vec![("value".to_owned(), text_type())].into()),
+            ]
+            .into(),
+        );
 
         checker
             .constrain(left, right, Span { start: 0, end: 0 })
@@ -9183,14 +9573,16 @@ mod tests {
             cases: vec![
                 ("Left".to_owned(), Type::Unit),
                 ("Right".to_owned(), Type::Unit),
-            ],
+            ]
+            .into(),
             open: false,
         };
         let second = Type::Variant {
             cases: vec![
                 ("Right".to_owned(), Type::Unit),
                 ("Left".to_owned(), Type::Unit),
-            ],
+            ]
+            .into(),
             open: false,
         };
 
@@ -9225,7 +9617,7 @@ mod tests {
         checker
             .constrain(
                 shallow,
-                Type::Array(Box::new(Type::Variable(deep_id))),
+                Type::Array(Rc::new(Type::Variable(deep_id))),
                 Span { start: 0, end: 0 },
             )
             .expect("a deeper type can flow through an extruded copy");
@@ -9262,9 +9654,9 @@ mod tests {
                 callback.clone(),
                 Type::Function {
                     deferred: false,
-                    parameter: Box::new(Type::Unit),
-                    effects: Box::new(callback_effects.clone()),
-                    result: Box::new(Type::Unit),
+                    parameter: Rc::new(Type::Unit),
+                    effects: Rc::new(callback_effects.clone()),
+                    result: Rc::new(Type::Unit),
                 },
                 Span { start: 0, end: 0 },
             )
@@ -9272,7 +9664,7 @@ mod tests {
         checker
             .constrain(
                 parameter.clone(),
-                Type::Record(vec![("0".to_owned(), callback)]),
+                Type::Record(vec![("0".to_owned(), callback)].into()),
                 Span { start: 0, end: 0 },
             )
             .expect("the wrapper parameter contains its callback");
@@ -9285,9 +9677,9 @@ mod tests {
             .expect("the wrapper performs its callback effects");
         let wrapper = Type::Function {
             deferred: false,
-            parameter: Box::new(parameter),
-            effects: Box::new(wrapper_effects),
-            result: Box::new(Type::Unit),
+            parameter: Rc::new(parameter),
+            effects: Rc::new(wrapper_effects),
+            result: Rc::new(Type::Unit),
         };
         checker.level.set(0);
         let wrapper = checker.freshen(wrapper, 0, &mut HashMap::new());
@@ -9297,17 +9689,22 @@ mod tests {
                 wrapper,
                 Type::Function {
                     deferred: false,
-                    parameter: Box::new(Type::Record(vec![(
-                        "0".to_owned(),
-                        Type::Function {
-                            deferred: false,
-                            parameter: Box::new(Type::Unit),
-                            effects: Box::new(Type::Effects(BTreeSet::from(["Access".to_owned()]))),
-                            result: Box::new(Type::Unit),
-                        },
-                    )])),
-                    effects: Box::new(performed.clone()),
-                    result: Box::new(Type::Unit),
+                    parameter: Rc::new(Type::Record(
+                        vec![(
+                            "0".to_owned(),
+                            Type::Function {
+                                deferred: false,
+                                parameter: Rc::new(Type::Unit),
+                                effects: Rc::new(Type::Effects(BTreeSet::from([
+                                    "Access".to_owned()
+                                ]))),
+                                result: Rc::new(Type::Unit),
+                            },
+                        )]
+                        .into(),
+                    )),
+                    effects: Rc::new(performed.clone()),
+                    result: Rc::new(Type::Unit),
                 },
                 Span { start: 0, end: 0 },
             )
@@ -9324,18 +9721,18 @@ mod tests {
         let checker = Checker::new(Rc::new(Context::default()));
         let identity = Type::Forall {
             variables: vec![7],
-            body: Box::new(Type::Function {
+            body: Rc::new(Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Rigid(7)),
-                effects: Box::new(Type::Effects(BTreeSet::new())),
-                result: Box::new(Type::Rigid(7)),
+                parameter: Rc::new(Type::Rigid(7)),
+                effects: Rc::new(Type::Effects(BTreeSet::new())),
+                result: Rc::new(Type::Rigid(7)),
             }),
         };
         let integer_identity = Type::Function {
             deferred: false,
-            parameter: Box::new(int_type()),
-            effects: Box::new(Type::Effects(BTreeSet::new())),
-            result: Box::new(int_type()),
+            parameter: Rc::new(int_type()),
+            effects: Rc::new(Type::Effects(BTreeSet::new())),
+            result: Rc::new(int_type()),
         };
 
         checker
@@ -9347,20 +9744,20 @@ mod tests {
     fn forall_equality_ignores_bound_rigid_names() {
         let left = Type::Forall {
             variables: vec![7],
-            body: Box::new(Type::Function {
+            body: Rc::new(Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Rigid(7)),
-                effects: Box::new(Type::Effects(BTreeSet::new())),
-                result: Box::new(Type::Rigid(7)),
+                parameter: Rc::new(Type::Rigid(7)),
+                effects: Rc::new(Type::Effects(BTreeSet::new())),
+                result: Rc::new(Type::Rigid(7)),
             }),
         };
         let right = Type::Forall {
             variables: vec![91],
-            body: Box::new(Type::Function {
+            body: Rc::new(Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Rigid(91)),
-                effects: Box::new(Type::Effects(BTreeSet::new())),
-                result: Box::new(Type::Rigid(91)),
+                parameter: Rc::new(Type::Rigid(91)),
+                effects: Rc::new(Type::Effects(BTreeSet::new())),
+                result: Rc::new(Type::Rigid(91)),
             }),
         };
 
@@ -9371,11 +9768,11 @@ mod tests {
     fn forall_equality_does_not_capture_a_free_rigid() {
         let bound = Type::Forall {
             variables: vec![7],
-            body: Box::new(Type::Rigid(7)),
+            body: Rc::new(Type::Rigid(7)),
         };
         let free = Type::Forall {
             variables: vec![91],
-            body: Box::new(Type::Rigid(7)),
+            body: Rc::new(Type::Rigid(7)),
         };
 
         assert!(!same_type(&bound, &free));
@@ -9386,17 +9783,17 @@ mod tests {
         let checker = Checker::new(Rc::new(Context::default()));
         let integer_identity = Type::Function {
             deferred: false,
-            parameter: Box::new(int_type()),
-            effects: Box::new(Type::Effects(BTreeSet::new())),
-            result: Box::new(int_type()),
+            parameter: Rc::new(int_type()),
+            effects: Rc::new(Type::Effects(BTreeSet::new())),
+            result: Rc::new(int_type()),
         };
         let identity_requirement = Type::Forall {
             variables: vec![7],
-            body: Box::new(Type::Function {
+            body: Rc::new(Type::Function {
                 deferred: false,
-                parameter: Box::new(Type::Rigid(7)),
-                effects: Box::new(Type::Effects(BTreeSet::new())),
-                result: Box::new(Type::Rigid(7)),
+                parameter: Rc::new(Type::Rigid(7)),
+                effects: Rc::new(Type::Effects(BTreeSet::new())),
+                result: Rc::new(Type::Rigid(7)),
             }),
         };
 
@@ -9415,7 +9812,7 @@ mod tests {
         let initial_skolem = checker.next_skolem.get();
         let requirement = Type::Forall {
             variables: vec![7],
-            body: Box::new(Type::Rigid(7)),
+            body: Rc::new(Type::Rigid(7)),
         };
 
         assert!(!checker.can_constrain(int_type(), requirement, Span { start: 0, end: 0 },));
@@ -9431,18 +9828,21 @@ mod tests {
         );
         assert!(same_type(
             &non_zero,
-            &Type::Union(vec![
-                Type::Range {
-                    domain: Domain::Int,
-                    low: None,
-                    high: Some(Scalar::Int((-1).into())),
-                },
-                Type::Range {
-                    domain: Domain::Int,
-                    low: Some(Scalar::Int(1.into())),
-                    high: None,
-                },
-            ])
+            &Type::Union(
+                vec![
+                    Type::Range {
+                        domain: Domain::Int,
+                        low: None,
+                        high: Some(Scalar::Int((-1).into())),
+                    },
+                    Type::Range {
+                        domain: Domain::Int,
+                        low: Some(Scalar::Int(1.into())),
+                        high: None,
+                    },
+                ]
+                .into()
+            )
         ));
     }
 
@@ -9480,7 +9880,7 @@ mod tests {
             &union_types(vec![
                 Type::Bottom,
                 one.clone(),
-                Type::Union(vec![one.clone()]),
+                Type::Union(vec![one.clone()].into()),
             ]),
             &one,
         ));
@@ -9488,23 +9888,23 @@ mod tests {
             union_types(vec![one.clone(), Type::Top]),
             Type::Top
         ));
-        assert_eq!(
-            closed_type_key(&union_types(vec![
+        assert!(same_closed_type(
+            &union_types(vec![
                 Type::Range {
                     domain: Domain::Int,
                     low: Some(Scalar::Int(2.into())),
                     high: Some(Scalar::Int(2.into())),
                 },
                 one.clone(),
-            ])),
-            closed_type_key(&union_types(vec![
+            ]),
+            &union_types(vec![
                 one,
                 Type::Range {
                     domain: Domain::Int,
                     low: Some(Scalar::Int(2.into())),
                     high: Some(Scalar::Int(2.into())),
                 },
-            ])),
-        );
+            ]),
+        ));
     }
 }
