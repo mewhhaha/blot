@@ -1229,6 +1229,32 @@ mod tests {
     }
 
     #[test]
+    fn analysis_reports_resident_checker_work() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source("let identity = fn value => value\n\u{e000}return identity 1\u{e000}"),
+            )
+            .expect("analysis source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("analysis source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+        assert_eq!(analysis["ok"], true);
+        assert_eq!(analysis["work"]["schema"], 1);
+        assert!(analysis["work"]["typeNodes"].as_u64().unwrap_or_default() > 0);
+        assert!(analysis["work"]["constraints"].as_u64().unwrap_or_default() > 0);
+        assert!(
+            analysis["work"]["boundaryMaterializations"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
+    }
+
+    #[test]
     fn closed_program_and_artifact_follow_semantic_revision() {
         let mut session = CompilerSession::default();
         session

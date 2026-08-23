@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import { join, resolve } from "node:path";
 import { Compiler } from "../../src/compiler/session.ts";
 
-const samples = 3;
+let samples = 3;
 const sizes = [8, 16, 32, 64, 128, 256] as const;
 const phases = ["frontend", "check", "prepare", "compile"] as const;
 const generators = {
@@ -15,17 +15,29 @@ const generators = {
   polymorphic: polymorphicSource,
   refinement: refinementSource,
   wrapper: wrapperSource,
-  relationship: relationshipSource,
+  measure: measureSource,
+  evidence: evidenceSource,
 } as const;
 
 type Phase = typeof phases[number];
 type Family = keyof typeof generators;
 
+const requested = process.argv.slice(2).filter((argument) => argument !== "--");
+const familyArguments: string[] = [];
+for (const argument of requested) {
+  if (argument.startsWith("--samples=")) {
+    samples = Number.parseInt(argument.slice("--samples=".length), 10);
+    if (!Number.isSafeInteger(samples) || samples < 1 || samples % 2 === 0) {
+      throw new Error("type-scaling samples must be a positive odd integer");
+    }
+    continue;
+  }
+  familyArguments.push(argument);
+}
+
 let selectedFamilies = Object.keys(generators) as Family[];
-if (process.argv.length > 2) {
-  const requested = process.argv.slice(2).filter((argument) =>
-    argument !== "--"
-  );
+if (familyArguments.length > 0) {
+  const requested = familyArguments;
   for (const family of requested) {
     if (!(family in generators)) {
       throw new Error(`unknown type-scaling family ${JSON.stringify(family)}`);
@@ -42,6 +54,7 @@ interface Case {
   astBytes: number;
   hirNodes: number;
   wasmBytes: number;
+  work: Awaited<ReturnType<Compiler["analyze"]>>["work"];
 }
 
 interface Timings {
@@ -72,6 +85,7 @@ try {
         astBytes: 0,
         hirNodes: 0,
         wasmBytes: 0,
+        work: null,
       });
     }
   }
@@ -82,11 +96,13 @@ try {
     const compiler = await Compiler.create();
     try {
       const ast = await compiler.portableAst(item.path);
+      const analysis = await compiler.analyze(item.path);
       const hir = await compiler.prepare(item.path);
       const artifact = await compiler.compile(item.path);
       item.astBytes = Buffer.byteLength(ast);
       item.hirNodes = hirNodeCount(hir);
       item.wasmBytes = artifact.wasm.byteLength;
+      item.work = analysis.work;
       const observed = await runDefault(artifact.wasm);
       if (observed !== BigInt(item.size)) {
         throw new Error(
@@ -133,6 +149,8 @@ try {
       portable_ast_bytes: item.astBytes,
       runtime_hir_nodes: item.hirNodes,
       wasm_bytes: item.wasmBytes,
+      work: item.work,
+      semantic_decisions: semanticDecisions(item.work),
       median_ms: {
         frontend: median(measured.frontend),
         check: median(measured.check),
@@ -155,6 +173,9 @@ try {
     }
     slopes[family] = byPhase;
   }
+
+  const workGate = scalingGate(rows);
+  const failedWorkGate = workGate.find((gate) => !gate.passed);
 
   const compilerBytes = await readFile(
     resolve("generated/compiler/compiler.wasm"),
@@ -180,15 +201,24 @@ try {
         union: "O(N) constructors and one-column case arms",
         polymorphic: "O(N) independent instantiations of one principal type",
         refinement: "O(N) fixed-size predicates normalized to integer regions",
-        wrapper: "O(N) wrapper bodies with memoized identity relationships",
-        relationship: "O(N) wrapper bodies with memoized relational summaries",
+        wrapper: "O(N) wrapper bodies with identity relationships",
+        measure: "O(N) wrapper depth transporting one measured array length",
+        evidence: "O(N) independent structural proof packages",
       },
+      work_gate: workGate,
       estimated_log_log_slope: slopes,
       rows,
     },
     null,
     2,
   ));
+  if (failedWorkGate !== undefined) {
+    throw new Error(
+      `${failedWorkGate.family} semantic decision work grew ${
+        failedWorkGate.last_doubling.toFixed(3)
+      }x; expected at most 2.25x`,
+    );
+  }
 } finally {
   await rm(directory, { recursive: true, force: true });
 }
@@ -282,7 +312,7 @@ function wrapperSource(size: number): string {
   return moduleSource(declarations, `pass${size} ${size}`);
 }
 
-function relationshipSource(size: number): string {
+function measureSource(size: number): string {
   const declarations = [
     "const count0 = fn values => Array.length values",
   ];
@@ -291,8 +321,6 @@ function relationshipSource(size: number): string {
       `const count${index} = fn values => count${index - 1} values`,
     );
   }
-  const values: string[] = [];
-  for (let index = 1; index <= size; index += 1) values.push(String(index));
   declarations.push(
     "sig at = [Int] -> Int -> Int",
     `let at = fn values => fn index => case index >= 0 && index < count${size} values of\n` +
@@ -301,7 +329,31 @@ function relationshipSource(size: number): string {
   );
   return moduleSource(
     declarations,
-    `at [${values.join(", ")}] ${size - 1}`,
+    `at [1, 2, 3, 4] 3 + ${size - 4}`,
+  );
+}
+
+function evidenceSource(size: number): string {
+  const declarations: string[] = [];
+  for (let index = 1; index <= size; index += 1) {
+    declarations.push(
+      `let carry${index} = fn input => { .values = input.0; .payload = input.1; }`,
+      `let select${index} = fn values => do:\n` +
+        "  let iterator = Iter.indexed values\n" +
+        "  let state = iterator.state\n" +
+        "  return case iterator.step state of\n" +
+        "    #None => 0\n" +
+        "    #Some (entry, _) => do:\n" +
+        "      let input = (values, entry)\n" +
+        `      let package = carry${index} input\n` +
+        "      let { .values = selected_values; .payload; } = package\n" +
+        "      let (position, value) = payload\n" +
+        "      return @array.get selected_values position + value",
+    );
+  }
+  return moduleSource(
+    declarations,
+    `select${size} [1, 2, 3, 4] + ${size - 2}`,
   );
 }
 
@@ -313,6 +365,45 @@ function moduleSource(declarations: readonly string[], result: string): string {
 
 function emptyTimings(): Timings {
   return { frontend: [], check: [], prepare: [], compile: [] };
+}
+
+function semanticDecisions(work: Case["work"]): number | null {
+  if (work === null) return null;
+  return work.constraints + work.boundaryMaterializations +
+    work.captureCandidates + work.capturesBridged;
+}
+
+function scalingGate(
+  rows: readonly {
+    readonly family: Family;
+    readonly size: number;
+    readonly semantic_decisions: number | null;
+  }[],
+): readonly {
+  readonly family: Family;
+  readonly last_doubling: number;
+  readonly passed: boolean;
+}[] {
+  const gates = [];
+  for (const family of ["wrapper", "measure", "evidence"] as const) {
+    const familyRows = rows.filter((row) => row.family === family);
+    if (familyRows.length < 2) continue;
+    const previous = familyRows.at(-2)?.semantic_decisions;
+    const last = familyRows.at(-1)?.semantic_decisions;
+    if (
+      previous === null || previous === undefined || last === null ||
+      last === undefined
+    ) {
+      throw new Error(`${family} has no resident compiler-work counters`);
+    }
+    const lastDoubling = last / previous;
+    gates.push({
+      family,
+      last_doubling: lastDoubling,
+      passed: lastDoubling <= 2.25,
+    });
+  }
+  return gates;
 }
 
 function caseKey(item: Pick<Case, "family" | "size">): string {

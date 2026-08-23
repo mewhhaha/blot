@@ -7400,7 +7400,7 @@ fn prepare_function_export(
             ),
             &trace,
         )?;
-        type_ = *result;
+        type_ = Rc::unwrap_or_clone(result);
     }
     drop(runtime);
     let trace = Rc::try_unwrap(trace)
@@ -8059,7 +8059,7 @@ impl HirBuilder {
                 let Value::Tag { name, payload } = value else {
                     return Err(self.mismatch(value, "variant"));
                 };
-                let mut cases = cases.clone();
+                let mut cases = cases.to_vec();
                 if !cases.iter().any(|(candidate, _)| candidate == name) {
                     cases.push((
                         name.clone(),
@@ -8167,7 +8167,13 @@ impl HirBuilder {
                         }
                     }
                     if !cases.is_empty() {
-                        return self.runtime_type(&Type::Variant { cases, open: false }, value);
+                        return self.runtime_type(
+                            &Type::Variant {
+                                cases: cases.into(),
+                                open: false,
+                            },
+                            value,
+                        );
                     }
                 }
                 self.runtime_type(&type_from_value(value), value)
@@ -8210,7 +8216,14 @@ impl HirBuilder {
                     }
                 }
                 if !cases.is_empty() {
-                    return self.value(value, &Type::Variant { cases, open: false }, operations);
+                    return self.value(
+                        value,
+                        &Type::Variant {
+                            cases: cases.into(),
+                            open: false,
+                        },
+                        operations,
+                    );
                 }
             }
             return self.value(value, &type_from_value(value), operations);
@@ -8559,14 +8572,14 @@ fn type_from_value(value: &Value) -> Type {
                 .map(|(name, value)| (name.clone(), type_from_value(value)))
                 .collect(),
         ),
-        Value::Array(elements) => Type::Array(Box::new(
+        Value::Array(elements) => Type::Array(Rc::new(
             elements
                 .first()
                 .map(type_from_value)
                 .unwrap_or(Type::Bottom),
         )),
-        Value::EmptyArray { .. } => Type::Array(Box::new(Type::Bottom)),
-        Value::Scratch { values, .. } => Type::Scratch(Box::new(
+        Value::EmptyArray { .. } => Type::Array(Rc::new(Type::Bottom)),
+        Value::Scratch { values, .. } => Type::Scratch(Rc::new(
             values.first().map(type_from_value).unwrap_or(Type::Bottom),
         )),
         Value::Tag { name, payload } => Type::Variant {
@@ -8576,7 +8589,8 @@ fn type_from_value(value: &Value) -> Type {
                     .as_deref()
                     .map(type_from_value)
                     .unwrap_or(Type::Unit),
-            )],
+            )]
+            .into(),
             open: false,
         },
         Value::Sealed { name, .. } => Type::Opaque(format!("Sealed:{name}")),

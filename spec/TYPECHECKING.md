@@ -74,8 +74,8 @@ A, B ::=
   | forall rho_1 ... rho_n. A
 ```
 
-`forall` occurs in the TypeScript inference authority. A backend may erase it
-only after the same left-instantiation and right-skolemisation checks have been
+`forall` occurs in the Rust inference authority. A backend may erase it only
+after the same left-instantiation and right-skolemisation checks have been
 performed.
 
 A type is **ground** when it contains no inference variable or `forall`. Source
@@ -1027,6 +1027,31 @@ its own, and a reused variable number denotes the same syntactic
 later constraint judgement. This separates dense, stable type storage from the
 journalled graph that inference mutates.
 
+### Shared live type graph
+
+The recursive `Type` view used between checker operations is immutable. Its
+function, collection, quantified, effect-tail, record, variant, and union edges
+share their children. Cloning a type therefore copies one root handle and does
+not recursively copy the reachable graph. Mutable inference information exists
+only in the variable arena and its interned lower and upper edges; a pass must
+not recover mutability by editing a shared type child. Recursive constructor
+payloads in finite exhaustiveness witnesses follow the same immutable-sharing
+rule.
+
+Settling and residual-signature construction may cache the reading of an
+inference variable. Any new bound conservatively invalidates those caches before
+another reading. A cached result is an implementation fact about the current
+bound graph, never a transported certificate. Residual closure signatures and
+diagnostic strings are materialized from the graph only at a boundary that
+consumes them; recursive closure inference itself carries the shared type.
+
+Closed-union deduplication compares types structurally with scoped
+alpha-equivalence. Pretty printing is not an identity operation and must not be
+used to construct a union, constraint, cache, or visited key. Evaluated closure
+inference inspects only the closure body's free names and bridges the matching
+captured values. Scanning every value in every captured frame would make an
+unused environment part of inference cost without changing the judgment.
+
 ## 7. Implementation stages and gates
 
 Each stage must preserve diagnostic fixtures, inferred principal types, Runtime
@@ -1063,11 +1088,12 @@ The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache
 hit inflates them with fresh quantified identities. The live solver also stores
 every lower and upper constraint edge as a canonical `TypeId` into an
-append-only arena. Public inference values remain recursive at pass boundaries;
-only the mutable graph's hot adjacency representation is flat. Successful
-ownership and safety analyses share the same invalidation boundary. Checked
-value environments are retained under the `checked-environment` premise, so
-Runtime-HIR preparation does not evaluate a complete nullary module twice.
+append-only arena. The live recursive view shares immutable children, so cloning
+it does not duplicate those trees; only the mutable graph's hot adjacency
+representation is flat. Successful ownership and safety analyses share the same
+invalidation boundary. Checked value environments are retained under the
+`checked-environment` premise, so Runtime-HIR preparation does not evaluate a
+complete nullary module twice.
 
 The 2026-08-03 `storage.blot` profiles justified stage 3 but not SIMD. Across 50
 repeated TypeScript checks, replacing formatted visited keys reduced sampled

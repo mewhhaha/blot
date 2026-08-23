@@ -169,6 +169,19 @@ export interface CompilerOwnershipFact {
   readonly spent: boolean;
 }
 
+export interface CompilerWork {
+  readonly schema: 1;
+  readonly typeNodes: number;
+  readonly typeInterns: number;
+  readonly constraints: number;
+  readonly settleVisits: number;
+  readonly freshenVisits: number;
+  readonly unionVisits: number;
+  readonly boundaryMaterializations: number;
+  readonly captureCandidates: number;
+  readonly capturesBridged: number;
+}
+
 export type CompilerAnalysisResult =
   | {
     readonly ok: true;
@@ -177,6 +190,7 @@ export type CompilerAnalysisResult =
     readonly types: readonly CompilerTypeFact[];
     readonly tags: readonly CompilerTagFact[];
     readonly ownership: readonly CompilerOwnershipFact[];
+    readonly work: CompilerWork | null;
   }
   | CompilerTransportFailure;
 
