@@ -553,6 +553,25 @@ the focused witness tests establish that algebra independently. The catalog
 implementation deliberately transfers one complete root sequentially, avoiding a
 tree of witnesses while exercising the same destructive partition operations.
 
+A zipper is the explicit structural alternative. Partitioning a Region produces
+left, pivot, and right children plus the two rejoin witnesses. The recursive
+calls consume the disjoint children independently; the return path joins the
+pivot to the right child and then joins that result to the left child. Every
+stack frame is therefore a linear reconstruction context:
+
+```text
+                 outer witness                 inner witness
+root  ->  (left, pivot+right)  ->  (left, pivot, right)
+       <- join(left, pivot+right) <- join(pivot, right)
+```
+
+This shape makes separation and reconstruction visible and is useful when the
+children escape to unrelated callees or later become parallel. A direct
+sequential quicksort remains preferable for its smaller source and guaranteed
+`O(log n)` non-tail stack. Naive zipper recursion calls both children normally
+and can retain `O(n)` reconstruction frames for a maximally unbalanced
+partition; the ownership proof does not imply a balancing theorem.
+
 ## 11. Why this is not general mutable references
 
 The proposal does not introduce arbitrary addresses which can be stored,
@@ -622,7 +641,8 @@ The first region family is production-complete. Its gates are:
 - ABI refusal for live slice values;
 - an in-place quicksort corpus entry that allocates no element Stores after
   acquisition, with split/join conservation covered independently; and
-- a benchmark separating acquisition-copy cost from partition/sort cost.
+- a dynamic benchmark that distinguishes input-construction growth from sort
+  writes in Runtime HIR and rejects persistent sites or Store helper imports.
 
 The accepted/rejected catalog, dynamic Wasm tests, certificate validation,
 cross-module wrapper example, and `pnpm benchmark:owned-regions` provide that

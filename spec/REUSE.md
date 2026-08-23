@@ -60,7 +60,7 @@ operation must still carry its own checked `owned-reuse` annotation and closed
 layout witness.
 
 The checked-module ownership certificate does not contain the assertion. Its
-schema 8 contract contains the parameter pattern, inferred input authority, and
+schema 9 contract contains the parameter pattern, inferred input authority, and
 produced result tree. The assertion follows the evaluated closure so portable
 ASTs, the type lattice, and imported ownership contracts cannot forge it.
 

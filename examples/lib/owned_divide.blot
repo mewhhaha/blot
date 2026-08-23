@@ -1,0 +1,14 @@
+open import "blot:prelude"
+
+const binary = fn transition => do:
+  @[assert.reuse]
+  let rec go = fn (?state, problem, context) => do:
+    return case transition (?state, problem, context) of
+      #Done ?state => state
+      #Split (?state, first, second) => do:
+        let state = go (?state, first, context)
+        return go (?state, second, context)
+
+  return go
+
+return { .binary = binary; }

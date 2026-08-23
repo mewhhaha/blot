@@ -559,7 +559,7 @@ pub struct CachedModuleInterface {
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 8;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 9;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -8843,6 +8843,7 @@ mod tests {
                     parameter: PatternId(0),
                     input: crate::ownership::Produced::None,
                     result: crate::ownership::Produced::None,
+                    callback_requirements: Vec::new(),
                 },
             )],
         };

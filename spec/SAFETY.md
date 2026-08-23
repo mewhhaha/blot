@@ -80,7 +80,7 @@ a permission, reinterpret a last use as consumption, or change the inferred
 function type. Materialized checked functions publish the discharged assertion
 in Runtime-HIR schema 3 for independent validation.
 
-Checked-module certificate schema 8 publishes the inferred parameter-input
+Checked-module certificate schema 9 publishes the inferred parameter-input
 authority tree, produced-result tree, and structural lineage. Each owning
 destination path names its earlier binding identity and source path. Dynamic
 proof-refined `@array.take` lineage contains exactly the selected and remainder

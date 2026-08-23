@@ -153,19 +153,47 @@ its successor in each continuing result alternative. A binary driver would
 accept `#Done state` or `#Split (state, first, second)`, recursively process the
 smaller problem, and leave the larger problem in ownership-tail position.
 
-The current ownership certificate describes a closure's own parameter and result
-but cannot quantify over the contract of a function-valued parameter.
-Consequently a generic binary driver must be rejected when it passes owned state
-to an opaque transition. Compile-time specialization selecting a concrete
-transition does not change that rule: ownership checks the generic definition
-before Runtime-HIR specialization, and safety cannot depend on optional
-inlining.
+The certificate therefore carries **callback requirements**. When a
+function-valued parameter is called with owned arguments and its result is
+immediately bound by a declaration pattern or eliminated by `case`, existing `!`
+and `?` binders identify the successor positions. Owned input leaves and
+qualified output leaves are paired structurally from left to right. A direct
+result must expose exactly the consumed leaves; every named alternative must do
+the same, with compatible obligations. No new source annotation or ownership
+type is introduced.
 
-A future abstraction must add relational higher-order ownership constraints or a
-scoped state construct with equivalent laws. It must not assume forwarding from
-equal input and result types, recognize quicksort, or introduce a hidden copy.
-Until then the direct recurrence is the smallest source form whose certificate
-can state the full authority chain.
+For example, the driver below requires `transition` to consume one affine state
+authority and return that exact successor in the first payload position of both
+alternatives:
+
+```blot
+const divide = fn transition => do:
+  let rec go = fn (?state, problem, context) => do:
+    return case transition (?state, problem, context) of
+      #Done ?state => state
+      #Split (?state, first, second) => do:
+        let state = go (?state, first, context)
+        return go (?state, second, context)
+
+  return go
+```
+
+The requirement is inferred while checking `divide`, serialized beside its
+ordinary ownership contract, and erased before Runtime HIR. Applying `divide`
+validates the actual callback's checked input/result contract after substituting
+the driver's symbolic input authority through it. Equal value types are not
+evidence: a callback that drops the state, returns a fresh Array, shares it, or
+omits it from one result alternative is rejected. An unresolved or host-supplied
+callback cannot discharge the requirement.
+
+The result must be exposed immediately because the qualified pattern is the
+finite proof of where each successor resides. A state fold can therefore write
+`?next <- step (?current, value)` without declaring an ownership type for
+`step`. Returning or storing an opaque owned callback result remains rejected.
+This keeps the relation language small, decidable, and separate from
+biunification while covering folds, work lists, and divide-and-conquer drivers.
+Compile-time specialization does not grant the relation; it may only optimize
+code after the certificate has validated it.
 
 ## 7. Quicksort and the Region boundary
 
@@ -204,7 +232,9 @@ The implementation must preserve these facts:
 10. a residual direct call restores Store authority only from its certified
     produced-result tree.
 11. an opaque higher-order callback never receives owned state without a
-    certified consuming parameter contract.
+    certified consuming parameter contract; and
+12. each inferred callback requirement is discharged by substituting the actual
+    callback's checked result contract, never by type equality or callee name.
 
 The useful asymptotic boundary is explicit:
 

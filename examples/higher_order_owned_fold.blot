@@ -1,0 +1,21 @@
+// A direct qualified result pattern publishes the one-step state relation.
+// The generic fold can then thread any owned state without an ownership type.
+
+open import "blot:prelude"
+
+const owned_fold = fn (&values, ?state, step) => do:
+  let rec go = fn (index, ?current) => do:
+    return case Array.get ((&values), index) of
+      #Some value => do:
+        ?next <- step (?current, value)
+        return go (index + 1, ?next)
+      #None => current
+
+  return go (0, ?state)
+
+let initial = [1]
+return owned_fold (
+  (&[2, 3, 4]),
+  ?initial,
+  fn (?state, value) => @array.push state value
+)

@@ -149,6 +149,14 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     stage: "check",
   },
+  "higher_order_owned_direct_result_replaced": {
+    code: "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+    stage: "check",
+  },
+  "higher_order_owned_result_replaced": {
+    code: "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
+    stage: "check",
+  },
   "region_name_not_trusted": {
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     stage: "check",
