@@ -1,0 +1,23 @@
+// Evaluate a small expression tree with the direct recursive definition.
+//
+// Constructors are the syntax tree and pattern matching is the interpreter;
+// no visitor interface or compiler-specific encoding is needed.
+
+open import "blot:prelude"
+
+let rec evaluate = fn expression => case expression of
+  #Literal value => value
+  #Add operands => evaluate operands.0 + evaluate operands.1
+  #Multiply operands => evaluate operands.0 * evaluate operands.1
+  #Negate operand => 0 - evaluate operand
+
+let expression =
+  #Add (
+    #Literal 10,
+    #Multiply (
+      #Literal 4,
+      #Negate (#Literal 3)
+    )
+  )
+
+return evaluate expression
