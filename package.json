@@ -20,6 +20,7 @@
     "benchmark:owned-maps": "tsx --import ./src/node/polyfills.mjs experiments/owned-maps/benchmark.ts",
     "benchmark:owned-sorts": "tsx --import ./src/node/polyfills.mjs experiments/owned-sorts/benchmark.ts",
     "benchmark:predicate-refinements": "tsx --import ./src/node/polyfills.mjs experiments/predicate-refinements/benchmark.ts",
+    "benchmark:type-scaling": "tsx --import ./src/node/polyfills.mjs experiments/type-scaling/benchmark.ts",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
     "test:compiler": "cargo test --manifest-path compiler/Cargo.toml && deno run --allow-read scripts/verify_runtime.ts",
     "conformance": "deno run --allow-read scripts/verify_runtime.ts",

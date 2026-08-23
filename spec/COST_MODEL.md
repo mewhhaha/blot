@@ -104,6 +104,17 @@ once per transaction, while failed union choices add the work of the candidates
 actually explored. Runtime validation, Core construction, and emission should be
 linear in their artifact sizes.
 
+The type-mechanics scaling experiment varies one source dimension `N` at a time.
+An ordinary declaration chain, one wide structural requirement, `N` independent
+polymorphic instantiations, `N` fixed-size predicate refinements, and a chain of
+`N` memoizable relational summaries should each add `O(N)` AST nodes, finite
+members, or bound edges. A one-column closed union with `N` constructors and `N`
+arms should likewise be linear after constructor-set normalization. Superlinear
+wall time is not by itself a complexity proof, but a stable doubling ratio above
+two identifies a phase and source family that needs an internal counter or
+profile. The reproducible boundary and current evidence live in
+[`experiments/type-scaling/README.md`](../experiments/type-scaling/README.md).
+
 Progressive Runtime-HIR construction visits each settled Core node once and
 stores `O(H_s)` compact builder state. Preparation subsequently visits the `H_p`
 pending nodes plus the final graph validation, rather than repeating all settled

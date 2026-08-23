@@ -1,0 +1,47 @@
+// Apply command-line-style overrides to a default application configuration.
+//
+// The override union keeps the accepted changes explicit. Each branch rebuilds
+// the small record because a structural parameter may be wider than `Config`.
+
+open import "blot:prelude"
+
+const Config =
+  {
+    .workers = Int;
+    .verbose = Bool;
+    .environment = Text;
+  }
+
+const Override = #Workers Int | #Verbose Bool | #Environment Text
+
+sig apply = (Config, Override) -> Config
+let apply = fn (config, override) => case override of
+  #Workers workers => {
+    .workers = workers;
+    .verbose = config.verbose;
+    .environment = config.environment;
+  }
+  #Verbose verbose => {
+    .workers = config.workers;
+    .verbose = verbose;
+    .environment = config.environment;
+  }
+  #Environment environment => {
+    .workers = config.workers;
+    .verbose = config.verbose;
+    .environment = environment;
+  }
+
+sig defaults = Config
+let defaults =
+  {
+    .workers = 4;
+    .verbose = False;
+    .environment = "development";
+  }
+
+sig overrides = [Override]
+let overrides =
+  [#Workers 8, #Environment "production", #Verbose True]
+
+return fold (overrides, defaults, apply)
