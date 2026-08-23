@@ -477,6 +477,80 @@ test("agent-style recursion remains dynamic runtime control flow and compiles", 
   }
 });
 
+test("owned radix sorts preserve signed order and stable equal-key order", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve("examples/lib/owned_radix_sorts.blot"),
+    );
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(manifest.imports, []);
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {},
+    );
+    for (
+      const [name, expected] of [
+        ["first", -9223372036854775808n],
+        ["last", 9223372036854775807n],
+        ["stable_ids", 20401030n],
+      ] as const
+    ) {
+      const exported = requiredRuntimeExport(manifest, name);
+      assert.deepEqual(exported.function.parameters, [
+        { kind: "signed-integer-64" },
+      ]);
+      assert.equal(exported.function.result.kind, "signed-integer-64");
+      if (exported.name === null) {
+        throw new Error(`runtime export ${name} has no Wasm name`);
+      }
+      assert.equal(
+        exportedFunction(instantiated.instance, exported.name)(-1n),
+        expected,
+      );
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("owned merge sort preserves equal-key order in emitted Wasm", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve("examples/lib/owned_merge_sort.blot"),
+    );
+    const manifest = decodeManifest(artifact.manifestBytes);
+    assert.deepEqual(manifest.imports, []);
+    const exported = requiredRuntimeExport(manifest, "stable_ids");
+    assert.deepEqual(exported.function, {
+      parameters: [{ kind: "signed-integer-64" }],
+      result: { kind: "signed-integer-64" },
+    });
+    if (exported.name === null) {
+      throw new Error("runtime export stable_ids has no Wasm name");
+    }
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {},
+    );
+    assert.equal(
+      exportedFunction(instantiated.instance, exported.name)(-1n),
+      20401030n,
+    );
+    const emptyLength = requiredRuntimeExport(manifest, "empty_length");
+    if (emptyLength.name === null) {
+      throw new Error("runtime export empty_length has no Wasm name");
+    }
+    assert.equal(
+      exportedFunction(instantiated.instance, emptyLength.name)(32n),
+      0n,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 function decodeManifest(bytes: Uint8Array): Manifest {
   return JSON.parse(new TextDecoder().decode(bytes)) as Manifest;
 }
@@ -506,12 +580,12 @@ function blotFunctionExports(wasm: Uint8Array): string[] {
 function exportedFunction(
   instance: WebAssembly.Instance,
   name: string,
-): (...arguments_: readonly number[]) => unknown {
+): (...arguments_: readonly (bigint | number)[]) => unknown {
   const exported = instance.exports[name];
   if (typeof exported !== "function") {
     throw new Error(`missing WebAssembly function export ${name}`);
   }
-  return exported as (...arguments_: readonly number[]) => unknown;
+  return exported as (...arguments_: readonly (bigint | number)[]) => unknown;
 }
 
 function exportedMemory(instance: WebAssembly.Instance): WebAssembly.Memory {

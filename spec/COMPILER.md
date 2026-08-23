@@ -49,7 +49,16 @@ records import edges, and `includes` records compile-time external inputs. A
 target policy `tau` contains the public ABI major and concrete Wasm target. The
 current default is `(1, wasm-simd128)`. Runtime-HIR schema compatibility is
 internal to a compiler/backend distribution and is therefore an invariant, not a
-caller-selected target policy. Compilation is a partial, deterministic judgment:
+caller-selected target policy. Compilation is a partial, deterministic judgment.
+
+The packaged compiler reserves an 8 MiB Rust/Wasm stack. This is compiler-host
+memory for recursive inference, specialization, and ownership proofs; it does
+not alter the memory or stack of emitted Blot programs. The artifact build owns
+the linker setting so local and hosted compilers have the same proof limit.
+Source closure calls are trampolined during evaluation, so recursive Blot code
+does not consume the host VM call stack.
+
+The judgment is:
 
 ```text
 G ; tau |- compile(root) => Artifact(W, M, D)
@@ -240,9 +249,9 @@ Store authority and contributes it to the published input only when the body
 consumes or transfers it; linearity remains outside the type lattice. The
 compiler-known identity transform of an `assert.reuse` declaration tag forwards
 the raw closure's exact contract; it does not recompute one from the decorated
-binding. For a recursive function whose checked result is Array or Region,
-ownership may seed one provisional produced-result tree from the sole matching
-input authority. The completed body must return that exact Store authority or
+binding. For a recursive function whose checked result is Array, Region, or
+Scratch, ownership may seed one provisional produced-result tree from the sole
+matching input authority. The completed body must return that exact authority or
 complete Region root on every terminating path, or checking reports
 `BLOT_RECURSIVE_OWNERSHIP_RESULT`; an arbitrary recursive result is never
 upgraded from its runtime type alone. When the produced tree says the result is
@@ -256,15 +265,16 @@ agreement from the ownership certificate. The compiler-distributed module
 certificate serializes it beside the closure signature and validates every
 expression, pattern, span, and region derivation reference against the installed
 AST before an importer may substitute an argument through it. Checked-module
-certificate schema 9 adds callback requirements to the inferred input/result
-trees from schema 8. It identifies every lineage source and callback leaf by
-module-local pattern identity, requiring a complete dynamic extraction partition
-and exact callback-result substitution. Reuse assertions travel on evaluated
-closures and are discharged only after Runtime HIR exists; they are not
-authority facts. Neither certificate recognizes a source binding name. Staging
-owns compile-time values and residualization decisions. Specialization owns
-concrete representations. A later pass verifies and consumes these facts; it
-does not infer them again.
+certificate schema 10 adds Scratch type nodes to the schema-9 callback
+requirements, structural lineage, and inferred input/result trees from schema 8.
+It identifies every lineage source and callback leaf by module-local pattern
+identity, requiring a complete dynamic extraction partition and exact
+callback-result substitution. Reuse assertions travel on evaluated closures and
+are discharged only after Runtime HIR exists; they are not authority facts.
+Neither certificate recognizes a source binding name. Staging owns compile-time
+values and residualization decisions. Specialization owns concrete
+representations. A later pass verifies and consumes these facts; it does not
+infer them again.
 
 The progressive Runtime-HIR builder state is keyed by the typed-Core node ID,
 not by a printed type. Its structural representation key is composed from the

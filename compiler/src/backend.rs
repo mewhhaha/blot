@@ -366,6 +366,21 @@ fn runtime_layout_type(
                 admit_indirect,
             )?),
         },
+        RuntimeType::Scratch { .. } if admit_indirect => AbiType::Record {
+            fields: ["0", "1", "2"]
+                .into_iter()
+                .map(|name| AbiField {
+                    name: name.to_owned(),
+                    type_: AbiType::InternalPointer,
+                })
+                .collect(),
+        },
+        RuntimeType::Scratch { .. } => {
+            return Err(format!(
+                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 1",
+                module.source
+            ));
+        }
         RuntimeType::Indirect { .. } if admit_indirect => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
@@ -1772,9 +1787,10 @@ fn emit_dynamic_operation(
                 .i32_const(element_layout.size as i32)
                 .i32_mul()
                 .call(helpers.realloc)
-                .local_tee(result[0]);
+                .local_set(result[0]);
             if operation.update == Some("persistent") {
                 instructions
+                    .local_get(result[0])
                     .local_get(store[0])
                     .local_get(store[1])
                     .i32_const(element_layout.size as i32)
@@ -1797,6 +1813,162 @@ fn emit_dynamic_operation(
                 scratch_pointer,
                 0,
             )?;
+        }
+        "scratch.with-capacity" => {
+            let RuntimeType::Scratch { element_type } =
+                module.types.get(operation.type_id).ok_or_else(|| {
+                    format!(
+                        "{}: scratch.with-capacity has no Scratch type",
+                        module.source
+                    )
+                })?
+            else {
+                return Err(format!(
+                    "{}: scratch.with-capacity result is not Scratch",
+                    module.source
+                ));
+            };
+            let capacity = locals_for(module, value_locals, operation.operands[0])?;
+            let element_type = canonical_type(module, *element_type, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            let maximum_length = u32::MAX
+                .checked_div(element_layout.size)
+                .unwrap_or(u32::MAX);
+            instructions
+                .local_get(capacity[0])
+                .i64_const(0)
+                .i64_lt_s()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(capacity[0])
+                .i64_const(i64::from(maximum_length))
+                .i64_gt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(capacity[0])
+                .i32_wrap_i64()
+                .local_tee(result[2])
+                .local_set(scratch_length)
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(element_layout.alignment as i32)
+                .local_get(scratch_length)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
+                .local_set(result[0])
+                .i32_const(0)
+                .local_set(result[1]);
+        }
+        "scratch.push" => {
+            let RuntimeType::Scratch { element_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: scratch.push has no Scratch type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: scratch.push result is not Scratch",
+                    module.source
+                ));
+            };
+            let scratch = locals_for(module, value_locals, operation.operands[0])?;
+            let value = locals_for(module, value_locals, operation.operands[1])?;
+            let element_type_id = *element_type;
+            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_layout = memory_layout(&element_type);
+            let maximum_length = u32::MAX
+                .checked_div(element_layout.size)
+                .unwrap_or(u32::MAX);
+            let half_maximum = maximum_length / 2;
+            instructions
+                .local_get(scratch[1])
+                .i32_const(1)
+                .i32_add()
+                .local_tee(result[1])
+                .local_get(scratch[1])
+                .i32_le_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(result[1])
+                .i32_const(maximum_length as i32)
+                .i32_gt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(scratch[0])
+                .local_set(result[0])
+                .local_get(scratch[2])
+                .local_set(result[2])
+                .local_get(result[1])
+                .local_get(scratch[2])
+                .i32_gt_u()
+                .if_(BlockType::Empty)
+                .local_get(scratch[2])
+                .i32_const(half_maximum as i32)
+                .i32_gt_u()
+                .if_(BlockType::Empty)
+                .i32_const(maximum_length as i32)
+                .local_set(result[2])
+                .else_()
+                .local_get(scratch[2])
+                .i32_const(2)
+                .i32_mul()
+                .local_set(result[2])
+                .local_get(result[2])
+                .i32_const(1)
+                .i32_lt_u()
+                .if_(BlockType::Empty)
+                .i32_const(1)
+                .local_set(result[2])
+                .end()
+                .end()
+                .local_get(scratch[0])
+                .local_get(scratch[2])
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_const(element_layout.alignment as i32)
+                .local_get(result[2])
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
+                .local_set(result[0])
+                .end()
+                .local_get(result[0])
+                .local_get(scratch[1])
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_store_public_result(
+                instructions,
+                module,
+                element_type_id,
+                &element_type,
+                value,
+                scratch_pointer,
+                0,
+            )?;
+        }
+        "scratch.finish" => {
+            let scratch = locals_for(module, value_locals, operation.operands[0])?;
+            instructions
+                .local_get(scratch[0])
+                .local_set(result[0])
+                .local_get(scratch[1])
+                .local_set(result[1]);
+        }
+        "scratch.recycle" => {
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            instructions
+                .local_get(store[0])
+                .local_set(result[0])
+                .i32_const(0)
+                .local_set(result[1])
+                .local_get(store[1])
+                .local_set(result[2]);
         }
         "seal.wrap" | "seal.unwrap" | "resource.move" | "resource.borrow" | "resource.freeze" => {
             let operand = locals_for(module, value_locals, operation.operands[0])?;
@@ -2624,6 +2796,7 @@ fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<
         RuntimeType::Float32 => Ok(vec![ValType::F32]),
         RuntimeType::Float64 => Ok(vec![ValType::F64]),
         RuntimeType::Text | RuntimeType::Store { .. } => Ok(vec![ValType::I32, ValType::I32]),
+        RuntimeType::Scratch { .. } => Ok(vec![ValType::I32, ValType::I32, ValType::I32]),
         RuntimeType::Indirect { .. } => Ok(vec![ValType::I32]),
         RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
         RuntimeType::Product { fields, .. } => {
@@ -2683,6 +2856,7 @@ fn runtime_kind(type_: &RuntimeType) -> &'static str {
         RuntimeType::Vector { .. } => "vector",
         RuntimeType::Mask { .. } => "mask",
         RuntimeType::Store { .. } => "store",
+        RuntimeType::Scratch { .. } => "scratch",
         RuntimeType::Indirect { .. } => "indirect",
         RuntimeType::Product { .. } => "product",
         RuntimeType::Sum { .. } => "sum",
@@ -4295,7 +4469,7 @@ mod tests {
     fn recursive_representation_is_private_to_runtime_hir() {
         let module = RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 3,
+            schema_version: 4,
             source: "recursive-boundary-test".to_owned(),
             types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
             signatures: Vec::new(),
@@ -4309,6 +4483,30 @@ mod tests {
         };
 
         assert!(error.contains("cannot cross Blot Core Wasm ABI 1"));
+    }
+
+    #[test]
+    fn scratch_is_private_but_has_an_internal_indirect_layout() {
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: 4,
+            source: "scratch-boundary-test".to_owned(),
+            types: vec![
+                RuntimeType::Unit,
+                RuntimeType::SignedInteger64,
+                RuntimeType::Scratch { element_type: 1 },
+            ],
+            signatures: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        assert!(canonical_type(&module, 2, &mut Vec::new()).is_err());
+        let internal = runtime_layout_type(&module, 2, &mut Vec::new(), true)
+            .expect("Scratch needs a private layout inside indirect carriers");
+        assert_eq!(flattened_type(&internal), vec![ValType::I32; 3]);
+        assert_eq!(memory_layout(&internal).size, 12);
     }
 
     fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {

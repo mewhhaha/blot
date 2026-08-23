@@ -1,0 +1,22 @@
+// Stable generic sorting uses one sequential Scratch allocation and hands the
+// input Array directly to the consuming algorithm.
+
+open import "blot:prelude"
+
+let sorted =
+  Array.merge_sort (
+    [
+      { .key = 4; .id = 4; },
+      { .key = 2; .id = 2; },
+      { .key = 4; .id = 5; },
+      { .key = 1; .id = 1; },
+      { .key = 3; .id = 3; }
+    ],
+    fn (left, right) => left.key <= right.key
+  )
+let a = Array.expect_get ((&sorted), 0)
+let b = Array.expect_get ((&sorted), 1)
+let c = Array.expect_get ((&sorted), 2)
+let d = Array.expect_get ((&sorted), 3)
+let e = Array.expect_get ((&sorted), 4)
+return a.id * 10000 + b.id * 1000 + c.id * 100 + d.id * 10 + e.id

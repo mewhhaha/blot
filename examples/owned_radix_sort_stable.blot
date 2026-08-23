@@ -1,0 +1,27 @@
+// The key is evaluated while the input is consumed into the cached pair array.
+// Stable scatter preserves source order for records with equal keys.
+
+open import "blot:prelude"
+
+sig values = [{ .key = Int; .id = Int; }]
+let values =
+  [
+    { .key = 2; .id = 4; },
+    { .key = -1; .id = 1; },
+    { .key = 2; .id = 5; },
+    { .key = 0; .id = 3; },
+    { .key = -1; .id = 2; }
+  ]
+
+let sorted =
+  Array.radix_sort (
+    values,
+    fn value => value.key,
+    Radix.stable
+  )
+let a = Array.expect_get ((&sorted), 0)
+let b = Array.expect_get ((&sorted), 1)
+let c = Array.expect_get ((&sorted), 2)
+let d = Array.expect_get ((&sorted), 3)
+let e = Array.expect_get ((&sorted), 4)
+return a.id * 10000 + b.id * 1000 + c.id * 100 + d.id * 10 + e.id

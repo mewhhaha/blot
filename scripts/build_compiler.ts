@@ -14,6 +14,7 @@ const preludeSnapshot = new URL(
   "../generated/compiler/prelude.snapshot",
   import.meta.url,
 );
+const compilerStackBytes = 8 * 1024 * 1024;
 
 await buildCompilerWasm();
 const bytes = await Deno.readFile(artifact);
@@ -102,6 +103,7 @@ async function buildCompilerWasm(): Promise<void> {
       RUSTFLAGS: [
         `--remap-path-prefix=${home}=/cargo`,
         `--remap-path-prefix=${new URL(".", crateRoot).pathname}=/crate`,
+        `-C link-arg=-zstack-size=${compilerStackBytes}`,
       ].join(" "),
     },
     stdout: "inherit",

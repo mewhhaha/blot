@@ -27,6 +27,10 @@ export type BlotRuntimeType =
     readonly elementType: number;
   }
   | {
+    readonly kind: "scratch";
+    readonly elementType: number;
+  }
+  | {
     readonly kind: "indirect";
     readonly targetType: number;
   }
@@ -203,6 +207,13 @@ export type BlotRuntimeOperation =
       readonly update: "persistent" | "owned-reuse";
     }
     | {
+      readonly kind:
+        | "scratch.with-capacity"
+        | "scratch.push"
+        | "scratch.finish"
+        | "scratch.recycle";
+    }
+    | {
       readonly kind: "call.direct";
       readonly function: number;
     }
@@ -304,7 +315,7 @@ export type BlotRuntimeExport =
 
 export type BlotRuntimeModule = {
   readonly format: "blot-runtime-hir";
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly source: string;
   readonly types: readonly BlotRuntimeType[];
   readonly signatures: readonly BlotRuntimeSignature[];
@@ -398,6 +409,23 @@ export function runtimeLayoutWitness(
           size: 8,
           alignment: 4,
           stride: 8,
+        };
+        break;
+      }
+      case "scratch": {
+        memo.set(id, {
+          fingerprint: `scratch@${id}`,
+          size: 12,
+          alignment: 4,
+          stride: 12,
+        });
+        const element = visit(type.elementType);
+        witness = {
+          fingerprint:
+            `scratch(${element.fingerprint};stride=${element.stride})`,
+          size: 12,
+          alignment: 4,
+          stride: 12,
         };
         break;
       }
@@ -496,9 +524,9 @@ type BlotRuntimeValueDefinition = {
 export function validateBlotRuntimeModule(
   module: BlotRuntimeModule,
 ): ValidatedBlotRuntimeModule {
-  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 3) {
+  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 4) {
     throw new TypeError(
-      `Blot Runtime HIR requires format blot-runtime-hir schema 3; received ${module.format} schema ${module.schemaVersion}`,
+      `Blot Runtime HIR requires format blot-runtime-hir schema 4; received ${module.format} schema ${module.schemaVersion}`,
     );
   }
   if (module.types.length === 0) {
@@ -579,6 +607,13 @@ export function validateBlotRuntimeModule(
         `${module.source}: export ${exported.sourceName} declares signature ${exported.signature} but function ${function_.name} has signature ${function_.signature}`,
       );
     }
+    const signature = module.signatures[exported.signature];
+    const exposedTypes = [...signature.parameters, signature.result];
+    if (exposedTypes.some((type) => typeContainsScratch(module, type))) {
+      throw new TypeError(
+        `${module.source}: export ${exported.sourceName} exposes compiler-private Scratch storage`,
+      );
+    }
   }
   return module as ValidatedBlotRuntimeModule;
 }
@@ -588,8 +623,17 @@ function validateType(
   type: BlotRuntimeType,
   typeId: number,
 ): void {
-  if (type.kind === "store") {
-    requireType(module, type.elementType, `store type ${typeId} element`);
+  if (type.kind === "store" || type.kind === "scratch") {
+    requireType(
+      module,
+      type.elementType,
+      `${type.kind} type ${typeId} element`,
+    );
+    if (typeContainsScratch(module, type.elementType)) {
+      throw new TypeError(
+        `${module.source}: ${type.kind} type ${typeId} nests compiler-private Scratch storage`,
+      );
+    }
     return;
   }
   if (type.kind === "indirect") {
@@ -886,6 +930,9 @@ function validateOperation(
   capabilityOperations: ReadonlyMap<string, number>,
   values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
+  if (operation.kind.startsWith("scratch.")) {
+    validateScratchOperation(module, function_, operation, values);
+  }
   if (operation.kind === "call.direct" || operation.kind === "closure.make") {
     requireFunction(
       module,
@@ -947,6 +994,113 @@ function validateOperation(
       );
     }
   }
+}
+
+function validateScratchOperation(
+  module: BlotRuntimeModule,
+  function_: BlotRuntimeFunction,
+  operation: BlotRuntimeOperation,
+  values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
+): void {
+  const location = `${operation.kind} ${function_.name}:${operation.result}`;
+  const resultType = module.types[operation.type];
+  const operandTypeId = (index: number): number => {
+    const operand = operation.operands[index];
+    if (operand === undefined) {
+      throw new TypeError(
+        `${module.source}: ${location} omits operand ${index}`,
+      );
+    }
+    const definition = values.get(operand);
+    if (definition === undefined) {
+      throw new TypeError(
+        `${module.source}: ${location} omits operand ${index}`,
+      );
+    }
+    return definition.type;
+  };
+  const operandType = (index: number): BlotRuntimeType => {
+    return module.types[operandTypeId(index)];
+  };
+  if (operation.kind === "scratch.with-capacity") {
+    if (
+      operation.operands.length !== 1 || resultType.kind !== "scratch" ||
+      operandType(0).kind !== "signed-integer-64"
+    ) {
+      throw new TypeError(
+        `${module.source}: ${location} requires Int -> Scratch T`,
+      );
+    }
+    return;
+  }
+  if (operation.kind === "scratch.push") {
+    const sourceType = operandType(0);
+    const valueType = operandTypeId(1);
+    if (
+      operation.operands.length !== 2 || resultType.kind !== "scratch" ||
+      sourceType.kind !== "scratch" ||
+      sourceType.elementType !== resultType.elementType ||
+      valueType !== resultType.elementType
+    ) {
+      throw new TypeError(
+        `${module.source}: ${location} requires (Scratch T, T) -> Scratch T`,
+      );
+    }
+    return;
+  }
+  const sourceType = operandType(0);
+  if (operation.kind === "scratch.finish") {
+    if (
+      operation.operands.length !== 1 || resultType.kind !== "store" ||
+      sourceType.kind !== "scratch" ||
+      sourceType.elementType !== resultType.elementType
+    ) {
+      throw new TypeError(
+        `${module.source}: ${location} requires Scratch T -> Store T`,
+      );
+    }
+    return;
+  }
+  if (
+    operation.operands.length !== 1 || resultType.kind !== "scratch" ||
+    sourceType.kind !== "store" ||
+    sourceType.elementType !== resultType.elementType
+  ) {
+    throw new TypeError(
+      `${module.source}: ${location} requires Store T -> Scratch T`,
+    );
+  }
+}
+
+function typeContainsScratch(
+  module: BlotRuntimeModule,
+  typeId: number,
+  seen = new Set<number>(),
+): boolean {
+  if (seen.has(typeId)) return false;
+  seen.add(typeId);
+  const type = module.types[typeId];
+  if (type.kind === "scratch") return true;
+  if (type.kind === "store") {
+    return typeContainsScratch(module, type.elementType, seen);
+  }
+  if (type.kind === "indirect") {
+    return typeContainsScratch(module, type.targetType, seen);
+  }
+  if (type.kind === "product") {
+    return type.fields.some((field) =>
+      typeContainsScratch(module, field.type, seen)
+    );
+  }
+  if (type.kind === "sum") {
+    return type.cases.some((case_) =>
+      typeContainsScratch(module, case_.payloadType, seen)
+    );
+  }
+  if (type.kind === "sealed") {
+    return typeContainsScratch(module, type.representationType, seen);
+  }
+  return false;
 }
 
 function validateEffectClosure(

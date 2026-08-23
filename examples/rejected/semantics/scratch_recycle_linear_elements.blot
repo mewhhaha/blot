@@ -1,0 +1,8 @@
+// Recycling discards the initialized prefix. An Array that still carries an
+// exact linear resource therefore cannot become empty Scratch storage.
+
+open import "blot:prelude"
+
+let region = Slice.copy [1, 2, 3]
+let values = [region]
+return Scratch.finish (Scratch.recycle values)

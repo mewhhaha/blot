@@ -78,16 +78,17 @@ An `@[assert.reuse]` tag is checked after those permissions exist. It rejects a
 persistent Store update in the function's residual frame but cannot manufacture
 a permission, reinterpret a last use as consumption, or change the inferred
 function type. Materialized checked functions publish the discharged assertion
-in Runtime-HIR schema 3 for independent validation.
+retained by Runtime-HIR schema 4 for independent validation.
 
-Checked-module certificate schema 9 publishes the inferred parameter-input
-authority tree, produced-result tree, and structural lineage. Each owning
-destination path names its earlier binding identity and source path. Dynamic
-proof-refined `@array.take` lineage contains exactly the selected and remainder
-parts; `@array.split` contains exactly the prefix, selected, and suffix parts.
-The independent verifier rejects an unknown source identity, malformed path,
-duplicate lineage, invalid part, or incomplete partition. Bounds failure is not
-an ownership path: an unproved extraction is rejected before lineage is minted.
+Checked-module certificate schema 10 retains the schema-9 inferred
+parameter-input authority tree, produced-result tree, and structural lineage.
+Each owning destination path names its earlier binding identity and source path.
+Dynamic proof-refined `@array.take` lineage contains exactly the selected and
+remainder parts; `@array.split` contains exactly the prefix, selected, and
+suffix parts. The independent verifier rejects an unknown source identity,
+malformed path, duplicate lineage, invalid part, or incomplete partition. Bounds
+failure is not an ownership path: an unproved extraction is rejected before
+lineage is minted.
 
 ## 5. Certificate discipline
 

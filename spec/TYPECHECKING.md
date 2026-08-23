@@ -755,7 +755,7 @@ authority rather than duplicating it:
   move replaces exactly one leaf by `none`, blocks whole-value reuse while the
   root is partial, and snapshots that remainder at branches and speculative
   ownership transactions. Ownership leaves also retain their source binding and
-  path. Checked-module certificate schema 9 publishes that lineage and
+  path. Checked-module certificate schema 10 retains that schema-9 lineage and
   independently requires both `take` outputs or all three `split` outputs at one
   extraction identity.
 - A region ownership value is `Region(authority, elements)`: the first component

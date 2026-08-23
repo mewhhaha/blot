@@ -540,6 +540,572 @@ const array_expect_get = fn (&values, index) => do:
     #Some value => value
     #None => @panic "index escaped its checked Array range"
 
+sig array_expect_set =
+  @forall (fn T => ([T], @type.int, T) -> [T])
+const array_expect_set = fn (?values, index, value) => do:
+  if index >= 0:
+    if index < @array.len (&values):
+      return @array.set values index value
+    else:
+      return @panic "index escaped its checked Array range"
+  else:
+    return @panic "index escaped its checked Array range"
+
+sig scratch_with_capacity =
+  @forall (fn T => @type.int -> @scratch.type T)
+const scratch_with_capacity =
+  fn capacity => @scratch.with_capacity capacity
+
+sig scratch_push =
+  @forall (fn T => (@scratch.type T, T) -> @scratch.type T)
+const scratch_push =
+  fn (scratch, value) => @scratch.push scratch value
+
+sig scratch_finish =
+  @forall (fn T => @scratch.type T -> [T])
+const scratch_finish =
+  fn scratch => @scratch.finish scratch
+
+sig scratch_recycle =
+  @forall (fn T => [T] -> @scratch.type T)
+const scratch_recycle =
+  fn values => @scratch.recycle values
+
+const Scratch =
+  {
+    .of = @scratch.type;
+    .with_capacity = scratch_with_capacity;
+    .push = scratch_push;
+    .finish = scratch_finish;
+    .recycle = scratch_recycle;
+  }
+
+sig array_merge_run =
+  @forall (fn T => do:
+    return (
+      [T],
+      @scratch.type T,
+      @type.int,
+      @type.int,
+      @type.int,
+      @type.int,
+      ((T, T) -> (#True | #False))
+    ) -> ([T], @scratch.type T)
+  )
+const array_merge_run =
+  fn (?source, ?target, left, middle, right, stop, before_or_equal) => do:
+    let rec merge = fn (?current, ?output, i, j) => do:
+      if i >= middle:
+        if j >= stop:
+          return (current, output)
+        else:
+          let value = array_expect_get ((&current), j)
+          return merge (current, Scratch.push (output, value), i, j + 1)
+      else:
+        if j >= stop:
+          let value = array_expect_get ((&current), i)
+          return merge (current, Scratch.push (output, value), i + 1, j)
+        else:
+          let left_value = array_expect_get ((&current), i)
+          let right_value = array_expect_get ((&current), j)
+          if before_or_equal (left_value, right_value):
+            return merge (
+              current,
+              Scratch.push (output, left_value),
+              i + 1,
+              j
+            )
+          else:
+            return merge (
+              current,
+              Scratch.push (output, right_value),
+              i,
+              j + 1
+            )
+
+    return merge (source, target, left, right)
+
+sig array_merge_pass =
+  @forall (fn T => do:
+    return (
+      [T],
+      @scratch.type T,
+      @type.int,
+      ((T, T) -> (#True | #False))
+    ) -> ([T], @scratch.type T)
+  )
+const array_merge_pass =
+  fn (?source, ?target, width, before_or_equal) => do:
+    let length = @array.len (&source)
+    let rec runs = fn (?current, ?output, start) => do:
+      if start >= length:
+        return (
+          Scratch.finish output,
+          Scratch.recycle current
+        )
+      else:
+        let middle = Ord.min (start + width) length
+        let stop = Ord.min (middle + width) length
+        let (current, output) =
+          array_merge_run (
+            current,
+            output,
+            start,
+            middle,
+            middle,
+            stop,
+            before_or_equal
+          )
+        return runs (current, output, stop)
+
+    return runs (source, target, 0)
+
+sig array_merge_sort =
+  @forall (fn T => ([T], ((T, T) -> (#True | #False))) -> [T])
+const array_merge_sort = fn (values, before_or_equal) => do:
+  let length = @array.len (&values)
+  if length < 2:
+    return values
+  else:
+    let target = Scratch.with_capacity length
+    let rec passes = fn (?source, ?output, width) => do:
+      let (next, output) =
+        array_merge_pass (
+          source,
+          output,
+          width,
+          before_or_equal
+        )
+      let next_width = width * 2
+      if next_width >= length:
+        return (next, output)
+      else:
+        return passes (next, output, next_width)
+
+    let (sorted, _) = passes (values, target, 1)
+    return sorted
+
+const RadixSign = 0 | 1 | 2
+const RadixStrategy = #Stable | #Unstable
+const RadixBucket =
+  @type.refine @type.int (
+    fn value => value >= 0 && value <= 255
+  )
+
+sig radix_zeroes = @type.unit -> [@type.int]
+const radix_zeroes = fn _ => do:
+  let rec fill = fn (?counts, bucket) => do:
+    if bucket >= 256:
+      return counts
+    else:
+      return fill (@array.push counts 0, bucket + 1)
+  return fill (@array.empty, 0)
+
+sig radix_floor_digit = (@type.int, @type.int) -> @type.int
+const radix_floor_digit = fn (key, divisor) => do:
+  let quotient = key / divisor
+  let quotient = case key % divisor < 0 of
+    #True => quotient - 1
+    #False => quotient
+  let digit = quotient % 256
+  if digit < 0:
+    return digit + 256
+  else:
+    return digit
+
+sig radix_magnitude_digit = (@type.int, @type.int) -> @type.int
+const radix_magnitude_digit = fn (key, divisor) => do:
+  let digit = (key / divisor) % 256
+  if digit < 0:
+    return 0 - digit
+  else:
+    return digit
+
+sig radix_bucket = @type.int -> RadixBucket
+const radix_bucket = fn value => do:
+  if value < 0:
+    return 0
+  else:
+    if value > 255:
+      return 255
+    else:
+      return value
+
+sig radix_digit =
+  (@type.int, @type.int, RadixSign, @type.int) -> RadixBucket
+const radix_digit = fn (key, divisor, sign, top_divisor) => do:
+  if sign == 0:
+    return radix_bucket (radix_floor_digit (key, divisor))
+  else:
+    if sign == 1:
+      return radix_bucket (
+        255 - radix_magnitude_digit (key, divisor)
+      )
+    else:
+      let digit = radix_floor_digit (key, divisor)
+      if divisor == top_divisor:
+        if digit < 128:
+          return radix_bucket (digit + 128)
+        else:
+          return radix_bucket (digit - 128)
+      else:
+        return radix_bucket digit
+
+sig radix_power = @type.int -> @type.int
+const radix_power = fn exponent => do:
+  let rec raise = fn (value, remaining) => do:
+    if remaining < 1:
+      return value
+    else:
+      return raise (value * 256, remaining - 1)
+  return raise (1, exponent)
+
+sig radix_top_divisor = (@type.int, @type.int, RadixSign) -> @type.int
+const radix_top_divisor = fn (minimum, maximum, sign) => do:
+  if sign == 2:
+    return radix_power 7
+  else:
+    if sign == 0:
+      let rec grow = fn divisor => do:
+        if maximum / divisor >= 256:
+          return grow (divisor * 256)
+        else:
+          return divisor
+      return grow 1
+    else:
+      let rec grow = fn divisor => do:
+        if minimum / divisor <= -256:
+          return grow (divisor * 256)
+        else:
+          return divisor
+      return grow 1
+
+sig array_radix_cache =
+  @forall (fn T => do:
+    return ([T], (T -> @type.int)) -> (
+      [(T, @type.int)],
+      @type.int,
+      @type.int,
+      @scratch.type T
+    )
+  )
+const array_radix_cache = fn (values, key) => do:
+  let length = @array.len (&values)
+  let first = array_expect_get ((&values), 0)
+  let first_key = key first
+  let entries = Scratch.with_capacity length
+  let entries = Scratch.push (entries, (first, first_key))
+  let rec cache = fn (?source, ?output, index) => do:
+    if index >= length:
+      return (
+        source,
+        Scratch.finish output
+      )
+    else:
+      let value = array_expect_get ((&source), index)
+      let value_key = key value
+      return cache (
+        source,
+        Scratch.push (output, (value, value_key)),
+        index + 1
+      )
+  let (values, entries) = cache (values, entries, 1)
+  let rec bounds = fn (index, minimum, maximum) => do:
+    if index >= length:
+      return (minimum, maximum)
+    else:
+      let entry = array_expect_get ((&entries), index)
+      return bounds (
+        index + 1,
+        Ord.min minimum entry.1,
+        Ord.max maximum entry.1
+      )
+  let (minimum, maximum) = bounds (1, first_key, first_key)
+  return (entries, minimum, maximum, Scratch.recycle values)
+
+sig radix_counts =
+  @forall (fn T => do:
+    return (
+      [(T, @type.int)],
+      @type.int,
+      @type.int,
+      @type.int,
+      RadixSign,
+      @type.int
+    ) -> [@type.int]
+  )
+const radix_counts =
+  fn (&entries, start, stop, divisor, sign, top_divisor) => do:
+    let rec count = fn (?counts, index) => do:
+      if index >= stop:
+        return counts
+      else:
+        let entry = array_expect_get ((&entries), index)
+        let bucket = radix_digit (entry.1, divisor, sign, top_divisor)
+        let seen = array_expect_get ((&counts), bucket)
+        return count (
+          array_expect_set (counts, bucket, seen + 1),
+          index + 1
+        )
+    return count (radix_zeroes (), start)
+
+sig radix_positions = [@type.int] -> [@type.int]
+const radix_positions = fn &counts => do:
+  let rec build = fn (?positions, bucket, offset) => do:
+    if bucket >= 256:
+      return positions
+    else:
+      let count = array_expect_get ((&counts), bucket)
+      return build (
+        @array.push positions offset,
+        bucket + 1,
+        offset + count
+      )
+  let first = array_expect_get ((&counts), 0)
+  return build ([0], 1, first)
+
+sig radix_stable_pass =
+  @forall (fn T => do:
+    return (
+      [(T, @type.int)],
+      [(T, @type.int)],
+      @type.int,
+      RadixSign,
+      @type.int
+    ) -> ([(T, @type.int)], [(T, @type.int)])
+  )
+const radix_stable_pass =
+  fn (?source, ?target, divisor, sign, top_divisor) => do:
+    let length = @array.len (&source)
+    let counts =
+      radix_counts (
+        (&source),
+        0,
+        length,
+        divisor,
+        sign,
+        top_divisor
+      )
+    let positions = radix_positions (&counts)
+    let rec scatter = fn (?current, ?output, ?cursor, index) => do:
+      if index >= length:
+        return (current, output, cursor)
+      else:
+        let entry = array_expect_get ((&current), index)
+        let bucket =
+          radix_digit (
+            entry.1,
+            divisor,
+            sign,
+            top_divisor
+          )
+        let position = array_expect_get ((&cursor), bucket)
+        let output = array_expect_set (output, position, entry)
+        let cursor = array_expect_set (cursor, bucket, position + 1)
+        return scatter (
+          ?current,
+          ?output,
+          ?cursor,
+          index + 1
+        )
+    let (source, target, _) = scatter (?source, ?target, ?positions, 0)
+    return (target, source)
+
+sig radix_stable =
+  @forall (fn T => do:
+    return (
+      [(T, @type.int)],
+      RadixSign,
+      @type.int
+    ) -> [(T, @type.int)]
+  )
+const radix_stable = fn (?entries, sign, top_divisor) => do:
+  let target = @array.copy (&entries)
+  let rec passes = fn (?source, ?output, divisor) => do:
+    let (next, output) =
+      radix_stable_pass (
+        source,
+        output,
+        divisor,
+        sign,
+        top_divisor
+      )
+    if divisor >= top_divisor:
+      return (next, output)
+    else:
+      return passes (next, output, divisor * 256)
+  let (sorted, _) = passes (entries, target, 1)
+  return sorted
+
+sig radix_flag_range =
+  @forall (fn T => do:
+    return (
+      [(T, @type.int)],
+      @type.int,
+      @type.int,
+      @type.int,
+      RadixSign,
+      @type.int
+    ) -> [(T, @type.int)]
+  )
+const radix_flag_range =
+  fn (?entries, start, stop, divisor, sign, top_divisor) => do:
+    let rec flag = fn (?values, range_start, range_stop, place_value) => do:
+      let counts =
+        radix_counts (
+          (&values),
+          range_start,
+          range_stop,
+          place_value,
+          sign,
+          top_divisor
+        )
+      let relative = radix_positions (&counts)
+      let rec shift = fn (?positions, bucket) => do:
+        if bucket >= 256:
+          return positions
+        else:
+          let offset = array_expect_get ((&positions), bucket)
+          let positions =
+            array_expect_set (
+              positions,
+              bucket,
+              range_start + offset
+            )
+          return shift (?positions, bucket + 1)
+      let starts = shift (?relative, 0)
+      let next = @array.copy (&starts)
+      let rec buckets = fn (?current, ?positions, bucket) => do:
+        if bucket >= 256:
+          return (current, positions)
+        else:
+          let bucket_start = array_expect_get ((&starts), bucket)
+          let bucket_count = array_expect_get ((&counts), bucket)
+          let limit = bucket_start + bucket_count
+          let rec place = fn (?state, ?next_positions) => do:
+            let index = array_expect_get ((&next_positions), bucket)
+            if index >= limit:
+              return (state, next_positions)
+            else:
+              let entry = array_expect_get ((&state), index)
+              let target_bucket =
+                radix_digit (
+                  entry.1,
+                  place_value,
+                  sign,
+                  top_divisor
+                )
+              if target_bucket == bucket:
+                return place (
+                  state,
+                  array_expect_set (
+                    next_positions,
+                    bucket,
+                    index + 1
+                  )
+                )
+              else:
+                let target =
+                  array_expect_get (
+                    (&next_positions),
+                    target_bucket
+                  )
+                let displaced = array_expect_get ((&state), target)
+                let state =
+                  array_expect_set (
+                    array_expect_set (state, index, displaced),
+                    target,
+                    entry
+                  )
+                let next_positions =
+                  array_expect_set (
+                    next_positions,
+                    target_bucket,
+                    target + 1
+                  )
+                return place (state, next_positions)
+          let (current, positions) = place (current, positions)
+          return buckets (current, positions, bucket + 1)
+
+      let (values, _) = buckets (values, next, 0)
+      if place_value <= 1:
+        return values
+      else:
+        let next_place = place_value / 256
+        let rec children = fn (?current, bucket) => do:
+          if bucket >= 256:
+            return current
+          else:
+            let child_start = array_expect_get ((&starts), bucket)
+            let child_count = array_expect_get ((&counts), bucket)
+            let current = case child_count < 2 of
+              #True => current
+              #False => flag (
+                current,
+                child_start,
+                child_start + child_count,
+                next_place
+              )
+            return children (current, bucket + 1)
+        return children (values, 0)
+
+    return flag (?entries, start, stop, divisor)
+
+sig radix_unstable =
+  @forall (fn T => do:
+    return (
+      [(T, @type.int)],
+      RadixSign,
+      @type.int
+    ) -> [(T, @type.int)]
+  )
+const radix_unstable = fn (?entries, sign, top_divisor) => do:
+  let length = @array.len (&entries)
+  return radix_flag_range (
+    ?entries,
+    0,
+    length,
+    top_divisor,
+    sign,
+    top_divisor
+  )
+
+sig array_radix_sort =
+  @forall (fn T => do:
+    return ([T], (T -> @type.int), RadixStrategy) -> [T]
+  )
+const array_radix_sort = fn (?values, key, strategy) => do:
+  let length = @array.len (&values)
+  if length < 1:
+    return values
+  else:
+    let (entries, minimum, maximum, output) = array_radix_cache (values, key)
+    let sign = case minimum >= 0 of
+      #True => 0
+      #False => case maximum < 0 of
+        #True => 1
+        #False => 2
+    let top_divisor = radix_top_divisor (minimum, maximum, sign)
+    let algorithm = case strategy of
+      #Stable => radix_stable
+      #Unstable => radix_unstable
+    let sorted = algorithm (?entries, sign, top_divisor)
+    let rec project = fn (?source, ?target, index) => do:
+      if index >= length:
+        let _ = Scratch.recycle source
+        return Scratch.finish target
+      else:
+        let entry = array_expect_get ((&source), index)
+        let target = Scratch.push (target, entry.0)
+        return project (?source, ?target, index + 1)
+    return project (?sorted, ?output, 0)
+
+const Radix =
+  {
+    .stable = #Stable;
+    .unstable = #Unstable;
+  }
+
 sig array_swap_or_keep =
   @forall (fn T => ([T], @type.int, @type.int) -> [T])
 @[assert.reuse]
@@ -652,6 +1218,8 @@ const Array =
     .swap_or_keep = array_swap_or_keep;
     .expect_partition_last = array_expect_partition_last;
     .quicksort = array_quicksort;
+    .merge_sort = array_merge_sort;
+    .radix_sort = array_radix_sort;
   }
 
 sig slice_whole = @forall (fn T => @region.type T -> SliceRange)
@@ -2287,6 +2855,8 @@ return {
   .Iterable = Iterable;
 
   .Array = Array;
+  .Scratch = Scratch;
+  .Radix = Radix;
   .Range = Range;
   .Slice = Slice;
   .Arena = Arena;

@@ -1,0 +1,18 @@
+// The in-place American-flag path shares the same API with stable radix sort.
+
+open import "blot:prelude"
+
+sig values = [{ .key = Int; .id = Int; }]
+let values =
+  [{ .key = 3; .id = 3; }, { .key = 1; .id = 1; }, { .key = 2; .id = 2; }]
+
+let sorted =
+  Array.radix_sort (
+    values,
+    fn value => value.key,
+    Radix.unstable
+  )
+let a = Array.expect_get ((&sorted), 0)
+let b = Array.expect_get ((&sorted), 1)
+let c = Array.expect_get ((&sorted), 2)
+return a.id * 100 + b.id * 10 + c.id

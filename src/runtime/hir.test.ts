@@ -10,7 +10,7 @@ const span = { file: "test.blot", start: 0, end: 1 } as const;
 function acceptedModule(): BlotRuntimeModule {
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 3,
+    schemaVersion: 4,
     source: "test.blot",
     types: [
       { kind: "unit" },
@@ -140,6 +140,81 @@ Deno.test("Runtime HIR derives a closed Store layout witness", () => {
   assertEquals(layout.size, 8);
   assertEquals(layout.alignment, 4);
   assertEquals(layout.fingerprint, "store(signed-integer-64;stride=8)");
+});
+
+Deno.test("Runtime HIR derives the opaque Scratch header layout", () => {
+  const module: BlotRuntimeModule = {
+    ...acceptedModule(),
+    types: [
+      ...acceptedModule().types,
+      { kind: "scratch", elementType: 1 },
+    ],
+  };
+  const layout = runtimeLayoutWitness(module, 4);
+  assertEquals(layout.size, 12);
+  assertEquals(layout.alignment, 4);
+  assertEquals(layout.fingerprint, "scratch(signed-integer-64;stride=8)");
+});
+
+Deno.test("Runtime HIR accepts a typed Scratch lifecycle", () => {
+  validateBlotRuntimeModule(scratchModule());
+});
+
+Deno.test("Runtime HIR rejects a Scratch push with the wrong element type", () => {
+  const module = scratchModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const operations = entry.operations.map((operation) => {
+    if (operation.result !== 2) return operation;
+    return { ...operation, type: 2, value: true };
+  });
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    functions: [{
+      ...main,
+      blocks: [{ ...entry, operations }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /requires \(Scratch T, T\) -> Scratch T/,
+  );
+});
+
+Deno.test("Runtime HIR rejects Scratch at a public ABI boundary", () => {
+  const module = scratchModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    signatures: [{
+      ...module.signatures[0],
+      result: 4,
+    }, ...module.signatures.slice(1)],
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        terminator: { kind: "return", value: 3, span },
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /exposes compiler-private Scratch storage/,
+  );
+});
+
+Deno.test("Runtime HIR rejects Scratch nested in initialized storage", () => {
+  const module = scratchModule();
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    types: [...module.types, { kind: "store", elementType: 4 }],
+  };
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /nests compiler-private Scratch storage/,
+  );
 });
 
 Deno.test("Blot Runtime HIR rejects values that do not dominate their use", () => {
@@ -393,6 +468,65 @@ Deno.test("Blot Runtime HIR rejects duplicate exported names", () => {
     /source exports repeats "default"/,
   );
 });
+
+function scratchModule(): BlotRuntimeModule {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  return {
+    ...module,
+    types: [...module.types, { kind: "scratch", elementType: 1 }],
+    signatures: [{
+      ...module.signatures[0],
+      result: 3,
+    }, ...module.signatures.slice(1)],
+    functions: [{
+      ...main,
+      blocks: [{
+        id: 0,
+        parameters: [],
+        operations: [{
+          kind: "constant",
+          result: 0,
+          type: 1,
+          operands: [],
+          ownership: "plain",
+          value: 4n,
+          span,
+        }, {
+          kind: "scratch.with-capacity",
+          result: 1,
+          type: 4,
+          operands: [0],
+          ownership: "owned",
+          span,
+        }, {
+          kind: "constant",
+          result: 2,
+          type: 1,
+          operands: [],
+          ownership: "plain",
+          value: 42n,
+          span,
+        }, {
+          kind: "scratch.push",
+          result: 3,
+          type: 4,
+          operands: [1, 2],
+          ownership: "owned",
+          span,
+        }, {
+          kind: "scratch.finish",
+          result: 4,
+          type: 3,
+          operands: [3],
+          ownership: "owned",
+          span,
+        }],
+        terminator: { kind: "return", value: 4, span },
+      }],
+    }, ...module.functions.slice(1)],
+  };
+}
 
 function assertThrows(action: () => unknown, expected: RegExp): void {
   try {
