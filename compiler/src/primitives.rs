@@ -114,6 +114,10 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@region.copy"
         | "@region.length"
         | "@region.freeze"
+        | "@scratch.type"
+        | "@scratch.with_capacity"
+        | "@scratch.finish"
+        | "@scratch.recycle"
         | "@int.neg"
         | "@text.len"
         | "@text.of_int"
@@ -164,6 +168,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@region.split"
         | "@region.reassociate_left"
         | "@region.reassociate_right"
+        | "@scratch.push"
         | "@int.add"
         | "@int.sub"
         | "@int.mul"
@@ -431,6 +436,48 @@ pub fn run_primitive(
             shape(&arguments[0], span, name)?.contains_key(text(&arguments[1], span, name)?),
         )),
         "@region.type" => Ok(Value::RegionType(Box::new(arguments[0].clone()))),
+        "@scratch.type" => Ok(Value::ScratchType(Box::new(arguments[0].clone()))),
+        "@scratch.with_capacity" => {
+            let capacity = integer(&arguments[0], span, name)?
+                .to_usize()
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_SCRATCH_CAPACITY",
+                        "Scratch capacity must be a non-negative machine-sized integer.",
+                        span,
+                    )
+                })?;
+            Ok(Value::Scratch {
+                values: Vec::new(),
+                capacity,
+            })
+        }
+        "@scratch.push" => {
+            let Value::Scratch { values, capacity } = &arguments[0] else {
+                return Err(type_error(name, "an owned Scratch", &arguments[0], span));
+            };
+            let mut values = values.clone();
+            values.push(arguments[1].clone());
+            let capacity = if values.len() <= *capacity {
+                *capacity
+            } else {
+                capacity.saturating_mul(2).max(1).max(values.len())
+            };
+            Ok(Value::Scratch { values, capacity })
+        }
+        "@scratch.finish" => {
+            let Value::Scratch { values, .. } = &arguments[0] else {
+                return Err(type_error(name, "an owned Scratch", &arguments[0], span));
+            };
+            Ok(Value::Array(values.clone()))
+        }
+        "@scratch.recycle" => {
+            let values = array(&arguments[0], span, name)?;
+            Ok(Value::Scratch {
+                values: Vec::new(),
+                capacity: values.len(),
+            })
+        }
         "@region.copy" => {
             let values = array(&arguments[0], span, name)?.to_vec();
             let length = values.len();
@@ -1993,5 +2040,41 @@ mod tests {
         )
         .expect("F32 square root evaluates");
         assert!(matches!(root, Value::Float32(value) if value == 3.0));
+    }
+
+    #[test]
+    fn scratch_tracks_initialized_prefix_and_geometric_capacity() {
+        let span = Span { start: 1, end: 2 };
+        let mut scratch = run_primitive(
+            "@scratch.with_capacity",
+            vec![Value::Int(BigInt::from(1))],
+            span,
+            Phase::Comptime,
+        )
+        .expect("Scratch capacity is valid");
+        for value in [1, 2, 3] {
+            scratch = run_primitive(
+                "@scratch.push",
+                vec![scratch, Value::Int(BigInt::from(value))],
+                span,
+                Phase::Comptime,
+            )
+            .expect("Scratch push succeeds");
+        }
+        assert!(matches!(
+            &scratch,
+            Value::Scratch { values, capacity }
+                if values.len() == 3 && *capacity == 4
+        ));
+        let finished = run_primitive("@scratch.finish", vec![scratch], span, Phase::Comptime)
+            .expect("Scratch finish succeeds");
+        assert!(matches!(&finished, Value::Array(values) if values.len() == 3));
+        let recycled = run_primitive("@scratch.recycle", vec![finished], span, Phase::Comptime)
+            .expect("Array recycle succeeds");
+        assert!(matches!(
+            recycled,
+            Value::Scratch { values, capacity }
+                if values.is_empty() && capacity == 3
+        ));
     }
 }

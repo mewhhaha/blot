@@ -12,7 +12,7 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     assert.equal(checked.type, "42");
 
     const runtime = await compiler.prepare("examples/minimal.blot");
-    assert.equal(runtime.schemaVersion, 3);
+    assert.equal(runtime.schemaVersion, 4);
 
     const artifact = await compiler.compile("examples/minimal.blot");
     const wasm = Uint8Array.from(artifact.wasm).buffer;

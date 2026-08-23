@@ -193,6 +193,7 @@ impl Runtime {
 
 pub enum Computation {
     Done(Result<Value, Diagnostic>),
+    Step(Box<dyn FnOnce() -> Computation>),
     Perform {
         request: Perform,
         resume: Box<dyn FnOnce(Value) -> Computation>,
@@ -208,10 +209,15 @@ impl Computation {
         Self::Done(Err(error))
     }
 
+    fn step(next: impl FnOnce() -> Computation + 'static) -> Self {
+        Self::Step(Box::new(next))
+    }
+
     pub fn and_then(self, next: impl FnOnce(Value) -> Computation + 'static) -> Computation {
         match self {
             Computation::Done(Ok(value)) => next(value),
             Computation::Done(Err(error)) => Computation::Done(Err(error)),
+            Computation::Step(step) => Computation::step(move || step().and_then(next)),
             Computation::Perform { request, resume } => Computation::Perform {
                 request,
                 resume: Box::new(move |value| resume(value).and_then(next)),
@@ -228,6 +234,7 @@ impl Computation {
     ) -> Computation {
         match self {
             Computation::Done(result) => next(result),
+            Computation::Step(step) => Computation::step(move || step().map_result(next)),
             Computation::Perform { request, resume } => Computation::Perform {
                 request,
                 resume: Box::new(move |value| resume(value).map_result(next)),
@@ -239,6 +246,7 @@ impl Computation {
         match self {
             Computation::Done(Ok(value)) => Computation::Done(Ok(value)),
             Computation::Done(Err(error)) => Computation::Done(Err(error.at(&origin))),
+            Computation::Step(step) => Computation::step(move || step().at(origin)),
             Computation::Perform { request, resume } => Computation::Perform {
                 request,
                 resume: Box::new(move |value| resume(value).at(origin)),
@@ -258,17 +266,22 @@ pub struct Perform {
     pub host: bool,
 }
 
-pub fn run(computation: Computation) -> Result<Value, Diagnostic> {
-    match computation {
-        Computation::Done(result) => result,
-        Computation::Perform { request, .. } => Err(Diagnostic::new(
-            "BLOT_UNHANDLED_EFFECT",
-            format!(
-                "No handler for `{}.{}`.",
-                request.effect_name, request.operation
-            ),
-            request.span,
-        )),
+pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
+    loop {
+        match computation {
+            Computation::Done(result) => return result,
+            Computation::Step(step) => computation = step(),
+            Computation::Perform { request, .. } => {
+                return Err(Diagnostic::new(
+                    "BLOT_UNHANDLED_EFFECT",
+                    format!(
+                        "No handler for `{}.{}`.",
+                        request.effect_name, request.operation
+                    ),
+                    request.span,
+                ));
+            }
+        }
     }
 }
 
@@ -450,7 +463,7 @@ pub fn evaluate_expression(
                 .expression_types
                 .borrow()
                 .get(&(module_path.as_ref().clone(), expression_id))
-                .cloned();
+                .map(|type_| substitute_signature(type_, &environment));
             let function = *function;
             let argument = *argument;
             let argument_context = context.clone();
@@ -2052,8 +2065,14 @@ fn apply_with_expected(
                 }
             }
             let scope = child_env(Some(environment));
-            if let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body) {
+            if let Some(Value::Arrow {
+                domain, codomain, ..
+            }) = signature.as_deref().map(signature_body)
+            {
                 record_signature_substitutions(&scope, domain, &argument);
+                if let Some(expected_result) = &expected_result {
+                    record_signature_substitutions(&scope, codomain, expected_result);
+                }
             }
             if let Some(name) = self_name {
                 scope.names.borrow_mut().insert(
@@ -2071,13 +2090,29 @@ fn apply_with_expected(
                     },
                 );
             }
-            let argument = match signature.as_deref().map(signature_body) {
+            let mut argument = match signature.as_deref().map(signature_body) {
                 Some(Value::Arrow { domain, .. }) => match adapt_argument(argument, domain, span) {
                     Ok(argument) => argument,
                     Err(error) => return Computation::error(error),
                 },
                 _ => argument,
             };
+            if let Value::DeferredScratch { capacity } = &argument
+                && let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body)
+                && let Some(trace) = &runtime.residual
+            {
+                let expected = substitute_signature(domain, &scope);
+                match trace.borrow_mut().primitive(
+                    "@scratch.with_capacity",
+                    &[(**capacity).clone()],
+                    Some(&expected),
+                    span,
+                ) {
+                    Ok(Some(specialized)) => argument = specialized,
+                    Ok(None) => {}
+                    Err(error) => return Computation::error(error),
+                }
+            }
             let reuse_scope = if reuse_assertion.is_some() {
                 runtime.residual.as_ref().map(|trace| {
                     let scope = trace.borrow().begin_reuse_scope();
@@ -2096,42 +2131,44 @@ fn apply_with_expected(
             let mut closure_runtime = runtime;
             closure_runtime.module = closure_module.clone();
             Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
-            evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
-                move |mut value| {
-                    if let Some((trace, scope)) = reuse_scope
-                        && let Err(error) = trace.borrow().finish_reuse_scope(
-                            scope,
-                            reuse_assertion.expect("checked reuse assertion"),
-                        )
-                    {
-                        return Computation::error(error);
-                    }
-                    if let Some(Value::Arrow { codomain, .. }) =
-                        signature.as_deref().map(signature_body)
-                    {
-                        attach_signature(&mut value, codomain);
-                    }
-                    if let Some(span) = reuse_assertion
-                        && let Value::Closure {
-                            reuse_assertion: nested,
-                            ..
-                        } = &mut value
-                        && nested.is_none()
-                    {
-                        *nested = Some(span);
-                    }
-                    let Some((trace, compilation)) = residual_compilation else {
-                        return Computation::value(value);
-                    };
-                    match trace
-                        .borrow_mut()
-                        .finish_recursive_function(compilation, value)
-                    {
-                        Ok(value) => Computation::value(value),
-                        Err(error) => Computation::error(error),
-                    }
-                },
-            )
+            Computation::step(move || {
+                evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
+                    move |mut value| {
+                        if let Some((trace, scope)) = reuse_scope
+                            && let Err(error) = trace.borrow().finish_reuse_scope(
+                                scope,
+                                reuse_assertion.expect("checked reuse assertion"),
+                            )
+                        {
+                            return Computation::error(error);
+                        }
+                        if let Some(Value::Arrow { codomain, .. }) =
+                            signature.as_deref().map(signature_body)
+                        {
+                            attach_signature(&mut value, codomain);
+                        }
+                        if let Some(span) = reuse_assertion
+                            && let Value::Closure {
+                                reuse_assertion: nested,
+                                ..
+                            } = &mut value
+                            && nested.is_none()
+                        {
+                            *nested = Some(span);
+                        }
+                        let Some((trace, compilation)) = residual_compilation else {
+                            return Computation::value(value);
+                        };
+                        match trace
+                            .borrow_mut()
+                            .finish_recursive_function(compilation, value)
+                        {
+                            Ok(value) => Computation::value(value),
+                            Err(error) => Computation::error(error),
+                        }
+                    },
+                )
+            })
         }
         Value::Tag {
             name,
@@ -2221,7 +2258,14 @@ fn apply_with_expected(
                     applied,
                 });
             }
-            let computation = run_special_or_primitive(context, &name, applied, span, runtime);
+            let computation = run_special_or_primitive(
+                context,
+                &name,
+                applied,
+                span,
+                runtime,
+                expected_result.as_ref(),
+            );
             match expected_result {
                 Some(signature) => computation.and_then(move |mut value| {
                     attach_signature(&mut value, &signature);
@@ -2333,6 +2377,7 @@ fn run_special_or_primitive(
     arguments: Vec<Value>,
     span: Span,
     runtime: Runtime,
+    expected_result: Option<&Value>,
 ) -> Computation {
     if name == "@effect" || name == "@effect.host" || name == "@effect.named" {
         let (effect_name, operations, host) = if name == "@effect.named" {
@@ -2498,7 +2543,10 @@ fn run_special_or_primitive(
         );
     }
     if let Some(trace) = &runtime.residual {
-        match trace.borrow_mut().primitive(name, &arguments, span) {
+        match trace
+            .borrow_mut()
+            .primitive(name, &arguments, expected_result, span)
+        {
             Ok(Some(value)) => return Computation::value(value),
             Ok(None) => {}
             Err(error) => return Computation::error(error),
@@ -2561,6 +2609,9 @@ fn drive(
             Some(return_clause) => apply(context, return_clause, value, span, runtime),
             None => Computation::value(value),
         },
+        Computation::Step(step) => {
+            Computation::step(move || drive(context, step(), effect_id, handler, span, runtime))
+        }
         Computation::Perform { request, resume } => {
             let operation = if request.effect_id == effect_id {
                 handler.get(&request.operation).cloned()
@@ -3008,6 +3059,9 @@ fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
                 .map(|value| substitute_signature(value, environment))
                 .collect(),
         ),
+        Value::ScratchType(element) => {
+            Value::ScratchType(Box::new(substitute_signature(element, environment)))
+        }
         Value::EmptyArray { element } => Value::EmptyArray {
             element: Box::new(substitute_signature(element, environment)),
         },
@@ -3079,6 +3133,11 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
                 domain: Some(ValueDomain::Text),
             }),
             Value::Unit => Some(Value::Unit),
+            Value::Range { .. }
+            | Value::Arrow { .. }
+            | Value::RegionType(_)
+            | Value::ScratchType(_)
+            | Value::TypeVariable(_) => Some(value.clone()),
             Value::Shape(fields) => Some(Value::Shape(
                 fields
                     .iter()

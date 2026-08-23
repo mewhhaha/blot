@@ -641,6 +641,7 @@ fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagno
     loop {
         match computation {
             Computation::Done(result) => return result.map(|value| (value, writes)),
+            Computation::Step(step) => computation = step(),
             Computation::Perform { request, resume }
                 if request.host
                     && request.effect_name == "Console"
@@ -749,6 +750,18 @@ fn json_value(value: &Value) -> serde_json::Value {
         Value::RegionType(element) => serde_json::json!({
             "tag": "region-type",
             "element": json_value(element),
+        }),
+        Value::ScratchType(element) => serde_json::json!({
+            "tag": "scratch-type",
+            "element": json_value(element),
+        }),
+        Value::Scratch { values, capacity } => serde_json::json!({
+            "tag": "opaque",
+            "display": format!("<scratch {}/{}>", values.len(), capacity),
+        }),
+        Value::DeferredScratch { .. } => serde_json::json!({
+            "tag": "opaque",
+            "display": "<scratch empty>",
         }),
         Value::Region { start, end, .. } => serde_json::json!({
             "tag": "opaque",
@@ -1690,6 +1703,71 @@ mod tests {
             .expect("collect test thread should start")
             .join()
             .expect("collect test thread should finish");
+    }
+
+    #[test]
+    fn an_empty_scratch_uses_its_specialized_result_layout() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source(
+                        "prelude.blot".to_owned(),
+                        source(include_str!("../../src/prelude/prelude.blot")),
+                    )
+                    .expect("prelude should load");
+                session
+                    .add_source(
+                        "main.blot".to_owned(),
+                        source(concat!(
+                            "open import \"blot:prelude\"\n",
+                            "sig empty_length = Int -> Int\n",
+                            "const empty_length = fn capacity => do:\n",
+                            "  sig values = [Int]\n",
+                            "  let values = Scratch.finish (Scratch.with_capacity capacity)\n",
+                            "  return Array.length (&values)\n",
+                            "return { .empty_length = empty_length; }\n",
+                        )),
+                    )
+                    .expect("source should load");
+                session
+                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                    .expect("prelude should configure");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("source should configure");
+
+                let prepared = session.prepare_runtime_hir("main.blot");
+                assert_eq!(prepared["ok"], true, "{}", prepared["diagnostic"]);
+                let operations = prepared["module"]["functions"]
+                    .as_array()
+                    .expect("runtime functions")
+                    .iter()
+                    .flat_map(|function| {
+                        function["blocks"]
+                            .as_array()
+                            .expect("runtime blocks")
+                            .iter()
+                    })
+                    .flat_map(|block| {
+                        block["operations"]
+                            .as_array()
+                            .expect("runtime operations")
+                            .iter()
+                    })
+                    .filter_map(|operation| operation["kind"].as_str())
+                    .collect::<Vec<_>>();
+                assert!(operations.contains(&"scratch.with-capacity"));
+                assert!(operations.contains(&"scratch.finish"));
+            })
+            .expect("empty Scratch test thread should start")
+            .join()
+            .expect("empty Scratch test thread should finish");
     }
 
     fn source(value: &str) -> Vec<u16> {

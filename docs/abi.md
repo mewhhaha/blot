@@ -165,12 +165,17 @@ outstanding result: the matching `cabi_post_*` restores the call's allocation
 checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
 another export, and double post-return trap.
 
-Runtime HIR schema 3 may contain private `indirect` roots for positive recursive
-algebraic values. Their targets live in the current export call's scratch arena
-and recursive edges are memory32 pointers. ABI 1 defines no caller encoding for
-such a root: it is admitted only as an internal value whose eventual public
-observation has a supported non-recursive type. Public-layout construction
-rejects any signature that exposes it.
+Runtime HIR schema 4 retains private `indirect` roots introduced by schema 3 for
+positive recursive algebraic values. Their targets live in the current export
+call's scratch arena and recursive edges are memory32 pointers. ABI 1 defines no
+caller encoding for such a root: it is admitted only as an internal value whose
+eventual public observation has a supported non-recursive type. Public-layout
+construction rejects any signature that exposes it.
+
+Schema 4 also represents private Scratch values as a memory32 pointer,
+initialized length, and capacity. Scratch has no ABI 1 caller encoding and is
+rejected in public signatures and initialized public aggregates; only a finished
+Array may cross the boundary.
 
 Multiple input paths are prepared independently and their admitted Runtime HIR
 modules form one stable target batch. Blot sends their generic Wasm plans

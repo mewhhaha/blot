@@ -97,6 +97,11 @@ pub(crate) enum Produced {
     PendingFreeze {
         region: Box<Produced>,
     },
+    /// A recycle whose source Store is still a symbolic parameter. Whether
+    /// its elements are droppable is checked after call-site substitution.
+    PendingScratchRecycle {
+        source: Box<Produced>,
+    },
     PendingReassociate {
         direction: u8,
         part: u8,
@@ -235,7 +240,8 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
         Produced::Borrow(value)
         | Produced::Store(value)
         | Produced::Variant(value)
-        | Produced::PendingFreeze { region: value } => validate_produced(module, value),
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => validate_produced(module, value),
         Produced::Parameter { source, .. } | Produced::StoreParameter { source, .. } => {
             validate_pattern(*source)
         }
@@ -1708,6 +1714,43 @@ fn walk_apply(
                 elements: Box::new(elements),
             };
         }
+        if name == "@scratch.with_capacity" && arguments.len() == 1 {
+            walk(arguments[0], scope, analysis, Use::Move);
+            return Produced::Store(Box::new(Produced::Sequence(Vec::new())));
+        }
+        if name == "@scratch.push" && arguments.len() == 2 {
+            let scratch = walk(arguments[0], scope, analysis, Use::Move);
+            let value = walk(arguments[1], scope, analysis, Use::Move);
+            if let Produced::Store(elements) = scratch {
+                let mut elements = *elements;
+                if let Produced::Sequence(values) = &mut elements {
+                    values.push(value);
+                } else {
+                    elements = combine(elements, value);
+                }
+                return Produced::Store(Box::new(elements));
+            }
+            if let Produced::StoreParameter { .. } = scratch {
+                return Produced::Store(Box::new(value));
+            }
+            analysis.report(
+                "BLOT_SCRATCH_NOT_OWNED",
+                "Scratch.push requires one owned Scratch authority.",
+                analysis.module.arena.expression_span(arguments[0]),
+            );
+            return combine(scratch, value);
+        }
+        if name == "@scratch.finish" && arguments.len() == 1 {
+            return walk(arguments[0], scope, analysis, Use::Move);
+        }
+        if name == "@scratch.recycle" && arguments.len() == 1 {
+            let source = walk(arguments[0], scope, analysis, Use::Move);
+            return recycle_scratch(
+                source,
+                analysis.module.arena.expression_span(arguments[0]),
+                analysis,
+            );
+        }
         if name == "@region.length" && arguments.len() == 1 {
             walk(arguments[0], scope, analysis, Use::Borrow);
             return Produced::None;
@@ -2744,7 +2787,7 @@ fn type_may_carry_ownership(type_: &Type) -> bool {
     match type_ {
         Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Forall { body, .. } => type_may_carry_ownership(body),
-        Type::Function { .. } | Type::Array(_) | Type::Region(_) => true,
+        Type::Function { .. } | Type::Array(_) | Type::Region(_) | Type::Scratch(_) => true,
         Type::Record(fields) => fields
             .iter()
             .any(|(_, type_)| type_may_carry_ownership(type_)),
@@ -2764,9 +2807,10 @@ fn type_may_carry_ownership(type_: &Type) -> bool {
 fn contains_type_value(type_: &Type) -> bool {
     match type_ {
         Type::Opaque(name) => name == "Type",
-        Type::Forall { body, .. } | Type::Array(body) | Type::Region(body) => {
-            contains_type_value(body)
-        }
+        Type::Forall { body, .. }
+        | Type::Array(body)
+        | Type::Region(body)
+        | Type::Scratch(body) => contains_type_value(body),
         Type::Function {
             parameter,
             effects,
@@ -3128,6 +3172,15 @@ fn substitute_parameter_source(
         Produced::PendingFreeze { region } => Produced::PendingFreeze {
             region: Box::new(substitute_parameter_source(*region, source, argument)),
         },
+        Produced::PendingScratchRecycle {
+            source: recycle_source,
+        } => Produced::PendingScratchRecycle {
+            source: Box::new(substitute_parameter_source(
+                *recycle_source,
+                source,
+                argument,
+            )),
+        },
         Produced::PendingReassociate {
             direction,
             part,
@@ -3402,6 +3455,15 @@ fn substitute_element_source(
         Produced::PendingFreeze { region } => Produced::PendingFreeze {
             region: Box::new(substitute_element_source(
                 *region,
+                source,
+                argument_elements,
+            )),
+        },
+        Produced::PendingScratchRecycle {
+            source: recycle_source,
+        } => Produced::PendingScratchRecycle {
+            source: Box::new(substitute_element_source(
+                *recycle_source,
                 source,
                 argument_elements,
             )),
@@ -3820,6 +3882,11 @@ fn owned_parameter_type(type_: &Type, source: PatternId, path: &[String]) -> Pro
             path: path.to_vec(),
             shareable: !type_may_carry_ownership(element),
         },
+        Type::Scratch(_) => Produced::StoreParameter {
+            source,
+            path: path.to_vec(),
+            shareable: false,
+        },
         _ => Produced::None,
     }
 }
@@ -3881,6 +3948,8 @@ fn obligation(produced: &Produced) -> Obligation {
         // A pending freeze already consumed its authority; only the deferred
         // full-root proof remains, discharged where substitution lands.
         Produced::PendingFreeze { .. } => Obligation::None,
+        // Recycle consumed its input and promises a fresh affine Scratch.
+        Produced::PendingScratchRecycle { .. } => Obligation::Affine,
     }
 }
 
@@ -3893,6 +3962,7 @@ fn obligation_without_stores(produced: &Produced) -> Obligation {
         | Produced::SharedStore
         | Produced::EmptyStore
         | Produced::PendingFreeze { .. } => Obligation::None,
+        Produced::PendingScratchRecycle { .. } => Obligation::Affine,
         Produced::Closure { captures, .. } | Produced::Variant(captures) => {
             obligation_without_stores(captures)
         }
@@ -3933,6 +4003,7 @@ fn contains_borrow(produced: &Produced) -> bool {
         | Produced::RegionWitness { .. }
         | Produced::PendingJoin { .. }
         | Produced::PendingFreeze { .. }
+        | Produced::PendingScratchRecycle { .. }
         | Produced::PendingReassociate { .. } => false,
         Produced::PendingCallback { input, .. } => contains_borrow(input),
         Produced::Closure {
@@ -3952,7 +4023,8 @@ fn contains_pending_callback(produced: &Produced) -> bool {
         Produced::Borrow(value)
         | Produced::Store(value)
         | Produced::Variant(value)
-        | Produced::PendingFreeze { region: value } => contains_pending_callback(value),
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => contains_pending_callback(value),
         Produced::Closure {
             captures, result, ..
         } => contains_pending_callback(captures) || contains_pending_callback(result),
@@ -3999,7 +4071,8 @@ fn contains_shared(produced: &Produced) -> bool {
         Produced::Borrow(_) => false,
         Produced::Store(value)
         | Produced::Variant(value)
-        | Produced::PendingFreeze { region: value } => contains_shared(value),
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => contains_shared(value),
         Produced::Closure {
             captures, result, ..
         } => contains_shared(captures) || contains_shared(result),
@@ -4034,7 +4107,8 @@ fn contains_empty_store(produced: &Produced) -> bool {
         Produced::Borrow(value)
         | Produced::Store(value)
         | Produced::Variant(value)
-        | Produced::PendingFreeze { region: value } => contains_empty_store(value),
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => contains_empty_store(value),
         Produced::Closure {
             captures, result, ..
         } => contains_empty_store(captures) || contains_empty_store(result),
@@ -4083,7 +4157,8 @@ fn contains_concrete_store(produced: &Produced) -> bool {
         } => true,
         Produced::Borrow(value)
         | Produced::Variant(value)
-        | Produced::PendingFreeze { region: value } => contains_concrete_store(value),
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => contains_concrete_store(value),
         Produced::Closure {
             captures, result, ..
         } => contains_concrete_store(captures) || contains_concrete_store(result),
@@ -4594,6 +4669,7 @@ fn symbolic_authority(produced: &Produced) -> bool {
         Produced::Parameter { .. }
             | Produced::PendingJoin { .. }
             | Produced::PendingFreeze { .. }
+            | Produced::PendingScratchRecycle { .. }
             | Produced::PendingReassociate { .. }
     )
 }
@@ -4913,9 +4989,40 @@ fn reassociate_region(
     Produced::None
 }
 
-/// Discharges pending join and freeze proofs whose components became
-/// concrete through parameter substitution. Components that are still
-/// symbolic stay pending for the next call boundary out.
+fn recycle_scratch(source: Produced, span: Span, analysis: &mut Analysis) -> Produced {
+    match source {
+        Produced::Store(elements) => {
+            if obligation_without_stores(&elements) == Obligation::Linear {
+                analysis.report(
+                    "BLOT_SCRATCH_RECYCLE_LINEAR",
+                    "Scratch.recycle cannot discard an Array containing a linear resource.",
+                    span,
+                );
+            }
+            Produced::Store(Box::new(Produced::Sequence(Vec::new())))
+        }
+        Produced::EmptyStore => Produced::Store(Box::new(Produced::Sequence(Vec::new()))),
+        source
+            if matches!(source, Produced::StoreParameter { .. }) || symbolic_authority(&source) =>
+        {
+            Produced::PendingScratchRecycle {
+                source: Box::new(source),
+            }
+        }
+        source => {
+            analysis.report(
+                "BLOT_SCRATCH_NOT_OWNED",
+                "Scratch.recycle requires one owned Array authority.",
+                span,
+            );
+            source
+        }
+    }
+}
+
+/// Discharges pending ownership proofs whose components became concrete
+/// through parameter substitution. Components that are still symbolic stay
+/// pending for the next call boundary out.
 fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> Produced {
     match produced {
         Produced::PendingJoin {
@@ -4948,6 +5055,10 @@ fn resolve_pending(produced: Produced, span: Span, analysis: &mut Analysis) -> P
                     Produced::None
                 }
             }
+        }
+        Produced::PendingScratchRecycle { source } => {
+            let source = resolve_pending(*source, span, analysis);
+            recycle_scratch(source, span, analysis)
         }
         Produced::PendingReassociate {
             direction,

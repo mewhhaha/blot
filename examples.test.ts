@@ -161,6 +161,10 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     stage: "check",
   },
+  "scratch_recycle_linear_elements": {
+    code: "BLOT_SCRATCH_RECYCLE_LINEAR",
+    stage: "check",
+  },
   "ordered_map_owned_value": {
     code: "BLOT_LINEAR_RESULT_ESCAPES",
     stage: "check",

@@ -2863,6 +2863,36 @@ first, and tail-calls the longer range, bounding non-tail recursion by
 capacity behavior. The kernel carries `@[assert.reuse]`, so a future lowering
 that introduces a persistent update is rejected.
 
+`Scratch.of T` is the opaque affine builder type for an Array of `T`.
+`Scratch.with_capacity n` creates an empty builder with room for at least the
+non-negative capacity `n`; its element type is inferred from later pushes or the
+surrounding signature. `Scratch.push (scratch, value)` consumes the old builder
+and initializes its next position. `Scratch.finish scratch` consumes the builder
+and returns its initialized prefix as an owned Array without a copy.
+`Scratch.recycle values` consumes an owned Array, discards its droppable
+elements, and retains its allocation as an empty builder. Recycling an Array
+whose element ownership tree contains an exact linear obligation is rejected.
+Scratch values cannot be shared or cross a host boundary. Capacity and the
+uninitialized suffix are never source values.
+
+`Array.merge_sort (values, before_or_equal)` is stable and consumes the input
+Store. It performs bottom-up merging between one Array and one Scratch builder,
+recycling the previous source after each pass. It takes `O(n log n)` comparisons
+and initialized writes, allocates one `O(n)` scratch element buffer, and emits
+no persistent element-Store update after acquisition.
+
+`Array.radix_sort (values, key, strategy)` consumes an Array, calls the pure
+`key : T -> Int` exactly once for each element, and orders by the cached signed
+integer keys. `Radix.unstable` uses an in-place base-256 American-flag
+permutation with one `O(n)` cached-entry Store and fixed bucket metadata.
+`Radix.stable` uses base-256 stable scatter between two initialized cached-entry
+Stores; it preserves the input order of equal keys and uses two `O(n)` auxiliary
+allocations: the cached-entry Store and its scatter Store. The final projection
+reuses the consumed input allocation. Both strategies handle the complete signed
+integer range without negating `Int` minimum. Actual cached extrema bound the
+digit work, so non-negative and narrow refined keys skip irrelevant sign and
+high-digit passes without a callee-name specialization.
+
 `@array.get xs index`, `@array.set xs index value`, `@array.take xs index`, and
 `@array.split xs index` are the direct path. The checker accepts them only when
 every value of `index` is inside `0..@array.len xs - 1`. An index known to be

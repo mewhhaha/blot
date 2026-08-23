@@ -51,6 +51,7 @@ pub enum Type {
     Record(Vec<(String, Type)>),
     Array(Box<Type>),
     Region(Box<Type>),
+    Scratch(Box<Type>),
     Variant {
         cases: Vec<(String, Type)>,
         open: bool,
@@ -109,6 +110,7 @@ enum ConstraintTypeNode {
     Record(Vec<(String, ConstraintTypeId)>),
     Array(ConstraintTypeId),
     Region(ConstraintTypeId),
+    Scratch(ConstraintTypeId),
     Variant {
         cases: Vec<(String, ConstraintTypeId)>,
         open: bool,
@@ -162,6 +164,7 @@ impl ConstraintTypeArena {
             ),
             Type::Array(element) => ConstraintTypeNode::Array(self.intern(element)),
             Type::Region(element) => ConstraintTypeNode::Region(self.intern(element)),
+            Type::Scratch(element) => ConstraintTypeNode::Scratch(self.intern(element)),
             Type::Variant { cases, open } => ConstraintTypeNode::Variant {
                 cases: cases
                     .iter()
@@ -221,6 +224,7 @@ impl ConstraintTypeArena {
             ),
             ConstraintTypeNode::Array(element) => Type::Array(Box::new(self.expand(*element))),
             ConstraintTypeNode::Region(element) => Type::Region(Box::new(self.expand(*element))),
+            ConstraintTypeNode::Scratch(element) => Type::Scratch(Box::new(self.expand(*element))),
             ConstraintTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
@@ -267,9 +271,9 @@ impl ConstraintTypeArena {
                 .map(|(_, field)| self.level_of(*field, variables))
                 .max()
                 .unwrap_or(0),
-            ConstraintTypeNode::Array(element) | ConstraintTypeNode::Region(element) => {
-                self.level_of(*element, variables)
-            }
+            ConstraintTypeNode::Array(element)
+            | ConstraintTypeNode::Region(element)
+            | ConstraintTypeNode::Scratch(element) => self.level_of(*element, variables),
             ConstraintTypeNode::OpenEffects { tail, .. } => self.level_of(*tail, variables),
             ConstraintTypeNode::Union(members) => members
                 .iter()
@@ -389,7 +393,8 @@ impl ConstraintTypeArena {
                 self.same_fields(left, right, rigids)
             }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right))
-            | (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
+            | (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right))
+            | (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
                 self.same_with_rigids(*left, *right, rigids)
             }
             (
@@ -559,7 +564,7 @@ pub struct CachedModuleInterface {
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
 }
 
-pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 9;
+pub const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 10;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
@@ -598,6 +603,7 @@ enum FlatTypeNode {
     Record(Vec<(String, FlatTypeId)>),
     Array(FlatTypeId),
     Region(FlatTypeId),
+    Scratch(FlatTypeId),
     Variant {
         cases: Vec<(String, FlatTypeId)>,
         open: bool,
@@ -841,7 +847,9 @@ fn validate_certificate_type(
                 validate_child(*field, bound)?;
             }
         }
-        FlatTypeNode::Array(element) | FlatTypeNode::Region(element) => {
+        FlatTypeNode::Array(element)
+        | FlatTypeNode::Region(element)
+        | FlatTypeNode::Scratch(element) => {
             validate_child(*element, bound)?;
         }
         FlatTypeNode::OpenEffects { tail, .. } => {
@@ -1663,6 +1671,9 @@ impl Checker {
                 self.inflate_interface_type(arena, *element, rigids),
             )),
             FlatTypeNode::Region(element) => Type::Region(Box::new(
+                self.inflate_interface_type(arena, *element, rigids),
+            )),
+            FlatTypeNode::Scratch(element) => Type::Scratch(Box::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
             FlatTypeNode::Variant { cases, open } => Type::Variant {
@@ -3886,6 +3897,7 @@ impl Checker {
             ),
             Type::Array(element) => Type::Array(Box::new(self.freshen(*element, level, fresh))),
             Type::Region(element) => Type::Region(Box::new(self.freshen(*element, level, fresh))),
+            Type::Scratch(element) => Type::Scratch(Box::new(self.freshen(*element, level, fresh))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
                 tail: Box::new(self.freshen(*tail, level, fresh)),
@@ -3944,7 +3956,9 @@ impl Checker {
                 .map(|(_, field)| self.level_of(field))
                 .max()
                 .unwrap_or(0),
-            Type::Array(element) | Type::Region(element) => self.level_of(element),
+            Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                self.level_of(element)
+            }
             Type::OpenEffects { tail, .. } => self.level_of(tail),
             Type::Union(members) => members
                 .iter()
@@ -4038,6 +4052,9 @@ impl Checker {
             }
             Type::Region(element) => {
                 Type::Region(Box::new(self.extrude(*element, polarity, level, copies)))
+            }
+            Type::Scratch(element) => {
+                Type::Scratch(Box::new(self.extrude(*element, polarity, level, copies)))
             }
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
@@ -4274,6 +4291,11 @@ impl Checker {
                 true
             }
             (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
+                self.constrain_ids(left, right, span, seen)?;
+                self.constrain_ids(right, left, span, seen)?;
+                true
+            }
+            (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
                 self.constrain_ids(left, right, span, seen)?;
                 self.constrain_ids(right, left, span, seen)?;
                 true
@@ -4550,7 +4572,9 @@ impl Checker {
                         pending.push((field, bound.clone()));
                     }
                 }
-                Type::Array(element) | Type::Region(element) => pending.push((element, bound)),
+                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                    pending.push((element, bound));
+                }
                 Type::OpenEffects { tail, .. } => pending.push((tail, bound)),
                 Type::Union(members) => {
                     for member in members {
@@ -4703,6 +4727,9 @@ impl Checker {
             Type::Region(element) => Type::Region(Box::new(
                 self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
             )),
+            Type::Scratch(element) => Type::Scratch(Box::new(
+                self.residual_signature_type(*element, seen, resolved, unresolved, recursive),
+            )),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
                 tail: Box::new(
@@ -4821,6 +4848,9 @@ impl Checker {
             }
             Type::Region(element) => {
                 Type::Region(Box::new(self.settle_seen(*element, positive, seen)))
+            }
+            Type::Scratch(element) => {
+                Type::Scratch(Box::new(self.settle_seen(*element, positive, seen)))
             }
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
@@ -5351,6 +5381,15 @@ impl Checker {
             Value::RegionType(element) => {
                 Type::Region(Box::new(self.bridge_runtime_value(element)))
             }
+            Value::ScratchType(element) => {
+                Type::Scratch(Box::new(self.bridge_runtime_value(element)))
+            }
+            Value::Scratch { values, .. } => Type::Scratch(Box::new(join_types(
+                values
+                    .iter()
+                    .map(|value| self.bridge_runtime_value(value))
+                    .collect(),
+            ))),
             Value::Region { store, start, end } => Type::Region(Box::new(join_types(
                 store.borrow()[*start..*end]
                     .iter()
@@ -5401,6 +5440,13 @@ impl Checker {
                     .collect::<Option<Vec<_>>>()?,
             )),
             Value::RegionType(element) => Some(Type::Region(Box::new(self.bridge(element)?))),
+            Value::ScratchType(element) => Some(Type::Scratch(Box::new(self.bridge(element)?))),
+            Value::Scratch { values, .. } => Some(Type::Scratch(Box::new(join_types(
+                values
+                    .iter()
+                    .map(|value| self.bridge(value))
+                    .collect::<Option<Vec<_>>>()?,
+            )))),
             Value::Region { store, start, end } => Some(Type::Region(Box::new(union_types(
                 store.borrow()[*start..*end]
                     .iter()
@@ -5589,6 +5635,7 @@ impl Checker {
                 }
             }
             Type::Region(element) => format!("Region {}", self.show(&element)),
+            Type::Scratch(element) => format!("Scratch {}", self.show(&element)),
             Type::Variant { cases, .. } => cases
                 .iter()
                 .map(|(name, payload)| {
@@ -5690,7 +5737,7 @@ fn free_rigid_variables(
                 free_rigid_variables(field, bound, free);
             }
         }
-        Type::Array(element) | Type::Region(element) => {
+        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
             free_rigid_variables(element, bound, free);
         }
         Type::OpenEffects { tail, .. } => free_rigid_variables(tail, bound, free),
@@ -6004,6 +6051,32 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             vec![Type::Opaque("Type".to_owned())],
             Type::Opaque("Type".to_owned()),
         ),
+        "@scratch.type" => curried(
+            vec![Type::Opaque("Type".to_owned())],
+            Type::Opaque("Type".to_owned()),
+        ),
+        "@scratch.with_capacity" => {
+            curried(vec![int.clone()], Type::Scratch(Box::new(checker.fresh())))
+        }
+        "@scratch.push" => {
+            let element = checker.fresh();
+            let scratch = Type::Scratch(Box::new(element.clone()));
+            curried(vec![scratch.clone(), element], scratch)
+        }
+        "@scratch.finish" => {
+            let element = checker.fresh();
+            curried(
+                vec![Type::Scratch(Box::new(element.clone()))],
+                Type::Array(Box::new(element)),
+            )
+        }
+        "@scratch.recycle" => {
+            let element = checker.fresh();
+            curried(
+                vec![Type::Array(Box::new(element.clone()))],
+                Type::Scratch(Box::new(element)),
+            )
+        }
         "@region.copy" => {
             let element = checker.fresh();
             curried(
@@ -6353,6 +6426,7 @@ fn contains_function(type_: &Type) -> bool {
         Type::Forall { body, .. }
         | Type::Array(body)
         | Type::Region(body)
+        | Type::Scratch(body)
         | Type::OpenEffects { tail: body, .. } => contains_function(body),
         Type::Record(fields) | Type::Variant { cases: fields, .. } => {
             fields.iter().any(|(_, field)| contains_function(field))
@@ -6694,6 +6768,7 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
         ),
         Type::Array(element) => Type::Array(Box::new(substitute_rigid(*element, replacements))),
         Type::Region(element) => Type::Region(Box::new(substitute_rigid(*element, replacements))),
+        Type::Scratch(element) => Type::Scratch(Box::new(substitute_rigid(*element, replacements))),
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
             labels,
             tail: Box::new(substitute_rigid(*tail, replacements)),
@@ -7474,6 +7549,9 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
         Type::Region(element) => Some(Value::RegionType(Box::new(reify_type_with_holes(
             element, next_hole,
         )?))),
+        Type::Scratch(element) => Some(Value::ScratchType(Box::new(reify_type_with_holes(
+            element, next_hole,
+        )?))),
         Type::Variant { cases, open: false } => Some(Value::Union(
             cases
                 .iter()
@@ -7648,9 +7726,9 @@ fn same_type_with_rigids(
                 && same_type_with_rigids(left_result, right_result, rigids)
         }
         (Type::Record(left), Type::Record(right)) => same_fields(left, right, rigids),
-        (Type::Array(left), Type::Array(right)) | (Type::Region(left), Type::Region(right)) => {
-            same_type_with_rigids(left, right, rigids)
-        }
+        (Type::Array(left), Type::Array(right))
+        | (Type::Region(left), Type::Region(right))
+        | (Type::Scratch(left), Type::Scratch(right)) => same_type_with_rigids(left, right, rigids),
         (
             Type::Variant {
                 cases: left,
@@ -7811,6 +7889,7 @@ fn closed_type_key(type_: &Type) -> String {
             Type::Record(values) => fields("record", values, binders),
             Type::Array(element) => format!("array({})", visit(element, binders)),
             Type::Region(element) => format!("region({})", visit(element, binders)),
+            Type::Scratch(element) => format!("scratch({})", visit(element, binders)),
             Type::Variant { cases, open } => {
                 format!("variant({open}){}", fields("", cases, binders))
             }
@@ -8460,7 +8539,9 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
         Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
             .iter()
             .all(|(_, field)| closed_checked_type(field, bound)),
-        Type::Array(element) | Type::Region(element) => closed_checked_type(element, bound),
+        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+            closed_checked_type(element, bound)
+        }
         Type::OpenEffects { tail, .. } => closed_checked_type(tail, bound),
         Type::Union(members) => members
             .iter()
@@ -8523,6 +8604,9 @@ fn flatten_interface_type(
         Type::Array(element) => FlatTypeNode::Array(flatten_interface_type(element, bound, types)?),
         Type::Region(element) => {
             FlatTypeNode::Region(flatten_interface_type(element, bound, types)?)
+        }
+        Type::Scratch(element) => {
+            FlatTypeNode::Scratch(flatten_interface_type(element, bound, types)?)
         }
         Type::Variant { cases, open } => FlatTypeNode::Variant {
             cases: cases

@@ -247,3 +247,7 @@ The useful asymptotic boundary is explicit:
 | owned `push`                   |             amortized `O(1)` | only capacity growth |
 | `Array.copy` shared Store      |                       `O(n)` |                  one |
 | `Array.copy` proved-last Store | `O(1)` physical optimization |                 none |
+
+Reusable initialized-prefix construction is the separate affine `Scratch`
+capability specified in [`SCRATCH.md`](SCRATCH.md). It neither changes ordinary
+Array ownership nor permits uninitialized values to enter the type lattice.

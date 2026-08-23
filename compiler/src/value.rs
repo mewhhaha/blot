@@ -336,6 +336,20 @@ pub enum Value {
     Array(Vec<Value>),
     /// Private type value produced only by `@region.type`.
     RegionType(Box<Value>),
+    /// Private type value produced only by `@scratch.type`.
+    ScratchType(Box<Value>),
+    /// Affine initialized-prefix builder. Capacity is operational only; source
+    /// observation can recover only `values` through `@scratch.finish`.
+    Scratch {
+        values: Vec<Value>,
+        capacity: usize,
+    },
+    /// A residual empty Scratch whose element representation is fixed by its
+    /// first pushed value. This is the runtime analogue of `EmptyArray`: the
+    /// capacity is known, but an empty polymorphic builder has no layout yet.
+    DeferredScratch {
+        capacity: Box<Value>,
+    },
     /// Mutable interval into one evaluator Store. Split clones only this
     /// metadata and the `Rc`; elements stay in one backing allocation.
     Region {
@@ -652,6 +666,10 @@ pub fn substitute_type_variable(
             element: Box::new(substitute(element)?),
         },
         Value::RegionType(element) => Value::RegionType(Box::new(substitute(element)?)),
+        Value::ScratchType(element) => Value::ScratchType(Box::new(substitute(element)?)),
+        Value::DeferredScratch { capacity } => Value::DeferredScratch {
+            capacity: Box::new(substitute(capacity)?),
+        },
         Value::Tag { name, payload } => Value::Tag {
             name: name.clone(),
             payload: match payload.as_deref() {
@@ -772,8 +790,13 @@ fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
                 collect_type_variables(member, variables);
             }
         }
-        Value::RegionType(element) | Value::EmptyArray { element } => {
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::EmptyArray { element } => {
             collect_type_variables(element, variables);
+        }
+        Value::DeferredScratch { capacity } => {
+            collect_type_variables(capacity, variables);
         }
         Value::Tag {
             payload: Some(payload),
@@ -899,6 +922,24 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                     .all(|left| right.iter().any(|right| equal(left, right)))
         }
         (Value::RegionType(left), Value::RegionType(right)) => equal(left, right),
+        (Value::ScratchType(left), Value::ScratchType(right)) => equal(left, right),
+        (
+            Value::Scratch {
+                values: left_values,
+                capacity: left_capacity,
+            },
+            Value::Scratch {
+                values: right_values,
+                capacity: right_capacity,
+            },
+        ) => {
+            left_capacity == right_capacity
+                && left_values.len() == right_values.len()
+                && left_values
+                    .iter()
+                    .zip(right_values)
+                    .all(|(left, right)| equal(left, right))
+        }
         (
             Value::Region {
                 store: left_store,
@@ -937,6 +978,14 @@ pub fn equal(left: &Value, right: &Value) -> bool {
         (Value::EmptyArray { .. }, Value::EmptyArray { .. }) => true,
         (Value::EmptyArray { .. }, Value::Array(right))
         | (Value::Array(right), Value::EmptyArray { .. }) => right.is_empty(),
+        (
+            Value::DeferredScratch {
+                capacity: left_capacity,
+            },
+            Value::DeferredScratch {
+                capacity: right_capacity,
+            },
+        ) => equal(left_capacity, right_capacity),
         (
             Value::Tag {
                 name: left_name,
@@ -1230,6 +1279,11 @@ pub fn show(value: &Value) -> String {
             format!("[{elements}]")
         }
         Value::RegionType(element) => format!("Region {}", show(element)),
+        Value::ScratchType(element) => format!("Scratch {}", show(element)),
+        Value::Scratch { values, capacity } => {
+            format!("<scratch {}/{}>", values.len(), capacity)
+        }
+        Value::DeferredScratch { .. } => "<scratch empty>".to_owned(),
         Value::Region { start, end, .. } => format!("<region {start}..{end}>"),
         Value::RegionRejoin {
             start, middle, end, ..

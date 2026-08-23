@@ -18,6 +18,7 @@ that implements it.
 | [`PARTITIONED_CAPABILITIES.md`](PARTITIONED_CAPABILITIES.md) | Generic partitioned-authority proof algebra                            |
 | [`OWNED_REGIONS.md`](OWNED_REGIONS.md)                       | Store-region provenance, split/join witnesses, and production gates    |
 | [`OWNED_VALUES.md`](OWNED_VALUES.md)                         | Owned-until-shared Stores, borrowing, freezing, and explicit copies    |
+| [`SCRATCH.md`](SCRATCH.md)                                   | Affine initialized-prefix builders and allocation recycling            |
 | [`OWNED_ORDERED_MAPS.md`](OWNED_ORDERED_MAPS.md)             | Ordered-map representation, refinements, and cost model                |
 | [`REUSE.md`](REUSE.md)                                       | Declaration-tag Store-reuse assertions and Runtime-HIR certificates    |
 | [`RUNTIME.md`](RUNTIME.md)                                   | Runtime HIR, canonical ABI lowering, and WebAssembly boundary          |

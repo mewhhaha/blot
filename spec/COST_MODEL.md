@@ -258,6 +258,11 @@ An optimization is accepted only when:
 5. the benchmark includes the work claimed by its name; and
 6. the profile attributes the improvement to a removed or cheaper cost term.
 
+Sorting benchmarks additionally distinguish one-Store permutation, cached-entry
+Stores, initialized stable-scatter destinations, and affine Scratch capacity. An
+allocation claim counts element capacity, not merely Runtime-HIR operation
+sites. Timing is reported but is not an absolute CI threshold.
+
 Generated-code comparisons additionally use the same target boundary. Native
 Rust and Rust WebAssembly answer different questions; the Rust counterparts in
 the Wasm execution benchmark are compiled to `wasm32-unknown-unknown` and run in

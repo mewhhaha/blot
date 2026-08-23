@@ -40,6 +40,10 @@ pub(crate) enum RuntimeType {
         #[serde(rename = "elementType")]
         element_type: usize,
     },
+    Scratch {
+        #[serde(rename = "elementType")]
+        element_type: usize,
+    },
     Indirect {
         #[serde(rename = "targetType")]
         target_type: usize,
@@ -145,6 +149,27 @@ fn runtime_layout_witness(
                     stride: 8,
                 }
             }
+            RuntimeType::Scratch { element_type } => {
+                memo.insert(
+                    type_id,
+                    RuntimeLayoutWitness {
+                        fingerprint: format!("scratch@{type_id}"),
+                        size: 12,
+                        alignment: 4,
+                        stride: 12,
+                    },
+                );
+                let element = visit(types, *element_type, memo, active)?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!(
+                        "scratch({};stride={})",
+                        element.fingerprint, element.stride
+                    ),
+                    size: 12,
+                    alignment: 4,
+                    stride: 12,
+                }
+            }
             RuntimeType::Sealed {
                 name,
                 representation_type,
@@ -220,6 +245,21 @@ fn runtime_layout_witness(
 }
 
 fn validate_runtime_layouts(types: &[RuntimeType]) -> Result<(), Diagnostic> {
+    for (type_id, type_) in types.iter().enumerate() {
+        let element_type = match type_ {
+            RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } => {
+                Some(*element_type)
+            }
+            _ => None,
+        };
+        if let Some(element_type) = element_type
+            && runtime_type_contains_scratch(types, element_type, &mut HashSet::new())
+        {
+            return Err(hir_error(&format!(
+                "Runtime type {type_id} nests compiler-private Scratch storage"
+            )));
+        }
+    }
     for type_id in 0..types.len() {
         runtime_layout_witness(types, type_id).map_err(|error| {
             hir_error(&format!(
@@ -228,6 +268,44 @@ fn validate_runtime_layouts(types: &[RuntimeType]) -> Result<(), Diagnostic> {
         })?;
     }
     Ok(())
+}
+
+fn runtime_type_contains_scratch(
+    types: &[RuntimeType],
+    type_id: usize,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    if !seen.insert(type_id) {
+        return false;
+    }
+    match &types[type_id] {
+        RuntimeType::Scratch { .. } => true,
+        RuntimeType::Store { element_type } => {
+            runtime_type_contains_scratch(types, *element_type, seen)
+        }
+        RuntimeType::Indirect { target_type } => {
+            runtime_type_contains_scratch(types, *target_type, seen)
+        }
+        RuntimeType::Product { fields, .. } => fields
+            .iter()
+            .any(|field| runtime_type_contains_scratch(types, field.type_id, seen)),
+        RuntimeType::Sum { cases, .. } => cases
+            .iter()
+            .any(|case_| runtime_type_contains_scratch(types, case_.payload_type, seen)),
+        RuntimeType::Sealed {
+            representation_type,
+            ..
+        } => runtime_type_contains_scratch(types, *representation_type, seen),
+        RuntimeType::Unit
+        | RuntimeType::Boolean
+        | RuntimeType::Integer32
+        | RuntimeType::SignedInteger64
+        | RuntimeType::Float32
+        | RuntimeType::Float64
+        | RuntimeType::Text
+        | RuntimeType::Vector { .. }
+        | RuntimeType::Mask { .. } => false,
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -456,6 +534,7 @@ enum RepresentationShape {
     Shape(Vec<(String, RepresentationShape)>),
     Array(Option<Box<RepresentationShape>>),
     Region(Box<RepresentationShape>),
+    Scratch(Box<RepresentationShape>),
     Tag(String, Option<Box<RepresentationShape>>),
 }
 
@@ -804,7 +883,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 3,
+            schema_version: 4,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -825,9 +904,14 @@ impl ResidualTrace {
         &mut self,
         name: &str,
         arguments: &[Value],
+        expected_result: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Option<Value>, Diagnostic> {
-        if !arguments.iter().any(contains_runtime) {
+        // Scratch is an operational builder even when its capacity stages to
+        // a constant. In a residual trace its element representation comes
+        // from the surrounding signature or the first push, so do not let the
+        // evaluator turn an empty builder back into an untyped source value.
+        if name != "@scratch.with_capacity" && !arguments.iter().any(contains_runtime) {
             return Ok(None);
         }
         self.active_primitive = Some(name.to_owned());
@@ -907,6 +991,137 @@ impl ResidualTrace {
             return self.float_simd_primitive(name, arguments, span).map(Some);
         }
         let value = match name {
+            "@scratch.with_capacity" => {
+                let capacity = arguments
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| hir_error("Scratch.with_capacity omitted its capacity."))?;
+                let Some(Value::ScratchType(element)) = expected_result else {
+                    return Ok(Some(Value::DeferredScratch {
+                        capacity: Box::new(capacity),
+                    }));
+                };
+                let Ok(element_type) = self.type_from_type_value(element) else {
+                    return Ok(Some(Value::DeferredScratch {
+                        capacity: Box::new(capacity),
+                    }));
+                };
+                let capacity = self.lower_as(Some(&capacity), "signed-integer-64", span)?;
+                let scratch_type = self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                );
+                self.operation(
+                    "scratch.with-capacity",
+                    scratch_type,
+                    vec![capacity.id],
+                    span,
+                    None,
+                )
+            }
+            "@scratch.push" => {
+                if let Value::DeferredScratch { capacity } = &arguments[0] {
+                    let element_type = self.value_type(&arguments[1])?;
+                    let capacity = self.lower_as(Some(capacity), "signed-integer-64", span)?;
+                    let scratch_type = self.insert_type(
+                        &format!("scratch:{element_type}"),
+                        RuntimeType::Scratch { element_type },
+                    );
+                    let scratch = self.operation(
+                        "scratch.with-capacity",
+                        scratch_type,
+                        vec![capacity.id],
+                        span,
+                        None,
+                    );
+                    let value = self.lower_store_element(&arguments[1], element_type, span)?;
+                    return Ok(Some(Value::Runtime(self.operation(
+                        "scratch.push",
+                        scratch_type,
+                        vec![scratch.id, value.id],
+                        span,
+                        None,
+                    ))));
+                }
+                let scratch = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Scratch { element_type } = self.types[scratch.type_id] else {
+                    return Err(hir_error("Scratch.push received a non-Scratch value."));
+                };
+                let value = self.lower_store_element(&arguments[1], element_type, span)?;
+                self.operation(
+                    "scratch.push",
+                    scratch.type_id,
+                    vec![scratch.id, value.id],
+                    span,
+                    None,
+                )
+            }
+            "@scratch.finish" => {
+                if let Value::DeferredScratch { capacity } = &arguments[0] {
+                    let Some(expected_result) = expected_result else {
+                        return Err(hir_error(
+                            "An empty residual Scratch needs a specialized Array result.",
+                        ));
+                    };
+                    let mut expected_result = expected_result;
+                    while let Value::Forall { body, .. } = expected_result {
+                        expected_result = body;
+                    }
+                    let Value::Array(elements) = expected_result else {
+                        return Err(hir_error(&format!(
+                            "An empty residual Scratch cannot finish as {}.",
+                            crate::value::show(expected_result)
+                        )));
+                    };
+                    let element = elements.first().ok_or_else(|| {
+                        hir_error("A specialized Array result omitted its element type.")
+                    })?;
+                    let element_type = self.type_from_type_value(element)?;
+                    let capacity = self.lower_as(Some(capacity), "signed-integer-64", span)?;
+                    let scratch_type = self.insert_type(
+                        &format!("scratch:{element_type}"),
+                        RuntimeType::Scratch { element_type },
+                    );
+                    let scratch = self.operation(
+                        "scratch.with-capacity",
+                        scratch_type,
+                        vec![capacity.id],
+                        span,
+                        None,
+                    );
+                    let store_type = self.insert_type(
+                        &format!("store:{element_type}"),
+                        RuntimeType::Store { element_type },
+                    );
+                    return Ok(Some(Value::Runtime(self.operation(
+                        "scratch.finish",
+                        store_type,
+                        vec![scratch.id],
+                        span,
+                        None,
+                    ))));
+                }
+                let scratch = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Scratch { element_type } = self.types[scratch.type_id] else {
+                    return Err(hir_error("Scratch.finish received a non-Scratch value."));
+                };
+                let store_type = self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                );
+                self.operation("scratch.finish", store_type, vec![scratch.id], span, None)
+            }
+            "@scratch.recycle" => {
+                let store = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(hir_error("Scratch.recycle received a non-Array value."));
+                };
+                let scratch_type = self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                );
+                self.operation("scratch.recycle", scratch_type, vec![store.id], span, None)
+            }
             "@float.of_int" => {
                 let value = self.lower_as(arguments.first(), "signed-integer-64", span)?;
                 let float = self.insert_type("float-64", RuntimeType::Float64);
@@ -1674,6 +1889,7 @@ impl ResidualTrace {
             RuntimeType::Vector { .. } => "Vector",
             RuntimeType::Mask { .. } => "Mask",
             RuntimeType::Store { .. } => "Store",
+            RuntimeType::Scratch { .. } => "Scratch",
             RuntimeType::Indirect { .. } => "Recursive",
             RuntimeType::Product { .. } => "Record",
             RuntimeType::Sum { .. } => "Sum",
@@ -2882,24 +3098,34 @@ impl ResidualTrace {
             .remove(&compilation.result_type)
         {
             if result.type_id == compilation.result_type {
-                return Err(hir_error(
-                    "A residual recursive result has no finite constructor case.",
-                ));
+                let RuntimeType::Indirect { target_type } = self.types[compilation.result_type]
+                else {
+                    return Err(hir_error(
+                        "A pending recursive result lost its indirect representation.",
+                    ));
+                };
+                if target_type == 0 {
+                    return Err(hir_error(
+                        "A residual recursive result has no finite constructor case.",
+                    ));
+                }
+            } else {
+                let RuntimeType::Indirect { target_type } =
+                    &mut self.types[compilation.result_type]
+                else {
+                    return Err(hir_error(
+                        "A pending recursive result lost its indirect representation.",
+                    ));
+                };
+                *target_type = result.type_id;
+                result = self.operation(
+                    "indirect.make",
+                    compilation.result_type,
+                    vec![result.id],
+                    compilation.span,
+                    None,
+                );
             }
-            let RuntimeType::Indirect { target_type } = &mut self.types[compilation.result_type]
-            else {
-                return Err(hir_error(
-                    "A pending recursive result lost its indirect representation.",
-                ));
-            };
-            *target_type = result.type_id;
-            result = self.operation(
-                "indirect.make",
-                compilation.result_type,
-                vec![result.id],
-                compilation.span,
-                None,
-            );
         } else if result.type_id != compilation.result_type {
             return Err(hir_error(
                 "A residual recursive function returned a value outside its signature.",
@@ -3038,7 +3264,7 @@ impl ResidualTrace {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 3,
+            schema_version: 4,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
@@ -3161,9 +3387,54 @@ impl ResidualTrace {
             ));
         }
         self.current_block = consequent_block;
-        let consequent = self.lower_value(&consequent, span)?;
+        let mut consequent = self.lower_value(&consequent, span)?;
         self.current_block = alternate_block;
-        let alternate = self.lower_value(&alternate, span)?;
+        let mut alternate = self.lower_value(&alternate, span)?;
+        if consequent.type_id != alternate.type_id {
+            let consequent_target = match self.types[consequent.type_id] {
+                RuntimeType::Indirect { target_type } => Some(target_type),
+                _ => None,
+            };
+            let alternate_target = match self.types[alternate.type_id] {
+                RuntimeType::Indirect { target_type } => Some(target_type),
+                _ => None,
+            };
+            if consequent_target == Some(alternate.type_id)
+                || (consequent_target == Some(0)
+                    && self.pending_recursive_types.contains(&consequent.type_id))
+            {
+                if consequent_target == Some(0) {
+                    self.types[consequent.type_id] = RuntimeType::Indirect {
+                        target_type: alternate.type_id,
+                    };
+                }
+                self.current_block = alternate_block;
+                alternate = self.operation(
+                    "indirect.make",
+                    consequent.type_id,
+                    vec![alternate.id],
+                    span,
+                    None,
+                );
+            } else if alternate_target == Some(consequent.type_id)
+                || (alternate_target == Some(0)
+                    && self.pending_recursive_types.contains(&alternate.type_id))
+            {
+                if alternate_target == Some(0) {
+                    self.types[alternate.type_id] = RuntimeType::Indirect {
+                        target_type: consequent.type_id,
+                    };
+                }
+                self.current_block = consequent_block;
+                consequent = self.operation(
+                    "indirect.make",
+                    alternate.type_id,
+                    vec![consequent.id],
+                    span,
+                    None,
+                );
+            }
+        }
         Ok((consequent, alternate))
     }
 
@@ -3345,6 +3616,55 @@ impl ResidualTrace {
                     )));
                 };
                 self.lower_typed_value(value, expected, span)
+            }
+            (Value::DeferredScratch { capacity }, expected) => {
+                let mut substitutions = substitutions.clone();
+                let scratch_type = self.specialized_type_from_type_value(
+                    expected,
+                    &mut substitutions,
+                    &RepresentationFacts::default(),
+                )?;
+                if !matches!(self.types[scratch_type], RuntimeType::Scratch { .. }) {
+                    return Err(hir_error(&format!(
+                        "An empty residual Scratch has no element representation in {}.",
+                        crate::value::show(expected)
+                    )));
+                }
+                let capacity = self.lower_as(Some(capacity), "signed-integer-64", span)?;
+                Ok(self.operation(
+                    "scratch.with-capacity",
+                    scratch_type,
+                    vec![capacity.id],
+                    span,
+                    None,
+                ))
+            }
+            (Value::Scratch { values, capacity }, expected) if values.is_empty() => {
+                let mut substitutions = substitutions.clone();
+                let scratch_type = self.specialized_type_from_type_value(
+                    expected,
+                    &mut substitutions,
+                    &RepresentationFacts::default(),
+                )?;
+                if !matches!(self.types[scratch_type], RuntimeType::Scratch { .. }) {
+                    return Err(hir_error(&format!(
+                        "An empty residual Scratch has no element representation in {}.",
+                        crate::value::show(expected)
+                    )));
+                }
+                let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+                let capacity = self.constant(
+                    WireConstant::SignedInteger64(capacity.to_string()),
+                    integer,
+                    span,
+                );
+                Ok(self.operation(
+                    "scratch.with-capacity",
+                    scratch_type,
+                    vec![capacity.id],
+                    span,
+                    None,
+                ))
             }
             _ => self.lower_typed_value(value, type_, span),
         }
@@ -3590,6 +3910,40 @@ impl ResidualTrace {
                 store.meaning = RuntimeMeaning::ReusableStore;
                 Ok(store)
             }
+            Value::Scratch { values, capacity } => {
+                let first = values.first().ok_or_else(|| {
+                    hir_error("An untyped empty residual Scratch has no element representation.")
+                })?;
+                let element_type = self.value_type(first)?;
+                let scratch_type = self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                );
+                let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+                let capacity = self.constant(
+                    WireConstant::SignedInteger64(capacity.to_string()),
+                    integer,
+                    span,
+                );
+                let mut scratch = self.operation(
+                    "scratch.with-capacity",
+                    scratch_type,
+                    vec![capacity.id],
+                    span,
+                    None,
+                );
+                for value in values {
+                    let value = self.lower_store_element(value, element_type, span)?;
+                    scratch = self.operation(
+                        "scratch.push",
+                        scratch_type,
+                        vec![scratch.id, value.id],
+                        span,
+                        None,
+                    );
+                }
+                Ok(scratch)
+            }
             // A witness is element-free proof; at runtime it is erased to
             // unit, because ownership already discharged the pairing.
             Value::RegionRejoin { .. } => Ok(self.constant(WireConstant::Unit, 0, span)),
@@ -3801,6 +4155,16 @@ impl ResidualTrace {
                     RuntimeType::Store { element_type },
                 ))
             }
+            Value::Scratch { values, .. } => {
+                let element = values.first().ok_or_else(|| {
+                    hir_error("An untyped empty Scratch has no element representation.")
+                })?;
+                let element_type = self.value_type(element)?;
+                Ok(self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                ))
+            }
             _ => Err(hir_error(&format!(
                 "{} has no first-order runtime type.",
                 crate::value::show(value)
@@ -3882,6 +4246,13 @@ impl ResidualTrace {
                 Ok(self.insert_type(
                     &format!("store:{element_type}"),
                     RuntimeType::Store { element_type },
+                ))
+            }
+            Value::ScratchType(element) => {
+                let element_type = self.type_from_type_value(element)?;
+                Ok(self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
                 ))
             }
             Value::Union(members) => {
@@ -3989,6 +4360,13 @@ impl ResidualTrace {
                     )?;
                 }
             }
+            Value::ScratchType(expected_element) => {
+                if let Value::Runtime(actual) = actual
+                    && let RuntimeType::Scratch { element_type } = self.types[actual.type_id]
+                {
+                    representation_facts.record(expected_element, element_type);
+                }
+            }
             Value::Union(members) => {
                 for member in members {
                     self.record_runtime_substitutions(
@@ -4072,6 +4450,17 @@ impl ResidualTrace {
                     RuntimeType::Store { element_type },
                 );
                 self.region_type(store_type)
+            }
+            Value::ScratchType(element) => {
+                let element_type = self.specialized_type_from_type_value(
+                    element,
+                    substitutions,
+                    representation_facts,
+                )?;
+                Ok(self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                ))
             }
             Value::Union(members) => {
                 if members
@@ -4225,6 +4614,13 @@ impl ResidualTrace {
                     RuntimeType::Store { element_type },
                 );
                 self.region_type(store_type)
+            }
+            Type::Scratch(element) => {
+                let element_type = self.runtime_type_from_checked_type(element)?;
+                Ok(self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                ))
             }
             Type::Variant { cases, open: false } => {
                 let names = cases
@@ -5292,6 +5688,12 @@ impl ResidualTrace {
             };
             return Ok(Value::Runtime(value));
         }
+        if !matches!(
+            self.types[value.type_id],
+            RuntimeType::Indirect { target_type: 0 }
+        ) {
+            value = self.load_indirect(&value, span);
+        }
         let RuntimeType::Product { name, fields } = self.types[value.type_id].clone() else {
             return Ok(Value::Runtime(value));
         };
@@ -5370,6 +5772,7 @@ impl ResidualTrace {
         match self.types[type_id] {
             RuntimeType::Text
             | RuntimeType::Store { .. }
+            | RuntimeType::Scratch { .. }
             | RuntimeType::Indirect { .. }
             | RuntimeType::Product { .. }
             | RuntimeType::Sum { .. }
@@ -5396,7 +5799,9 @@ fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usi
         Value::Array(elements) | Value::Union(elements) => elements
             .iter()
             .any(|element| has_unresolved_representation(element, substitutions)),
-        Value::RegionType(element) => has_unresolved_representation(element, substitutions),
+        Value::RegionType(element) | Value::ScratchType(element) => {
+            has_unresolved_representation(element, substitutions)
+        }
         Value::EmptyArray { element }
         | Value::Extended { inner: element, .. }
         | Value::Sealed { inner: element, .. }
@@ -5531,7 +5936,9 @@ pub(crate) fn contains_runtime(value: &Value) -> bool {
         Value::Region { store, start, end } => {
             store.borrow()[*start..*end].iter().any(contains_runtime)
         }
-        Value::RegionType(element) => contains_runtime(element),
+        Value::RegionType(element) | Value::ScratchType(element) => contains_runtime(element),
+        Value::Scratch { values, .. } => values.iter().any(contains_runtime),
+        Value::DeferredScratch { capacity } => contains_runtime(capacity),
         Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
         Value::Array(elements) => elements.iter().any(contains_runtime),
         Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_runtime),
@@ -5586,6 +5993,7 @@ fn representation_shape(value: &Value) -> Option<RepresentationShape> {
                 RepresentationShape::Array(elements.first().map(|element| Box::new(shape(element))))
             }
             Value::RegionType(element) => RepresentationShape::Region(Box::new(shape(element))),
+            Value::ScratchType(element) => RepresentationShape::Scratch(Box::new(shape(element))),
             Value::Tag { name, payload } => RepresentationShape::Tag(
                 name.clone(),
                 payload.as_deref().map(|payload| Box::new(shape(payload))),
@@ -5599,7 +6007,9 @@ fn representation_shape(value: &Value) -> Option<RepresentationShape> {
 
     let represented = match value {
         Value::Shape(_) | Value::Array(_) => true,
-        Value::RegionType(element) => matches!(element.as_ref(), Value::TypeVariable(_)),
+        Value::RegionType(element) | Value::ScratchType(element) => {
+            matches!(element.as_ref(), Value::TypeVariable(_))
+        }
         _ => false,
     };
     represented.then(|| shape(value))
@@ -5666,8 +6076,16 @@ fn collect_value(
                 collect_value(context, element, visited, captured)?;
             }
         }
-        Value::RegionType(element) => {
+        Value::RegionType(element) | Value::ScratchType(element) => {
             collect_value(context, element, visited, captured)?;
+        }
+        Value::DeferredScratch { capacity } => {
+            collect_value(context, capacity, visited, captured)?;
+        }
+        Value::Scratch { values, .. } => {
+            for element in values {
+                collect_value(context, element, visited, captured)?;
+            }
         }
         Value::Region { store, start, end } => {
             let cells = store.borrow();
@@ -5862,8 +6280,16 @@ fn replace_value(
                 *element = replace_value(context, element, replacements, replaced)?;
             }
         }
-        Value::RegionType(element) => {
+        Value::RegionType(element) | Value::ScratchType(element) => {
             **element = replace_value(context, element, replacements, replaced)?;
+        }
+        Value::DeferredScratch { capacity } => {
+            **capacity = replace_value(context, capacity, replacements, replaced)?;
+        }
+        Value::Scratch { values, .. } => {
+            for element in values {
+                *element = replace_value(context, element, replacements, replaced)?;
+            }
         }
         Value::Region { store, start, end } => {
             let cells = store.borrow();
@@ -6943,7 +7369,9 @@ fn merge_runtime_modules(
         let function_offset = functions.len();
         for mut type_ in module.types {
             match &mut type_ {
-                RuntimeType::Store { element_type } => *element_type += type_offset,
+                RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } => {
+                    *element_type += type_offset;
+                }
                 RuntimeType::Indirect { target_type } => *target_type += type_offset,
                 RuntimeType::Product { fields, .. } => {
                     for field in fields {
@@ -7011,7 +7439,7 @@ fn merge_runtime_modules(
     validate_runtime_layouts(&types)?;
     Ok(RuntimeModule {
         format: "blot-runtime-hir",
-        schema_version: 3,
+        schema_version: 4,
         source: source.to_owned(),
         types,
         signatures,
@@ -7082,6 +7510,7 @@ fn complete_residual_host_calls(
     loop {
         match computation {
             Computation::Done(result) => return result,
+            Computation::Step(step) => computation = step(),
             Computation::Perform { request, resume } => {
                 if !request.host {
                     return Err(Diagnostic::new(
@@ -7207,6 +7636,7 @@ fn type_value(type_: &Type) -> Value {
         ),
         Type::Array(element) => Value::Array(vec![type_value(element)]),
         Type::Region(element) => Value::RegionType(Box::new(type_value(element))),
+        Type::Scratch(element) => Value::ScratchType(Box::new(type_value(element))),
         Type::Variant { cases, .. } => Value::Union(
             cases
                 .iter()
@@ -7231,6 +7661,7 @@ fn complete_host_calls(mut computation: Computation) -> Result<(Value, Vec<HostC
     loop {
         match computation {
             Computation::Done(result) => return result.map(|value| (value, calls)),
+            Computation::Step(step) => computation = step(),
             Computation::Perform { request, resume } => {
                 if !request.host {
                     return Err(Diagnostic::new(
@@ -7412,7 +7843,7 @@ impl HirBuilder {
         validate_runtime_layouts(&self.types)?;
         Ok(RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 3,
+            schema_version: 4,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
@@ -7521,6 +7952,9 @@ impl HirBuilder {
             }
             Type::Region(_) => Err(hir_error(
                 "A live Region is compiler-private and cannot cross the runtime export boundary.",
+            )),
+            Type::Scratch(_) => Err(hir_error(
+                "A live Scratch is compiler-private and cannot cross the runtime export boundary.",
             )),
             Type::Opaque(name) if name == "Rejoin" => Err(hir_error(
                 "A live Region rejoin witness is compiler-private and cannot cross the runtime export boundary.",
@@ -8062,6 +8496,9 @@ fn type_from_value(value: &Value) -> Type {
                 .unwrap_or(Type::Bottom),
         )),
         Value::EmptyArray { .. } => Type::Array(Box::new(Type::Bottom)),
+        Value::Scratch { values, .. } => Type::Scratch(Box::new(
+            values.first().map(type_from_value).unwrap_or(Type::Bottom),
+        )),
         Value::Tag { name, payload } => Type::Variant {
             cases: vec![(
                 name.clone(),
@@ -8239,6 +8676,18 @@ mod tests {
         assert_eq!(layout.size, 8);
         assert_eq!(layout.alignment, 4);
         assert_eq!(layout.fingerprint, "store(signed-integer-64;stride=8)");
+    }
+
+    #[test]
+    fn runtime_scratch_layout_witness_is_closed_and_deterministic() {
+        let types = vec![
+            RuntimeType::SignedInteger64,
+            RuntimeType::Scratch { element_type: 0 },
+        ];
+        let layout = runtime_layout_witness(&types, 1).expect("Scratch layout");
+        assert_eq!(layout.size, 12);
+        assert_eq!(layout.alignment, 4);
+        assert_eq!(layout.fingerprint, "scratch(signed-integer-64;stride=8)");
     }
 
     #[test]

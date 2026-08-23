@@ -33,8 +33,10 @@ where `Delta_rep` maps every residual binding to a concrete representation and
 8. every private function-choice table has at least one alternative, one case
    per alternative, and one capture product per case; and
 9. every function marked `reuse: "checked"` contains no persistent Store update
-   in its materialized Runtime-HIR frame; and
-10. every export and import is admitted by the selected ABI policy.
+   in its materialized Runtime-HIR frame;
+10. every private Scratch value carries a closed element layout, initialized
+    length no greater than capacity, and affine operation lineage; and
+11. every export and import is admitted by the selected ABI policy.
 
 Validation does not infer a missing source fact. A well-typed internal program
 that reaches an open shape or polymorphic operation exposes a specialization or
@@ -226,13 +228,20 @@ checkpoints the private heap at entry and restores it after scalar results or
 canonical post-return, so these internal allocations form a scratch arena per
 outer export call.
 
-Runtime-HIR schema 3 adds an optional `reuse: "checked"` function certificate.
-It is emitted only after the source `@[assert.reuse]` tag has been discharged.
-The independent validator replays the local condition: every `store.write` and
-`store.grow` in that materialized function must say `owned-reuse`. This flag is
-not operation evidence and the emitter never consults it to select destructive
-lowering; each operation still carries and validates its own ownership and
-closed-layout permission.
+Runtime-HIR schema 4 retains the optional `reuse: "checked"` function
+certificate introduced by schema 3. It is emitted only after the source
+`@[assert.reuse]` tag has been discharged. The independent validator replays the
+local condition: every `store.write` and `store.grow` in that materialized
+function must say `owned-reuse`. This flag is not operation evidence and the
+emitter never consults it to select destructive lowering; each operation still
+carries and validates its own ownership and closed-layout permission.
+
+A residual recursive result whose representation is not yet closed receives a
+private pending `indirect` carrier. The first conditional join with a finite
+direct base case fixes that carrier's pointee type and wraps the direct arm;
+later consumers load the pointee before structural projection. A recursive
+result that reaches function completion without such a constructor remains an
+invariant failure.
 
 Finite recursive structures may use the prelude `Arena`: nodes occupy a
 homogeneous Store and contain stable integer indices to other nodes. This is a

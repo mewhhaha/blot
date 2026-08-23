@@ -53,16 +53,17 @@ The owned-until-shared rules and explicit copy boundary are specified in
 
 ## 4. Runtime certificate
 
-Runtime-HIR schema 3 records `reuse: "checked"` on a discharged materialized
-function. The independent validator repeats the local operation check. The
-emitter never consults the function bit to select an update strategy: each Store
-operation must still carry its own checked `owned-reuse` annotation and closed
-layout witness.
+Runtime-HIR schema 4 retains the schema-3 `reuse: "checked"` certificate on a
+discharged materialized function. The independent validator repeats the local
+operation check. The emitter never consults the function bit to select an update
+strategy: each Store operation must still carry its own checked `owned-reuse`
+annotation and closed layout witness.
 
 The checked-module ownership certificate does not contain the assertion. Its
-schema 9 contract contains the parameter pattern, inferred input authority, and
-produced result tree. The assertion follows the evaluated closure so portable
-ASTs, the type lattice, and imported ownership contracts cannot forge it.
+schema 10 contract contains the parameter pattern, inferred input authority,
+Scratch type nodes, structural lineage, and produced result tree. The assertion
+follows the evaluated closure so portable ASTs, the type lattice, and imported
+ownership contracts cannot forge it.
 
 ## 5. Examples
 

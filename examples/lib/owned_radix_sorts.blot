@@ -1,0 +1,57 @@
+// Runtime parameters keep both kernels in Runtime HIR. The signed case
+// includes i64::MIN, which the digit transform must never negate.
+
+open import "blot:prelude"
+
+const wide = 2147483647 + 1
+const maximum = wide * wide * 2 - 1
+const minimum = 0 - maximum - 1
+
+sig sort_signed = Int -> [Int]
+const sort_signed = fn dynamic => do:
+  sig values = [Int]
+  let values =
+    [maximum, -257, 256, minimum, dynamic, 0, 255, -256, 1]
+  return Array.radix_sort (
+    values,
+    fn value => value,
+    Radix.unstable
+  )
+
+sig first = Int -> Int
+const first = fn dynamic => do:
+  let sorted = sort_signed dynamic
+  return Array.expect_get ((&sorted), 0)
+
+sig last = Int -> Int
+const last = fn dynamic => do:
+  let sorted = sort_signed dynamic
+  return Array.expect_get ((&sorted), 8)
+
+sig stable_ids = Int -> Int
+const stable_ids = fn dynamic => do:
+  sig values = [{ .key = Int; .id = Int; }]
+  let values =
+    [
+      { .key = 2; .id = 10; },
+      { .key = dynamic; .id = 20; },
+      { .key = 2; .id = 30; },
+      { .key = 0; .id = 40; }
+    ]
+  let sorted =
+    Array.radix_sort (
+      values,
+      fn value => value.key,
+      Radix.stable
+    )
+  let a = Array.expect_get ((&sorted), 0)
+  let b = Array.expect_get ((&sorted), 1)
+  let c = Array.expect_get ((&sorted), 2)
+  let d = Array.expect_get ((&sorted), 3)
+  return a.id * 1000000 + b.id * 10000 + c.id * 100 + d.id
+
+return {
+  .first = first;
+  .last = last;
+  .stable_ids = stable_ids;
+}

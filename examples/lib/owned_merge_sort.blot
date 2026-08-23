@@ -1,0 +1,32 @@
+// A runtime key keeps the generic stable merge kernel in Runtime HIR.
+
+open import "blot:prelude"
+
+sig stable_ids = Int -> Int
+const stable_ids = fn dynamic => do:
+  sig values = [{ .key = Int; .id = Int; }]
+  let values =
+    [
+      { .key = 2; .id = 10; },
+      { .key = dynamic; .id = 20; },
+      { .key = 2; .id = 30; },
+      { .key = 0; .id = 40; }
+    ]
+  let sorted =
+    Array.merge_sort (
+      values,
+      fn (left, right) => left.key <= right.key
+    )
+  let a = Array.expect_get ((&sorted), 0)
+  let b = Array.expect_get ((&sorted), 1)
+  let c = Array.expect_get ((&sorted), 2)
+  let d = Array.expect_get ((&sorted), 3)
+  return a.id * 1000000 + b.id * 10000 + c.id * 100 + d.id
+
+sig empty_length = Int -> Int
+const empty_length = fn capacity => do:
+  sig values = [Int]
+  let values = Scratch.finish (Scratch.with_capacity capacity)
+  return Array.length (&values)
+
+return { .empty_length = empty_length; .stable_ids = stable_ids; }
