@@ -113,6 +113,49 @@ fn predicate_intervals(
         ));
     }
     *budget -= 1;
+    if let Expression::If {
+        branches,
+        fallback: Some(fallback),
+        ..
+    } = &module.arena.expressions[expression.0 as usize]
+        && let [branch] = branches.as_slice()
+    {
+        let left = predicate_intervals(
+            context,
+            module,
+            branch.condition,
+            subject,
+            environment,
+            span,
+            budget,
+        )?;
+        if tag_named(module, *fallback, "False") {
+            let right = predicate_intervals(
+                context,
+                module,
+                branch.consequence,
+                subject,
+                environment,
+                span,
+                budget,
+            )?;
+            return Ok(intersection(&left, &right));
+        }
+        if tag_named(module, branch.consequence, "True") {
+            let right = predicate_intervals(
+                context,
+                module,
+                *fallback,
+                subject,
+                environment,
+                span,
+                budget,
+            )?;
+            let mut either = left;
+            either.extend(right);
+            return Ok(normalize(either));
+        }
+    }
     let (callee, arguments) = application(module, expression).ok_or_else(|| {
         unsupported(
             expression_span(module, expression),
@@ -200,6 +243,13 @@ fn predicate_intervals(
         expression_span(module, expression),
         "This call is not a recognized comparison, conjunction, disjunction, or negation.",
     ))
+}
+
+fn tag_named(module: &Module, expression: ExpressionId, expected: &str) -> bool {
+    matches!(
+        &module.arena.expressions[expression.0 as usize],
+        Expression::Tag { name, .. } if name == expected
+    )
 }
 
 fn pattern_name(module: &Module, pattern: PatternId) -> Option<&str> {

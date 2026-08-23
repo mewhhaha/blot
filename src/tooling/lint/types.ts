@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../../diagnostic.ts";
+import type { Diagnostic, DiagnosticCode } from "../../diagnostic.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import type { Rule } from "../../syntax/cursor.ts";
 
@@ -63,7 +63,7 @@ export interface LintVisitors {
 
 export interface LintRule {
   readonly name: string;
-  readonly code: string;
+  readonly code: DiagnosticCode;
   readonly severity: LintSeverity;
   create(context: LintRuleContext): LintVisitors;
 }

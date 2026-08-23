@@ -112,7 +112,7 @@ a name instead:
 ```blot
 const prelude = import "blot:prelude"
 
-let answer = prelude.Num.add 20 22
+let answer = prelude.Int.add 20 22
 
 return { .answer = answer; }
 ```
@@ -191,8 +191,8 @@ belong here:
 open import "blot:prelude"
 
 const UserId = seal ("UserId", I64)
-const Message = #Ready | #Failed Str
-const Console = @effect { .write = Str -> Unit; }
+const Message = #Ready | #Failed Text
+const Console = @effect { .write = Text -> Unit; }
 const Config = @include "./config.json" as_const_json
 ```
 
@@ -207,7 +207,7 @@ Put a `sig` directly above the binding it constrains. Signatures document a
 boundary; they are not a substitute for inference on every local:
 
 ```blot
-sig describe = Message -> Str
+sig describe = Message -> Text
 let describe = fn message => case message of
   #Ready => "ready"
   #Failed reason => reason
@@ -266,8 +266,8 @@ types, effects, and namespace-like compile-time values by convention, and keep
 the `#` on constructors:
 
 ```blot
-const RequestState = #Waiting | #Running | #Failed Str
-const Console = @effect { .write = Str -> Unit; }
+const RequestState = #Waiting | #Running | #Failed Text
+const Console = @effect { .write = Text -> Unit; }
 
 let retry_delay = 200
 let describe_state = fn state => case state of
@@ -284,7 +284,7 @@ bindings, so choose it to help the reader rather than to satisfy the parser.
 Use one structured parameter for an operation whose arguments belong together:
 
 ```blot
-let distance = fn (from, to) => Num.abs (to - from)
+let distance = fn (from, to) => Int.abs (to - from)
 
 let move = fn { .position; .velocity; } => {
   .x = position.x + velocity.x;
@@ -352,7 +352,7 @@ let names = [...names, "Edsger"]
 Use constructors for alternatives, not ad hoc tag fields:
 
 ```blot
-const Result = #Ok Int | #Error Str
+const Result = #Ok Int | #Error Text
 
 let render = fn result => case result of
   #Ok value => Text.of_int value
@@ -529,7 +529,7 @@ Use a refutable loop pattern when a constructor pattern is the filter:
 
 ```blot
 let total = 0
-for #Some value in Iter.items choices:
+for case #Some value in Iter.items choices:
   total := total + value
 return total
 ```
@@ -571,7 +571,7 @@ Create an effect once and thread it through types and handlers:
 
 ```blot
 const Console = @effect {
-  .write = Str -> Unit;
+  .write = Text -> Unit;
 }
 ```
 
@@ -597,7 +597,7 @@ Write effectful callbacks with the effect row in the signature when the boundary
 matters:
 
 ```blot
-sig report = Str -> Unit ~ { Console }
+sig report = Text -> Unit ~ { Console }
 let report = fn text => do:
   <- Console.write text
   return ()
@@ -649,36 +649,18 @@ Use `@satisfies` when a value should be checked against a structural requirement
 while remaining the same runtime value:
 
 ```blot
-const Named = { .name = Str; }
+const Named = { .name = Text; }
 let item = @satisfies value Named
 ```
 
-## Use operators for algebra and composition
+## Use the fixed operators for algebra and composition
 
-Declare an operator when the operation has a natural algebraic or pipeline
-reading:
-
-```blot
-operators {
-  infixr 55 (<++>) = Document.append;
-  infixl 20 (|>>) = Decoder.then;
-}
-```
-
-Targets must be curried so partial application remains possible. Keep the
-primitive, host call, or lower-level implementation behind that target; code in
-the rest of the module should use the operator.
-
-Create operators aggressively for genuine composition and algebra: pipelines,
-domain addition, alternatives, merging, sequencing, and set-like operations are
-good candidates. Keep a named call for an action whose arguments have different
-roles and read better with names. `account |> validate |> save` is composition;
-`transfer { .from; .to; .amount; }` is a domain command, not an excuse to invent
-punctuation.
-
-An operator declaration is file-level syntax, but its target still follows
-ordinary lexical scope. Keep the namespace named or open the record that exports
-it only where that operator vocabulary is intended to work.
+Blot deliberately has one small operator vocabulary. Use it where the reading is
+conventional: `account |> validate |> save` is composition, integer arithmetic
+uses the numeric operators, and `<>` appends text. Domain-specific operations
+stay named, such as `Document.append left right` or `Decoder.then decoder next`.
+This keeps precedence and punctuation identical in the compiler, formatter,
+editor, and every module.
 
 ## Prefer public operations to primitives
 
@@ -695,11 +677,11 @@ Keep `@` primitives at the boundary that implements those operations. The
 integer multiplication chain is deliberately:
 
 ```text
-* -> Num.mul -> @int.mul
+* -> Int.mul -> @int.mul
 ```
 
-`Num.mul` must call `@int.mul` once to bottom out. Code outside that
-implementation should normally use `*` or explicitly name `Num.mul` when partial
+`Int.mul` must call `@int.mul` once to bottom out. Code outside that
+implementation should normally use `*` or explicitly name `Int.mul` when partial
 application is the point.
 
 The same rule applies to collection operations. Prefer `Array.empty`,
@@ -710,19 +692,15 @@ or when no prelude operation can express the capability.
 Decompose and classify ordinary arrays with the public operations:
 
 ```blot
-operators {
-  infixl 55 (<>) = Array.append;
-}
-
 let result = case Array.uncons values of
   #None => []
   #Some (first, rest) => do:
     let (small, large) = partition (rest, fn value => value <= first)
-    return small <> [first] <> large
+    return Array.append (Array.append small [first]) large
 ```
 
 `partition` is one stable pass, while two filters visit and test every element
-twice. These ordinary arrays are independent contiguous values: `<>` names the
+twice. These ordinary arrays are independent contiguous values: `Array.append`
 array monoid but does not make partition and append a zero-copy split/rejoin.
 Use `Slice.split` and `Slice.join` when the algorithm must retain one owned
 backing Store and carry the recombination proof explicitly. `Array.uncons`
@@ -768,7 +746,7 @@ There is no separate type namespace or declaration form:
 
 ```blot
 const Identifier = I64
-const State = #Idle | #Running | #Failed Str
+const State = #Idle | #Running | #Failed Text
 const Pair = { .left = Int; .right = Int; }
 ```
 
@@ -777,7 +755,7 @@ Use set operations to construct and refine types:
 ```blot
 const Small = 1 | 2 | 3
 const NonZero = Int \ 0
-const Readable = { .read = Unit -> Str; }
+const Readable = { .read = Unit -> Text; }
 ```
 
 Use `struct` when you want predictable positional storage with named
@@ -945,7 +923,7 @@ just test
 ```
 
 In Helix, hover values to see their inferred signature and compact definition.
-Hover syntax and operators for documentation and active fixity. Prefer the
+Hover syntax and operators for documentation and fixed precedence. Prefer the
 language server's code action when a lint offers one; actions that require
 compiler evidence are validated before they are published.
 

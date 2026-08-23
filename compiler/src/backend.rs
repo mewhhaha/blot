@@ -4469,7 +4469,7 @@ mod tests {
     fn recursive_representation_is_private_to_runtime_hir() {
         let module = RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 4,
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
             source: "recursive-boundary-test".to_owned(),
             types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
             signatures: Vec::new(),
@@ -4489,7 +4489,7 @@ mod tests {
     fn scratch_is_private_but_has_an_internal_indirect_layout() {
         let module = RuntimeModule {
             format: "blot-runtime-hir",
-            schema_version: 4,
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
             source: "scratch-boundary-test".to_owned(),
             types: vec![
                 RuntimeType::Unit,

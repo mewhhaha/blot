@@ -120,7 +120,7 @@ function flattenConditional(
 
 function equalityBranch(branch: Branch): EqualityBranch | null {
   const call = binaryCall(branch.condition);
-  if (call === null || calleePath(call.callee)?.join(".") !== "Eq.eq") {
+  if (call === null || calleePath(call.callee)?.join(".") !== "Int.eq") {
     return null;
   }
   const leftPattern = isCasePattern(call.left);

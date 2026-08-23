@@ -6,13 +6,23 @@
 //
 // The table is needed only here, never by the parser, so a built-in default set
 // costs nothing structurally. Without it every file would have to restate the
-// fixity of `+` before it could use it. A module's `operators` header extends
-// the defaults and may override any entry.
+// fixity of `+` before it could use it. The table is fixed language data.
 
-import type { Associativity, Expr, Fixity, Span } from "./ast.ts";
+import type { Expr, Span } from "./ast.ts";
 import { fail } from "../diagnostic.ts";
+import { generatedFixities } from "./fixities.generated.ts";
 
 const NOWHERE: Span = { start: 0, end: 0 };
+
+export type Associativity = "left" | "right" | "none" | "prefix";
+
+export interface Fixity {
+  readonly operator: string;
+  readonly associativity: Associativity;
+  readonly precedence: number;
+  readonly target: readonly string[];
+  readonly span: Span;
+}
 
 function entry(
   operator: string,
@@ -22,7 +32,13 @@ function entry(
 ): Fixity {
   // An intrinsic is one token, dots included; only a qualified name splits.
   const path = target.startsWith("@") ? [target] : target.split(".");
-  return { operator, associativity, precedence, target: path, span: NOWHERE };
+  return {
+    operator,
+    associativity,
+    precedence,
+    target: path,
+    span: NOWHERE,
+  };
 }
 
 /**
@@ -30,60 +46,14 @@ function entry(
  * is built into the compiler; only the precedence is.
  */
 export const DEFAULT_FIXITIES: readonly Fixity[] = [
-  // Loosest first. The levels are grouped by what an operator *does*, and two
-  // groups only share a level when mixing them without parentheses is
-  // meaningless anyway.
-  entry("$", "right", 10, "Fn.apply"),
-  entry("|>", "left", 20, "Fn.pipe"),
-
-  // Looser than the arrow it annotates, so `A -> B ~ { Console }` is
-  // `(A -> B) ~ { Console }`: the row is what the whole function performs, not
-  // part of `B`. Left-associative, so a curried chain fills its arrows from the
-  // inside out — the order the printer writes them in.
-  entry("~", "left", 21, "@type.performs"),
-
-  // Distinct spellings from `|` and `&`, which are set algebra. Both are
-  // ordinary curried functions, so both arguments are evaluated — `if` is the
-  // short-circuiting form.
-  entry("||", "right", 22, "Logic.or"),
-  entry("&&", "right", 24, "Logic.and"),
-
-  // An arrow is looser than everything that builds the types on either side of
-  // it, so `A | B -> C` is `(A | B) -> C` — the reading the notation has
-  // everywhere else.
-  entry("->", "right", 25, "@type.arrow"),
-
-  entry("==", "none", 30, "Eq.eq"),
-  entry("!=", "none", 30, "Eq.ne"),
-  entry("<", "none", 30, "Ord.lt"),
-  entry("<=", "none", 30, "Ord.le"),
-  entry(">", "none", 30, "Ord.gt"),
-  entry(">=", "none", 30, "Ord.ge"),
-
-  // Set algebra mirrors arithmetic: intersection is the product, union and
-  // difference are the sum and the remainder, and the product binds tighter.
-  // `A | B & C` is `A | (B & C)`.
-  entry("|", "left", 40, "Type.union"),
-  entry("\\", "left", 40, "Type.diff"),
-  entry("&", "left", 45, "Type.intersect"),
-
-  entry("<+", "left", 50, "attach"),
-
-  // Above comparison, so `a <> b == c` compares the joined value; below
-  // arithmetic, so `text <> x + y` appends the sum.
-  entry("<>", "right", 55, "Text.append"),
-
-  entry("+", "left", 60, "Num.add"),
-  entry("-", "left", 60, "Num.sub"),
-  entry("*", "left", 70, "Num.mul"),
-  entry("/", "left", 70, "Num.div"),
-  entry("%", "left", 70, "Num.rem"),
-
-  entry("-", "prefix", 90, "Num.negate"),
-  entry("~", "prefix", 90, "@type.defer"),
-  entry("!", "prefix", 90, "@linear.own"),
-  entry("?", "prefix", 90, "@linear.maybe"),
-  entry("&", "prefix", 90, "@linear.borrow"),
+  ...generatedFixities.map((fixity) => {
+    return entry(
+      fixity.operator,
+      fixity.associativity,
+      fixity.precedence,
+      fixity.target,
+    );
+  }),
 ];
 
 export interface FixityTable {
@@ -91,11 +61,11 @@ export interface FixityTable {
   prefix(operator: string): Fixity | undefined;
 }
 
-export function buildFixityTable(declared: readonly Fixity[]): FixityTable {
+export function buildFixityTable(): FixityTable {
   const infix = new Map<string, Fixity>();
   const prefix = new Map<string, Fixity>();
 
-  for (const fixity of [...DEFAULT_FIXITIES, ...declared]) {
+  for (const fixity of DEFAULT_FIXITIES) {
     if (fixity.associativity === "prefix") {
       prefix.set(fixity.operator, fixity);
     } else {
@@ -109,7 +79,7 @@ export function buildFixityTable(declared: readonly Fixity[]): FixityTable {
   };
 }
 
-/** Turns a fixity target such as `Num.add` or `@type.union` into a callee. */
+/** Turns a fixity target such as `Int.add` or `@type.union` into a callee. */
 export function targetExpr(fixity: Fixity, span: Span): Expr {
   const [root, ...rest] = fixity.target;
   let result: Expr = root.startsWith("@")
@@ -130,9 +100,9 @@ export interface ChainStep {
 /**
  * Operator-precedence fold over the flat chain.
  *
- * Infix application is curried: `a + b` becomes `Num.add a b`, not
- * `Num.add (a, b)`. Currying is what makes `Num.add 2` a usable value, which is
- * what makes `20 |> Num.add 2` work at all, and it is the reading a language
+ * Infix application is curried: `a + b` becomes `Int.add a b`, not
+ * `Int.add (a, b)`. Currying is what makes `Int.add 2` a usable value, which is
+ * what makes `20 |> Int.add 2` work at all, and it is the reading a language
  * with one parameter per function should have.
  */
 export function foldChain(
@@ -147,7 +117,7 @@ export function foldChain(
     if (fixity === undefined) {
       fail(
         "BLOT_UNKNOWN_OPERATOR",
-        `No fixity is declared for the infix operator \`${step.operator}\`. Declare one in the module's \`operators\` header.`,
+        `\`${step.operator}\` is not in Blot's fixed operator vocabulary. Use a named function call.`,
         step.span,
       );
     }

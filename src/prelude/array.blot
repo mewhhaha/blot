@@ -1,0 +1,3 @@
+const prelude = import "blot:prelude"
+
+return prelude.Array

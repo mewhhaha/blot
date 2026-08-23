@@ -12,7 +12,7 @@
 
 open import "blot:prelude"
 
-sig name = 1 | 2 | 3 -> (1 | 2 -> Str)
+sig name = 1 | 2 | 3 -> (1 | 2 -> Text)
 let name = fn n => fn m => do:
   if n == m:
     return "same"

@@ -1,19 +1,19 @@
 // The prelude.
 //
-// Nothing here is built into the compiler. `Bool`, `Ord`, `+`, `struct`, and
+// Nothing here is built into the compiler. `Bool`, `Int`, `+`, `struct`, and
 // `fold` are ordinary blot declarations over the `@` primitives, which is what
 // "few primitives" has to mean if it means anything.
 //
 // Two calling conventions, and the line between them is deliberate:
 //
 //   * anything an operator dispatches to is curried, because sections are the
-//     point of an operator — `Num.add 2` is what makes `20 |> Num.add 2` work;
+//     point of an operator — `Int.add 2` is what makes `20 |> Int.add 2` work;
 //   * every other multi-argument function takes one shape, because naming beats
 //     position and a tuple is still one parameter.
 
 // --- types ------------------------------------------------------------------
 //
-// `|` names `Type.union` exactly the way `+` names `Num.add`: the operator
+// `|` names `Type.union` exactly the way `+` names `Int.add`: the operator
 // points at prelude source, and the prelude decides which primitive answers.
 // Nothing about `|` is privileged. This initial namespace has to precede the
 // declarations that use it; the complete namespace is assembled after its
@@ -22,9 +22,9 @@
 
 const Type =
   {
-    .union = fn left => fn right => @type.union left right;
-    .intersect = fn left => fn right => @type.intersect left right;
-    .diff = fn left => fn right => @type.diff left right;
+    .union = @type.union;
+    .intersect = @type.intersect;
+    .diff = @type.diff;
   }
 
 // --- functions --------------------------------------------------------------
@@ -79,17 +79,14 @@ const not = fn value => case value of
   #True => False
   #False => True
 
-// Curried, because they are the targets of `&&` and `||`.
-//
-// Both arguments are evaluated: an operator is an ordinary function here, and
-// blot has no laziness for one to exploit. That is the honest cost of "nothing
-// is built in" — `if` is the short-circuiting form, and `a && perform ()` will
-// perform whatever `a` is.
-const and = fn left => fn right => case left of
+// Ordinary deferred functions implement boolean combination. The operators are
+// ordinary calls to these bindings; the function decides whether to demand its
+// second argument.
+const and = fn left => fn ~right => case left of
   #False => False
   #True => right
 
-const or = fn left => fn right => case left of
+const or = fn left => fn ~right => case left of
   #True => True
   #False => right
 
@@ -110,7 +107,7 @@ const expect = fn (condition, message) => case condition of
 
 // --- ordering ---------------------------------------------------------------
 //
-// One comparison primitive yields the whole of `Eq` and `Ord`. Every member
+// One comparison primitive yields every integer ordering operation. Each member
 // here is curried: they are all operator targets.
 
 const Ordering = #Less | #Equal | #Greater
@@ -134,9 +131,9 @@ const is_greater = fn o => case o of
   #Less => False
   #Equal => False
 
-const Ord =
+const IntOrder =
   {
-    .cmp = fn left => fn right => @int.cmp left right;
+    .cmp = @int.cmp;
     .eq = fn left => fn right => is_equal (@int.cmp left right);
     .ne = fn left => fn right => not (is_equal (@int.cmp left right));
     .lt = fn left => fn right => is_less (@int.cmp left right);
@@ -157,18 +154,16 @@ const Ord =
     ;
   }
 
-const Eq = { .eq = Ord.eq; .ne = Ord.ne; }
-
 // --- numbers ----------------------------------------------------------------
 
-const Num =
+const IntArithmetic =
   {
-    .add = fn left => fn right => @int.add left right;
-    .sub = fn left => fn right => @int.sub left right;
-    .mul = fn left => fn right => @int.mul left right;
-    .div = fn left => fn right => @int.div left right;
-    .rem = fn left => fn right => @int.rem left right;
-    .negate = fn value => @int.neg value;
+    .add = @int.add;
+    .sub = @int.sub;
+    .mul = @int.mul;
+    .div = @int.div;
+    .rem = @int.rem;
+    .negate = @int.neg;
     .abs = fn value => do:
       if is_less (@int.cmp value 0):
         return @int.neg value
@@ -178,6 +173,10 @@ const Num =
     .succ = fn value => @int.add value 1;
     .pred = fn value => @int.sub value 1;
   }
+
+// The fixed operator table resolves against this early namespace. The complete
+// type value is attached later, after the ordinary `attach` helper exists.
+const Int = { ...IntOrder; ...IntArithmetic; }
 
 // --- text -------------------------------------------------------------------
 
@@ -207,15 +206,17 @@ const Filterable = fn (collection, value) => {
   .filter = (collection, (value -> Bool)) -> collection;
 }
 
-const Text =
+const TextOperations =
   {
     .empty = "";
-    .append = fn left => fn right => @text.concat left right;
-    .length = fn value => @text.len value;
-    .cmp = fn left => fn right => @text.cmp left right;
-    .contains = fn text => fn query => @text.contains text query;
-    .of_int = fn value => @text.of_int value;
+    .append = @text.concat;
+    .length = @text.len;
+    .cmp = @text.cmp;
+    .contains = @text.contains;
+    .of_int = @text.of_int;
   }
+
+const Text = TextOperations
 
 const as_json = @json.parse #Widen
 const as_const_json = @json.parse #Exact
@@ -644,8 +645,8 @@ const array_merge_pass =
           Scratch.recycle current
         )
       else:
-        let middle = Ord.min (start + width) length
-        let stop = Ord.min (middle + width) length
+        let middle = IntOrder.min (start + width) length
+        let stop = IntOrder.min (middle + width) length
         let (current, output) =
           array_merge_run (
             current,
@@ -817,8 +818,8 @@ const array_radix_cache = fn (values, key) => do:
       let entry = array_expect_get ((&entries), index)
       return bounds (
         index + 1,
-        Ord.min minimum entry.1,
-        Ord.max maximum entry.1
+        IntOrder.min minimum entry.1,
+        IntOrder.max maximum entry.1
       )
   let (minimum, maximum) = bounds (1, first_key, first_key)
   return (entries, minimum, maximum, Scratch.recycle values)
@@ -1372,27 +1373,27 @@ const upto = fn (low, high) => upto_build (low, high, Array.empty)
 
 // --- floats -----------------------------------------------------------------
 //
-// A separate namespace rather than an overload of `Num`: an operator resolves
+// Attached operations do not imply overload resolution: an operator resolves
 // to one binding by name, and a `+` that worked on both would have to dispatch
 // on a value's type at run time — the typeclass machinery this language does
-// not have. `Float.add` is the addition, and a module that wants `+.` or `+`
-// to mean it says so in its own `operators` header.
+// not have. `F64.add` is the floating-point addition; integer operators remain
+// fixed to `Int` and other domains use named calls.
 
-const Float =
+const F64Operations =
   {
-    .add = fn left => fn right => @float.add left right;
-    .sub = fn left => fn right => @float.sub left right;
-    .mul = fn left => fn right => @float.mul left right;
-    .div = fn left => fn right => @float.div left right;
-    .rem = fn left => fn right => @float.rem left right;
-    .negate = fn value => @float.neg value;
-    // No `.eq`. Exact comparison is `is_equal (Float.cmp a b)`, which is the
+    .add = @float.add;
+    .sub = @float.sub;
+    .mul = @float.mul;
+    .div = @float.div;
+    .rem = @float.rem;
+    .negate = @float.neg;
+    // No `.eq`. Exact comparison is `is_equal (F64.cmp a b)`, which is the
     // same test and refuses NaN instead of quietly answering `#False` for it —
     // and a float equality that looks like the integer one invites the
     // comparison that `0.1 + 0.2` is famous for failing.
-    .cmp = fn left => fn right => @float.cmp left right;
-    .of_int = fn value => @float.of_int value;
-    .truncate = fn value => @int.of_float value;
+    .cmp = @float.cmp;
+    .of_int = @float.of_int;
+    .truncate = @int.of_float;
     .abs = fn value => do:
       if is_less (@float.cmp value 0.0):
         return @float.neg value
@@ -1400,10 +1401,10 @@ const Float =
         return value
     ;
 
-    // How a program asks before comparing. It cannot be written over `Float.cmp`,
+    // How a program asks before comparing. It cannot be written over `F64.cmp`,
     // because comparing a NaN is the thing that refuses — which is exactly why
     // this one is a primitive and float equality is not.
-    .is_nan = fn value => @float.is_nan value;
+    .is_nan = @float.is_nan;
 
     // Newton's method, seeded at the value. Core has no f64 square root, so a
     // `@float.sqrt` primitive would have been open-coded at lowering anyway —
@@ -1430,18 +1431,18 @@ const Float =
 // precision a step the program takes. It is also the lane type a four-wide
 // vector wants, which is the other reason to have it at all.
 
-const Float32 =
+const F32Operations =
   {
-    .add = fn left => fn right => @f32.add left right;
-    .sub = fn left => fn right => @f32.sub left right;
-    .mul = fn left => fn right => @f32.mul left right;
-    .div = fn left => fn right => @f32.div left right;
-    .negate = fn value => @f32.neg value;
-    .cmp = fn left => fn right => @f32.cmp left right;
-    .is_nan = fn value => @f32.is_nan value;
-    .of_float = fn value => @f32.of_float value;
-    .of_int = fn value => @f32.of_int value;
-    .widen = fn value => @float.of_f32 value;
+    .add = @f32.add;
+    .sub = @f32.sub;
+    .mul = @f32.mul;
+    .div = @f32.div;
+    .negate = @f32.neg;
+    .cmp = @f32.cmp;
+    .is_nan = @f32.is_nan;
+    .of_float = @f32.of_float;
+    .of_int = @f32.of_int;
+    .widen = @float.of_f32;
     .truncate = fn value => @int.of_float (@float.of_f32 value);
     .abs = fn value => do:
       if is_less (@f32.cmp value (@f32.of_float 0.0)):
@@ -1456,7 +1457,7 @@ const Float32 =
       return @f32.of_float
         (@float.rem (@float.of_f32 left) (@float.of_f32 right))
     ;
-    .sqrt = fn value => @f32.sqrt value;
+    .sqrt = @f32.sqrt;
   }
 
 // --- four lanes -------------------------------------------------------------
@@ -1470,77 +1471,79 @@ const Float32 =
 // way to choose between them at run time. That is also why there is no `.get`
 // taking an index.
 
-const Vec4 =
+sig f32x4_dot = @type.f32x4 -> @type.f32x4 -> @type.float32
+const f32x4_dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right)
+
+sig f32x4_scale = (@type.f32x4, @type.float32) -> @type.f32x4
+const f32x4_scale = fn (value, factor) => do:
+  return @f32x4.mul value (@f32x4.splat factor)
+
+const F32x4Operations =
   {
     .of = fn (x, y, z, w) => @f32x4.of x y z w;
-    .splat = fn value => @f32x4.splat value;
-    .add = fn left => fn right => @f32x4.add left right;
-    .sub = fn left => fn right => @f32x4.sub left right;
-    .mul = fn left => fn right => @f32x4.mul left right;
-    .div = fn left => fn right => @f32x4.div left right;
-    .equal = fn left => fn right => @f32x4.eq left right;
-    .less = fn left => fn right => @f32x4.less left right;
-    .select = fn mask => fn when_true => fn when_false => do:
-      return @f32x4.select mask when_true when_false
-    ;
+    .splat = @f32x4.splat;
+    .add = @f32x4.add;
+    .sub = @f32x4.sub;
+    .mul = @f32x4.mul;
+    .div = @f32x4.div;
+    .equal = @f32x4.eq;
+    .less = @f32x4.less;
+    .select = @f32x4.select;
     .shuffle = fn (left, right, lane0, lane1, lane2, lane3) => do:
       return @f32x4.shuffle left right lane0 lane1 lane2 lane3
     ;
     .swizzle = fn (value, lane0, lane1, lane2, lane3) => do:
       return @f32x4.shuffle value value lane0 lane1 lane2 lane3
     ;
-    .x = fn value => @f32x4.x value;
-    .y = fn value => @f32x4.y value;
-    .z = fn value => @f32x4.z value;
-    .w = fn value => @f32x4.w value;
+    .x = @f32x4.x;
+    .y = @f32x4.y;
+    .z = @f32x4.z;
+    .w = @f32x4.w;
 
     // A dot product is a multiply and three adds of the lanes. Written here
     // rather than as a primitive because it is writable here.
     // One instruction, where four extracts and three adds would be seven.
-    .sum = fn value => @f32x4.sum value;
+    .sum = @f32x4.sum;
 
-    .dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right);
-
-    .scale = fn (value, factor) => @f32x4.mul value (@f32x4.splat factor);
+    .dot = f32x4_dot;
+    .scale = f32x4_scale;
   }
 
-const Int32x4 =
+const I32x4Operations =
   {
     .of = fn (x, y, z, w) => @i32x4.of x y z w;
     .of_wrapping = fn (x, y, z, w) => @i32x4.of_wrapping x y z w;
-    .splat = fn value => @i32x4.splat value;
-    .splat_wrapping = fn value => @i32x4.splat_wrapping value;
-    .add = fn left => fn right => @i32x4.add left right;
-    .sub = fn left => fn right => @i32x4.sub left right;
-    .mul = fn left => fn right => @i32x4.mul left right;
-    .bit_and = fn left => fn right => @i32x4.and left right;
-    .bit_or = fn left => fn right => @i32x4.or left right;
-    .bit_xor = fn left => fn right => @i32x4.xor left right;
-    .bit_not = fn value => @i32x4.not value;
+    .splat = @i32x4.splat;
+    .splat_wrapping = @i32x4.splat_wrapping;
+    .add = @i32x4.add;
+    .sub = @i32x4.sub;
+    .mul = @i32x4.mul;
+    .bit_and = @i32x4.and;
+    .bit_or = @i32x4.or;
+    .bit_xor = @i32x4.xor;
+    .bit_not = @i32x4.not;
     .shift_left = fn value => fn amount => @i32x4.shl value amount;
     .shift_right_signed = fn value => fn amount => @i32x4.shr_s value amount;
     .shift_right_unsigned = fn value => fn amount => @i32x4.shr_u value amount;
-    .equal = fn left => fn right => @i32x4.eq left right;
-    .not_equal = fn left => fn right => @i32x4.ne left right;
-    .less_signed = fn left => fn right => @i32x4.lt_s left right;
-    .less_unsigned = fn left => fn right => @i32x4.lt_u left right;
-    .greater_signed = fn left => fn right => @i32x4.gt_s left right;
-    .greater_unsigned = fn left => fn right => @i32x4.gt_u left right;
-    .less_or_equal_signed = fn left => fn right => @i32x4.le_s left right;
-    .less_or_equal_unsigned = fn left => fn right => @i32x4.le_u left right;
-    .greater_or_equal_signed = fn left => fn right => @i32x4.ge_s left right;
-    .greater_or_equal_unsigned = fn left => fn right => @i32x4.ge_u left right;
-    .min_signed = fn left => fn right => @i32x4.min_s left right;
-    .min_unsigned = fn left => fn right => @i32x4.min_u left right;
-    .max_signed = fn left => fn right => @i32x4.max_s left right;
-    .max_unsigned = fn left => fn right => @i32x4.max_u left right;
-    .select = fn mask => fn when_true => fn when_false => do:
-      return @i32x4.select mask when_true when_false
-    ;
-    .x = fn value => @i32x4.lane0 value;
-    .y = fn value => @i32x4.lane1 value;
-    .z = fn value => @i32x4.lane2 value;
-    .w = fn value => @i32x4.lane3 value;
+    .equal = @i32x4.eq;
+    .not_equal = @i32x4.ne;
+    .less_signed = @i32x4.lt_s;
+    .less_unsigned = @i32x4.lt_u;
+    .greater_signed = @i32x4.gt_s;
+    .greater_unsigned = @i32x4.gt_u;
+    .less_or_equal_signed = @i32x4.le_s;
+    .less_or_equal_unsigned = @i32x4.le_u;
+    .greater_or_equal_signed = @i32x4.ge_s;
+    .greater_or_equal_unsigned = @i32x4.ge_u;
+    .min_signed = @i32x4.min_s;
+    .min_unsigned = @i32x4.min_u;
+    .max_signed = @i32x4.max_s;
+    .max_unsigned = @i32x4.max_u;
+    .select = @i32x4.select;
+    .x = @i32x4.lane0;
+    .y = @i32x4.lane1;
+    .z = @i32x4.lane2;
+    .w = @i32x4.lane3;
     .lane = @i32x4.lane;
     .with_x = fn value => fn lane => @i32x4.with_lane0 value lane;
     .with_y = fn value => fn lane => @i32x4.with_lane1 value lane;
@@ -1563,72 +1566,68 @@ const Int32x4 =
     .any = fn mask => is_equal (@int.cmp (@i32x4.mask_any mask) 1);
   }
 
-const Int16x8 =
+const I16x8Operations =
   {
-    .splat = fn value => @i16x8.splat value;
-    .splat_wrapping = fn value => @i16x8.splat_wrapping value;
-    .add = fn left => fn right => @i16x8.add left right;
-    .sub = fn left => fn right => @i16x8.sub left right;
-    .mul = fn left => fn right => @i16x8.mul left right;
-    .bit_and = fn left => fn right => @i16x8.and left right;
-    .bit_or = fn left => fn right => @i16x8.or left right;
-    .bit_xor = fn left => fn right => @i16x8.xor left right;
-    .bit_not = fn value => @i16x8.not value;
+    .splat = @i16x8.splat;
+    .splat_wrapping = @i16x8.splat_wrapping;
+    .add = @i16x8.add;
+    .sub = @i16x8.sub;
+    .mul = @i16x8.mul;
+    .bit_and = @i16x8.and;
+    .bit_or = @i16x8.or;
+    .bit_xor = @i16x8.xor;
+    .bit_not = @i16x8.not;
     .shift_left = fn value => fn amount => @i16x8.shl value amount;
     .shift_right_signed = fn value => fn amount => @i16x8.shr_s value amount;
     .shift_right_unsigned = fn value => fn amount => @i16x8.shr_u value amount;
-    .equal = fn left => fn right => @i16x8.eq left right;
-    .not_equal = fn left => fn right => @i16x8.ne left right;
-    .less_signed = fn left => fn right => @i16x8.lt_s left right;
-    .less_unsigned = fn left => fn right => @i16x8.lt_u left right;
-    .greater_signed = fn left => fn right => @i16x8.gt_s left right;
-    .greater_unsigned = fn left => fn right => @i16x8.gt_u left right;
-    .less_or_equal_signed = fn left => fn right => @i16x8.le_s left right;
-    .less_or_equal_unsigned = fn left => fn right => @i16x8.le_u left right;
-    .greater_or_equal_signed = fn left => fn right => @i16x8.ge_s left right;
-    .greater_or_equal_unsigned = fn left => fn right => @i16x8.ge_u left right;
-    .min_signed = fn left => fn right => @i16x8.min_s left right;
-    .min_unsigned = fn left => fn right => @i16x8.min_u left right;
-    .max_signed = fn left => fn right => @i16x8.max_s left right;
-    .max_unsigned = fn left => fn right => @i16x8.max_u left right;
-    .select = fn mask => fn when_true => fn when_false => do:
-      return @i16x8.select mask when_true when_false
-    ;
+    .equal = @i16x8.eq;
+    .not_equal = @i16x8.ne;
+    .less_signed = @i16x8.lt_s;
+    .less_unsigned = @i16x8.lt_u;
+    .greater_signed = @i16x8.gt_s;
+    .greater_unsigned = @i16x8.gt_u;
+    .less_or_equal_signed = @i16x8.le_s;
+    .less_or_equal_unsigned = @i16x8.le_u;
+    .greater_or_equal_signed = @i16x8.ge_s;
+    .greater_or_equal_unsigned = @i16x8.ge_u;
+    .min_signed = @i16x8.min_s;
+    .min_unsigned = @i16x8.min_u;
+    .max_signed = @i16x8.max_s;
+    .max_unsigned = @i16x8.max_u;
+    .select = @i16x8.select;
     .mask_bits = fn mask => @i16x8.mask_bitmask mask;
     .all = fn mask => is_equal (@int.cmp (@i16x8.mask_all mask) 1);
     .any = fn mask => is_equal (@int.cmp (@i16x8.mask_any mask) 1);
   }
 
-const Int8x16 =
+const I8x16Operations =
   {
-    .splat = fn value => @i8x16.splat value;
-    .splat_wrapping = fn value => @i8x16.splat_wrapping value;
-    .add = fn left => fn right => @i8x16.add left right;
-    .sub = fn left => fn right => @i8x16.sub left right;
-    .bit_and = fn left => fn right => @i8x16.and left right;
-    .bit_or = fn left => fn right => @i8x16.or left right;
-    .bit_xor = fn left => fn right => @i8x16.xor left right;
-    .bit_not = fn value => @i8x16.not value;
+    .splat = @i8x16.splat;
+    .splat_wrapping = @i8x16.splat_wrapping;
+    .add = @i8x16.add;
+    .sub = @i8x16.sub;
+    .bit_and = @i8x16.and;
+    .bit_or = @i8x16.or;
+    .bit_xor = @i8x16.xor;
+    .bit_not = @i8x16.not;
     .shift_left = fn value => fn amount => @i8x16.shl value amount;
     .shift_right_signed = fn value => fn amount => @i8x16.shr_s value amount;
     .shift_right_unsigned = fn value => fn amount => @i8x16.shr_u value amount;
-    .equal = fn left => fn right => @i8x16.eq left right;
-    .not_equal = fn left => fn right => @i8x16.ne left right;
-    .less_signed = fn left => fn right => @i8x16.lt_s left right;
-    .less_unsigned = fn left => fn right => @i8x16.lt_u left right;
-    .greater_signed = fn left => fn right => @i8x16.gt_s left right;
-    .greater_unsigned = fn left => fn right => @i8x16.gt_u left right;
-    .less_or_equal_signed = fn left => fn right => @i8x16.le_s left right;
-    .less_or_equal_unsigned = fn left => fn right => @i8x16.le_u left right;
-    .greater_or_equal_signed = fn left => fn right => @i8x16.ge_s left right;
-    .greater_or_equal_unsigned = fn left => fn right => @i8x16.ge_u left right;
-    .min_signed = fn left => fn right => @i8x16.min_s left right;
-    .min_unsigned = fn left => fn right => @i8x16.min_u left right;
-    .max_signed = fn left => fn right => @i8x16.max_s left right;
-    .max_unsigned = fn left => fn right => @i8x16.max_u left right;
-    .select = fn mask => fn when_true => fn when_false => do:
-      return @i8x16.select mask when_true when_false
-    ;
+    .equal = @i8x16.eq;
+    .not_equal = @i8x16.ne;
+    .less_signed = @i8x16.lt_s;
+    .less_unsigned = @i8x16.lt_u;
+    .greater_signed = @i8x16.gt_s;
+    .greater_unsigned = @i8x16.gt_u;
+    .less_or_equal_signed = @i8x16.le_s;
+    .less_or_equal_unsigned = @i8x16.le_u;
+    .greater_or_equal_signed = @i8x16.ge_s;
+    .greater_or_equal_unsigned = @i8x16.ge_u;
+    .min_signed = @i8x16.min_s;
+    .min_unsigned = @i8x16.min_u;
+    .max_signed = @i8x16.max_s;
+    .max_unsigned = @i8x16.max_u;
+    .select = @i8x16.select;
     .mask_bits = fn mask => @i8x16.mask_bitmask mask;
     .all = fn mask => is_equal (@int.cmp (@i8x16.mask_all mask) 1);
     .any = fn mask => is_equal (@int.cmp (@i8x16.mask_any mask) 1);
@@ -2140,18 +2139,18 @@ const rec pow2 =
 // The arithmetic domains. Integer operations return signed-i64 `Int` without
 // proving a narrower storage width, so a `sig` narrowing to `I32` is a real
 // obligation rather than a formality.
-const Int = @type.int
-const Str = @type.text
+const Int = attach (attach @type.int IntOrder) IntArithmetic
+const Text = attach @type.text TextOperations
 
-const F64 = @type.float
-const F32 = @type.float32
-const F32x4 = @type.f32x4
+const F64 = attach @type.float F64Operations
+const F32 = attach @type.float32 F32Operations
+const F32x4 = attach @type.f32x4 F32x4Operations
 const F32x4Mask = @type.f32x4_mask
-const I32x4 = @type.i32x4
+const I32x4 = attach @type.i32x4 I32x4Operations
 const I32x4Mask = @type.i32x4_mask
-const I16x8 = @type.i16x8
+const I16x8 = attach @type.i16x8 I16x8Operations
 const I16x8Mask = @type.i16x8_mask
-const I8x16 = @type.i8x16
+const I8x16 = attach @type.i8x16 I8x16Operations
 const I8x16Mask = @type.i8x16_mask
 const likely = fn condition => @branch.likely condition
 const unlikely = fn condition => @branch.unlikely condition
@@ -2268,7 +2267,7 @@ const below_high = fn (value, high) => case reflect high of
 // A literal type is a singleton, so only the same literal refines it.
 const refines_literal = fn (narrow, value) => case reflect narrow of
   #Int v => case reflect value of
-    #Int w => Ord.eq v w
+    #Int w => Int.eq v w
     _ => False
 
   #Text v => case reflect value of
@@ -2344,7 +2343,7 @@ const rec refines =
       _ => False
 
     #Array wide_elements => case reflect narrow of
-      #Array narrow_elements => case Ord.eq (@array.len narrow_elements) (@array.len wide_elements) of
+      #Array narrow_elements => case Int.eq (@array.len narrow_elements) (@array.len wide_elements) of
         #True => every (
           upto (0, @int.sub (@array.len wide_elements) 1),
           fn index => case (
@@ -2366,7 +2365,7 @@ const rec refines =
       // The calling convention is part of the arrow: a strict function does not
       // refine a deferred one, because the caller decides whether the argument
       // runs at all.
-      #Arrow n => same_demand (n.deferred, w.deferred) && refines (w.domain, n.domain) && refines (n.codomain, w.codomain) && Ord.eq (@array.len n.effects) 0
+      #Arrow n => same_demand (n.deferred, w.deferred) && refines (w.domain, n.domain) && refines (n.codomain, w.codomain) && Int.eq (@array.len n.effects) 0
       _ => False
 
     #Tag w => case reflect narrow of
@@ -2474,7 +2473,7 @@ const Reflect =
 // lattice.
 //
 // The storage is a tuple rather than an array because a tuple keeps one type
-// per slot. `[I32, Str]` collapses to "an array of int-or-text" the moment
+// per slot. `[I32, Text]` collapses to "an array of int-or-text" the moment
 // inference looks at it, and storage that is imprecise is not predictable
 // storage.
 //
@@ -2565,7 +2564,7 @@ const aligned = fn (shape, order, width_of) => do:
   for name in array_items (@array.copy (&order)):
     let width = width_of (@shape.get shape name)
     let slack = @int.rem offset width
-    let pad = case Ord.eq slack 0 of
+    let pad = case Int.eq slack 0 of
       #True => 0
       #False => @int.sub width slack
     let start = @int.add offset pad
@@ -2618,7 +2617,7 @@ const packed = fn shape => do:
 // two-slot tuple accepted by the persistent Map representation.
 const ordered_text_map_entry_type =
   fn value => do:
-    let entry = struct { .key = Str; .value = value; }
+    let entry = struct { .key = Text; .value = value; }
     return @type.attach entry "ordered_text_map_entry" ()
 
 const ordered_text_map_type =
@@ -2670,7 +2669,7 @@ sig ordered_text_map_lower_bound_from =
   @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
-      Str,
+      Text,
       Int,
       Int
     ) -> Int
@@ -2703,7 +2702,7 @@ sig ordered_text_map_lower_bound =
   @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
-      Str
+      Text
     ) -> Int
   )
 const ordered_text_map_lower_bound = fn (&entries, key) => do:
@@ -2719,7 +2718,7 @@ sig ordered_text_map_get =
   @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
-      Str
+      Text
     ) -> (#Some V | #None)
   )
 const ordered_text_map_get = fn (&entries, key) => do:
@@ -2736,7 +2735,7 @@ sig ordered_text_map_replace =
   @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
-      Str,
+      Text,
       V
     ) -> (
       #MapReplaced (V, @region.type (ordered_text_map_entry_type V)) |
@@ -2759,7 +2758,7 @@ sig ordered_text_map_split_before =
   @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
-      Str
+      Text
     ) -> (#Split (
         @region.type (ordered_text_map_entry_type V),
         @region.type (ordered_text_map_entry_type V),
@@ -2831,15 +2830,6 @@ return {
   .is_equal = is_equal;
   .is_less = is_less;
   .is_greater = is_greater;
-  .Ord = Ord;
-  .Eq = Eq;
-  .Num = Num;
-  .Float = Float;
-  .Float32 = Float32;
-  .Vec4 = Vec4;
-  .Int32x4 = Int32x4;
-  .Int16x8 = Int16x8;
-  .Int8x16 = Int8x16;
   .likely = likely;
   .unlikely = unlikely;
   .Text = Text;
@@ -2938,6 +2928,5 @@ return {
   .U64 = U64;
   .Nat = Nat;
   .Int = Int;
-  .Str = Str;
   .Unit = Unit;
 }

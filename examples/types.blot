@@ -16,13 +16,13 @@ const Small = 1 | 2 | 3 | #Woop | "hello"
 // Set algebra is by containment, not by equality: a type is a set, so the
 // question is what it *contains*. Removing a point from an integer range splits
 // it, which is exact because integers are discrete. Text is dense — there is no
-// least string above `"a"` — so `Str \\ "a"` is refused rather than approximated.
+// least string above `"a"` — so `Text \\ "a"` is refused rather than approximated.
 const NonZero = Int \ 0
 const JustOne = Int & 1
 
 // Set algebra over unions. `|` and `\` are `Type.union` and `Type.diff` — no
 // more built in than `+` is.
-const Value = I32 | Str
+const Value = I32 | Text
 const Verb = Method \ "PUT"
 const Digit = range (0, 9)
 
@@ -45,7 +45,7 @@ const BoxedPair = Compose (Boxed, fn a => Pair (a, a))
 const Record =
   struct {
     .code = I32;
-    .label = Str;
+    .label = Text;
   }
 
 // Derivation takes the field names, not the struct. A struct's namespace is
@@ -76,7 +76,7 @@ return {
   .centimeter = Centimeter;
   .opened = @type.open Centimeter;
 
-  .pair = Pair (I32, Str);
+  .pair = Pair (I32, Text);
   .boxed_pair = BoxedPair U8;
 
   .record_fields = Record.fields;

@@ -148,9 +148,7 @@ impl CompilerSession {
         }
 
         let retained_bindings = previous.as_ref().and_then(|loaded| {
-            if loaded.module.parameter != module.parameter
-                || loaded.module.fixities != module.fixities
-            {
+            if loaded.module.parameter != module.parameter {
                 return None;
             }
             let unchanged_declarations =
@@ -615,6 +613,7 @@ fn tool_grants() -> Value {
     let operations = OrderedFields::from_iter([(
         "write".to_owned(),
         Value::Arrow {
+            deferred: false,
             domain: Box::new(Value::Unbounded),
             codomain: Box::new(Value::Unit),
             effects: Vec::new(),
@@ -794,6 +793,7 @@ fn json_value(value: &Value) -> serde_json::Value {
         }),
         Value::Unbounded => serde_json::json!({ "tag": "unbounded" }),
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
@@ -801,6 +801,7 @@ fn json_value(value: &Value) -> serde_json::Value {
         } => {
             let mut value = serde_json::json!({
                 "tag": "arrow",
+                "deferred": deferred,
                 "domain": json_value(domain),
                 "codomain": json_value(codomain),
                 "effects": effects.iter().map(json_value).collect::<Vec<_>>(),
@@ -1485,7 +1486,6 @@ mod tests {
         });
         let module = Module {
             parameter: None,
-            fixities: Vec::new(),
             declarations: Vec::new(),
             result,
             result_effects: ResultEffects::Pure,
@@ -1703,6 +1703,43 @@ mod tests {
             .expect("collect test thread should start")
             .join()
             .expect("collect test thread should finish");
+    }
+
+    #[test]
+    fn short_circuit_bounds_refine_direct_array_access() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source(
+                        "prelude.blot".to_owned(),
+                        source(include_str!("../../src/prelude/prelude.blot")),
+                    )
+                    .expect("prelude should load");
+                session
+                    .add_source(
+                        "main.blot".to_owned(),
+                        source(include_str!("../../examples/advanced_refinements.blot")),
+                    )
+                    .expect("source should load");
+                session
+                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                    .expect("prelude should configure");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("source should configure");
+
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            })
+            .expect("short-circuit refinement test thread should start")
+            .join()
+            .expect("short-circuit refinement test thread should finish");
     }
 
     #[test]

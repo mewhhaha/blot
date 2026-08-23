@@ -18,7 +18,7 @@ let payload = case #Code 2 of
   _ => 0
 
 let matches = 0
-for ^wanted in Iter.items [1, 2, 2, 3]:
+for case ^wanted in Iter.items [1, 2, 2, 3]:
   matches := matches + 1
   let ^matches = matches
 

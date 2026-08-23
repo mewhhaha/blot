@@ -1,18 +1,14 @@
-operators {
-  infixl 65 (++) = Text.append;
-}
-
 open import "blot:prelude"
 
 const Terminal =
   @effect.host {
-    .read_line = Unit -> Str;
-    .write = Str -> Unit;
+    .read_line = Unit -> Text;
+    .write = Text -> Unit;
   }
 
 const Model =
   @effect.host {
-    .complete = Str -> Str;
+    .complete = Text -> Text;
   }
 
 let transcript = ""
@@ -24,10 +20,10 @@ for ever:
   if text_eq (prompt, ""):
     break
 
-  let request = transcript ++ "\nUser: " ++ prompt ++ "\nAssistant:"
+  let request = transcript <> "\nUser: " <> prompt <> "\nAssistant:"
   reply <- Model.complete request
   <- Terminal.write (Text.append "Agent: " reply)
-  transcript := request ++ " " ++ reply
+  transcript := request <> " " <> reply
   turns := turns + 1
 
 return turns

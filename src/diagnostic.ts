@@ -8,9 +8,19 @@
 // `expect` throws at the site.
 
 import type { Span } from "./syntax/ast.ts";
+import {
+  type DiagnosticCode as BlotDiagnosticCode,
+  isDiagnosticCode as isBlotDiagnosticCode,
+} from "./diagnostic_codes.generated.ts";
+
+export type DiagnosticCode =
+  | BlotDiagnosticCode
+  | `LEX_${string}`
+  | `PARSER_${string}`
+  | `GPU_FRONTEND_${string}`;
 
 export interface Diagnostic {
-  readonly code: string;
+  readonly code: DiagnosticCode;
   readonly message: string;
   readonly span: Span;
 }
@@ -36,8 +46,16 @@ export class BlotError extends Error {
   }
 }
 
-export function fail(code: string, message: string, span: Span): never {
+export function fail(code: DiagnosticCode, message: string, span: Span): never {
   throw new BlotError({ code, message, span });
+}
+
+export function diagnosticCode(value: string): DiagnosticCode {
+  if (
+    isBlotDiagnosticCode(value) || value.startsWith("LEX_") ||
+    value.startsWith("PARSER_") || value.startsWith("GPU_FRONTEND_")
+  ) return value as DiagnosticCode;
+  throw new Error(`blot invariant violated: unknown diagnostic code ${value}`);
 }
 
 export function expect(

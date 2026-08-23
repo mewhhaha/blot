@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { runtimeHirSchema } from "./protocol.ts";
 import { Compiler } from "./session.ts";
 
 test("Rust compiler host exposes check, prepare, compile", async () => {
@@ -12,7 +13,7 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     assert.equal(checked.type, "42");
 
     const runtime = await compiler.prepare("examples/minimal.blot");
-    assert.equal(runtime.schemaVersion, 4);
+    assert.equal(runtime.schemaVersion, runtimeHirSchema);
 
     const artifact = await compiler.compile("examples/minimal.blot");
     const wasm = Uint8Array.from(artifact.wasm).buffer;

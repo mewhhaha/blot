@@ -151,6 +151,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.intersect"
         | "@type.diff"
         | "@type.arrow"
+        | "@type.deferred_arrow"
         | "@type.performs"
         | "@type.refine"
         | "@type.equal"
@@ -310,6 +311,14 @@ pub fn run_primitive(
         "@type.intersect" => intersect(&arguments[0], &arguments[1], span),
         "@type.diff" => difference(&arguments[0], &arguments[1], span),
         "@type.arrow" => Ok(Value::Arrow {
+            deferred: false,
+            domain: Box::new(arguments[0].clone()),
+            codomain: Box::new(arguments[1].clone()),
+            effects: Vec::new(),
+            effect_tail: None,
+        }),
+        "@type.deferred_arrow" => Ok(Value::Arrow {
+            deferred: true,
             domain: Box::new(arguments[0].clone()),
             codomain: Box::new(arguments[1].clone()),
             effects: Vec::new(),
@@ -1468,6 +1477,10 @@ fn vector_shuffle(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic
 fn union(left: Value, right: Value) -> Value {
     let mut members = Vec::new();
     fn add(members: &mut Vec<Value>, value: Value) {
+        if let Value::Extended { inner, .. } = value {
+            add(members, *inner);
+            return;
+        }
         if let Value::Union(nested) = value {
             for value in nested {
                 add(members, value);
@@ -1486,6 +1499,8 @@ fn union(left: Value, right: Value) -> Value {
 }
 
 fn intersect(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnostic> {
+    let left = transparent_type(left);
+    let right = transparent_type(right);
     let left = match left {
         Value::Union(values) => values.clone(),
         value => vec![value.clone()],
@@ -1524,6 +1539,8 @@ fn intersect(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnosti
 }
 
 fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnostic> {
+    let left = transparent_type(left);
+    let right = transparent_type(right);
     if equal(left, right) {
         return Err(Diagnostic::new(
             "BLOT_EMPTY_TYPE",
@@ -1580,6 +1597,13 @@ fn difference(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnost
         return Ok(pieces.into_iter().skip(1).fold(first, union));
     }
     Ok(left.clone())
+}
+
+fn transparent_type(mut value: &Value) -> &Value {
+    while let Value::Extended { inner, .. } = value {
+        value = inner;
+    }
+    value
 }
 
 fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
@@ -1732,6 +1756,7 @@ fn reflect(value: &Value) -> Value {
         Value::Shape(_) => tagged("Shape", value.clone()),
         Value::Array(_) | Value::EmptyArray { .. } => tagged("Array", value.clone()),
         Value::Arrow {
+            deferred,
             domain,
             codomain,
             effects,
@@ -1744,6 +1769,10 @@ fn reflect(value: &Value) -> Value {
             tagged(
                 "Arrow",
                 Value::Shape(OrderedFields::from([
+                    (
+                        "deferred".to_owned(),
+                        bare(if *deferred { "True" } else { "False" }),
+                    ),
                     ("domain".to_owned(), (**domain).clone()),
                     ("codomain".to_owned(), (**codomain).clone()),
                     ("effects".to_owned(), Value::Array(reflected_effects)),
@@ -1804,6 +1833,7 @@ fn performs(arrow: &Value, effects: &Value, span: Span) -> Result<Value, Diagnos
 
 fn attach_effects(arrow: &Value, effects: &[Value], tail: Option<u32>) -> Option<Value> {
     let Value::Arrow {
+        deferred,
         domain,
         codomain,
         effects: existing,
@@ -1814,6 +1844,7 @@ fn attach_effects(arrow: &Value, effects: &[Value], tail: Option<u32>) -> Option
     };
     if let Some(codomain) = attach_effects(codomain, effects, tail) {
         return Some(Value::Arrow {
+            deferred: *deferred,
             domain: domain.clone(),
             codomain: Box::new(codomain),
             effects: existing.clone(),
@@ -1824,6 +1855,7 @@ fn attach_effects(arrow: &Value, effects: &[Value], tail: Option<u32>) -> Option
         return None;
     }
     Some(Value::Arrow {
+        deferred: *deferred,
         domain: domain.clone(),
         codomain: codomain.clone(),
         effects: effects.to_vec(),

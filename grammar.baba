@@ -59,6 +59,8 @@ module_header = (
   LAYOUT_NEWLINE
 ) ;
 
+// Retained as a recognisable removed form so the compiler can issue one
+// migration diagnostic instead of a cascade of syntax errors.
 operator_section = (
   "operators"
   "{"
@@ -161,13 +163,14 @@ sequencing = (
 //
 //   for source:              runs the body once per element
 //   for x in source:         binds each element
-//   for #Some x in source:   binds, and skips what does not match
+//   for case #Some x in source: binds, and explicitly skips non-matches
 //
 // `break` stops the nearest `for` with its accumulator as it exists at that
 // point. An unbounded loop is an ordinary iteration over an infinite iterator:
 // `for ever:` followed by an indented body.
 iteration = (
   "for"
+  kind:"case"?
   head:value
   drawn:iteration_source?
   ":"
@@ -193,7 +196,7 @@ breaking = (
 
 // Spreading a module's exports into scope. Selective binding and renaming use
 // an ordinary record pattern instead. The prelude is an ordinary module with
-// no privilege, so this is how `+` finds `Num.add` — a default fixity whose
+// no privilege, so this is how `+` finds `Int.add` — a default fixity whose
 // target is not in scope is useless, and `open` is what puts it there.
 opening = (
   "open"
@@ -212,8 +215,7 @@ result = (
 // Patterns. The qualifier carries `!` (linear, consumed exactly once), `&` (bounded borrow), and `^` (pin an existing scalar), and absorbs `-` so that
 // negative literal patterns need no separate rule. It is OPERATOR rather than a
 // set of literals because spelling those as literals would shadow them out of
-// the operator class entirely, costing every custom operator that uses those
-// characters.
+// the shared operator token class.
 binding_pattern = (
   qualifier:operator_token?
   value:pattern_core
@@ -352,7 +354,7 @@ field_suffix = ("." field:field_name) ;
 
 // Field names accept every keyword and TYPE_IDENT. blot has few keywords, but
 // `.const`, `.type`, `.of`, and `.end` are all natural member names, and types
-// are values so `.I32` and `.Num` are ordinary members too. Enumerating the
+// are values so `.I32` and `.Int` are ordinary members too. Enumerating the
 // keyword set here is static — it needs no contextual token, which the GPU
 // profile forbids outright.
 field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;

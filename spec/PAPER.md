@@ -286,9 +286,11 @@ control sums, provided their erasure implements these forms.
 
 Application appears in `p` only when the function's row is empty; otherwise it
 is a computation `c` and must occur under `bind` or in a computation branch. A
-first-class delayed computation is represented by the ordinary value
-`lambda (). c`, matching Blot's nullary-function convention rather than adding a
-second thunk type to source.
+deferred arrow `A ~> B` gives the callee one affine demand of its argument.
+Known applications normalize demand into ordinary residual branches before
+Runtime HIR, so this calling convention adds no runtime thunk representation. A
+first-class delayed computation that must be stored independently remains the
+ordinary value `lambda (). c`.
 
 ### 4.3 Liveness-erased pure bindings
 
@@ -298,14 +300,15 @@ binding cannot be reached from the block result or another live declaration. The
 remaining declarations evaluate exactly once in source order before the block
 result. There is no run-time thunk and no first-use forcing rule.
 
-This is not laziness. It is dead-definition elimination made part of the source
-semantics, followed by ordinary call-by-value evaluation.
+This is not implicit laziness. It is dead-definition elimination made part of
+the source semantics, followed by ordinary call-by-value evaluation except at an
+explicitly deferred arrow.
 
-Once demanded, a pure expression evaluates deterministically: the function
-position precedes its argument, and tuple, array, record, and constructor
-payloads evaluate in source order. `if` evaluates only its selected branch. ABI
-field sorting is a layout rule and does not retroactively change source
-evaluation order.
+Once demanded, an expression evaluates deterministically: the function position
+precedes a strict argument. A deferred argument is evaluated at its single
+lexical demand, if any. Tuple, array, record, and constructor payloads evaluate
+in source order. `if` evaluates only its selected branch. ABI field sorting is a
+layout rule and does not retroactively change source evaluation order.
 
 The distinction makes three existing design goals compatible:
 
@@ -470,7 +473,7 @@ seal(name, A) = seal(name, B)  iff  A = B
 
 The carrier participates invariantly in identity. Thus `List I32` is the same
 type every time its ordinary compile-time constructor runs, while `List I32` and
-`List Str` are distinct. Choosing the same public name and carrier chooses the
+`List Text` are distinct. Choosing the same public name and carrier chooses the
 same seal even across modules. A future abstraction capability that cannot be
 reconstructed from public inputs would be a separate generative primitive;
 making `seal` itself fresh would invalidate ordinary parameterized nominals.

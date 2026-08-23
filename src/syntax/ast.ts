@@ -176,21 +176,9 @@ export type Decl =
     readonly span: Span;
   };
 
-export type Associativity = "left" | "right" | "none" | "prefix";
-
-export interface Fixity {
-  readonly operator: string;
-  readonly associativity: Associativity;
-  readonly precedence: number;
-  /** Dotted path, e.g. `Num.add` or `@type.union`. */
-  readonly target: readonly string[];
-  readonly span: Span;
-}
-
 export interface Module {
   /** Bound by `module <pattern>;`. The entry module's whole authority. */
   readonly parameter: Pattern | null;
-  readonly fixities: readonly Fixity[];
   readonly declarations: readonly Decl[];
   readonly result: Expr;
   readonly resultEffects: "pure" | "ambient";

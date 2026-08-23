@@ -3,7 +3,7 @@
     "generate:parser": "deno run --allow-read --allow-write npm:@jsr/mewhhaha__baba@9.0.0/cli grammar.baba --out generated --name blot --root program --metadata baba.json --target wasm",
     "generate:compiler-schema": "deno run --allow-read --allow-write scripts/generate_compiler_schema.ts",
     "generate": "deno task generate:parser && deno task generate:compiler-schema",
-    "check:generated": "deno task generate:parser && git diff --exit-code -- generated && deno task generate:compiler-schema --check",
+    "check:generated": "deno task generate:parser && git diff --exit-code -- generated/wasm generated/queries generated/.baba-manifest.json && deno task generate:compiler-schema --check && deno run --allow-read scripts/generate_language_health.ts --check",
     "inspect": "deno run --allow-read scripts/inspect_plan.ts",
     "parse": "deno run --allow-read scripts/parse.ts"
   },
@@ -11,6 +11,8 @@
   "lint": {
     "exclude": [
       "generated",
+      "src/diagnostic_codes.generated.ts",
+      "src/syntax/fixities.generated.ts",
       "tree-sitter-blot"
     ]
   },
@@ -18,6 +20,9 @@
     "exclude": [
       "generated",
       "compiler/src/frontend_plan.rs",
+      "src/diagnostic_codes.generated.ts",
+      "src/syntax/fixities.generated.ts",
+      "STDLIB.md",
       "AGENTS.md",
       "CLAUDE.md",
       "tree-sitter-blot",

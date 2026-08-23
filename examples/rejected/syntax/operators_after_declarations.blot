@@ -5,7 +5,7 @@
 let x = 1
 
 operators {
-  infixl 60 (+) = Num.add;
+  infixl 60 (+) = Int.add;
 }
 
 return x

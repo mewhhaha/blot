@@ -1,0 +1,8 @@
+const prelude = import "blot:prelude"
+
+return {
+  .Scratch = prelude.Scratch;
+  .Slice = prelude.Slice;
+  .Arena = prelude.Arena;
+  .freeze = prelude.freeze;
+}

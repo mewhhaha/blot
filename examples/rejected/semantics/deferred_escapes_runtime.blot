@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+sig deferred = Int ~> Int
+let deferred = fn ~value => value
+
+return { .default = deferred; }

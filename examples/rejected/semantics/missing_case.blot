@@ -3,8 +3,8 @@
 
 open import "blot:prelude"
 
-const Message = #Ready | #Progress Int | #Failed Str
-sig describe = Message -> Str
+const Message = #Ready | #Progress Int | #Failed Text
+sig describe = Message -> Text
 let describe = fn m => case m of
   #Ready => "ready"
   #Progress n => "working"

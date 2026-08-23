@@ -11,7 +11,7 @@ const Point =
     .y = I32;
   }
 
-const Message = #Ready | #Progress I32 | #Failed Str
+const Message = #Ready | #Progress I32 | #Failed Text
 
 let origin = { .x = 0; .y = 0; }
 let moved = { ...origin; .x = 20; }

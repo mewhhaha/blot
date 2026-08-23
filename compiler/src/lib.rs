@@ -12,6 +12,7 @@ mod ownership;
 mod partition;
 mod predicate_refinement;
 mod primitives;
+mod protocol;
 mod rebinding;
 mod recognise;
 mod relational;
@@ -36,7 +37,7 @@ thread_local! {
 /// Version of the JSON/binary transport consumed by `src/compiler/wasm.ts`.
 #[unsafe(no_mangle)]
 pub extern "C" fn compiler_host_abi_version() -> u32 {
-    1
+    protocol::COMPILER_HOST_ABI_VERSION
 }
 
 #[unsafe(no_mangle)]

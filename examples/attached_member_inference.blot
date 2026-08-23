@@ -1,0 +1,13 @@
+// Attached member closures are inferred against their runtime arguments. A
+// dynamic argument does not require compile-time execution of the member.
+
+open import "blot:prelude"
+
+const Money = #Money I32 <+ { .of = fn n => #Money n; }
+
+const priced = fn amount => do:
+  sig converted = Money
+  let converted = Money.of amount
+  return converted
+
+return priced 42

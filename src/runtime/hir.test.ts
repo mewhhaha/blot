@@ -4,13 +4,14 @@ import {
   runtimeLayoutWitness,
   validateBlotRuntimeModule,
 } from "./hir.ts";
+import { runtimeHirSchema } from "../compiler/protocol.ts";
 
 const span = { file: "test.blot", start: 0, end: 1 } as const;
 
 function acceptedModule(): BlotRuntimeModule {
   return {
     format: "blot-runtime-hir",
-    schemaVersion: 4,
+    schemaVersion: runtimeHirSchema,
     source: "test.blot",
     types: [
       { kind: "unit" },

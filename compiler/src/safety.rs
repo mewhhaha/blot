@@ -464,6 +464,32 @@ impl Analysis<'_> {
         expression: ExpressionId,
         scope: &Scope,
     ) -> (Vec<Constraint>, Vec<Constraint>) {
+        if let Expression::If {
+            branches,
+            fallback: Some(fallback),
+            ..
+        } = &self.module.arena.expressions[expression.0 as usize]
+            && let [branch] = branches.as_slice()
+        {
+            if matches!(
+                &self.module.arena.expressions[fallback.0 as usize],
+                Expression::Tag { name, .. } if name == "False"
+            ) {
+                let (mut left, _) = self.comparison_constraints(branch.condition, scope);
+                let (right, _) = self.comparison_constraints(branch.consequence, scope);
+                left.extend(right);
+                return (left, Vec::new());
+            }
+            if matches!(
+                &self.module.arena.expressions[branch.consequence.0 as usize],
+                Expression::Tag { name, .. } if name == "True"
+            ) {
+                let (_, mut left) = self.comparison_constraints(branch.condition, scope);
+                let (_, right) = self.comparison_constraints(*fallback, scope);
+                left.extend(right);
+                return (Vec::new(), left);
+            }
+        }
         let (callee, arguments) = application_spine(expression, self.module);
         let Some(callee_value) = self.callee_value(callee, scope) else {
             return (Vec::new(), Vec::new());

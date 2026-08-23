@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "@std/path";
-import { BlotError, type Diagnostic } from "../diagnostic.ts";
+import { BlotError, type Diagnostic, diagnosticCode } from "../diagnostic.ts";
 import { type Loaded, LoadError, loadSource, PRELUDE } from "../load.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
@@ -521,7 +521,7 @@ export async function compileArtifact(path: string): Promise<CompilerArtifact> {
 
 function sourceDiagnostic(diagnostic: CompilerSourceDiagnostic): Diagnostic {
   return {
-    code: diagnostic.code,
+    code: diagnosticCode(diagnostic.code),
     message: diagnostic.message,
     span: diagnostic.span,
   };

@@ -4,9 +4,9 @@ use std::str::FromStr;
 use num_bigint::BigInt;
 
 use crate::ast::{
-    Arm, ArrayElement, Associativity, AstArena, Branch, Declaration, DeclarationId,
-    DeclarationKind, DeclarationTag, Expression, ExpressionId, Fixity, Module, Pattern, PatternId,
-    Qualifier, ResultEffects, ShapeMember, ShapePatternField, Span,
+    Arm, ArrayElement, AstArena, Branch, Declaration, DeclarationId, DeclarationKind,
+    DeclarationTag, Expression, ExpressionId, Module, Pattern, PatternId, Qualifier, ResultEffects,
+    ShapeMember, ShapePatternField, Span,
 };
 use crate::cst::{CompactCst, Cursor};
 use crate::fixity::{ChainStep, FixityTable, target_expression};
@@ -80,17 +80,13 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         }
         None => None,
     };
-    let fixities = match cst.field(root, "operators")? {
-        Some(section) => {
-            let section = as_rule(section)?;
-            cst.field_list(section, "declarations")?
-                .into_iter()
-                .map(|cursor| lower_fixity(cst, cursor))
-                .collect::<Result<Vec<_>, _>>()?
-        }
-        None => Vec::new(),
-    };
-    let table = FixityTable::new(&fixities);
+    if cst.field(root, "operators")?.is_some() {
+        return Err(
+            "BLOT_REMOVED_OPERATOR_SECTION: operator precedence and targets are fixed; use a named function for another operation"
+                .to_owned(),
+        );
+    }
+    let table = FixityTable::new();
     let context = LoweringContext::root(&table);
     let mut statements = cst.field_list(root, "declarations")?;
     let mut result = arena.expression(Expression::Unit { span });
@@ -127,7 +123,6 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     elaborate_handler_steps(&mut arena);
     Ok(Module {
         parameter,
-        fixities,
         declarations: lowered_declarations,
         result,
         result_effects,
@@ -272,32 +267,6 @@ fn handled_computation(
         deferred: false,
         span,
     }
-}
-
-fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {
-    let rule = as_rule(cursor)?;
-    let associativity = match token_text(cst, required(cst, rule, "associativity")?)?.as_str() {
-        "infixl" => Associativity::Left,
-        "infixr" => Associativity::Right,
-        "infix" => Associativity::None,
-        "prefix" => Associativity::Prefix,
-        value => return Err(format!("unknown associativity {value}")),
-    };
-    let precedence = token_text(cst, required(cst, rule, "precedence")?)?
-        .parse::<u32>()
-        .map_err(|error| format!("invalid fixity precedence: {error}"))?;
-    let target_rule = as_rule(required(cst, rule, "target")?)?;
-    let mut target = vec![token_text(cst, required(cst, target_rule, "root")?)?];
-    for part in cst.field_list(target_rule, "rest")? {
-        target.push(token_text(cst, required(cst, as_rule(part)?, "name")?)?);
-    }
-    Ok(Fixity {
-        operator: token_text(cst, required(cst, rule, "operator")?)?,
-        associativity,
-        precedence,
-        target,
-        span: cst.span(Cursor::Rule(rule))?,
-    })
 }
 
 #[derive(Clone)]
@@ -1271,6 +1240,7 @@ fn lower_control_loop(
             (Some(binder), source)
         }
     };
+    let filtering = loop_filtering(cst, rule, binder, arena)?;
     let (pattern, value) = desugar_loop(
         binder,
         source,
@@ -1284,8 +1254,11 @@ fn lower_control_loop(
             continues,
             breaks,
         }),
-        statements_contain_effect(cst, &statements)?,
-        LoopCompletion::Control,
+        LoopMode {
+            effectful: statements_contain_effect(cst, &statements)?,
+            filtering,
+            completion: LoopCompletion::Control,
+        },
         span,
         arena,
     )?;
@@ -1350,6 +1323,7 @@ fn lower_iteration(
             (Some(binder), source)
         }
     };
+    let filtering = loop_filtering(cst, rule, binder, arena)?;
     let mut body = Vec::new();
     for statement in statements {
         let statement = unwrapped_rule(cst, statement)?;
@@ -1362,8 +1336,11 @@ fn lower_iteration(
             declarations: body,
             carried,
         },
-        effectful,
-        LoopCompletion::Iterate,
+        LoopMode {
+            effectful,
+            filtering,
+            completion: LoopCompletion::Iterate,
+        },
         span,
         arena,
     )?;
@@ -1404,12 +1381,17 @@ enum LoopCompletion {
     Control,
 }
 
+struct LoopMode {
+    effectful: bool,
+    filtering: bool,
+    completion: LoopCompletion,
+}
+
 fn desugar_loop(
     binder: Option<PatternId>,
     source: ExpressionId,
     body: LoopBody,
-    effectful: bool,
-    completion: LoopCompletion,
+    mode: LoopMode,
     span: Span,
     arena: &mut AstArena,
 ) -> Result<(PatternId, ExpressionId), String> {
@@ -1438,12 +1420,8 @@ fn desugar_loop(
             span,
         }));
     }
-    let filtering = match binder {
-        Some(pattern) => refutable(pattern, arena),
-        None => false,
-    };
     if let Some(pattern) = binder
-        && !filtering
+        && !mode.filtering
     {
         declarations.push(arena.declaration(Declaration::Binding {
             kind: DeclarationKind::Let,
@@ -1470,7 +1448,7 @@ fn desugar_loop(
         result_effects: ResultEffects::Ambient,
         span,
     });
-    let visited = if filtering {
+    let visited = if mode.filtering {
         let pattern = binder.expect("filtering loop omitted its binder");
         let wildcard = arena.pattern(Pattern::Wildcard { span });
         let carried_value = variable(carried_in, span, arena);
@@ -1508,7 +1486,7 @@ fn desugar_loop(
     let completed_visit = match &body {
         LoopBody::Plain { .. } => continue_loop(next_iterator, visited, span, arena),
         LoopBody::Control(body) => {
-            resolve_loop_visit(visited, next_iterator, body, &completion, span, arena)
+            resolve_loop_visit(visited, next_iterator, body, &mode.completion, span, arena)
         }
     };
 
@@ -1559,7 +1537,7 @@ fn desugar_loop(
         ],
         span,
     });
-    let go_body = if effectful {
+    let go_body = if mode.effectful {
         let result_pattern = arena.pattern(Pattern::Name {
             name: "loopResult$".to_owned(),
             qualifier: Qualifier::None,
@@ -1648,6 +1626,31 @@ fn desugar_loop(
         span,
     });
     Ok((state_pattern, value))
+}
+
+fn loop_filtering(
+    cst: &CompactCst<'_>,
+    rule: u32,
+    binder: Option<PatternId>,
+    arena: &AstArena,
+) -> Result<bool, String> {
+    let filtering = cst.field(rule, "kind")?.is_some();
+    let Some(binder) = binder else {
+        if filtering {
+            return Err(
+                "BLOT_FILTERING_LOOP_WITHOUT_PATTERN: `for case` requires a pattern followed by `in`"
+                    .to_owned(),
+            );
+        }
+        return Ok(false);
+    };
+    if refutable(binder, arena) && !filtering {
+        return Err(
+            "BLOT_REFUTABLE_FOR_PATTERN: a refutable loop pattern must be introduced with `for case`"
+                .to_owned(),
+        );
+    }
+    Ok(filtering)
 }
 
 fn continue_loop(

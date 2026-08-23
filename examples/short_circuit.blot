@@ -1,0 +1,8 @@
+open import "blot:prelude"
+
+return {
+  .and = False && ((1 / 0) == 0);
+  .or = True || ((1 / 0) == 0);
+  .named_and = Logic.and False ((1 / 0) == 0);
+  .named_or = Logic.or True ((1 / 0) == 0);
+}

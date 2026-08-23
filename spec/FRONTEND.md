@@ -162,8 +162,9 @@ node, typing rule, or backend operation.
 
 ## 5. Scope and source order
 
-Nothing is implicitly in scope. Imports, `open`, fixity declarations, and local
-bindings determine lexical lookup. The prelude is an ordinary imported module.
+Nothing is implicitly in scope. Imports, `open`, the fixed operator targets, and
+local bindings determine lexical lookup. The prelude is an ordinary imported
+module.
 
 Elaboration preserves the source order of live computation bindings. Pure
 bindings may later be erased when unused, but the frontend does not reorder a

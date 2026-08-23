@@ -2,11 +2,6 @@
 // pattern-matching, fold, mapping, and iterator APIs. The same implementation
 // runs at compile time and at runtime.
 
-operators {
-  infixr 70 (::) = List.prepend;
-  infixl 50 (++) = List.append;
-}
-
 open import "blot:prelude"
 
 const IntList = List.of Int
@@ -17,9 +12,10 @@ const rec sum_matching =
     #Nil => 0
     #Cons (value, tail) => value + sum_matching tail
 
-const Primes = 2 :: 3 :: 5 :: 7 :: List.empty
+const Primes =
+  List.prepend 2 (List.prepend 3 (List.prepend 5 (List.prepend 7 List.empty)))
 const Doubled = List.map (Primes, fn value => value * 2)
-const Combined = Primes ++ Doubled
+const Combined = List.append Primes Doubled
 const compile_time_total =
   List.fold (
     Combined,
@@ -29,8 +25,8 @@ const compile_time_total =
 const compile_time_values = List.to_array Combined
 
 let runtime_list = List.from_array (upto (1, 11))
-let prefixed = 0 :: runtime_list
-let repeated = runtime_list ++ runtime_list
+let prefixed = List.prepend 0 runtime_list
+let repeated = List.append runtime_list runtime_list
 let matched_head = case List.uncons prefixed of
   #Nil => -1
   #Cons (value, _) => value

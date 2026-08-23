@@ -3,7 +3,7 @@
 
 open import "blot:prelude"
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 _ <- case 1 of
   1 => Console.write "nobody is listening"
   _ => Console.write "still nobody"

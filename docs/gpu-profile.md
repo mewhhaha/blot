@@ -22,11 +22,11 @@ in a benchmark months later.
 | `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
 | `islandCount`               |      66 | one island for every grammar rule                  |
-| `islandStates`              |     388 |                                                    |
-| `islandTransitions`         |     395 |                                                    |
+| `islandStates`              |     389 |                                                    |
+| `islandTransitions`         |     397 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 572,688 | immutable device table                             |
-| `packedBytes`               | 448,686 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 574,164 | immutable device table                             |
+| `packedBytes`               | 449,881 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 

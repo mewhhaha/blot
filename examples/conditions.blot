@@ -7,10 +7,10 @@
 // `2`.
 //
 // Nothing in the checker knows what `==` is. The fixity table names the binding
-// `Eq.eq`, the checker reads the compile-time function that name is bound to,
+// `Int.eq`, the checker reads the compile-time function that name is bound to,
 // and it derives what that function proves by interrogating the value: a
 // comparison factors through `@int.cmp`, whose three answers determine it on
-// every pair of integers. Bind `Eq` to something else and narrowing stops,
+// every pair of integers. Bind `Int` to something else and narrowing stops,
 // because the checker asks the value rather than the spelling.
 //
 // `examples/narrowing.blot` is the sibling rule for `case`, where the arm's own
@@ -18,7 +18,7 @@
 
 open import "blot:prelude"
 
-sig name = 1 | 2 | 3 -> Str
+sig name = 1 | 2 | 3 -> Text
 let name = fn n => case n == 1 of
   #True => case n of
     1 => "one"
@@ -28,7 +28,7 @@ let name = fn n => case n == 1 of
 
 // The chain accumulates: the fallback knows that none of the earlier conditions
 // fired, so `n` is `3` there and one arm covers it.
-sig ordinal = 1 | 2 | 3 -> Str
+sig ordinal = 1 | 2 | 3 -> Text
 let ordinal = fn n => case n == 1 of
   #True => "first"
   #False => case n == 2 of
@@ -40,13 +40,13 @@ let ordinal = fn n => case n == 1 of
 // comparison narrows an unbounded domain the same way it narrows a finite one:
 // `..9` and `10..` are the two halves `Int` splits into, and `size` could not
 // call either helper without the proof.
-sig small = range (@type.unbounded, 9) -> Str
+sig small = range (@type.unbounded, 9) -> Text
 let small = fn n => "small"
 
-sig large = range (10, @type.unbounded) -> Str
+sig large = range (10, @type.unbounded) -> Text
 let large = fn n => "large"
 
-sig size = Int -> Str
+sig size = Int -> Text
 let size = fn n => do:
   if n < 10:
     return small n

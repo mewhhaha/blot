@@ -4,7 +4,7 @@
 // operators, comparisons, records, tuples, unions, and recursion. `blot build`
 // emits a `.wasm` whose `main` export returns the module's result.
 //
-// The prelude is compiled, not inlined at every use — `+` is `Num.add`, an
+// The prelude is compiled, not inlined at every use — `+` is `Int.add`, an
 // ordinary closure that becomes one runtime definition.
 
 open import "blot:prelude"

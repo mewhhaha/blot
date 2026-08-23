@@ -9,7 +9,7 @@
       "kind": "query"
     },
     "queries/generated-rainbows.scm": {
-      "hash": "9f501a35d82403d38264a0e1068f2beae99ecf2f9f0655937cd4653b2391182a",
+      "hash": "1d7045bfde2fb262d4a8359c2212cb16568a3c13b47aa4f98a61f44217be6189",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "query"
@@ -33,7 +33,7 @@
       "kind": "source"
     },
     "wasm/parser.plan": {
-      "hash": "91909f984ddd405358671bc690c3f878df1bd44e63c1240a21b0f5425f558047",
+      "hash": "8fe7c9cc4b1d770a0c38f458d2a25b4f8089374ebf72068f67727970cc7f4d5d",
       "ownership": "generated",
       "encoding": "binary",
       "kind": "binary"
@@ -45,7 +45,7 @@
       "kind": "binary"
     },
     "wasm/syntax.ts": {
-      "hash": "bd5bdb64b59a479f6f272e7c290e1c05cc3d5e2ea4379fa5a736acb0f87e6470",
+      "hash": "09c174dcd7e436800e395f98ec30721d4f67fefdf95d9868a34ba6b33f754959",
       "ownership": "generated",
       "encoding": "utf-8",
       "kind": "source"

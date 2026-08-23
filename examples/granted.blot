@@ -12,7 +12,7 @@ module with init
 
 open import "blot:prelude"
 
-const Console = @effect { .write = Str -> Unit; }
+const Console = @effect { .write = Text -> Unit; }
 
 // The handler discharges the blot effect by forwarding it to the granted
 // capability, then resumes the rest of the computation.

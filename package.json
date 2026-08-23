@@ -25,7 +25,9 @@
     "conformance": "deno run --allow-read scripts/verify_runtime.ts",
     "verify:compiler": "pnpm conformance",
     "compiler:download": "deno run --allow-read --allow-write --allow-run=gh,git scripts/download_compiler.ts",
-    "compile:corpus": "deno run --allow-read scripts/compile_corpus.ts"
+    "compile:corpus": "deno run --allow-read scripts/compile_corpus.ts",
+    "generate:health": "deno run --allow-read --allow-write scripts/generate_language_health.ts",
+    "health": "deno run --allow-read scripts/generate_language_health.ts --check"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",

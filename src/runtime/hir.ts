@@ -1,3 +1,5 @@
+import { runtimeHirSchema } from "../compiler/protocol.ts";
+
 export type BlotRuntimeSpan = {
   readonly file: string;
   readonly start: number;
@@ -315,7 +317,7 @@ export type BlotRuntimeExport =
 
 export type BlotRuntimeModule = {
   readonly format: "blot-runtime-hir";
-  readonly schemaVersion: 4;
+  readonly schemaVersion: typeof runtimeHirSchema;
   readonly source: string;
   readonly types: readonly BlotRuntimeType[];
   readonly signatures: readonly BlotRuntimeSignature[];
@@ -524,9 +526,12 @@ type BlotRuntimeValueDefinition = {
 export function validateBlotRuntimeModule(
   module: BlotRuntimeModule,
 ): ValidatedBlotRuntimeModule {
-  if (module.format !== "blot-runtime-hir" || module.schemaVersion !== 4) {
+  if (
+    module.format !== "blot-runtime-hir" ||
+    module.schemaVersion !== runtimeHirSchema
+  ) {
     throw new TypeError(
-      `Blot Runtime HIR requires format blot-runtime-hir schema 4; received ${module.format} schema ${module.schemaVersion}`,
+      `Blot Runtime HIR requires format blot-runtime-hir schema ${runtimeHirSchema}; received ${module.format} schema ${module.schemaVersion}`,
     );
   }
   if (module.types.length === 0) {

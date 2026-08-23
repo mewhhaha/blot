@@ -1,1 +1,3 @@
-export const COMPILER_HOST_ABI_VERSION = 1;
+export {
+  compilerHostAbiVersion as COMPILER_HOST_ABI_VERSION,
+} from "./protocol.ts";

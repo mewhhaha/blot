@@ -12,27 +12,27 @@
 // function that performs `Console` prints as, and a `sig` spells it the same
 // way — an effect is an ordinary compile-time value, so a row is the ordinary
 // list of them. A bare `->` is not silence about effects: it is the empty row,
-// so `sig greet = Unit -> Str;` below would be rejected.
+// so `sig greet = Unit -> Text;` below would be rejected.
 
 open import "blot:prelude"
 
 const Console =
   @effect {
-    .write = Str -> Unit;
+    .write = Text -> Unit;
   }
 
 const Counter =
   @effect {
-    .next = Unit -> Str;
+    .next = Unit -> Text;
   }
 
 // Reading from an effect, which is what `<-` is for.
 const Terminal =
   @effect {
-    .read = Unit -> Str;
+    .read = Unit -> Text;
   }
 
-sig ask = Unit -> Str ~ { Terminal }
+sig ask = Unit -> Text ~ { Terminal }
 let ask = fn () => do:
   answer <- Terminal.read ()
   return answer <> "!"
@@ -48,7 +48,7 @@ let answering =
 
 // Performing is a call, and the row follows from it. The `sig` says the same
 // thing the printer would: the body may perform `Console` and nothing else.
-sig greet = Unit -> Str ~ { Console }
+sig greet = Unit -> Text ~ { Console }
 let greet = fn () => do:
   <- Console.write "hello"
   <- Console.write "world"

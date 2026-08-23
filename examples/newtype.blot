@@ -21,7 +21,7 @@ Money := Money <+ {
   .of = fn n => #Money n;
   .zero = #Money 0;
   .eq = fn left => fn right => case (left, right) of
-    (#Money a, #Money b) => Ord.eq a b
+    (#Money a, #Money b) => Int.eq a b
   ;
   .add = fn left => fn right => case (left, right) of
     (#Money a, #Money b) => #Money (a + b)

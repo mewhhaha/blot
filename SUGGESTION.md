@@ -197,7 +197,7 @@ change; the signature language catches up with what it already computes.
 
 ## 9. Resolve `==` through an interface carried on the type
 
-`"a" == "a"` is still a type error because `==` names `Eq.eq` over `@int.cmp`.
+`"a" == "a"` is still a type error because `==` names `Int.eq` over `@int.cmp`.
 The repair is not a second equality primitive and not runtime dispatch. `==`
 stays an ordinary fixity entry whose target is source with type
 
@@ -221,14 +221,14 @@ delivered to the target's body at specialization, either through a primitive
 admissible only in this position or through a typing rule for the lookup
 function, which is how `@handle` is already special for its own reason.
 
-What follows is better than a dispatch table. Float equality stays refused
-because `F64` attaches no `.eq`, so §2.2's deliberate absence becomes a property
-of the type rather than a rule about an operator. There is no instance scope and
-no orphan question, because the implementation travels on the type value. The
-same mechanism gives `+` one name over `Int`, `F64`, and `F32` by looking up
-`.add`. Do not let it become implicit dispatch: the lookup is compile-time, the
-resolved target is visible in the specialized program, and a type that attaches
-nothing is a diagnostic rather than a fallback.
+What follows is better than a dispatch table. F64 equality stays refused because
+`F64` attaches no `.eq`, so §2.2's deliberate absence becomes a property of the
+type rather than a rule about an operator. There is no instance scope and no
+orphan question, because the implementation travels on the type value. The same
+mechanism gives `+` one name over `Int`, `F64`, and `F32` by looking up `.add`.
+Do not let it become implicit dispatch: the lookup is compile-time, the resolved
+target is visible in the specialized program, and a type that attaches nothing
+is a diagnostic rather than a fallback.
 
 ## 10. Narrow on the primitive rather than on the shape of its wrapper
 
@@ -280,9 +280,9 @@ the loop shape programs actually write, not that it approaches a general solver.
 
 ## 12. Answer float comparison totally
 
-`Float.cmp` refuses NaN — a diagnostic while compiling and a trap while running
-— so every runtime float comparison is a potential fault and numeric code pays
-an `is_nan` pre-check per comparison. IEEE 754 defines the total answer, and
+`F64.cmp` refuses NaN — a diagnostic while compiling and a trap while running —
+so every runtime float comparison is a potential fault and numeric code pays an
+`is_nan` pre-check per comparison. IEEE 754 defines the total answer, and
 returning it is more honest than trapping:
 
 ```blot
@@ -346,7 +346,7 @@ one — these cannot be written in blot at all:
 source and are simply absent. Changing the prelude's public record updates
 `LANGUAGE.md` §14 and the distributed snapshot in the same change.
 
-Interpolation, if it is wanted, is a desugar to `Text.append` chains over `Str`
+Interpolation, if it is wanted, is a desugar to `Text.append` chains over `Text`
 expressions with no implicit conversion. Do not add it before the primitives: a
 form that makes text convenient to build while it remains impossible to take
 apart is the wrong order.
@@ -402,7 +402,7 @@ inferred demand stays the truth; the signature is the human-facing bound on it.
   cancellation discharging exactly the suspended computation's obligations. Each
   is a hand-argued invariant a refactor can silently break, and each is small
   enough to state over the existing core model.
-- **Naming.** One domain carries three stems — the type `Str`, the namespace
+- **Naming.** One domain carries three stems — the type `Text`, the namespace
   `Text`, the primitives `@text.*` — and `@fail` and `@panic` do not say which
   phase they belong to. Both are cheap to settle and neither is urgent. The
   sigil budget is spent: `!`, `?`, `&`, `<`, and `>` each carry two or three

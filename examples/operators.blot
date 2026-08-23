@@ -1,24 +1,11 @@
-// Custom operators.
-//
-// Any spelling from the operator character class is available. The header
-// supplies precedence, associativity, and the function to dispatch to; the
-// parser knows none of it, because expressions parse as flat chains and
-// precedence is resolved semantically.
-
-operators {
-  infixl 45 (:|) = @type.union;
-  infixl 45 (:-) = @type.diff;
-  infixr 30 (<>) = Text.append;
-  infixl 15 (<%>) = Fn.pipe;
-  infix 35 (=~) = Ord.le;
-  prefix 90 (~) = Num.negate;
-}
+// Fixed operators. Their small precedence table is part of the language;
+// domains without a fixed spelling use named functions.
 
 open import "blot:prelude"
 
-const Value = I32 :| Str
-const Method = "GET" :| "POST" :| "PUT"
-const Verb = Method :- "PUT"
+const Value = I32 | Text
+const Method = "GET" | "POST" | "PUT"
+const Verb = Method \ "PUT"
 
 // Division and the comment marker coexist: an operator may contain `/`
 // anywhere except as a doubled prefix, which is what keeps `//` a comment.
@@ -28,12 +15,12 @@ let chained = 1 + 2 * 3 - 4 / 2
 let compared = 1 + 2 == 3
 let distinct = remainder != 0
 
-// Associativity and precedence are the header's business, not the grammar's.
+// Associativity and precedence are fixed and visible in LANGUAGE.md.
 let joined = "a" <> "b" <> "c"
-let piped = 20 <%> Num.add 2 <%> Num.mul 2
-let applied = Num.add 20 $ 22
-let bounded = 3 =~ 4
-let negated = ~7 + 10
+let piped = 20 |> Int.add 2 |> Int.mul 2
+let applied = Int.add 20 $ 22
+let bounded = Int.le 3 4
+let negated = -7 + 10
 
 // --- what the default levels mean -------------------------------------------
 //
@@ -44,8 +31,8 @@ let negated = ~7 + 10
 // An arrow is looser than the type algebra on either side of it, so each pair
 // here prints the same value twice. `==` cannot state it: it compares scalars,
 // and these are types.
-const arrow_bare = Int | Str -> Int
-const arrow_grouped = (Int | Str) -> Int
+const arrow_bare = Int | Text -> Int
+const arrow_grouped = (Int | Text) -> Int
 
 // Set algebra mirrors arithmetic: intersection is the product.
 const algebra_bare = 0 | 1 & 1
@@ -54,15 +41,13 @@ const algebra_grouped = 0 | (1 & 1)
 // `&&` and `||` are boolean logic, distinct from `&` and `|`, which are set
 // algebra. Comparisons bind tighter than both, and `&&` tighter than `||`.
 //
-// Both arguments are evaluated. An operator here is an ordinary curried
-// function and blot has no laziness for one to exploit, so `if` is the
-// short-circuiting form.
+// The two logical spellings lower to conditionals and short-circuit.
 let ranged = 1 < 2 && 3 < 4
 let either = False && True || True
 let precedence = True || False && False
 
 // Append binds tighter than comparison and looser than arithmetic. `==` is
-// `Ord.eq` over `@int.cmp`, so it compares integers; `Text.cmp` compares text.
+// `Int.eq` over `@int.cmp`, so it compares integers; `Text.cmp` compares text.
 let appended = is_equal (Text.cmp ("a" <> "b") "ab")
 let counted = "n" <> Text.of_int (1 + 2)
 

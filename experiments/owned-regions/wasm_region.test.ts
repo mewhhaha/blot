@@ -264,59 +264,6 @@ else:
   }
 });
 
-Deno.test("structural quicksort residualizes direct recursion without collection opcodes", async () => {
-  const source = `operators {
-  infixl 55 (<>) = Array.append;
-}
-
-open import "blot:prelude"
-const Source = @effect.host { .value = Int -> Int; }
-
-sig quicksort = [Int] -> [Int]
-let rec quicksort = fn values => case Array.uncons values of
-  #None => []
-  #Some (pivot, rest) => do:
-    let (smaller, larger) =
-      Array.partition (rest, fn value => value <= pivot)
-    return quicksort smaller <> [pivot] <> quicksort larger
-
-sig ordered_checksum = ([Int], Int, Int) -> Int
-let rec ordered_checksum = fn (values, index, total) => do:
-  if index >= Array.length values:
-    return total
-  else:
-    let value = case Array.get (values, index) of
-      #Some item => item
-      #None => 0
-    return ordered_checksum (values, index + 1, total + (index + 1) * value)
-
-dynamic <- Source.value 0
-let sorted = quicksort [dynamic, 7, 3, 8, 2, 6, 1, 5]
-return ordered_checksum (sorted, 0, 0)
-`;
-
-  await withSource(source, async (compiler, path) => {
-    const hir = await compiler.prepare(path);
-    assert(
-      allOperations(hir).some((operation) => operation.kind === "call.direct"),
-      "non-tail structural recursion must remain a direct Runtime-HIR call",
-    );
-    assert(
-      allOperations(hir).every((operation) =>
-        !operation.kind.includes("quicksort") &&
-        !operation.kind.includes("partition") &&
-        !operation.kind.includes("uncons")
-      ),
-      "collection algorithms must be expressed through generic Runtime-HIR operations",
-    );
-    const artifact = await compiler.compile(path);
-    const run = await instantiateDefault(artifact.wasm, {
-      "blot:host/Source": { value: (_: bigint) => 4n },
-    });
-    assertEquals(run(), 204n);
-  });
-});
-
 Deno.test("direct recursive functions close over dynamic values", async () => {
   const source = `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }

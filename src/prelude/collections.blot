@@ -1,0 +1,9 @@
+const prelude = import "blot:prelude"
+
+return {
+  .List = prelude.List;
+  .Map = prelude.Map;
+  .Set = prelude.Set;
+  .Dict = prelude.Dict;
+  .OrderedTextMap = prelude.OrderedTextMap;
+}
