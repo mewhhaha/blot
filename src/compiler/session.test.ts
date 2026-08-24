@@ -223,6 +223,31 @@ test("destroyed Rust compiler host refuses new work", async () => {
   );
 });
 
+test("canonical syntax snapshots expose parser bypass and node reuse", async () => {
+  const compiler = await Compiler.create();
+  const path = join(tmpdir(), "blot-canonical-syntax-snapshot.blot");
+  const source = "const first = 1\nconst second = 2\nreturn first\n";
+  try {
+    const initial = await compiler.syntaxSnapshot(path, source);
+    assert.equal(initial.parserExecuted, true);
+    assert.equal(initial.cst.name, "program");
+
+    const unchanged = await compiler.syntaxSnapshot(path, source);
+    assert.equal(unchanged.parserExecuted, false);
+    assert.equal(unchanged.portableAstDigest, initial.portableAstDigest);
+    assert.ok(unchanged.reuse.length > 0);
+
+    const edited = await compiler.syntaxSnapshot(
+      path,
+      source.replace("second = 2", "second = 3 + 4"),
+    );
+    assert.equal(edited.parserExecuted, true);
+    assert.ok(edited.reuse.length > 0);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test(
   "resident checker reuses a closed nullary leaf across root edits",
   async () => {

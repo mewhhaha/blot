@@ -12,7 +12,7 @@ use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
     Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run,
 };
-use crate::frontend::FrontendState;
+use crate::frontend::{FrontendState, SyntaxSnapshot};
 use crate::typecheck::{
     CHECKED_MODULE_CERTIFICATE_SCHEMA, CachedModuleAnalyses, CachedModuleInterface,
     CheckedModuleCertificate, Checker,
@@ -102,6 +102,7 @@ pub struct AddedModule {
     pub module_handle: String,
     pub portable_ast_digest: String,
     pub syntax_diagnostics: Vec<Diagnostic>,
+    pub syntax_snapshot: Option<SyntaxSnapshot>,
 }
 
 pub(crate) use crate::source::SourceError as AddSourceError;
@@ -194,9 +195,13 @@ impl CompilerSession {
                 *span,
             )]));
         }
+        let snapshot = lowered.frontend.snapshot();
         self.frontends.insert(path.clone(), lowered.frontend);
-        self.install_module(path, lowered.module)
-            .map_err(AddSourceError::Lowering)
+        let mut added = self
+            .install_module(path, lowered.module)
+            .map_err(AddSourceError::Lowering)?;
+        added.syntax_snapshot = Some(snapshot);
+        Ok(added)
     }
 
     pub fn add_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
@@ -1580,6 +1585,7 @@ fn added_module(
         module_handle: path.to_owned(),
         portable_ast_digest: format!("fnv1a64:{digest:016x}"),
         syntax_diagnostics: Vec::new(),
+        syntax_snapshot: None,
     })
 }
 
@@ -1810,7 +1816,10 @@ mod tests {
         const PATH: &str = "removed:module";
         let mut session = CompilerSession::default();
         session
-            .add_source(PATH.to_owned(), source("let value = 1\n\u{e000}return value\u{e000}"))
+            .add_source(
+                PATH.to_owned(),
+                source("let value = 1\n\u{e000}return value\u{e000}"),
+            )
             .expect("module source should load");
         session
             .configure_module(PATH, BTreeMap::new(), BTreeMap::new())

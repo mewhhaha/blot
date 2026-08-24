@@ -143,6 +143,7 @@ export type AddedCompilerModuleResult =
       readonly moduleHandle: string;
       readonly portableAstDigest: string;
       readonly syntaxDiagnostics: readonly CompilerSourceDiagnostic[];
+      readonly syntaxSnapshot: CompilerSyntaxSnapshot | null;
     };
   }
   | CompilerSourceFailure;
@@ -150,6 +151,19 @@ export type AddedCompilerModuleResult =
 export interface CompilerDependencySite {
   readonly specifier: string;
   readonly span: { readonly start: number; readonly end: number };
+}
+
+export interface CompilerNodeReuse {
+  readonly previous: number;
+  readonly current: number;
+}
+
+export interface CompilerSyntaxSnapshot {
+  readonly tokens: readonly number[];
+  readonly nodes: readonly number[];
+  readonly edges: readonly number[];
+  readonly reuse: readonly CompilerNodeReuse[];
+  readonly parserExecuted: boolean;
 }
 
 export interface CompilerModuleConfiguration {

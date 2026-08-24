@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 
@@ -68,7 +70,7 @@ struct Lexer {
     accept_spec_by_state: &'static [i32],
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct Token {
     pub(crate) terminal: i32,
     pub(crate) start: usize,
@@ -104,6 +106,7 @@ struct IslandProgress {
     state: usize,
 }
 
+#[derive(Clone)]
 pub struct CompactProgram {
     pub tokens: Vec<i32>,
     pub nodes: Vec<i32>,
@@ -113,6 +116,38 @@ pub struct CompactProgram {
 pub struct FrontendState {
     source: Vec<u16>,
     tokens: Vec<Token>,
+    program: CompactProgram,
+    reuse: Vec<NodeReuse>,
+    parser_executed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeReuse {
+    previous: u32,
+    current: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyntaxSnapshot {
+    tokens: Vec<i32>,
+    nodes: Vec<i32>,
+    edges: Vec<i32>,
+    reuse: Vec<NodeReuse>,
+    parser_executed: bool,
+}
+
+impl FrontendState {
+    pub(crate) fn snapshot(&self) -> SyntaxSnapshot {
+        SyntaxSnapshot {
+            tokens: self.program.tokens.clone(),
+            nodes: self.program.nodes.clone(),
+            edges: self.program.edges.clone(),
+            reuse: self.reuse.clone(),
+            parser_executed: self.parser_executed,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -124,13 +159,31 @@ pub fn ingest_incremental(
     source: &[u16],
     previous: Option<&FrontendState>,
 ) -> Result<(CompactProgram, FrontendState), Vec<Diagnostic>> {
+    if let Some(previous) = previous
+        && source == previous.source
+    {
+        let reuse = identity_reuse(&previous.program);
+        let program = previous.program.clone();
+        return Ok((
+            program.clone(),
+            FrontendState {
+                source: source.to_vec(),
+                tokens: previous.tokens.clone(),
+                program,
+                reuse,
+                parser_executed: false,
+            },
+        ));
+    }
     let plan = frontend_plan();
     let (tokens, mut diagnostics) = match previous {
         Some(previous) => lex_incremental(source, previous, plan),
         None => lex_from(source, 0, 0, plan),
     };
+    let syntax_unchanged =
+        previous.is_some_and(|previous| same_syntax_tokens(&tokens, &previous.tokens));
     let delimiter_matches = match_delimiters(&tokens, plan.boundaries, &mut diagnostics);
-    let root = if diagnostics.is_empty() {
+    let root = if diagnostics.is_empty() && !syntax_unchanged {
         execute_root_island(&tokens, &delimiter_matches, plan, &mut diagnostics)
     } else {
         None
@@ -139,17 +192,138 @@ pub fn ingest_incremental(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let Some(root) = root else {
-        panic!("frontend produced neither a root node nor a diagnostic");
+    let program = if syntax_unchanged {
+        let previous = previous.expect("unchanged syntax requires a previous snapshot");
+        CompactProgram {
+            tokens: materialize_tokens(tokens.clone()),
+            nodes: previous.program.nodes.clone(),
+            edges: previous.program.edges.clone(),
+        }
+    } else {
+        let root = root.expect("frontend produced neither a root node nor a diagnostic");
+        materialize(tokens.clone(), root, plan)
     };
-    let program = materialize(tokens.clone(), root, plan);
+    let reuse = previous.map_or_else(Vec::new, |previous| {
+        reused_nodes(&previous.source, &previous.program, source, &program)
+    });
     Ok((
-        program,
+        program.clone(),
         FrontendState {
             source: source.to_vec(),
             tokens,
+            program,
+            reuse,
+            parser_executed: !syntax_unchanged,
         },
     ))
+}
+
+fn same_syntax_tokens(current: &[Token], previous: &[Token]) -> bool {
+    let current = current
+        .iter()
+        .filter(|token| token.terminal >= 0)
+        .map(|token| {
+            (
+                token.terminal,
+                token.start,
+                token.end,
+                token.lexical_identity,
+            )
+        });
+    let previous = previous
+        .iter()
+        .filter(|token| token.terminal >= 0)
+        .map(|token| {
+            (
+                token.terminal,
+                token.start,
+                token.end,
+                token.lexical_identity,
+            )
+        });
+    current.eq(previous)
+}
+
+fn identity_reuse(program: &CompactProgram) -> Vec<NodeReuse> {
+    (0..program.nodes.len() / 8)
+        .map(|id| NodeReuse {
+            previous: id as u32,
+            current: id as u32,
+        })
+        .collect()
+}
+
+fn reused_nodes(
+    previous_source: &[u16],
+    previous: &CompactProgram,
+    source: &[u16],
+    current: &CompactProgram,
+) -> Vec<NodeReuse> {
+    let mut previous_by_fingerprint: HashMap<u64, Vec<usize>> = HashMap::new();
+    for id in 0..previous.nodes.len() / 8 {
+        previous_by_fingerprint
+            .entry(node_fingerprint(previous_source, previous, id))
+            .or_default()
+            .push(id);
+    }
+    let mut reuse = Vec::new();
+    for current_id in 0..current.nodes.len() / 8 {
+        let fingerprint = node_fingerprint(source, current, current_id);
+        let Some(candidates) = previous_by_fingerprint.get_mut(&fingerprint) else {
+            continue;
+        };
+        let Some(previous_id) = candidates.pop() else {
+            continue;
+        };
+        if same_node_source(
+            previous_source,
+            previous,
+            previous_id,
+            source,
+            current,
+            current_id,
+        ) {
+            reuse.push(NodeReuse {
+                previous: previous_id as u32,
+                current: current_id as u32,
+            });
+        }
+    }
+    reuse.sort_by_key(|item| item.current);
+    reuse
+}
+
+fn node_fingerprint(source: &[u16], program: &CompactProgram, id: usize) -> u64 {
+    let base = id * 8;
+    let rule = program.nodes[base] as u64;
+    let start = program.nodes[base + 2] as usize;
+    let end = program.nodes[base + 3] as usize;
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64 ^ rule;
+    for unit in &source[start..end] {
+        hash ^= u64::from(*unit);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+fn same_node_source(
+    previous_source: &[u16],
+    previous: &CompactProgram,
+    previous_id: usize,
+    source: &[u16],
+    current: &CompactProgram,
+    current_id: usize,
+) -> bool {
+    let previous_base = previous_id * 8;
+    let current_base = current_id * 8;
+    if previous.nodes[previous_base] != current.nodes[current_base] {
+        return false;
+    }
+    let previous_start = previous.nodes[previous_base + 2] as usize;
+    let previous_end = previous.nodes[previous_base + 3] as usize;
+    let current_start = current.nodes[current_base + 2] as usize;
+    let current_end = current.nodes[current_base + 3] as usize;
+    previous_source[previous_start..previous_end] == source[current_start..current_end]
 }
 
 fn frontend_plan() -> &'static FrontendPlan {
@@ -749,20 +923,24 @@ fn materialize(tokens: Vec<Token>, mut root: PendingNode, plan: &FrontendPlan) -
     let edge_count = count_edges(&root);
     let mut edges = Vec::with_capacity(edge_count * 4);
     materialize_node(&root, plan, &mut nodes, &mut edges);
-    let mut token_records = Vec::with_capacity(tokens.len() * 4);
+    CompactProgram {
+        tokens: materialize_tokens(tokens),
+        nodes,
+        edges,
+    }
+}
+
+fn materialize_tokens(tokens: Vec<Token>) -> Vec<i32> {
+    let mut records = Vec::with_capacity(tokens.len() * 4);
     for token in tokens {
-        token_records.extend([
+        records.extend([
             token.terminal,
             token.start as i32,
             token.end as i32,
             token.lexical_identity,
         ]);
     }
-    CompactProgram {
-        tokens: token_records,
-        nodes,
-        edges,
-    }
+    records
 }
 
 fn assign_ids(node: &mut PendingNode, next_id: &mut usize) {
@@ -838,6 +1016,24 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_syntax_reuses_the_resident_compact_tree() {
+        let previous = "let value = 1\u{e000}return value\u{e000}";
+        let current = "let value = 1\u{e000}return value\u{e000} // tooling-only edit";
+        let previous = previous.encode_utf16().collect::<Vec<_>>();
+        let current = current.encode_utf16().collect::<Vec<_>>();
+        let (_, state) = ingest_incremental(&previous, None).expect("previous source should parse");
+        let (incremental, state) =
+            ingest_incremental(&current, Some(&state)).expect("current source should parse");
+        let fresh = ingest(&current).expect("current source should parse from scratch");
+
+        assert!(!state.parser_executed);
+        assert_eq!(state.reuse.len(), incremental.nodes.len() / 8);
+        assert_eq!(incremental.tokens, fresh.tokens);
+        assert_eq!(incremental.nodes, fresh.nodes);
+        assert_eq!(incremental.edges, fresh.edges);
+    }
+
+    #[test]
     fn incremental_frontend_matches_fresh_frontend_when_tokens_merge() {
         assert_incremental_matches_fresh("return x\u{e000}", "return xy\u{e000}");
     }
@@ -851,6 +1047,23 @@ mod tests {
         assert_incremental_matches_fresh(
             "let first = 100\u{e000}let second = 2\u{e000}return first\u{e000}",
             "let first = 1\u{e000}let second = 2\u{e000}return first\u{e000}",
+        );
+    }
+
+    #[test]
+    fn changed_syntax_publishes_an_explicit_node_reuse_map() {
+        let previous = "let first = 1\u{e000}let second = 2\u{e000}return first\u{e000}";
+        let current = "let first = 100\u{e000}let second = 2\u{e000}return first\u{e000}";
+        let previous = previous.encode_utf16().collect::<Vec<_>>();
+        let current = current.encode_utf16().collect::<Vec<_>>();
+        let (_, state) = ingest_incremental(&previous, None).expect("previous source should parse");
+        let (_, state) =
+            ingest_incremental(&current, Some(&state)).expect("current source should parse");
+
+        assert!(state.parser_executed);
+        assert!(!state.reuse.is_empty());
+        assert!(
+            state.reuse.iter().any(|item| item.previous != item.current) || state.reuse.len() > 1
         );
     }
 

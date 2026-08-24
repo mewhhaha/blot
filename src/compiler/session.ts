@@ -8,7 +8,21 @@ import {
   type SourceInspection,
 } from "../load.ts";
 import { WorkspaceGraph } from "../workspace_graph.ts";
-import { encodePortableModule } from "../syntax/portable.ts";
+import { babaRuntime } from "../syntax/baba_runtime.ts";
+import { materializeCpuCst } from "../syntax/cpu_cst.ts";
+import {
+  compactFieldNames,
+  compactNamedTokenKinds,
+  compactRepeatedFields,
+  compactRuleNames,
+} from "../syntax/compact_schema.ts";
+import type { Rule } from "../syntax/cursor.ts";
+import { elaborateLayout } from "../syntax/layout.ts";
+import type { Module } from "../syntax/ast.ts";
+import {
+  decodePortableModule,
+  encodePortableModule,
+} from "../syntax/portable.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import {
   decodeCompilerArtifactManifest,
@@ -34,6 +48,7 @@ import {
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
   type CompilerSourceDiagnostic,
+  type CompilerSyntaxSnapshot as RustSyntaxSnapshot,
   type CompilerTagFact,
   type CompilerTargetPreflight,
   type CompilerTestOutcome,
@@ -61,6 +76,14 @@ export interface CompilerArtifact {
   readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
   readonly artifactSource: "compiled" | "revision-cache";
+}
+
+export interface CompilerSyntaxSnapshot {
+  readonly module: Module;
+  readonly cst: Rule;
+  readonly reuse: RustSyntaxSnapshot["reuse"];
+  readonly parserExecuted: boolean;
+  readonly portableAstDigest: string;
 }
 
 export interface CheckedModule {
@@ -98,6 +121,7 @@ export interface CompilerHost {
   test(path: string): Promise<readonly CompilerTestOutcome[]>;
   portableAst(path: string): Promise<string>;
   portableGraph(path: string): Promise<ReadonlyMap<string, string>>;
+  syntaxSnapshot(path: string, source: string): Promise<CompilerSyntaxSnapshot>;
   prepare(path: string): Promise<BlotRuntimeModule>;
   compile(path: string): Promise<CompilerArtifact>;
   destroy(): void;
@@ -268,6 +292,73 @@ export class Compiler implements CompilerHost {
         modules.set(modulePath, result.ast);
       }
       return modules;
+    });
+  }
+
+  async syntaxSnapshot(
+    path: string,
+    source: string,
+  ): Promise<CompilerSyntaxSnapshot> {
+    return await this.#request(async () => {
+      const root = await this.#workspace.updateOverlay(resolve(path), source);
+      this.#syncLoaded(root);
+      const inspected = this.#inspectedSources.get(root.path);
+      const snapshot = inspected?.module.syntaxSnapshot;
+      if (
+        inspected === undefined || snapshot === undefined || snapshot === null
+      ) {
+        throw new CompilerInvariantFailure(
+          "canonical syntax snapshot",
+          new Error(
+            `Rust frontend omitted the syntax snapshot for ${root.path}`,
+          ),
+        );
+      }
+      const exported = this.#compiler.exportCompilerSessionModuleAst(
+        this.#handle,
+        root.path,
+      );
+      if (!exported.ok) {
+        this.#throwFailure(exported, root.path, "portable AST export");
+      }
+      const layout = await elaborateLayout(source);
+      if (!layout.ok) {
+        throw new CompilerInvariantFailure(
+          "canonical syntax snapshot",
+          new Error(
+            "Rust accepted source that the shared layout pass rejected",
+          ),
+        );
+      }
+      const frontend = await babaRuntime();
+      const cst = materializeCpuCst(
+        frontend.cpuParser,
+        {
+          tokens: Int32Array.from(snapshot.tokens),
+          nodes: Int32Array.from(snapshot.nodes),
+          edges: Int32Array.from(snapshot.edges),
+          symbols: new Int32Array(),
+          types: new Int32Array(),
+        },
+        layout.layout.source,
+        layout.layout.originalOffset,
+        {
+          ruleNames: compactRuleNames,
+          fieldNames: compactFieldNames,
+          namedTokenKinds: compactNamedTokenKinds,
+          repeatedFields: compactRepeatedFields,
+        },
+      );
+      return {
+        module: decodePortableModule(
+          JSON.parse(exported.ast),
+          `${root.path} Rust syntax snapshot`,
+        ),
+        cst,
+        reuse: snapshot.reuse.slice(),
+        parserExecuted: snapshot.parserExecuted,
+        portableAstDigest: inspected.module.portableAstDigest,
+      };
     });
   }
 

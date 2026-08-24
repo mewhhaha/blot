@@ -5,6 +5,7 @@ export {
   type CompilerArtifact,
   type CompilerHost,
   type CompilerOptions,
+  type CompilerSyntaxSnapshot,
   type EvaluatedModule,
 } from "./compiler/session.ts";
 export {

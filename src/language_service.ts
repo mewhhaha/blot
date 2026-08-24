@@ -1,10 +1,14 @@
 import { fromFileUrl, resolve } from "@std/path";
-import { Compiler, type CompilerAnalysis } from "./compiler.ts";
+import {
+  Compiler,
+  type CompilerAnalysis,
+  type CompilerSyntaxSnapshot,
+} from "./compiler.ts";
 import { BlotError } from "./diagnostic.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { LoadError } from "./load.ts";
 import type { Span } from "./syntax/ast.ts";
-import { parse, parseConcrete } from "./syntax/parse.ts";
+import { parse } from "./syntax/parse.ts";
 import { definitionAt } from "./tooling/definition.ts";
 import { formatSource } from "./tooling/formatter.ts";
 import { hoverAt } from "./tooling/hover.ts";
@@ -83,6 +87,13 @@ export class LanguageService {
       readonly checked: Promise<CompilerAnalysis | null>;
     }
   >();
+  readonly #syntaxSnapshots = new Map<
+    string,
+    {
+      readonly version: number;
+      readonly snapshot: Promise<CompilerSyntaxSnapshot>;
+    }
+  >();
   readonly #compiler: Promise<Compiler>;
 
   constructor() {
@@ -92,6 +103,7 @@ export class LanguageService {
   open(uri: string, source: string, version: number): void {
     this.#documents.set(uri, { source, version });
     this.#hoverChecks.delete(uri);
+    this.#syntaxSnapshots.delete(uri);
   }
 
   change(uri: string, source: string, version: number): void {
@@ -99,6 +111,7 @@ export class LanguageService {
     this.#requireNextVersion(uri, current.version, version);
     this.#documents.set(uri, { source, version });
     this.#hoverChecks.delete(uri);
+    this.#syntaxSnapshots.delete(uri);
   }
 
   changeRanges(
@@ -133,11 +146,13 @@ export class LanguageService {
     }
     this.#documents.set(uri, { source, version });
     this.#hoverChecks.delete(uri);
+    this.#syntaxSnapshots.delete(uri);
   }
 
   close(uri: string): void {
     this.#documents.delete(uri);
     this.#hoverChecks.delete(uri);
+    this.#syntaxSnapshots.delete(uri);
   }
 
   version(uri: string): number | null {
@@ -148,40 +163,42 @@ export class LanguageService {
 
   async diagnostics(uri: string): Promise<readonly LanguageDiagnostic[]> {
     const document = this.#requiredDocument(uri);
-    const parsed = await parseConcrete(document.source);
-    if (!parsed.ok) {
-      return parsed.diagnostics.map((diagnostic) =>
-        languageDiagnostic(document.source, diagnostic, 1)
-      );
+    const path = editorPath(uri);
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      const diagnostic = diagnosticFromError(path, error);
+      if (diagnostic !== null) {
+        return [languageDiagnostic(document.source, diagnostic, 1)];
+      }
+      throw error;
     }
 
     const diagnostics: LanguageDiagnostic[] = [];
-    const path = filePath(uri);
-    if (path !== null) {
-      try {
-        const analysis = await (await this.#compiler).analyzeSource(
-          path,
-          document.source,
-        );
-        if (!analysis.targetPreflight.supported) {
-          let message = analysis.targetPreflight.unsupportedComponent;
-          if (message === null) {
-            message =
-              "The inferred export is not supported by the selected Wasm target.";
-          }
-          diagnostics.push(languageDiagnostic(document.source, {
-            code: "BLOT_TARGET_REFUSAL",
-            message,
-            span: { start: 0, end: 0 },
-          }, 1));
+    try {
+      const analysis = await (await this.#compiler).analyzeSource(
+        path,
+        document.source,
+      );
+      if (!analysis.targetPreflight.supported) {
+        let message = analysis.targetPreflight.unsupportedComponent;
+        if (message === null) {
+          message =
+            "The inferred export is not supported by the selected Wasm target.";
         }
-      } catch (error) {
-        const semantic = diagnosticFromError(path, error);
-        if (semantic !== null) {
-          diagnostics.push(languageDiagnostic(document.source, semantic, 1));
-        } else {
-          throw error;
-        }
+        diagnostics.push(languageDiagnostic(document.source, {
+          code: "BLOT_TARGET_REFUSAL",
+          message,
+          span: { start: 0, end: 0 },
+        }, 1));
+      }
+    } catch (error) {
+      const semantic = diagnosticFromError(path, error);
+      if (semantic !== null) {
+        diagnostics.push(languageDiagnostic(document.source, semantic, 1));
+      } else {
+        throw error;
       }
     }
     for (const diagnostic of await this.#validatedLints(uri, parsed)) {
@@ -199,8 +216,13 @@ export class LanguageService {
     range: Range,
   ): Promise<readonly CodeAction[]> {
     const document = this.#requiredDocument(uri);
-    const parsed = await parseConcrete(document.source);
-    if (!parsed.ok) return [];
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      throw error;
+    }
     const requestedStart = offsetAtPosition(document.source, range.start);
     const requestedEnd = offsetAtPosition(document.source, range.end);
     const actions: CodeAction[] = [];
@@ -245,8 +267,13 @@ export class LanguageService {
     position: Position,
   ): Promise<Location | null> {
     const document = this.#requiredDocument(uri);
-    const parsed = await parse(document.source);
-    if (!parsed.ok) return null;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      if (diagnosticFromError(editorPath(uri), error) !== null) return null;
+      throw error;
+    }
     const offset = offsetAtPosition(document.source, position);
     const span = definitionAt(parsed.module, document.source, offset);
     if (span === null) return null;
@@ -255,8 +282,13 @@ export class LanguageService {
 
   async hover(uri: string, position: Position): Promise<Hover | null> {
     const document = this.#requiredDocument(uri);
-    const parsed = await parseConcrete(document.source);
-    if (!parsed.ok) return null;
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      if (diagnosticFromError(editorPath(uri), error) !== null) return null;
+      throw error;
+    }
     const checked = await this.#typedRevision(uri, document);
     const offset = offsetAtPosition(document.source, position);
     const description = hoverAt(
@@ -275,7 +307,18 @@ export class LanguageService {
 
   async formatting(uri: string): Promise<readonly TextEdit[]> {
     const document = this.#requiredDocument(uri);
-    const formatted = await formatSource(document.source);
+    let snapshot: CompilerSyntaxSnapshot;
+    try {
+      snapshot = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      throw error;
+    }
+    const formatted = await formatSource(document.source, {
+      ok: true,
+      module: snapshot.module,
+      cst: snapshot.cst,
+    });
     if (!formatted.ok || formatted.source === document.source) return [];
     return [{
       range: {
@@ -290,6 +333,7 @@ export class LanguageService {
     (await this.#compiler).destroy();
     this.#documents.clear();
     this.#hoverChecks.clear();
+    this.#syntaxSnapshots.clear();
   }
 
   #typedRevision(
@@ -300,7 +344,7 @@ export class LanguageService {
     if (cached !== undefined && cached.version === document.version) {
       return cached.checked;
     }
-    const path = filePath(uri) ?? resolve(".blot-untitled.blot");
+    const path = editorPath(uri);
     const checked = this.#compiler.then((compiler) =>
       compiler.analyzeSource(path, document.source)
     ).catch((error) => {
@@ -316,10 +360,7 @@ export class LanguageService {
 
   async #validatedLints(
     uri: string,
-    parsed: Extract<
-      Awaited<ReturnType<typeof parseConcrete>>,
-      { readonly ok: true }
-    >,
+    parsed: CompilerSyntaxSnapshot,
   ): Promise<readonly LintDiagnostic[]> {
     const document = this.#requiredDocument(uri);
     const diagnostics = lintModule(parsed.module, document.source, parsed.cst);
@@ -375,6 +416,24 @@ export class LanguageService {
       }
     }
     return validated;
+  }
+
+  #syntaxRevision(
+    uri: string,
+    document: OpenDocument,
+  ): Promise<CompilerSyntaxSnapshot> {
+    const cached = this.#syntaxSnapshots.get(uri);
+    if (cached !== undefined && cached.version === document.version) {
+      return cached.snapshot;
+    }
+    const snapshot = this.#compiler.then((compiler) =>
+      compiler.syntaxSnapshot(editorPath(uri), document.source)
+    );
+    this.#syntaxSnapshots.set(uri, {
+      version: document.version,
+      snapshot,
+    });
+    return snapshot;
   }
 
   #requiredDocument(uri: string): OpenDocument {
@@ -454,4 +513,11 @@ function filePath(uri: string): string | null {
   const parsed = new URL(uri);
   if (parsed.protocol !== "file:") return null;
   return fromFileUrl(parsed);
+}
+
+function editorPath(uri: string): string {
+  const path = filePath(uri);
+  if (path !== null) return path;
+  const safe = encodeURIComponent(uri).replaceAll("%", "_");
+  return resolve(`.blot-editor-${safe}.blot`);
 }

@@ -84,11 +84,12 @@ and a deterministic portable-AST digest. Node resolves those reported sites and
 then configures that already-installed module; it does not ask the compiler to
 parse the same revision a second time.
 
-The TypeScript syntax tree remains available for formatting and other tooling.
-While that compatibility parser exists, the loader asserts that its dependency
-sites equal the compiler-owned inspection result. This is a parity invariant,
-not a second source of semantic graph edges. Nonliteral include paths and syntax
-failures are diagnostics from the Rust inspection before graph configuration.
+The compiler-owned inspection result also carries the canonical compact syntax
+snapshot used by formatting and editor tooling. The TypeScript parser remains a
+fresh-equivalence oracle and may validate a proposed replacement revision, but
+it is not run again for the accepted editor revision and is not a second source
+of semantic graph edges. Nonliteral include paths and syntax failures are
+diagnostics from the Rust inspection before graph configuration.
 
 ## 3. Dependency invalidation
 
@@ -136,6 +137,12 @@ incremental_frontend(previous, edit)
 
 including token identities, compact nodes, fields, edges, operator folding,
 resolved AST, origins, and diagnostics.
+
+An identical source revision reuses the complete resident compact tree without
+lexing or parsing. A changed revision resynchronizes an unchanged token suffix,
+publishes a deterministic old-to-new compact-node reuse map, and may reuse a
+complete compact tree when the resulting syntax-token sequence is identical.
+Every reuse decision remains subordinate to fresh-frontend equivalence.
 
 Operator identity uses the generated fixed language-plan revision. Source
 modules have no custom fixity environment to preserve or compare.

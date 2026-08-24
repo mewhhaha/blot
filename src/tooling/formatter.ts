@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostic.ts";
-import { parseConcrete } from "../syntax/parse.ts";
+import { type ConcreteParseResult, parseConcrete } from "../syntax/parse.ts";
 import type { Module, Span } from "../syntax/ast.ts";
 
 export type FormatResult =
@@ -80,8 +80,13 @@ const INDENTED_RULES = new Set([
  * Non-whitespace source content is retained, so comments never need a second
  * lexer and cannot be dropped by printing from the elaborated AST.
  */
-export async function formatSource(source: string): Promise<FormatResult> {
-  let parsed = await parseConcrete(source);
+export async function formatSource(
+  source: string,
+  snapshot?: Extract<ConcreteParseResult, { readonly ok: true }>,
+): Promise<FormatResult> {
+  let parsed: ConcreteParseResult;
+  if (snapshot === undefined) parsed = await parseConcrete(source);
+  else parsed = snapshot;
   if (!parsed.ok) return parsed;
 
   const preferredSequencing = preferDiscardSequencing(source, parsed.cst);

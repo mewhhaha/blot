@@ -15,10 +15,12 @@ Indent queries: ✓       Tags queries: ✓        Rainbow queries: ✓
 
 The server publishes syntax and compiler diagnostics for the open editor
 revision, finds local lexical definitions, describes values and syntax on hover,
-formats documents, and publishes style lints with quick fixes. Production
-compiler conformance uses the downloaded CI-built compiler Wasm; the server
-hosts that Rust/Wasm compiler with Baba's CPU frontend and does not initialize
-WebGPU. Run it outside Helix with:
+formats documents, and publishes style lints with quick fixes. All of those
+features consume the resident Rust frontend's canonical compact syntax snapshot,
+so the accepted editor revision is parsed once. Production compiler conformance
+uses the downloaded CI-built compiler Wasm; the server hosts that Rust/Wasm
+compiler with Baba's CPU frontend and does not initialize WebGPU. Run it outside
+Helix with:
 
 ```bash
 deno task lsp
