@@ -1,78 +1,53 @@
 # Predicate refinements
 
-## Status
+## Status and scope
 
 This document specifies the implemented unknown-first refinement contract.
-[`LANGUAGE.md`](../LANGUAGE.md) is normative for the source surface.
-[`TYPECHECKING.md`](TYPECHECKING.md) remains authoritative for the ordinary type
-lattice, and [`SAFETY.md`](SAFETY.md) remains authoritative for relational
-proofs over particular run-time values.
+[`LANGUAGE.md`](../LANGUAGE.md), subject to
+[`COHERENCE.md`](COHERENCE.md), owns the source surface.
+[`TYPECHECKING.md`](TYPECHECKING.md) owns the ordinary type lattice, and
+[`SAFETY.md`](SAFETY.md) owns propositions about particular immutable run-time
+values.
 
-The contract makes most type declarations ordinary compile-time values or pure
-predicates while retaining the existing representation, inference, effect,
-ownership, layout, and compilation guarantees. The supported model is complete
-at the canonicalization boundary defined below: open variables receive canonical
-constraints, closed types admit composable source predicates, and
-safety-sensitive relations require finite replayable evidence.
+Predicate refinements normalize compile-time descriptions into the existing
+canonical type algebra. They do not add arbitrary predicates to open
+biunification, dependent arrows, unchecked assumptions, or new run-time
+representations.
 
-## 1. Thesis
+## 1. Unknown-first inference
 
-Every unannotated value begins as a fresh inference variable. A lambda therefore
-starts schematically as `'a -> 'b`, and its body and call sites accumulate lower
-and upper constraints until the compiler has enough information to settle a
-representation. `Int`, arrays, records, variants, arrows, and effect rows are
-the canonical constraints that refine those unknowns; they are not eager nominal
-classifications.
+An unannotated value begins with fresh inference variables. Uses accumulate lower
+and upper bounds until checking has enough information to settle a canonical
+type and representation.
 
 ```blot
 let identity = fn value => value
-// identity : forall 'a. 'a -> 'a
+// forall 'a. 'a -> 'a
 
 let name_of = fn value => value.name
-// name_of : forall 'field. { .name = 'field; } -> 'field
+// forall 'field. { .name = 'field; } -> 'field
 
 let count = fn values => Array.length values
-// count : forall 'element. ['element] -> Int
+// forall 'element. ['element] -> Int
 ```
 
-Calling a quantified function freshens its variables, constrains the argument,
-result, and effect row together, and settles only what the use requires. This is
-the unknown-first core. Predicate-defined types participate by normalizing to
-the same canonical constraints before they enter the graph.
+Calling a quantified function freshens its variables and constrains argument,
+result, and effect row together. Predicate-defined types participate only after
+normalizing to canonical constraints already understood by ordinary inference.
 
-A source type may be introduced by a pure predicate:
-
-```blot
-const Natural = refine (Int, fn value => value >= 0)
-const Byte = refine (Int, fn value => value >= 0 && value <= 255)
-const NonZero = refine (Int, fn value => value != 0)
-```
-
-Functions remain ordinary arrows:
+The fact domains remain separate:
 
 ```text
-A -> B -> C
+Gamma  ordinary structural and scalar types
+Phi    duplicable propositions about immutable value identities
+Omega  affine and linear ownership state
 ```
 
-and control flow remains ordinary source code. A branch adds facts about the
-value it tested; it does not change the meaning of arrows or add an imperative
-assignment operation.
+`Gamma` determines operations and representation. `Phi` records facts such as
+`0 <= i < length(xs)`. `Omega` controls consuming use. A proposition is not made
+affine, and ownership evidence is not made duplicable, by refinement syntax.
 
-The essential separation is:
-
-```text
-Gamma    structural and scalar representation types
-Phi      duplicable propositions about immutable value identities
-Omega    affine and linear ownership facts
-```
-
-`Gamma` answers how a value is represented and which operations are defined.
-`Phi` answers facts such as `0 <= i < length(xs)`. `Omega` answers whether an
-owned value may still be consumed. Classical propositions in `Phi` may be
-duplicated; ownership evidence in `Omega` may not. Merging them would either
-make proofs spuriously affine or make ownership spuriously duplicable.
-
-## 2. Source operation
+## 2. Integer inhabitant predicates
 
 The prelude operation is:
 
@@ -80,112 +55,141 @@ The prelude operation is:
 refine : (Type, Predicate) -> Type
 ```
 
-where `Predicate` is an ordinary pure compile-time function. Its implementation
-uses the compiler primitive `@type.refine`; the primitive is necessary because
-an unbounded integer domain cannot be enumerated in Blot source.
+Its implementation crosses the checked primitive `@type.refine`. The first
+supported inversion boundary is the discrete signed-integer lattice.
 
-The accepted inhabitant-predicate grammar is semantic rather than lexical:
+An accepted inhabitant predicate is semantically equivalent to:
 
 ```text
-p ::= x relation k | k relation x | p junction p | negation p
+p ::= x relation k
+    | k relation x
+    | conjunction(p,p)
+    | disjunction(p,p)
+    | negation(p)
 ```
 
-`k` is a compile-time integer. Operators are accepted only when their
-compile-time values satisfy the same factorisation proof used by branch
-narrowing: `relation` is any function of two integers whose result factors
-through `@int.cmp`, `junction` has the truth table of conjunction or
-disjunction, and `negation` has the truth table of boolean complement. A
-shadowed function called `>=` has no authority merely because of its spelling.
+where `k` is a compile-time integer.
 
-The predicate parameter must occur only as an operand of accepted comparisons.
+Authority comes from behavior, not spelling:
+
+- a relation value must factor through `@int.cmp`, observe each operand exactly
+  once, and return true for an exact subset of `{less,equal,greater}`;
+- a conjunction or disjunction value must have the corresponding complete
+  boolean truth table; and
+- a negation value must have the boolean-complement truth table.
+
+A shadowed function named `>=`, `&&`, or `not` has no authority merely because of
+its name. Conversely, a source-defined value with the admitted finite semantics
+may be used.
+
+The predicate parameter may occur only through the accepted comparison basis.
 Recursion, effects, run-time captures, arbitrary calls, and opaque observations
-are rejected with `BLOT_REFINEMENT_PREDICATE`. Refusal is preferable to
-sampling: testing a few inputs cannot prove a predicate over an unbounded
-domain.
+are rejected with `BLOT_REFINEMENT_PREDICATE`. Sampling is never used to justify
+a predicate over an unbounded domain.
 
-### 2.1 The primitive boundary is semantic, not an operator list
+Examples:
 
-The compiler does not assign authority to `==`, `!=`, `<`, `&&`, or any other
-source spelling. Integer comparison functions are ordinary source values. A
-candidate is accepted only when the existing factorisation proof establishes
-that it observes both operands exactly once through `@int.cmp`. The compiler
-then records the subset of `{ less, equal, greater }` for which that value
-answers true. All eight subsets are meaningful; there is no closed compiler
-enumeration of source comparison operators.
+```blot
+const Natural = refine (Int, fn value => value >= 0)
+const Byte = refine (Int, fn value => value >= 0 && value <= 255)
+const NonZero = refine (Int, fn value => value != 0)
+```
 
-Conjunction, disjunction, and negation are likewise ordinary source functions.
-Their complete input domains are finite, so their boolean truth tables can be
-established exactly. This is a primitive semantic basis, not a privileged
-prelude vocabulary. Source may define and compose any names over it.
+## 3. Normalization
 
-### 2.2 One requirement operation
+Write `R(p)` for the exact integer set denoted by an accepted predicate:
 
-The surface has one operation for applying a requirement:
+```text
+R(x op k)  = integers whose ordering to k makes op true
+R(p and q) = R(p) intersect R(q)
+R(p or q)  = R(p) union R(q)
+R(not p)   = Int difference R(p)
+```
+
+Refinement evaluates at compile time:
+
+```text
+Delta |- base downarrow T
+Delta, x |- p normalizes R
+normalize(T intersect R) = U
+U is inhabited
+----------------------------------------------
+Delta |- refine(base, fn x => p) downarrow U
+```
+
+`U` is an existing integer range or finite ground union. No predicate closure
+node enters the open inference graph.
+
+Closed unions have one normal form:
+
+- flatten nested unions;
+- remove `bottom`;
+- let `top` absorb;
+- remove equivalent members;
+- normalize zero members to `bottom`; and
+- normalize one member to that member.
+
+Exact closed intersection and difference return through the same normalizer.
+An empty inhabitant refinement is rejected with `BLOT_EMPTY_REFINEMENT`; Blot
+exposes no ordinary source bottom-type value.
+
+The supported inversion boundary is deliberately narrow. Arrays, records,
+arrows, variants, effect rows, and seals already constrain unknowns directly as
+canonical type values. Text lacks the discrete successor structure required by
+this normalizer, and floats contain NaN and have no current singleton-type
+algebra. Accepting arbitrary closures would turn subtyping into program
+equivalence.
+
+## 4. Requirement application
+
+The surface has one requirement operation:
 
 ```text
 @satisfies : value -> (canonical type | closed-type predicate) -> value
 ```
 
-This is a normalization boundary rather than a union injected into the type
-lattice. The checker first evaluates the requirement. If `bridge(requirement)`
-produces a canonical type, that type constrains the subject's still-open
-inference variable. Otherwise the checker reifies the subject's settled type,
-applies the requirement as a compile-time predicate, and accepts only `#True` or
-`#False`. The assertion then erases.
+The checker evaluates the requirement at compile time.
 
-A `sig` uses this same requirement classifier and subtype judgment. It accepts
-only the canonical branch because an adjacent lambda may need bidirectional
-rank-N checking; predicate requirements are observations and cannot elaborate a
-lambda. Thus there is one semantic kernel with two source presentations, not two
-assertion mechanisms.
+### 4.1 Canonical requirement
 
-That one rule covers scalar, collection, structural, higher-order, effect, and
-nominal requirements:
+If the bridge produces a canonical type, that type constrains the subject's
+ordinary inference variable through the declarative subtype relation.
 
 ```blot
-// Scalar. Int is the canonical signed-integer domain constraint.
-let increment = fn value =>
+let increment = fn value => do:
   let value = @satisfies value Int
   return value + 1
 
-// Homogeneous collection. The carrier and element start open.
 let accept_ints = fn values => @satisfies values [Int]
 
-// Trait-like behavior is a record constraint plus width subtyping.
 const Renderable = { .render = Unit -> Text; }
-let render = fn value =>
+let render = fn value => do:
   let renderable = @satisfies value Renderable
   return renderable.render ()
+```
 
-// Higher-order behavior includes the callback's effect row.
+Higher-order requirements include effect rows:
+
+```blot
 const Console = @effect { .write = Text -> Unit; }
 const Command = Text -> Unit ~ { Console }
 let install = fn callback => @satisfies callback Command
+```
 
-// Variants and nominal seals are the same kind of canonical requirement.
+Variants and seals use the same canonical branch:
+
+```blot
 const Message = #Ready | #Failed Text
 const UserId = seal ("UserId", Int)
 let accept_message = fn value => @satisfies value Message
 let accept_user = fn value => @satisfies value UserId
 ```
 
-Requirements may be abstracted by a staged function:
+### 4.2 Closed-type predicate
 
-```blot
-const require = fn requirement => fn value => @satisfies value requirement
-let checked = require { .name = Text; } { .name = "Ada"; .age = 36; }
-```
-
-The `const` is semantically important: specialization supplies the requirement
-before checking the returned closure. An ordinary runtime parameter is rejected
-with `BLOT_SIG_NOT_COMPTIME`; it is never trusted as an unchecked predicate.
-
-A call freshens quantified variables, connects the argument, result, and effect
-rows, and solves the accumulated constraints. Thus `identity` remains
-`forall a. a -> a`, while calling `increment` makes its carrier integer and
-calling `render` requires only the one method it uses.
-
-Closed questions use the same operation with an ordinary source predicate:
+If the requirement is not a canonical type, the subject type must already be
+closed. The checker reifies that type, evaluates the requirement as a pure
+compile-time predicate, and accepts only `#True` or `#False`.
 
 ```blot
 const both = fn (left, right) => fn type => left type && right type
@@ -199,211 +203,173 @@ let person = { .name = "Ada"; .age = 36; }
 let checked = @satisfies person named_shape
 ```
 
-Predicates do not constrain open variables. That is deliberate: a predicate can
-reject a closed type but cannot grant an operation or become an arbitrary
-closure node in biunification. Use the canonical record, array, arrow, variant,
-seal, or range value when the requirement must refine an unknown.
+A closed-type predicate may reject a settled type. It cannot grant an operation
+on an open variable or become an opaque solver node. Use a canonical record,
+array, arrow, variant, seal, range, or effect-row value when a requirement must
+constrain an unknown.
 
-The minimal closed-type observations are:
+### 4.3 Signatures
+
+A `sig` uses the same canonical requirement classifier and subtype relation. It
+accepts only the canonical branch because an adjacent lambda may require
+bidirectional rank-N checking; an arbitrary observational predicate cannot
+elaborate an open lambda.
+
+Requirements may be abstracted only when staging supplies them before checking
+the returned closure:
+
+```blot
+const require = fn requirement => fn value => @satisfies value requirement
+let checked = require { .name = Text; } { .name = "Ada"; .age = 36; }
+```
+
+An ordinary run-time requirement parameter is rejected with
+`BLOT_SIG_NOT_COMPTIME`; it is never trusted as an unchecked predicate.
+
+## 5. Type reflection basis
+
+Closed-type predicates use a deliberately limited observation basis:
 
 ```text
 @type.reflect type             expose neutral outer structure
-@type.equal left right         exact alpha-equivalent type-value identity
-@type.instantiate forall arg   eliminate one outer binder with a chosen value
+@type.equal left right         exact alpha-equivalent type identity
+@type.instantiate forall arg   eliminate one outer binder
 @type.probe forall             eliminate one binder with a kind-correct witness
 ```
 
-`@type.reflect` reports an outer quantified type as `#Forall`, but never exposes
-the binder's internal identity or an open body. Source inspects it by applying
-`@type.instantiate` to a chosen type value. A kind-polymorphic traversal uses
-`@type.probe`, which chooses `Unit` for an ordinary type binder and the empty
-row for an effect-row binder.
+`@type.reflect` reports an outer quantified value as `#Forall` without exposing
+the binder's internal identity or an open body. Source traverses it by
+instantiation or probing.
 
 ```blot
 const rec is_function = fn type => case reflect type of
   #Arrow _ => True
   #Forall => is_function (@type.probe type)
   _ => False
-
-const Identity = @forall (fn T => T -> T)
-let id = fn value => value
-let checked_id = @satisfies id is_function
 ```
 
 Exact equality remains primitive because reflection intentionally hides
-quantifier identities, opaque type identities, and effect-row internals. Field
-tests, function decomposition, recursive arrow traversal, conjunction, and
-disjunction remain ordinary source.
+quantifier identities, opaque identities, and effect-row internals. Field tests,
+function decomposition, recursion over closed reflected structure, conjunction,
+and disjunction remain ordinary source code.
 
-### 2.3 Layout, facts, and ownership stay compositional
+## 6. Flow-sensitive facts
 
-Layout members travel with canonical type values, so refining an attached
-integer type keeps the namespace that selects its representation:
-
-```blot
-const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
-const bits = SmallI32.bit_width
-```
-
-Relationships between particular immutable values remain replayable evidence in
-`Phi`, not type parameters. A body-verified summary can cross a function or
-module boundary and authorize a later direct access:
-
-```blot
-let at = fn values => fn index =>
-  if index >= 0 && index < Contracts.count values:
-    return @array.get values index
-  return 0
-```
-
-Ownership remains `Omega`. Applying a requirement is an identity: it neither
-copies nor consumes the carrier, so an owned value still has exactly the same
-affine obligations before and after refinement. These three domains compose at a
-call site without being collapsed into one unsound lattice.
-
-## 3. Elaboration and normalization
-
-Closed unions have one normal form before they enter the solver: flatten nested
-unions, remove `bottom`, let `top` absorb, remove duplicate members, and map
-zero or one member to `bottom` or that member. Exact ground intersection and
-difference return through the same normalizer. Open inference variables never
-enter this Boolean layer; their joins remain Simple-sub lower bounds.
-
-Write `R(p)` for the exact integer set denoted by an accepted predicate. The
-normalizer is defined by:
-
-```text
-R(x op k)   = integers whose ordering to k makes op true
-R(p and q)  = R(p) intersect R(q)
-R(p or q)   = R(p) union R(q)
-R(not p)    = Int difference R(p)
-```
-
-Then predicate refinement is compile-time evaluation:
-
-```text
-Delta |- base downarrow T
-Delta, x |- p normalizes R
-T intersect R = U       U is inhabited
------------------------------------------------- refine
-Delta |- refine(base, fn x => p) downarrow U
-```
-
-`U` is an existing range or finite ground union value. No predicate node enters
-the biunification graph. Existing subtyping, coverage, reflection, and signature
-checking therefore receive the same canonical types they already understand. An
-empty intersection is rejected with `BLOT_EMPTY_REFINEMENT`; Blot has no source
-bottom type value.
-
-Inhabitant-predicate inversion accepts integer bases. This is the complete
-supported inversion boundary: the existing integer lattice has discrete
-inclusive bounds and exact difference. Arrays, records, arrows, variants, effect
-rows, and seals already constrain unknowns directly as canonical type values, so
-they do not require closure inversion. Text has no successor operation, floats
-contain NaN and do not have singleton types, and accepting an arbitrary closure
-for either would turn subtyping into program equivalence.
-
-## 4. Flow-sensitive facts
-
-Predicate-defined types do not replace branch refinement. Given:
+Predicate-defined canonical types do not replace branch refinement. For example:
 
 ```blot
 sig consume = Natural -> Int
 let consume = fn value => value
 
 sig checked = Int -> Int
-let checked = fn value =>
+let checked = fn value => do:
   if value >= 0:
     return consume value
   return 0
 ```
 
-the declaration of `Natural` normalizes to an existing range. The `if` branch
-uses the existing comparison proof to narrow `value` to that range, so the call
-is admitted without a cast or run-time validation. The else branch receives the
+`Natural` normalizes to a canonical integer range. The accepted comparison adds
+a branch fact that narrows `value` to that range. The else branch receives the
 representable complement.
 
-Predicates over relationships such as `i < length(xs)` remain propositions in
-`Phi`; they do not become array type parameters. This preserves stable array
-representations and keeps biunification polynomial.
+Relationships between particular values remain in `Phi`:
 
-## 5. Effects and ownership
-
-A type predicate is evaluated at compile time with no host authority. The
-accepted fragment contains no effectful expression. Consequently a predicate
-cannot perform an effect, inspect a run-time value, or introduce a run-time
-failure path.
-
-Ownership is checked after ordinary typing and relational proof construction.
-Refining an owned value does not copy, borrow, consume, or return it. The
-refinement is a fact about the value, not another carrier. `Omega` therefore
-continues to govern every use exactly once where required.
-
-## 6. Erasure and performance obligations
-
-Predicate normalization finishes before Runtime HIR. The erasure theorem is:
-
-```text
-normalize(T, p) = U
-layout(T) = layout(U)
-erase(e checked with U) = erase(e checked with the equivalent canonical range)
+```blot
+let at = fn values => fn index => do:
+  if index >= 0 && index < Contracts.count values:
+    return @array.get values index
+  return 0
 ```
 
-For integer refinements, both layouts are signed `i64`. A program that differs
-only by spelling a canonical range as an equivalent predicate must produce
-identical Runtime HIR operations and equivalent WebAssembly. The benchmark
-records:
+Here the direct read is authorized by a replayable identity-sensitive proposition
+about `index` and this exact `values`, not by turning array length into an ordinary
+type parameter.
 
-1. cold and warm checking time for predicate and canonical-range spellings;
-2. emitted Wasm byte length and SHA-256;
-3. Runtime HIR operation counts; and
-4. execution result and steady-state run time.
+## 7. Layout, effects, and ownership
+
+A canonical type retains its attached layout namespace through integer
+refinement:
+
+```blot
+const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
+const bits = SmallI32.bit_width
+```
+
+The inhabitant predicate and closed-type predicate fragments are pure compile-time
+code. They cannot perform source or host effects, inspect run-time values, or add
+a run-time failure branch.
+
+Applying a requirement is an identity on the carrier. It does not copy, borrow,
+move, cancel, or consume the value. `Omega` before and after the assertion is the
+same, subject to ordinary demand: if the assertion occurs only in a dead pure
+declaration, the whole declaration is absent.
+
+An owned-value example must use an explicit statement block:
+
+```blot
+let checked = fn value => do:
+  if value >= 0:
+    return consume value
+  return 0
+```
+
+The refinement fact does not duplicate the owned carrier.
+
+## 8. Erasure and representation
+
+Predicate normalization completes before Runtime HIR. For an integer refinement:
+
+```text
+normalize(T,p) = U
+layout(T) = layout(U)
+erase(check using U) = erase(check using the equivalent canonical range)
+```
+
+The predicate closure and `@satisfies` assertion erase. Equivalent predicate and
+canonical-range spellings must produce equivalent Runtime HIR and WebAssembly.
+No new public ABI type, tag, or run-time proof object is introduced.
 
 Recognition is linear in the predicate AST after comparison and boolean values
-have been characterized by their finite semantic answer sets. Recognition is
-cached by compile-time value identity. Normalization over the initial fragment
-produces at most one additional range piece per distinct comparison boundary;
-implementation limits must reject an oversized predicate before pathological
-compile-time growth.
+have been characterized by finite semantic answer sets. Recognition is cached by
+compile-time value identity. The implementation imposes deterministic expansion
+limits and returns a `LimitDiagnostic`, not a source theorem, when such a bound is
+reached before normalization completes.
 
-## 7. Deliberate rejection boundaries
+## 9. Deliberate rejection boundaries
 
-The following are rejection boundaries of the supported language, not incomplete
-implementations:
+The supported contract rejects:
 
-- no unchecked `assume`;
-- no implicit run-time validation or coercion;
-- no arbitrary closure nodes in biunification: structural, array, arrow,
-  variant, seal, and effect requirements enter as existing canonical
-  constraints, while source predicates inspect closed reifiable types;
-- no dependent function arrows or general theorem proving;
-- relational publication is the verified unary affine
-  `length(parameter) + literal` certificate schema;
-- no ownership facts inside the type lattice; and
-- no change to Runtime HIR or the public ABI.
+- unchecked `assume`;
+- implicit run-time validation or coercion;
+- arbitrary predicate closures in open biunification;
+- dependent function arrows and general theorem proving;
+- ownership facts inside the ordinary type lattice;
+- run-time or effectful type predicates;
+- predicate sampling as proof;
+- hidden Runtime-HIR or ABI representations for predicates; and
+- relationship publication outside the separately specified replayable summary
+  schemas.
 
-These boundaries keep checking decidable, evidence unforgeable, and the runtime
-representation stable. Any different language feature would need its own
-normalization, evidence, and erasure theorem; it is not an unfinished mode of
-this contract.
+A future broader predicate language requires its own normalization, decidability,
+evidence, and erasure theorem. It is not an unfinished mode of this one.
 
-## 8. Implemented behavior map
+## 10. Obligations and regressions
 
-| Requirement            | Implemented mechanism                                       | Regression evidence                                           |
-| ---------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
-| Unknown carriers       | fresh Simple-sub variables and call-site freshening         | `inference.test.ts`                                           |
-| Integer inhabitants    | exact predicate-to-range normalization                      | `predicate_refinements.blot`                                  |
-| Arrays                 | homogeneous canonical constraints from operations and calls | `collections.blot`                                            |
-| Trait-like behavior    | record width/depth subtyping and direct projections         | `type_predicates.blot`                                        |
-| Higher-order functions | arrow intersections and shared row variables                | `inference.test.ts`                                           |
-| Effects                | inferred open rows, handlers, and reflected closed rows     | `effects.blot`                                                |
-| Layout                 | attached namespaces preserved by refinement                 | `layout_table.blot`, `predicate_refinements.blot`             |
-| Fact passing           | verified affine summaries replayed across functions/modules | `relational_summaries.blot`, `refinement_types_on_crack.blot` |
-| Ownership              | separate affine `Omega` analysis                            | `owned_region_capabilities.blot`                              |
-| End-to-end composition | all layers in one checked and evaluated program             | `refinement_types_on_crack.blot`                              |
+The implementation owes:
 
-The integrated example imports a body-verified length wrapper, uses the
-published summary to authorize a direct array read, propagates a callback effect
-through a higher-order function, invokes a structural method, preserves an `I32`
-layout namespace through scalar refinement, and consumes an affine value. Every
-predicate and certificate erases before Runtime HIR.
+1. fresh unknown-first inference and call-site instantiation;
+2. semantic rather than spelling-based predicate recognition;
+3. exact integer-set normalization;
+4. rejection of empty and unsupported refinements;
+5. one `@satisfies` kernel for canonical and closed-predicate requirements;
+6. no observational predicate constraint on an open variable;
+7. branch narrowing through ordinary `Phi` facts;
+8. unchanged ownership state across a requirement assertion;
+9. complete erasure before Runtime HIR; and
+10. representation equivalence between predicate and canonical spellings.
+
+Regression programs cover scalar ranges, arrays, structural requirements,
+higher-order effect rows, seals, reflection through quantified types,
+relationship summaries, owned carriers, and end-to-end Runtime-HIR/Wasm
+equivalence. The tests are evidence for these boundaries, not another type
+lattice.
