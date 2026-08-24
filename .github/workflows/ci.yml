@@ -17,38 +17,53 @@ permissions:
 jobs:
   format-probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Produce canonical formatter output
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Capture the exact formatter delta
         shell: bash
         run: |
-          deno fmt \
-            .github/workflows/ci.yml \
-            docs/abi.md \
-            docs/backend.md \
-            docs/wasm-target-profile.md \
-            package.json \
-            spec/README.md \
-            spec/RUNTIME.md \
-            src/node/v8_wasm.test.ts
-          tar -czf formatted-v8-target.tar.gz \
-            .github/workflows/ci.yml \
-            docs/abi.md \
-            docs/backend.md \
-            docs/wasm-target-profile.md \
-            package.json \
-            spec/README.md \
-            spec/RUNTIME.md \
-            src/node/v8_wasm.test.ts
-      - name: Upload canonical formatter output
+          set -o pipefail
+          set +e
+          deno fmt --check 2>&1 | tee format-check.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          printf 'deno fmt --check exit status: %s\n' "$status" > format-status.txt
+          deno fmt
+          git status --short --untracked-files=all >> format-status.txt
+          git diff --binary > format.patch
+          tar -czf format-diagnostic.tar.gz \
+            format-check.txt \
+            format-status.txt \
+            format.patch
+      - name: Upload formatter diagnostic
         uses: actions/upload-artifact@v7
         with:
-          name: formatted-v8-target
-          path: formatted-v8-target.tar.gz
+          name: format-diagnostic
+          path: format-diagnostic.tar.gz
           if-no-files-found: error
           retention-days: 1
 
