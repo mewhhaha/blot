@@ -89,6 +89,7 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "effect_row_part",
     "effect_row_tail",
     "import_expression",
+    "signature",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[

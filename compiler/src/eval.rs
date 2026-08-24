@@ -1664,33 +1664,14 @@ fn evaluate_declarations(
         )
     };
     match declaration {
-        Declaration::Binding {
-            kind: DeclarationKind::Sig,
-            pattern,
-            value,
-            ..
-        } => {
+        Declaration::Signature { name, value, .. } => {
             let signature_environment = environment.clone();
-            let signature_context = context.clone();
-            let signature_module = module_path.clone();
             evaluate_expression(context, module_path, value, environment, runtime.comptime())
                 .and_then(move |signature| {
-                    let module = match module(&signature_context, &signature_module) {
-                        Ok(module) => module,
-                        Err(error) => return Computation::error(error),
-                    };
-                    let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize]
-                    else {
-                        return Computation::error(Diagnostic::new(
-                            "BLOT_SIG_PATTERN",
-                            "A signature must name one binding.",
-                            span,
-                        ));
-                    };
                     signature_environment
                         .signatures
                         .borrow_mut()
-                        .insert(name.clone(), signature);
+                        .insert(name, signature);
                     continue_with()
                 })
         }
@@ -2929,7 +2910,8 @@ fn expression_span(expression: &Expression) -> Span {
 
 fn declaration_span(declaration: &Declaration) -> Span {
     match declaration {
-        Declaration::Binding { span, .. }
+        Declaration::Signature { span, .. }
+        | Declaration::Binding { span, .. }
         | Declaration::Shadow { span, .. }
         | Declaration::Open { span, .. } => *span,
     }
@@ -2974,6 +2956,9 @@ fn declaration_names(
     declaration: &Declaration,
 ) -> (Vec<String>, HashSet<String>, bool) {
     match declaration {
+        Declaration::Signature { value, .. } => {
+            (Vec::new(), free_names_expression(module, *value), true)
+        }
         Declaration::Binding {
             kind,
             pattern,
@@ -2982,8 +2967,7 @@ fn declaration_names(
         } => (
             pattern_names(module, *pattern),
             free_names_expression(module, *value),
-            *kind == DeclarationKind::Sig
-                || *kind == DeclarationKind::Effect
+            *kind == DeclarationKind::Effect
                 || matches!(
                     module.arena.expressions[value.0 as usize],
                     Expression::Rec { .. }
@@ -3389,6 +3373,7 @@ fn collect_free(
                     }
                 }
                 match declaration {
+                    Declaration::Signature { .. } => {}
                     Declaration::Binding { pattern, .. } => {
                         scope.extend(pattern_names(module, *pattern));
                     }

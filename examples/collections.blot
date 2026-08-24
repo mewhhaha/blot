@@ -24,14 +24,14 @@ let small = filter (scaled, fn n => n < 8)
 // Interfaces are structural types. The implementation record is passed like
 // any other value, and the signature specializes its polymorphic empty value
 // and append function together.
-sig join_four = Monoid [Int] -> [Int]
+let join_four :: Monoid [Int] -> [Int]
 let join_four = fn implementation => do:
   return implementation.append
     (implementation.append implementation.empty [1, 2])
     [3, 4]
 let joined = join_four Array
 
-sig count_values = Length [Int] -> [Int] -> Int
+let count_values :: Length [Int] -> [Int] -> Int
 let count_values = fn implementation => fn values => do:
   return implementation.length values
 

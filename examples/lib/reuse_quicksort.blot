@@ -5,7 +5,7 @@ open import "blot:prelude"
 
 const Source = @effect.host { .value = Int -> Int; }
 
-sig quicksort = ([Int], Int) -> [Int]
+const quicksort :: ([Int], Int) -> [Int]
 @[assert.reuse]
 const quicksort = fn (?values, direction) => do:
   return Array.quicksort (

@@ -20,13 +20,13 @@ open import "blot:prelude"
 // type at run time, which is the typeclass machinery this language does not
 // have. A module that wants an operator for these says so in its own header.
 
-sig quarter = F64
+let quarter :: F64
 let quarter = F64.div 1.0 4.0
 
-sig sum = F64
+let sum :: F64
 let sum = F64.add 1.5 2.25
 
-sig scaled = F64
+let scaled :: F64
 let scaled = F64.mul quarter 8.0
 
 // --- crossing between the two -----------------------------------------------
@@ -34,13 +34,13 @@ let scaled = F64.mul quarter 8.0
 // Explicitly, in both directions. `truncate` rounds toward zero, which is what
 // WebAssembly's saturating conversion does.
 
-sig widened = F64
+let widened :: F64
 let widened = F64.of_int 7
 
-sig narrowed = Int
+let narrowed :: Int
 let narrowed = F64.truncate 3.75
 
-sig negative = Int
+let negative :: Int
 let negative = F64.truncate (F64.negate 3.75)
 
 // --- comparison, and the value no ordering accepts --------------------------
@@ -56,19 +56,19 @@ let negative = F64.truncate (F64.negate 3.75)
 // A program that might hold one asks `F64.is_nan` first, and that question
 // needs a primitive precisely because comparing is what refuses.
 
-sig ordered = Bool
+let ordered :: Bool
 let ordered = is_less (F64.cmp 1.5 2.5)
 
-sig same = Bool
+let same :: Bool
 let same = is_equal (F64.cmp 0.5 (F64.div 1.0 2.0))
 
-sig tenth_is_exact = Bool
+let tenth_is_exact :: Bool
 let tenth_is_exact = is_equal (F64.cmp (F64.add 0.1 0.2) 0.3)
 
-sig nan_is_nan = Bool
+let nan_is_nan :: Bool
 let nan_is_nan = F64.is_nan (F64.div 0.0 0.0)
 
-sig ordinary_is_not = Bool
+let ordinary_is_not :: Bool
 let ordinary_is_not = F64.is_nan 1.0
 
 // --- a root, written in blot ------------------------------------------------
@@ -77,7 +77,7 @@ let ordinary_is_not = F64.is_nan 1.0
 // would have been open-coded at lowering — and a primitive is for what blot
 // cannot write, which this is not.
 
-sig root = Int
+let root :: Int
 let root = F64.truncate (F64.mul (F64.sqrt 2.0) 1000.0)
 
 // --- the narrower one -------------------------------------------------------
@@ -90,12 +90,12 @@ let root = F64.truncate (F64.mul (F64.sqrt 2.0) 1000.0)
 // them is an error rather than a rounding nobody wrote down — and because it is
 // the lane type a four-wide vector needs.
 
-sig third_64 = Int
+let third_64 :: Int
 let third_64 = F64.truncate (F64.mul (F64.div 1.0 3.0) 1000000000.0)
 
 // The same division, in single precision, widened back to compare. The digits
 // stop earlier, which is the whole difference between the two types.
-sig third_32 = Int
+let third_32 :: Int
 let third_32 =
   F64.truncate (F64.mul
     (F32.widen (F32.div (F32.of_int 1) (F32.of_int 3)))
@@ -103,13 +103,13 @@ let third_32 =
 
 // A double that is exact in f32 survives the round trip; one that is not does
 // not. This is the pair that shows the narrowing is real rather than a label.
-sig exact_round_trip = Bool
+let exact_round_trip :: Bool
 let exact_round_trip =
   is_equal (F64.cmp
     (F32.widen (F32.of_float 0.5))
   0.5)
 
-sig lossy_round_trip = Bool
+let lossy_round_trip :: Bool
 let lossy_round_trip =
   is_equal (F64.cmp
     (F32.widen (F32.of_float 0.1))

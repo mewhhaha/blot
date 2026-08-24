@@ -337,9 +337,9 @@ Four more were true when this was written and are not now. The engine has not
 been rewritten to take them:
 
 - **An effect row can be written now** (`LANGUAGE.md` §12.4). Not one effectful
-  binding in the engine carries a `sig` — not `render`, not the two loaders, not
-  the renderer's `frame` — and that is now a thing to do rather than a thing the
-  language forbids.
+  binding in the engine carries a signature — not `render`, not the two loaders,
+  not the renderer's `frame` — and that is now a thing to do rather than a thing
+  the language forbids.
 - **A record may cross a module boundary carrying more fields than the module
   reads** (`LANGUAGE.md` §3). The renderer's brushes take a position, an angle,
   a scale, and a colour because a boundary that names what it reads is a good

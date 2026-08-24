@@ -91,6 +91,7 @@ export const compactRuleNames = [
   "effect_row_part",
   "effect_row_tail",
   "import_expression",
+  "signature",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do

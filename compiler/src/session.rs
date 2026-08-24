@@ -161,7 +161,9 @@ impl CompilerSession {
                 .filter_map(|declaration| {
                     match &loaded.module.arena.declarations[declaration.0 as usize] {
                         Declaration::Binding { pattern, value, .. } => Some((*pattern, *value)),
-                        Declaration::Shadow { .. } | Declaration::Open { .. } => None,
+                        Declaration::Signature { .. }
+                        | Declaration::Shadow { .. }
+                        | Declaration::Open { .. } => None,
                     }
                 })
                 .collect::<HashSet<_>>();
@@ -322,13 +324,7 @@ impl CompilerSession {
             {
                 continue;
             }
-            let Declaration::Binding {
-                kind,
-                pattern,
-                value,
-                ..
-            } = declaration
-            else {
+            let Declaration::Binding { pattern, value, .. } = declaration else {
                 return diagnostic_json(
                     Diagnostic::new(
                         "BLOT_BAD_TEST",
@@ -338,16 +334,6 @@ impl CompilerSession {
                     .at(path),
                 );
             };
-            if *kind == crate::ast::DeclarationKind::Sig {
-                return diagnostic_json(
-                    Diagnostic::new(
-                        "BLOT_BAD_TEST",
-                        "A `test` tag requires a named top-level `let` or `const` binding.",
-                        span,
-                    )
-                    .at(path),
-                );
-            }
             let Pattern::Name { name, .. } = &loaded.module.arena.patterns[pattern.0 as usize]
             else {
                 return diagnostic_json(
@@ -676,7 +662,8 @@ fn declaration_span(module: &Module, declaration: DeclarationId) -> crate::ast::
 
 fn declaration_span_value(declaration: &Declaration) -> crate::ast::Span {
     match declaration {
-        Declaration::Binding { span, .. }
+        Declaration::Signature { span, .. }
+        | Declaration::Binding { span, .. }
         | Declaration::Shadow { span, .. }
         | Declaration::Open { span, .. } => *span,
     }
@@ -921,6 +908,7 @@ impl<'a> UnchangedDeclarations<'a> {
             return true;
         }
         match current.clone() {
+            Declaration::Signature { value, .. } => self.expression(value),
             Declaration::Binding {
                 tags,
                 pattern,
@@ -1034,7 +1022,8 @@ fn collect_declaration_dependencies(
     dependencies: &mut ModuleDependencies,
 ) {
     let value = match declaration {
-        Declaration::Binding { value, .. }
+        Declaration::Signature { value, .. }
+        | Declaration::Binding { value, .. }
         | Declaration::Shadow { value, .. }
         | Declaration::Open { value, .. } => *value,
     };
@@ -1508,15 +1497,15 @@ mod tests {
         assert_eq!(dependencies.includes, ["shader.wgsl"]);
     }
 
-    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig pick = @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag => do:\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
+    const DIRECT_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let pick :: @type.int -> { .x = @type.int; } -> @type.int\n\u{e000}let pick = fn flag => do:\n  \u{e000}\u{e001}return case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n\n\u{e000}\u{e002}\u{e000}\u{e002}\u{e000}return { .pick = pick; }\u{e000}\n";
 
-    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const SHARED_BODY_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const bump = fn step => fn value => @int.add value step\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => bump 1\n    \u{e000}#False => bump 2\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const PRIMITIVE_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => @int.add flag\n    \u{e000}#False => @int.sub flag\n  \u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
-    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig hold = @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag => do:\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
+    const EXPORTED_CHOICE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let hold :: @type.int -> { .apply = { .x = @type.int; } -> @type.int; }\n\u{e000}let hold = fn flag => do:\n  \u{e000}\u{e001}let chosen = case positive flag of\n    \u{e000}\u{e001}#True => fn record => @int.add record.x flag\n    \u{e000}#False => fn record => @int.sub record.x flag\n  \u{e000}\u{e002}\u{e000}return { .apply = chosen; }\n\n\u{e000}\u{e002}\u{e000}return { .hold = hold; }\u{e000}\n";
 
-    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}sig run = @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+    const INCOMPATIBLE_CAPTURES: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let ratio = @float.of_int flag\n  \u{e000}let selected = case positive flag of\n    \u{e000}\u{e001}#True => fn n => @int.add n flag\n    \u{e000}#False => do:\n      \u{e000}\u{e001}let scaled = @float.mul ratio 2.0\n      \u{e000}return fn n => @int.add n (@int.of_float scaled)\n  \u{e000}\u{e002}\u{e000}\u{e002}\u{e000}let first = selected 10\n  \u{e000}let second = selected 20\n  \u{e000}return @int.add first second\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
 
     #[test]
     fn a_dynamic_function_choice_becomes_a_private_tagged_table() {
@@ -1792,9 +1781,9 @@ mod tests {
                         "main.blot".to_owned(),
                         source(concat!(
                             "open import \"blot:prelude\"\n",
-                            "sig empty_length = Int -> Int\n",
+                            "const empty_length :: Int -> Int\n",
                             "const empty_length = fn capacity => do:\n",
-                            "  sig values = [Int]\n",
+                            "  let values :: [Int]\n",
                             "  let values = Scratch.finish (Scratch.with_capacity capacity)\n",
                             "  return Array.length (&values)\n",
                             "return { .empty_length = empty_length; }\n",

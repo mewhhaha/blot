@@ -306,12 +306,12 @@ test("a deferred effect runs only on a demanding runtime path", async () => {
 
 open import "blot:prelude"
 
-sig choose = Bool -> Int ~> Int
+let choose :: Bool -> Int ~> Int
 let choose = fn condition => fn ~fallback => case condition of
   #True => fallback
   #False => 42
 
-sig run = Int -> Int
+let run :: Int -> Int
 let run = fn flag => do:
   value <- choose (flag != 0) (init.read ())
   return value

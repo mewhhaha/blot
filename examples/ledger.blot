@@ -13,7 +13,7 @@ const Ledger =
     .rejected = Int;
   }
 
-sig apply = (Ledger, Event) -> Ledger
+let apply :: (Ledger, Event) -> Ledger
 let apply = fn (state, event) => case event of
   #Deposit amount => {
     .balance = state.balance + amount;

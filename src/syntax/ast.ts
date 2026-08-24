@@ -147,7 +147,7 @@ export type Expr =
   | { readonly tag: "rec"; readonly lambda: Expr; readonly span: Span }
   | { readonly tag: "comptime"; readonly body: Expr; readonly span: Span };
 
-export type DeclKind = "let" | "effect" | "const" | "sig";
+export type DeclKind = "let" | "effect" | "const";
 
 export interface DeclarationTag {
   readonly descriptor: Expr;
@@ -155,6 +155,14 @@ export interface DeclarationTag {
 }
 
 export type Decl =
+  | {
+    readonly tag: "signature";
+    readonly kind: "let" | "const";
+    readonly recursive: boolean;
+    readonly name: string;
+    readonly value: Expr;
+    readonly span: Span;
+  }
   | {
     readonly tag: "binding";
     readonly kind: DeclKind;
@@ -204,8 +212,8 @@ export interface RecursiveMember {
  * one Core `let-rec-group` — and a rule each derived for itself would be three
  * rules free to disagree about which declarations belong together.
  *
- * A `sig` neither joins a run nor ends one. It constrains the binding that has
- * to follow it immediately, so a `sig` between two members is one member's own
+ * A signature header neither joins a run nor ends one. It constrains the
+ * binding that follows it, so a header between two members is one member's own
  * signature and separates nothing.
  */
 export function recursiveGroups(
@@ -220,7 +228,7 @@ export function recursiveGroups(
     }
   };
   for (const declaration of declarations) {
-    if (declaration.tag === "binding" && declaration.kind === "sig") continue;
+    if (declaration.tag === "signature") continue;
     const member = recursiveMember(declaration);
     if (member === null) {
       close();
@@ -246,7 +254,6 @@ export function recursiveGroups(
 
 function recursiveMember(declaration: Decl): RecursiveMember | null {
   if (declaration.tag !== "binding") return null;
-  if (declaration.kind === "sig") return null;
   // A recursive value that is not a lambda, or is bound through a compound
   // pattern, is an error every pass already reports where it stands. Leaving
   // it out of the group keeps that report rather than replacing it with a

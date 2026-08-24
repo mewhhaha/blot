@@ -13,7 +13,7 @@
 
 open import "blot:prelude"
 
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn xs => fn n => do:
   if n >= @array.len xs:
     return @array.get xs n

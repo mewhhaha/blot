@@ -84,7 +84,7 @@ const Model = { .kind = Int; .colour = Text; }
 
 // --- systems ----------------------------------------------------------------
 
-sig advance = Store Transform -> Store Transform
+let advance :: Store Transform -> Store Transform
 let advance = fn ts => E.each_1 (
     ts,
     fn t => {
@@ -134,7 +134,7 @@ let render = fn (transforms, models) => do:
 // blot module boundary, which costs nothing: the modules are inlined into one
 // artifact.
 
-sig load_transforms = Unit -> Store Transform ~ { Assets }
+let load_transforms :: Unit -> Store Transform ~ { Assets }
 let load_transforms = fn () => do:
   count <- Assets.count ()
   // The empty array starts polymorphic; this one requirement makes the
@@ -153,7 +153,7 @@ let load_transforms = fn () => do:
 
   return store
 
-sig load_models = Unit -> Store Model ~ { Assets }
+let load_models :: Unit -> Store Model ~ { Assets }
 let load_models = fn () => do:
   count <- Assets.count ()
   let store = @satisfies Array.empty (Store Model)

@@ -215,6 +215,9 @@ impl Analysis<'_> {
         for declaration in declarations {
             let declaration = self.module.arena.declarations[declaration.0 as usize].clone();
             match declaration {
+                Declaration::Signature { value, .. } => {
+                    self.walk(value, scope, false)?;
+                }
                 Declaration::Binding { pattern, value, .. } => {
                     self.walk(value, scope, false)?;
                     let affine = self.term(value, scope);

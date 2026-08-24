@@ -8,7 +8,7 @@ open import "blot:prelude"
 
 const Entry = #Deposit Int | #Withdraw Int | #Fee Int
 
-sig apply = Int -> Entry -> (Int, Int, Int)
+let apply :: Int -> Entry -> (Int, Int, Int)
 let apply = fn balance => fn entry => case entry of
   #Deposit amount => (balance + amount, 1, 0)
   #Withdraw amount => do:

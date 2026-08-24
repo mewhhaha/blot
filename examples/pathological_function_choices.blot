@@ -7,7 +7,7 @@
 
 open import "blot:prelude"
 
-sig run = (Int, Int) -> Int
+let run :: (Int, Int) -> Int
 let run = fn (flag, value) => do:
   let bias = value * 2
   let selected = case flag > 10 of

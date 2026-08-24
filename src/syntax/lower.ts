@@ -1479,10 +1479,40 @@ function quantifyEffectRowTails(
 }
 
 function lowerDecl(rule: Rule, context: Context): Decl {
+  if (rule.name === "signature") {
+    const kind = tokenOf(required(rule, "kind")).text;
+    expect(
+      kind === "let" || kind === "const",
+      `unknown signature kind ${kind}`,
+    );
+    const valueCursor = field(rule, "value");
+    expect(valueCursor !== null, "a signature has no type value");
+    const rowTails = effectRowTailUses(valueCursor);
+    const unconstrained = rowTails.find((tail) => tail.count < 2);
+    if (unconstrained !== undefined) {
+      fail(
+        "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
+        `Effect-row tail \`..${unconstrained.name}\` must occur at least twice in one signature.`,
+        unconstrained.span,
+      );
+    }
+    let value = lowerValue(asRule(valueCursor, "value"), context);
+    if (rowTails.length > 0) {
+      value = quantifyEffectRowTails(value, rowTails, rule.span);
+    }
+    return {
+      tag: "signature",
+      kind,
+      recursive: field(rule, "recursive") !== null,
+      name: tokenOf(required(rule, "name")).text,
+      value,
+      span: rule.span,
+    };
+  }
   if (rule.name === "binding") {
     const kind = tokenOf(required(rule, "kind")).text;
     expect(
-      kind === "let" || kind === "const" || kind === "sig",
+      kind === "let" || kind === "const",
       `unknown binding kind ${kind}`,
     );
     const tags = fieldList(rule, "tags").map((cursor) => {
@@ -1495,33 +1525,16 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         span: tag.span,
       };
     });
-    if (kind === "sig" && tags.length > 0) {
-      fail(
-        "BLOT_TAGGED_SIG",
-        "A declaration tag transforms a value, but a `sig` has no value to bind.",
-        tags[0].span,
-      );
-    }
     const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
     const valueCursor = field(rule, "value");
     expect(valueCursor !== null, "a binding has no value");
     const rowTails = effectRowTailUses(valueCursor);
-    if (rowTails.length > 0 && kind !== "sig") {
+    if (rowTails.length > 0) {
       fail(
-        "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIG",
-        "An effect-row tail is scoped by a `sig`; write `..e` only inside a signature.",
+        "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE",
+        "An effect-row tail is scoped by a signature header; write `..e` only after `::`.",
         rowTails[0].span,
       );
-    }
-    if (kind === "sig") {
-      const unconstrained = rowTails.find((tail) => tail.count < 2);
-      if (unconstrained !== undefined) {
-        fail(
-          "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
-          `Effect-row tail \`..${unconstrained.name}\` must occur at least twice in one \`sig\`.`,
-          unconstrained.span,
-        );
-      }
     }
     let value = lowerValue(asRule(valueCursor, "value"), context);
     const recursive = field(rule, "recursive");
@@ -1533,11 +1546,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         span: { start: marker.span.start, end: value.span.end },
       };
     }
-    if (kind === "sig" && rowTails.length > 0) {
-      value = quantifyEffectRowTails(value, rowTails, rule.span);
-    }
     if (tags.length > 0) {
-      expect(kind !== "sig", "a tagged signature reached value lowering");
       value = lowerTaggedValue(kind, pattern, value, tags, rule.span);
     }
     return {

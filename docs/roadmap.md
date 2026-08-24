@@ -78,11 +78,11 @@ resolved in the current tree — I could not reproduce any of them.
 **Rank-N landed.** `docs/inference.md:147` is now accurate:
 
 ```
-sig apply_both = @forall (fn a => a -> a) -> Int;
+let apply_both :: @forall (fn a => a -> a) -> Int;
 let apply_both = fn f => f 1 + Text.length (f "ab");
 return apply_both (fn x => x);            -> Int
 
-sig run2 = @forall (fn a => a -> a) -> Int;
+let run2 :: @forall (fn a => a -> a) -> Int;
 let run2 = fn f => f 1;
 return run2 (fn x => 42);
   -> BLOT_TYPE_ERROR: 42 is not the rigid type 's2.
@@ -157,14 +157,14 @@ instead, so `check` and `eval` agree with `build`, is still open (item 1d).
 the same path does. The checker always had the span; what was missing was the
 file that span indexes into, which the diagnostic now carries — so an error
 inside an imported module names _that_ module, not the entry file. `describe`
-renders a range through the printer, so `sig n = Nat; let n = -1;` names the
+renders a range through the printer, so `let n :: Nat; let n = -1;` names the
 bound the value fell outside of (`0..`) rather than the word "an integer", which
 was true of every range at once. The printer spells the unbounded text range
-`Text`, the name a `sig` accepts; it used to print `Text`, which is the
-prelude's _namespace record_, so copying the compiler's own output into a `sig`
-failed with `BLOT_SIG_NOT_A_TYPE`. Still open: one error per run, the file-wide
-span fallback, no `blot fmt` (`` unknown command `fmt` ``), and 26
-`unsupported()` sites with no user-readable list.
+`Text`, the name a signature accepts; it used to print `Text`, which is the
+prelude's _namespace record_, so copying the compiler's own output into a
+signature failed with `BLOT_SIGNATURE_NOT_A_TYPE`. Still open: one error per
+run, the file-wide span fallback, no `blot fmt` (`` unknown command `fmt` ``),
+and 26 `unsupported()` sites with no user-readable list.
 
 **The standard library ends early.** The complete text surface is
 `@text.concat`, `@text.len`, `@text.cmp`, `@text.contains`, `@text.of_int` —
@@ -172,7 +172,7 @@ verified by enumerating `src/comptime/primitives.ts`. There is no way to index,
 slice, split, or find an offset in text. `Array.find`, `Iter.map`, `Option.map`
 all fail with `no field`. `"a" == "a"` fails with `"a" is not an integer`, while
 the evaluator's message for the same mistake is much better. Every loop
-accumulator displays as `(Int | 0)` unless you write a `sig`.
+accumulator displays as `(Int | 0)` unless you write a signature.
 
 **The build is broken and it is not blot's fault.**
 `../gpufuck/src/functional/wasm_codegen.ts:6577` reads `.weakHeadNormalForms`
@@ -316,9 +316,9 @@ who tried to write real programs in blot.
    `fun`/`array` arms that produce "a function is not a function".
 5. **Print the name that works.** `src/check/print.ts:364,366` prints `Text`;
    the prelude and `LANGUAGE.md` §10.1 both say `Text`, and `Text` is the
-   _namespace record_, so copying the compiler's own output into a `sig` fails
-   with `BLOT_SIG_NOT_A_TYPE`. Print `Text`, and make that diagnostic say what
-   the expression did evaluate to.
+   _namespace record_, so copying the compiler's own output into a signature
+   fails with `BLOT_SIGNATURE_NOT_A_TYPE`. Print `Text`, and make that
+   diagnostic say what the expression did evaluate to.
 6. **The refusal table.** Give `unsupported()` a second parameter — the
    alternative — and generate a table in `docs/backend.md` from the 26 call
    sites. Where there is no alternative, say so instead of "yet"; "yet" reads as
@@ -527,7 +527,7 @@ displayed unions across `examples/` and `case-studies/` are redundant —
 `.doubled = ([Int] | ['a])`; `case-studies/grep/main.blot` infers
 `(Int | 0) ~ {
 Arguments, Console, File }` for a program that returns a count.
-Verified that the lattice already agrees: adding `sig total = Int;` makes the
+Verified that the lattice already agrees: adding `let total :: Int` makes the
 same program print `Int`. `src/check/print.ts:94` dedupes by rendered string, so
 `0` and `Int` both survive. Add range subsumption (but never lub disjoint ranges
 — `(0 |
@@ -540,8 +540,7 @@ it makes every accumulator look untyped.
 
 **5b. Widen constructor singletons on `:=`.** `let f = True; f := False;` is
 refused — `must preserve #True, found #False` — and even an explicit
-`sig f =
-Bool;` does not help, because `#False` is a strict subtype of
+`let f :: Bool` does not help, because `#False` is a strict subtype of
 `#True | #False`. A boolean flag is the most common loop accumulator there is.
 Extend `LANGUAGE.md` §4.3's widening from integer and text singletons to
 constructor sets: widen both sides to the union of their case sets before the
@@ -820,8 +819,9 @@ cyclic: recursive functions and recursive flows terminate through the visited
 ordered-constraint relation. That implementation fact is not a source
 constructor. `const Json = #Null | #Int Int | #Arr [Json];` remains refused. A
 recursive datatype can be structural but never _named_, so it cannot appear in a
-`sig` or cross the concrete first-order Runtime-HIR boundary. Adding it would be
-a separate closed-type design, not a reason to complicate open inference.
+signature or cross the concrete first-order Runtime-HIR boundary. Adding it
+would be a separate closed-type design, not a reason to complicate open
+inference.
 
 **No record row variable.** Investigated as a go/no-go and refused. The case for
 one is that three limits look like one missing feature: a spread of a parameter
@@ -876,7 +876,7 @@ The smaller thing that would help, and did: the spread rule was not merely
 incomplete, it was unsound in the other direction. A spread whose fields are
 unknown contributed no names _and left the fields written before it standing_,
 so `fn r => { .tag = 1; ...r; }` applied to `{ .tag = "hi"; }` type-checked
-against `sig t = 1;` and evaluated to `"hi"` — the checker and the evaluator
+against `let t :: 1` and evaluated to `"hi"` — the checker and the evaluator
 disagreeing, verified with `blot check` and `blot eval` on the same file. Such a
 shape is now refused with `BLOT_SPREAD_MAY_OVERWRITE`
 (`examples/rejected/semantics/spread_after_a_field.blot`). The rule only ever

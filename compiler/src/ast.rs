@@ -219,7 +219,6 @@ pub enum DeclarationKind {
     Let,
     Effect,
     Const,
-    Sig,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -231,6 +230,13 @@ pub struct DeclarationTag {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "tag", rename_all = "lowercase")]
 pub enum Declaration {
+    Signature {
+        kind: DeclarationKind,
+        recursive: bool,
+        name: String,
+        value: ExpressionId,
+        span: Span,
+    },
     Binding {
         kind: DeclarationKind,
         tags: Vec<DeclarationTag>,
@@ -480,6 +486,10 @@ impl Module {
             let location = format!("declaration {index}");
             let targets = &mut edges[declaration_offset + index];
             match declaration {
+                Declaration::Signature { value, span, .. } => {
+                    validate_span(*span, &location)?;
+                    targets.push(expression_index(*value, &location)?);
+                }
                 Declaration::Binding {
                     tags,
                     pattern,

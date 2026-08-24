@@ -51,6 +51,12 @@
         }
       },
       {
+        "rule": "signature",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "binding",
         "boundary": {
           "kind": "root"

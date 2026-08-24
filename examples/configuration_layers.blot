@@ -14,7 +14,7 @@ const Config =
 
 const Override = #Workers Int | #Verbose Bool | #Environment Text
 
-sig apply = (Config, Override) -> Config
+let apply :: (Config, Override) -> Config
 let apply = fn (config, override) => case override of
   #Workers workers => {
     .workers = workers;
@@ -32,7 +32,7 @@ let apply = fn (config, override) => case override of
     .environment = environment;
   }
 
-sig defaults = Config
+let defaults :: Config
 let defaults =
   {
     .workers = 4;
@@ -40,7 +40,7 @@ let defaults =
     .environment = "development";
   }
 
-sig overrides = [Override]
+let overrides :: [Override]
 let overrides =
   [#Workers 8, #Environment "production", #Verbose True]
 

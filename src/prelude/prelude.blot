@@ -31,7 +31,7 @@ const Type =
 
 const identity = fn value => value
 const always = fn value => fn _ => value
-sig freeze = @forall (fn T => [T] -> [T])
+const freeze :: @forall (fn T => [T] -> [T])
 const freeze = fn value => @linear.freeze value
 
 // Curried: these are the targets of `$` and `|>`.
@@ -250,8 +250,7 @@ const Continuation =
 
 // Structural recursion, which is all a surface loop becomes before inference.
 // Rebindings form the accumulator; `for` does not introduce assignment.
-sig fold =
-  @forall (fn T => @forall (fn S => do:
+const fold :: @forall (fn T => @forall (fn S => do:
     return ([T], S, (S, T) -> S) -> S
   ))
 const fold = fn (&values, state, step) => do:
@@ -319,26 +318,24 @@ const array_items = fn values => do:
     ;
   }
 
-sig slice_copy = @forall (fn T => [T] -> @region.type T)
+const slice_copy :: @forall (fn T => [T] -> @region.type T)
 const slice_copy = fn !values => @region.copy (!values)
 
-sig slice_length = @forall (fn T => @region.type T -> @type.int)
+const slice_length :: @forall (fn T => @region.type T -> @type.int)
 const slice_length = fn &region => @region.length (&region)
 
-sig slice_get =
+const slice_get ::
   @forall (fn T => (@region.type T, @type.int) -> (#Some T | #None))
 const slice_get = fn (&region, index) => @region.get (&region) index
 
-sig slice_set =
-  @forall (fn T => do:
+const slice_set :: @forall (fn T => do:
     return
       (@region.type T, @type.int, T) -> (#Updated (@region.type T) | #SetOutOfBounds (@region.type T))
   )
 const slice_set =
   fn (!region, index, value) => @region.set (!region) index value
 
-sig slice_replace =
-  @forall (fn T => do:
+const slice_replace :: @forall (fn T => do:
     return (@region.type T, @type.int, T) ->
         (#Replaced (T, @region.type T) |
          #ReplaceOutOfBounds (T, @region.type T))
@@ -346,16 +343,14 @@ sig slice_replace =
 const slice_replace =
   fn (!region, index, !value) => @region.replace (!region) index (!value)
 
-sig slice_swap =
-  @forall (fn T => do:
+const slice_swap :: @forall (fn T => do:
     return
       (@region.type T, @type.int, @type.int) -> (#Updated (@region.type T) | #SwapOutOfBounds (@region.type T))
   )
 const slice_swap =
   fn (!region, left, right) => @region.swap (!region) left right
 
-sig slice_partition_unchecked =
-  @forall (fn T => do:
+const slice_partition_unchecked :: @forall (fn T => do:
     return (
       @region.type T,
       @type.int,
@@ -396,8 +391,7 @@ const slice_partition_unchecked =
             )
     return go (!region, start, start, end)
 
-sig slice_partition_range =
-  @forall (fn T => do:
+const slice_partition_range :: @forall (fn T => do:
     return (
       @region.type T,
       @type.int,
@@ -429,8 +423,7 @@ const slice_partition_range =
             )
           return #Partitioned (!partitioned, boundary)
 
-sig slice_partition =
-  @forall (fn T => do:
+const slice_partition :: @forall (fn T => do:
     return (
       @region.type T,
       (T -> (#True | #False))
@@ -446,8 +439,7 @@ const slice_partition =
       belongs_left
     )
 
-sig slice_split =
-  @forall (fn T => do:
+const slice_split :: @forall (fn T => do:
     return (@region.type T, @type.int) -> (#Split (
         @region.type T,
         @region.type T,
@@ -456,8 +448,7 @@ sig slice_split =
   )
 const slice_split = fn (!region, index) => @region.split (!region) index
 
-sig slice_join =
-  @forall (fn T => do:
+const slice_join :: @forall (fn T => do:
     return (
       @region.rejoin,
       @region.type T,
@@ -467,16 +458,16 @@ sig slice_join =
 const slice_join =
   fn (!rejoin, !left, !right) => @region.join (!rejoin) (!left) (!right)
 
-sig slice_reassociate_left =
+const slice_reassociate_left ::
   (@region.rejoin, @region.rejoin) -> (@region.rejoin, @region.rejoin)
 const slice_reassociate_left =
   fn (!outer, !inner) => @region.reassociate_left (!outer) (!inner)
-sig slice_reassociate_right =
+const slice_reassociate_right ::
   (@region.rejoin, @region.rejoin) -> (@region.rejoin, @region.rejoin)
 const slice_reassociate_right =
   fn (!outer, !inner) => @region.reassociate_right (!outer) (!inner)
 
-sig slice_freeze = @forall (fn T => @region.type T -> [T])
+const slice_freeze :: @forall (fn T => @region.type T -> [T])
 const slice_freeze = fn !region => @region.freeze (!region)
 
 // Checked range metadata is deliberately not ownership authority. Every
@@ -492,31 +483,32 @@ const slice_range_value = fn (start, end) => do:
 
 const slice_range_bounds = fn bounds => bounds
 
-sig slice_range_length = SliceRange -> @type.int
+const slice_range_length :: SliceRange -> @type.int
 const slice_range_length = fn bounds => do:
   let { .start; .end; } = slice_range_bounds bounds
   return @int.sub end start
 
-sig slice_range_last = SliceRange -> @type.int
+const slice_range_last :: SliceRange -> @type.int
 const slice_range_last = fn bounds => do:
   let { .end; } = slice_range_bounds bounds
   return @int.sub end 1
 
-sig slice_range_before = (SliceRange, @type.int) -> SliceRange
+const slice_range_before :: (SliceRange, @type.int) -> SliceRange
 const slice_range_before = fn (bounds, boundary) => do:
   let { .start; } = slice_range_bounds bounds
   return slice_range_value (start, boundary)
 
-sig slice_range_after = (SliceRange, @type.int) -> SliceRange
+const slice_range_after :: (SliceRange, @type.int) -> SliceRange
 const slice_range_after = fn (bounds, boundary) => do:
   let { .end; } = slice_range_bounds bounds
   return slice_range_value (@int.add boundary 1, end)
 
-sig range_whole = @forall (fn T => [T] -> SliceRange)
+const range_whole :: @forall (fn T => [T] -> SliceRange)
 const range_whole = fn &values => do:
   return slice_range_value (0, @array.len (&values))
 
-sig range_shorter_first = (SliceRange, SliceRange) -> (SliceRange, SliceRange)
+const range_shorter_first ::
+  (SliceRange, SliceRange) -> (SliceRange, SliceRange)
 const range_shorter_first = fn (left, right) => do:
   if slice_range_length left <= slice_range_length right:
     return (left, right)
@@ -535,14 +527,13 @@ const Range =
     .shorter_first = range_shorter_first;
   }
 
-sig array_expect_get = @forall (fn T => ([T], @type.int) -> T)
+const array_expect_get :: @forall (fn T => ([T], @type.int) -> T)
 const array_expect_get = fn (&values, index) => do:
   return case array_get ((&values), index) of
     #Some value => value
     #None => @panic "index escaped its checked Array range"
 
-sig array_expect_set =
-  @forall (fn T => ([T], @type.int, T) -> [T])
+const array_expect_set :: @forall (fn T => ([T], @type.int, T) -> [T])
 const array_expect_set = fn (?values, index, value) => do:
   if index >= 0:
     if index < @array.len (&values):
@@ -552,23 +543,19 @@ const array_expect_set = fn (?values, index, value) => do:
   else:
     return @panic "index escaped its checked Array range"
 
-sig scratch_with_capacity =
-  @forall (fn T => @type.int -> @scratch.type T)
+const scratch_with_capacity :: @forall (fn T => @type.int -> @scratch.type T)
 const scratch_with_capacity =
   fn capacity => @scratch.with_capacity capacity
 
-sig scratch_push =
-  @forall (fn T => (@scratch.type T, T) -> @scratch.type T)
+const scratch_push :: @forall (fn T => (@scratch.type T, T) -> @scratch.type T)
 const scratch_push =
   fn (scratch, value) => @scratch.push scratch value
 
-sig scratch_finish =
-  @forall (fn T => @scratch.type T -> [T])
+const scratch_finish :: @forall (fn T => @scratch.type T -> [T])
 const scratch_finish =
   fn scratch => @scratch.finish scratch
 
-sig scratch_recycle =
-  @forall (fn T => [T] -> @scratch.type T)
+const scratch_recycle :: @forall (fn T => [T] -> @scratch.type T)
 const scratch_recycle =
   fn values => @scratch.recycle values
 
@@ -581,8 +568,7 @@ const Scratch =
     .recycle = scratch_recycle;
   }
 
-sig array_merge_run =
-  @forall (fn T => do:
+const array_merge_run :: @forall (fn T => do:
     return (
       [T],
       @scratch.type T,
@@ -626,8 +612,7 @@ const array_merge_run =
 
     return merge (source, target, left, right)
 
-sig array_merge_pass =
-  @forall (fn T => do:
+const array_merge_pass :: @forall (fn T => do:
     return (
       [T],
       @scratch.type T,
@@ -661,7 +646,7 @@ const array_merge_pass =
 
     return runs (source, target, 0)
 
-sig array_merge_sort =
+const array_merge_sort ::
   @forall (fn T => ([T], ((T, T) -> (#True | #False))) -> [T])
 const array_merge_sort = fn (values, before_or_equal) => do:
   let length = @array.len (&values)
@@ -693,7 +678,7 @@ const RadixBucket =
     fn value => value >= 0 && value <= 255
   )
 
-sig radix_zeroes = @type.unit -> [@type.int]
+const radix_zeroes :: @type.unit -> [@type.int]
 const radix_zeroes = fn _ => do:
   let rec fill = fn (?counts, bucket) => do:
     if bucket >= 256:
@@ -702,7 +687,7 @@ const radix_zeroes = fn _ => do:
       return fill (@array.push counts 0, bucket + 1)
   return fill (@array.empty, 0)
 
-sig radix_floor_digit = (@type.int, @type.int) -> @type.int
+const radix_floor_digit :: (@type.int, @type.int) -> @type.int
 const radix_floor_digit = fn (key, divisor) => do:
   let quotient = key / divisor
   let quotient = case key % divisor < 0 of
@@ -714,7 +699,7 @@ const radix_floor_digit = fn (key, divisor) => do:
   else:
     return digit
 
-sig radix_magnitude_digit = (@type.int, @type.int) -> @type.int
+const radix_magnitude_digit :: (@type.int, @type.int) -> @type.int
 const radix_magnitude_digit = fn (key, divisor) => do:
   let digit = (key / divisor) % 256
   if digit < 0:
@@ -722,7 +707,7 @@ const radix_magnitude_digit = fn (key, divisor) => do:
   else:
     return digit
 
-sig radix_bucket = @type.int -> RadixBucket
+const radix_bucket :: @type.int -> RadixBucket
 const radix_bucket = fn value => do:
   if value < 0:
     return 0
@@ -732,8 +717,7 @@ const radix_bucket = fn value => do:
     else:
       return value
 
-sig radix_digit =
-  (@type.int, @type.int, RadixSign, @type.int) -> RadixBucket
+const radix_digit :: (@type.int, @type.int, RadixSign, @type.int) -> RadixBucket
 const radix_digit = fn (key, divisor, sign, top_divisor) => do:
   if sign == 0:
     return radix_bucket (radix_floor_digit (key, divisor))
@@ -752,7 +736,7 @@ const radix_digit = fn (key, divisor, sign, top_divisor) => do:
       else:
         return radix_bucket digit
 
-sig radix_power = @type.int -> @type.int
+const radix_power :: @type.int -> @type.int
 const radix_power = fn exponent => do:
   let rec raise = fn (value, remaining) => do:
     if remaining < 1:
@@ -761,7 +745,7 @@ const radix_power = fn exponent => do:
       return raise (value * 256, remaining - 1)
   return raise (1, exponent)
 
-sig radix_top_divisor = (@type.int, @type.int, RadixSign) -> @type.int
+const radix_top_divisor :: (@type.int, @type.int, RadixSign) -> @type.int
 const radix_top_divisor = fn (minimum, maximum, sign) => do:
   if sign == 2:
     return radix_power 7
@@ -781,8 +765,7 @@ const radix_top_divisor = fn (minimum, maximum, sign) => do:
           return divisor
       return grow 1
 
-sig array_radix_cache =
-  @forall (fn T => do:
+const array_radix_cache :: @forall (fn T => do:
     return ([T], (T -> @type.int)) -> (
       [(T, @type.int)],
       @type.int,
@@ -824,8 +807,7 @@ const array_radix_cache = fn (values, key) => do:
   let (minimum, maximum) = bounds (1, first_key, first_key)
   return (entries, minimum, maximum, Scratch.recycle values)
 
-sig radix_counts =
-  @forall (fn T => do:
+const radix_counts :: @forall (fn T => do:
     return (
       [(T, @type.int)],
       @type.int,
@@ -850,7 +832,7 @@ const radix_counts =
         )
     return count (radix_zeroes (), start)
 
-sig radix_positions = [@type.int] -> [@type.int]
+const radix_positions :: [@type.int] -> [@type.int]
 const radix_positions = fn &counts => do:
   let rec build = fn (?positions, bucket, offset) => do:
     if bucket >= 256:
@@ -865,8 +847,7 @@ const radix_positions = fn &counts => do:
   let first = array_expect_get ((&counts), 0)
   return build ([0], 1, first)
 
-sig radix_stable_pass =
-  @forall (fn T => do:
+const radix_stable_pass :: @forall (fn T => do:
     return (
       [(T, @type.int)],
       [(T, @type.int)],
@@ -912,8 +893,7 @@ const radix_stable_pass =
     let (source, target, _) = scatter (?source, ?target, ?positions, 0)
     return (target, source)
 
-sig radix_stable =
-  @forall (fn T => do:
+const radix_stable :: @forall (fn T => do:
     return (
       [(T, @type.int)],
       RadixSign,
@@ -938,8 +918,7 @@ const radix_stable = fn (?entries, sign, top_divisor) => do:
   let (sorted, _) = passes (entries, target, 1)
   return sorted
 
-sig radix_flag_range =
-  @forall (fn T => do:
+const radix_flag_range :: @forall (fn T => do:
     return (
       [(T, @type.int)],
       @type.int,
@@ -1052,8 +1031,7 @@ const radix_flag_range =
 
     return flag (?entries, start, stop, divisor)
 
-sig radix_unstable =
-  @forall (fn T => do:
+const radix_unstable :: @forall (fn T => do:
     return (
       [(T, @type.int)],
       RadixSign,
@@ -1071,8 +1049,7 @@ const radix_unstable = fn (?entries, sign, top_divisor) => do:
     top_divisor
   )
 
-sig array_radix_sort =
-  @forall (fn T => do:
+const array_radix_sort :: @forall (fn T => do:
     return ([T], (T -> @type.int), RadixStrategy) -> [T]
   )
 const array_radix_sort = fn (?values, key, strategy) => do:
@@ -1107,8 +1084,7 @@ const Radix =
     .unstable = #Unstable;
   }
 
-sig array_swap_or_keep =
-  @forall (fn T => ([T], @type.int, @type.int) -> [T])
+const array_swap_or_keep :: @forall (fn T => ([T], @type.int, @type.int) -> [T])
 @[assert.reuse]
 const array_swap_or_keep = fn (?values, left, right) => do:
   if left >= 0:
@@ -1130,8 +1106,7 @@ const array_swap_or_keep = fn (?values, left, right) => do:
   else:
     return values
 
-sig array_partition_before =
-  @forall (fn T => do:
+const array_partition_before :: @forall (fn T => do:
     return (
       [T],
       @type.int,
@@ -1156,8 +1131,7 @@ const array_partition_before =
 
     return go (?values, start, start)
 
-sig array_expect_partition_last =
-  @forall (fn T => do:
+const array_expect_partition_last :: @forall (fn T => do:
     return (
       [T],
       SliceRange,
@@ -1179,7 +1153,7 @@ const array_expect_partition_last =
       slice_range_after (bounds, boundary)
     )
 
-sig array_quicksort =
+const array_quicksort ::
   @forall (fn T => ([T], ((T, T) -> (#True | #False))) -> [T])
 const array_quicksort = fn (values, before_or_equal) => do:
   let bounds = range_whole (&values)
@@ -1223,12 +1197,11 @@ const Array =
     .radix_sort = array_radix_sort;
   }
 
-sig slice_whole = @forall (fn T => @region.type T -> SliceRange)
+const slice_whole :: @forall (fn T => @region.type T -> SliceRange)
 const slice_whole = fn &region => do:
   return slice_range_value (0, slice_length (&region))
 
-sig slice_range =
-  @forall (fn T => do:
+const slice_range :: @forall (fn T => do:
     return (@region.type T, @type.int, @type.int) ->
       (#Range SliceRange | #RangeOutOfBounds)
   )
@@ -1245,15 +1218,13 @@ const slice_range = fn (&region, start, end) => do:
       else:
         return #Range (slice_range_value (start, end))
 
-sig slice_expect_get =
-  @forall (fn T => (@region.type T, @type.int) -> T)
+const slice_expect_get :: @forall (fn T => (@region.type T, @type.int) -> T)
 const slice_expect_get = fn (&region, index) => do:
   return case slice_get ((&region), index) of
     #Some value => value
     #None => @panic "index escaped its checked Slice range"
 
-sig slice_partition_in =
-  @forall (fn T => do:
+const slice_partition_in :: @forall (fn T => do:
     return (
       @region.type T,
       SliceRange,
@@ -1272,8 +1243,7 @@ const slice_partition_in = fn (!region, bounds, belongs_left) => do:
     belongs_left
   )
 
-sig slice_swap_or_keep =
-  @forall (fn T => do:
+const slice_swap_or_keep :: @forall (fn T => do:
     return (@region.type T, @type.int, @type.int) -> @region.type T
   )
 const slice_swap_or_keep = fn (!region, left, right) => do:
@@ -1342,7 +1312,7 @@ const sum = fn values => do:
     fn (state, value) => @int.add state value
   )
 
-sig any = @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
+const any :: @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
 const any = fn (&values, holds) => do:
   return fold (
     values,
@@ -1350,7 +1320,8 @@ const any = fn (&values, holds) => do:
     fn (seen, value) => seen || holds value
   )
 
-sig every = @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
+const every ::
+  @forall (fn T => ([T], T -> (#True | #False)) -> (#True | #False))
 const every = fn (&values, holds) => do:
   return fold (
     values,
@@ -1358,7 +1329,7 @@ const every = fn (&values, holds) => do:
     fn (seen, value) => seen && holds value
   )
 
-sig upto_build = (@type.int, @type.int, [@type.int]) -> [@type.int]
+const rec upto_build :: (@type.int, @type.int, [@type.int]) -> [@type.int]
 const rec upto_build = fn (index, high, state) => do:
   if is_less (@int.cmp index high):
     return upto_build (
@@ -1471,10 +1442,10 @@ const F32Operations =
 // way to choose between them at run time. That is also why there is no `.get`
 // taking an index.
 
-sig f32x4_dot = @type.f32x4 -> @type.f32x4 -> @type.float32
+const f32x4_dot :: @type.f32x4 -> @type.f32x4 -> @type.float32
 const f32x4_dot = fn left => fn right => @f32x4.sum (@f32x4.mul left right)
 
-sig f32x4_scale = (@type.f32x4, @type.float32) -> @type.f32x4
+const f32x4_scale :: (@type.f32x4, @type.float32) -> @type.f32x4
 const f32x4_scale = fn (value, factor) => do:
   return @f32x4.mul value (@f32x4.splat factor)
 
@@ -1739,7 +1710,7 @@ const iter_reverse = fn values => do:
 
 // Draining one. `for` is this loop with the accumulator inferred from the names
 // its body rebinds; written out, it is the same fold.
-sig iterate =
+const iterate ::
   @forall (fn State => @forall (fn Element => @forall (fn Carried => do:
     return (
       {
@@ -1986,8 +1957,7 @@ const set_has = fn (equal, values, needle) => do:
     fn (found, value) => found || equal value needle
   )
 
-sig set_insert =
-  @forall (fn T => do:
+const set_insert :: @forall (fn T => do:
     return (
       T -> T -> (#True | #False),
       [T],
@@ -2137,7 +2107,7 @@ const rec pow2 =
       return 2 * pow2 (@int.sub n 1)
 
 // The arithmetic domains. Integer operations return signed-i64 `Int` without
-// proving a narrower storage width, so a `sig` narrowing to `I32` is a real
+// proving a narrower storage width, so a signature narrowing to `I32` is a real
 // obligation rather than a formality.
 const Int = attach (attach @type.int IntOrder) IntArithmetic
 const Text = attach @type.text TextOperations
@@ -2361,7 +2331,7 @@ const rec refines =
       // one part this cannot decide: an effect reflects as `#Opaque`, so there is
       // no way here to ask whether one row contains another. A function that
       // performs is therefore refused rather than guessed at — the checker
-      // decides rows, at the `sig`, where both of them are known.
+      // decides rows, at the signature, where both of them are known.
       // The calling convention is part of the arrow: a strict function does not
       // refine a deferred one, because the caller decides whether the argument
       // runs at all.
@@ -2467,8 +2437,8 @@ const Reflect =
 //
 // `struct` hands back the storage type *itself*, with its constructor and
 // accessors attached to it by `<+`. One binding is both the type and its
-// namespace, so `Point` can be written in a `sig` and still answer
-// `Point.new`. The members are invisible to typing: `sig p = Point;`
+// namespace, so `Point` can be written in a signature and still answer
+// `Point.new`. The members are invisible to typing: `let p :: Point`
 // constrains `p` to the tuple, and nothing about the namespace reaches the
 // lattice.
 //
@@ -2623,8 +2593,7 @@ const ordered_text_map_entry_type =
 const ordered_text_map_type =
   fn value => @region.type (ordered_text_map_entry_type value)
 
-sig ordered_text_map_is_strict =
-  @forall (fn V => do:
+const rec ordered_text_map_is_strict :: @forall (fn V => do:
     return ([ordered_text_map_entry_type V], Int, Int) -> Bool
   )
 const rec ordered_text_map_is_strict =
@@ -2647,8 +2616,7 @@ const rec ordered_text_map_is_strict =
       else:
         return False
 
-sig ordered_text_map_copy =
-  @forall (fn V => do:
+const ordered_text_map_copy :: @forall (fn V => do:
     return [ordered_text_map_entry_type V] ->
       @region.type (ordered_text_map_entry_type V)
   )
@@ -2659,14 +2627,13 @@ const ordered_text_map_copy = fn entries => do:
   else:
     return @panic "OrderedTextMap.copy requires strictly increasing keys"
 
-sig ordered_text_map_validate =
+const ordered_text_map_validate ::
   @forall (fn V => [ordered_text_map_entry_type V] -> Bool)
 const ordered_text_map_validate = fn &entries => do:
   let length = @array.len (&entries)
   return ordered_text_map_is_strict ((&entries), 1, length)
 
-sig ordered_text_map_lower_bound_from =
-  @forall (fn V => do:
+const rec ordered_text_map_lower_bound_from :: @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Text,
@@ -2698,8 +2665,7 @@ const rec ordered_text_map_lower_bound_from =
           middle
         )
 
-sig ordered_text_map_lower_bound =
-  @forall (fn V => do:
+const ordered_text_map_lower_bound :: @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Text
@@ -2714,8 +2680,7 @@ const ordered_text_map_lower_bound = fn (&entries, key) => do:
     length
   )
 
-sig ordered_text_map_get =
-  @forall (fn V => do:
+const ordered_text_map_get :: @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Text
@@ -2731,8 +2696,7 @@ const ordered_text_map_get = fn (&entries, key) => do:
         return #None
     #None => #None
 
-sig ordered_text_map_replace =
-  @forall (fn V => do:
+const ordered_text_map_replace :: @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Text,
@@ -2754,8 +2718,7 @@ const ordered_text_map_replace = fn (!entries, key, replacement) => do:
         return #MapMissing (replacement, entries)
     #None => #MapMissing (replacement, entries)
 
-sig ordered_text_map_split_before =
-  @forall (fn V => do:
+const ordered_text_map_split_before :: @forall (fn V => do:
     return (
       @region.type (ordered_text_map_entry_type V),
       Text
@@ -2771,8 +2734,7 @@ const ordered_text_map_split_before = fn (!entries, key) => do:
   let index = ordered_text_map_lower_bound ((&entries), key)
   return @region.split (!entries) index
 
-sig ordered_text_map_freeze =
-  @forall (fn V => do:
+const ordered_text_map_freeze :: @forall (fn V => do:
     return @region.type (ordered_text_map_entry_type V) ->
       [ordered_text_map_entry_type V]
   )

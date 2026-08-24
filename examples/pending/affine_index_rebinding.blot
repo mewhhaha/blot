@@ -6,7 +6,7 @@
 
 open import "blot:prelude"
 
-sig sum = [Int] -> Int
+let sum :: [Int] -> Int
 let sum = fn values => do:
   let index = 0
   let total = 0

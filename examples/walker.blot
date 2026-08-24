@@ -7,8 +7,8 @@
 // scope — which is what a recursive group is for.
 //
 // The two are one group because they are adjacent `let rec` bindings of the same
-// kind. Their `sig`s sit between them and separate nothing: a signature has to
-// be followed by the binding it constrains, so a `sig` inside a run belongs to
+// kind. Their signature headers sit between them and separate nothing: a signature has to
+// be followed by the binding it constrains, so a header inside a run belongs to
 // a member of that run.
 
 open import "blot:prelude"
@@ -20,7 +20,7 @@ let program = [1, 0, 4, 5, 0, 6, 7]
 
 // A read past the end is a malformed tree rather than a trap. The guard is
 // what proves the index, exactly as in `indexed.blot`.
-sig token = ([Int], Int) -> Int
+let token :: ([Int], Int) -> Int
 let token = fn (&source, at) => do:
   if at >= 0 && at < @array.len source:
     return @array.get source at
@@ -29,7 +29,7 @@ let token = fn (&source, at) => do:
 
 // Each walker returns the value it read and the position after it, so the
 // caller knows where its next child begins.
-sig walk = ([Int], Int) -> (Int, Int)
+let rec walk :: ([Int], Int) -> (Int, Int)
 let rec walk =
   fn (&source, at) => do:
     let head = token ((&source), at)
@@ -38,7 +38,7 @@ let rec walk =
     else:
       return (head - 2, at + 1)
 
-sig combine = ([Int], Int, Int) -> (Int, Int)
+let rec combine :: ([Int], Int, Int) -> (Int, Int)
 let rec combine =
   fn (&source, at, operator) => do:
     let (left, after_left) = walk ((&source), at)

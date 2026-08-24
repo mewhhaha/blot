@@ -105,7 +105,6 @@ const RESERVED_TOKENS = [
   "prefix",
   "let",
   "const",
-  "sig",
   "return",
   "if",
   "else",

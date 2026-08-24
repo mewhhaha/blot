@@ -189,11 +189,12 @@ one. Row polymorphism over label sets has principal solutions in this lattice. A
 record row would need field types and the concatenation and override operations
 shape syntax can write, which is the reason that one has none.
 
-The implemented `sig` elaboration uses one written tail, `~ { Console, ..e }`,
-binding `e` for the extent of that signature, with both occurrences required. A
-tail on the outermost arrow with no second occurrence stays refused, which is
-the unconstrained-variable case §12.4 is right to fear. Inference does not
-change; the signature language catches up with what it already computes.
+The implemented signature elaboration uses one written tail,
+`~ { Console, ..e }`, binding `e` for the extent of that signature, with both
+occurrences required. A tail on the outermost arrow with no second occurrence
+stays refused, which is the unconstrained-variable case §12.4 is right to fear.
+Inference does not change; the signature language catches up with what it
+already computes.
 
 ## 9. Resolve `==` through an interface carried on the type
 
@@ -310,7 +311,7 @@ The difficulty is not a missing primitive but where checking happens. A language
 that checks a reflective body only at instantiation never has an evidence
 question. Blot checks principally, so §13.4 marks a reflect payload that cannot
 be related to the reflected input as unevidenced: usable at compile time, unable
-to discharge a runtime `sig`. That marking is the whole tax on derive-shaped
+to discharge a runtime signature. That marking is the whole tax on derive-shaped
 code.
 
 Apply the rule the array path already uses. `Iter.indexed` does not hand back an
@@ -364,25 +365,25 @@ proves the match total.
 
 A spread of a parameter contributes no fields (§6), so
 `fn r => { ...r; .tag = 1; }` returns a record with `.tag` alone. Where the
-parameter's record type is declared by a `sig`, there is a sound reading with no
-row variable: desugar the spread to an explicit copy of exactly the declared
-fields. The type and the runtime value agree field for field,
+parameter's record type is declared by a signature, there is a sound reading
+with no row variable: desugar the spread to an explicit copy of exactly the
+declared fields. The type and the runtime value agree field for field,
 `BLOT_SPREAD_MAY_OVERWRITE` keeps its meaning where nothing was declared, and
 the idiom becomes writable precisely where the program said what it meant.
 
 A module's demand on its parameter is inferred and unwritable, so its authority
-surface is documentation by excavation. Allow a `sig` for the parameter
+surface is documentation by excavation. Allow a signature for the parameter
 immediately after the header, checked as an upper bound like any other. The
 inferred demand stays the truth; the signature is the human-facing bound on it.
 
 ## 16. Contingent, and what not to do yet
 
-- **Relational signatures.** Phi is deliberately unspeakable in a `sig` (§10.1),
-  so a proved-safe helper cannot export its precondition and every caller
-  re-proves it or takes the total API's `Option`. One relational form restricted
-  to the difference fragment the certificates already replay would close that.
-  It is a large change — function types gain a relational component and
-  subtyping on it becomes implication — and it should wait for section 10.
+- **Relational signatures.** Phi is deliberately unspeakable in a signature
+  (§10.1), so a proved-safe helper cannot export its precondition and every
+  caller re-proves it or takes the total API's `Option`. One relational form
+  restricted to the difference fragment the certificates already replay would
+  close that. It is a large change — function types gain a relational component
+  and subtyping on it becomes implication — and it should wait for section 10.
   Sketch it before the capsule format hardens further: a capsule that cannot
   carry the relation forces re-inference forever.
 - **A word domain.** `U64` is a storage descriptor whose runtime inhabitants are

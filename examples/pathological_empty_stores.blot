@@ -6,15 +6,15 @@
 
 open import "blot:prelude"
 
-sig empty_ints = Unit -> [Int]
+let empty_ints :: Unit -> [Int]
 let empty_ints = fn () => []
 
-sig choose_empty = Bool -> [Int]
+let choose_empty :: Bool -> [Int]
 let choose_empty = fn condition => case condition of
   #True => []
   #False => []
 
-sig nested = [[Int]]
+let nested :: [[Int]]
 let nested = [empty_ints (), choose_empty False]
 
 return {

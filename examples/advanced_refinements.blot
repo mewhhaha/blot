@@ -6,7 +6,7 @@ open import "blot:prelude"
 // Phi summary over the second curried parameter.
 const count_second = fn _ => fn values => Array.length values
 
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn values => fn index => do:
   if index >= 0 && index < count_second () values:
     return @array.get values index
@@ -17,7 +17,7 @@ let at = fn values => fn index => do:
 const Audit = @effect { .record = Text -> Unit; }
 const Transition = #Closed Int -> #Open Int ~ { Audit }
 
-sig advance = Transition
+let advance :: Transition
 let advance = fn !state => do:
   result <- case state of
     #Closed value => do:

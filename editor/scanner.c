@@ -56,7 +56,7 @@ static bool starts_layout_entry(TSLexer *lexer) {
   }
 
   const bool statement_keyword = strcmp(word, "let") == 0 ||
-    strcmp(word, "const") == 0 || strcmp(word, "sig") == 0 ||
+    strcmp(word, "const") == 0 ||
     strcmp(word, "return") == 0 || strcmp(word, "for") == 0 ||
     strcmp(word, "break") == 0 || strcmp(word, "open") == 0 ||
     strcmp(word, "if") == 0;

@@ -43,11 +43,12 @@ but it never becomes a runtime `let`.
 A signature may bind the rest of an effect row with one final `..name` tail:
 
 ```blot
-sig logged =
+let logged ::
   (a -> b ~ { ..e }) ->
   a -> b ~ { Console, ..e }
+let logged = fn transform => fn value => transform value
 ```
 
-The tail is local to that `sig`, must occur at least twice, and carries only row
-identity. It grants no authority to construct or handle the effects it
+The tail is local to that signature, must occur at least twice, and carries only
+row identity. It grants no authority to construct or handle the effects it
 represents and does not add record row polymorphism.

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-sig retained_go = (Int, [Int], Int) -> Int
+const rec retained_go :: (Int, [Int], Int) -> Int
 const rec retained_go = fn (remaining, values, observed) => do:
   if remaining <= 0:
     return observed
@@ -9,7 +9,7 @@ const rec retained_go = fn (remaining, values, observed) => do:
   let previous_length = @array.len values
   return retained_go (remaining - 1, next, observed + previous_length)
 
-sig retained_updates = Int -> Int
+const retained_updates :: Int -> Int
 const retained_updates = fn count => retained_go (count, @array.empty, 0)
 
 return { .retained_updates = retained_updates; }

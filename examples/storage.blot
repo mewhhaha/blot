@@ -2,8 +2,8 @@
 //
 // `structure` hands back the storage type *itself*, with the constructor and
 // accessors attached to it. One binding is both the type and its namespace, so
-// `Point` can be written in a `sig` and still answer `Point.new`. The members
-// are invisible to typing: `sig p = Point;` constrains `p` to the tuple, and
+// `Point` can be written in a signature and still answer `Point.new`. The members
+// are invisible to typing: `let p :: Point` constrains `p` to the tuple, and
 // nothing about the namespace reaches the lattice.
 //
 // The storage is a tuple rather than an array because a tuple keeps one type
@@ -16,7 +16,7 @@ open import "blot:prelude"
 const Point = struct { .x = I32; .y = I32; }
 
 // `Point` is the type.
-sig somewhere = Point
+let somewhere :: Point
 // Named record in, positional storage out. The call site writes the fields in
 // whatever order reads well; the placement decides where they land.
 let somewhere = Point.new { .y = 20; .x = 10; }
@@ -65,7 +65,7 @@ const Pixel =
     .mode = U 2;
   }
 const pixel_bits = packed Pixel
-sig mode_at = Option Int
+let mode_at :: Option Int
 let mode_at = pixel_bits.bit_offset "mode"
 const signed_bit_width = bit_width (I 7)
 const unsigned_bit_width = bit_width U64

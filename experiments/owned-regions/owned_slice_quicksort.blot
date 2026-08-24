@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Source = @effect.host { .value = Int -> Int; }
 
-sig quicksort_owned =
+const quicksort_owned ::
   @forall (fn T => do:
     return (Slice.of T, (T, T) -> Bool) -> Slice.of T
   )

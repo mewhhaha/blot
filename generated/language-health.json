@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 1,
-    "checkedModuleCertificate": 12,
+    "checkedModuleCertificate": 13,
     "runtimeHir": 4
   },
   "operators": [
@@ -202,7 +202,7 @@
     "BLOT_DUPLICATE_RECURSIVE_BINDING",
     "BLOT_DYNAMIC_HOST_RESULT",
     "BLOT_DYNAMIC_SHAPE_FIELD",
-    "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIG",
+    "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE",
     "BLOT_EFFECT_ROW_TAIL_POSITION",
     "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
     "BLOT_EMPTY_REFINEMENT",
@@ -280,6 +280,7 @@
     "BLOT_REGION_REASSOCIATE_UNPROVED",
     "BLOT_REGION_SPLIT_NOT_OWNED",
     "BLOT_REMOVED_OPERATOR_SECTION",
+    "BLOT_REQUIREMENT_NOT_COMPTIME",
     "BLOT_RESERVED_LAYOUT_CHARACTER",
     "BLOT_RESUME_TWICE",
     "BLOT_RETIRED_IMPORT",
@@ -292,13 +293,11 @@
     "BLOT_SCRATCH_RECYCLE_LINEAR",
     "BLOT_SHADOWED_ACCUMULATOR",
     "BLOT_SHARED_ARRAY_UPDATE",
-    "BLOT_SIG_NOT_A_TYPE",
-    "BLOT_SIG_NOT_COMPTIME",
-    "BLOT_SIG_PATTERN",
+    "BLOT_SIGNATURE_NOT_A_TYPE",
+    "BLOT_SIGNATURE_TARGET",
     "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
     "BLOT_SIMD_IMMEDIATE_RANGE",
     "BLOT_SPREAD_MAY_OVERWRITE",
-    "BLOT_TAGGED_SIG",
     "BLOT_TARGET_REFUSAL",
     "BLOT_TYPE",
     "BLOT_TYPE_ERROR",
@@ -693,7 +692,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 10053
+      "lines": 10147
     },
     {
       "path": "compiler/src/hir.rs",
@@ -701,31 +700,31 @@
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 5764
+      "lines": 5761
     },
     {
       "path": "compiler/src/backend.rs",
       "lines": 4914
     },
     {
-      "path": "compiler/src/eval.rs",
-      "lines": 3504
+      "path": "compiler/src/frontend_plan.rs",
+      "lines": 3513
     },
     {
-      "path": "compiler/src/frontend_plan.rs",
-      "lines": 3468
+      "path": "compiler/src/eval.rs",
+      "lines": 3489
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3272
+      "lines": 3282
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 2933
+      "lines": 2895
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 2731
+      "lines": 2740
     },
     {
       "path": "compiler/src/primitives.rs",
@@ -733,7 +732,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 1863
+      "lines": 1852
     },
     {
       "path": "compiler/src/value.rs",
@@ -745,11 +744,11 @@
     },
     {
       "path": "compiler/src/safety.rs",
-      "lines": 1346
+      "lines": 1349
     },
     {
       "path": "src/tooling/formatter.ts",
-      "lines": 1113
+      "lines": 1121
     }
   ]
 }

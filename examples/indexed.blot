@@ -12,7 +12,7 @@
 
 open import "blot:prelude"
 
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn xs => fn n => do:
   if n >= 0:
     if n < @array.len xs:
@@ -22,7 +22,7 @@ let at = fn xs => fn n => do:
 
 // The same proof serves a write: `@array.set` takes the index `@array.get`
 // takes, and asks the same question of it.
-sig clear = [Int] -> Int -> [Int]
+let clear :: [Int] -> Int -> [Int]
 let clear = fn xs => fn n => do:
   if n >= 0 && n < @array.len xs:
     return @array.set xs n 0

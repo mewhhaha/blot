@@ -12,6 +12,7 @@
 ".." @operator
 "..." @operator
 ":" @punctuation.delimiter
+"::" @operator
 ":=" @operator
 ";" @punctuation.delimiter
 "<-" @operator

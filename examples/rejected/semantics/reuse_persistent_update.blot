@@ -2,7 +2,7 @@
 
 open import "blot:prelude"
 
-sig clear_first = [Int] -> [Int]
+const clear_first :: [Int] -> [Int]
 @[assert.reuse]
 const clear_first = fn values => do:
   if @array.len values > 0:

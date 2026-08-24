@@ -84,7 +84,7 @@ fixity_declaration = (
 // reference language collapse into `const`, because types are ordinary
 // compile-time values.
 declaration =
-  binding | rebinding | sequencing
+  signature | binding | rebinding | sequencing
   | opening | iteration | breaking
   | conditional_statement | result ;
 
@@ -92,13 +92,23 @@ declaration =
 // mechanical and keeps declaration and nested statement regions distinct in
 // the compact CST.
 statement =
-  binding | rebinding | sequencing
+  signature | binding | rebinding | sequencing
   | opening | iteration | breaking
   | conditional_statement | result ;
 
+signature = (
+  kind:("let" | "const")
+  recursive:"rec"?
+  name:(IDENT | TYPE_IDENT)
+  "::"
+  value:(value | indented_value)
+  LAYOUT_NEWLINE
+) ;
+
 binding = (
   tags:declaration_tag*
-  (kind:("let" | "const") recursive:"rec"? | kind:"sig")
+  kind:("let" | "const")
+  recursive:"rec"?
   pattern:binding_pattern
   "="
   value:(value | indented_value)
@@ -362,7 +372,7 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 keyword = (
   "module" | "with" | "import"
   | "operators" | "infixl" | "infixr" | "infix" | "prefix"
-  | "let" | "const" | "sig" | "return"
+  | "let" | "const" | "return"
   | "if" | "else" | "case" | "of" | "rec" | "open"
   | "for" | "in" | "break" | "do" | "compdo" | "fn"
 ) ;
@@ -401,7 +411,7 @@ import_expression = (
 // never empty — a function that performs nothing is written without `~` —
 // which is what leaves `{}` unambiguously the empty shape.
 //
-// A `..e` member names the rest of the row in a `sig`. The flat member list
+// A `..e` member names the rest of the row in a signature. The flat member list
 // keeps the comma decision local: after each comma, `..` and an expression have
 // disjoint starts. Lowering requires the tail to be last and gives every tail
 // name signature-local scope.

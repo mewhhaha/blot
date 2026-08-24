@@ -12,7 +12,7 @@ const Summary =
     .errors = [Text];
   }
 
-sig validate = Int -> Result
+let validate :: Int -> Result
 let validate = fn value => do:
   if value <= 0:
     return #Rejected "not positive"
@@ -22,7 +22,7 @@ let validate = fn value => do:
     else:
       return #Rejected "not even"
 
-sig summarize = (Summary, Result) -> Summary
+let summarize :: (Summary, Result) -> Summary
 let summarize = fn (state, result) => case result of
   #Accepted value => {
     .accepted = [...state.accepted, value];

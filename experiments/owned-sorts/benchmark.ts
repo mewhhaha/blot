@@ -100,7 +100,7 @@ function source(
   return `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 
-sig checksum = ([Int], Int, Int) -> Int
+const rec checksum :: ([Int], Int, Int) -> Int
 const rec checksum = fn (values, index, total) => do:
   if index >= Array.length (&values):
     return total
@@ -109,7 +109,7 @@ const rec checksum = fn (values, index, total) => do:
     return checksum (values, index + 1, total + (index + 1) * value)
 
 dynamic <- Source.value 0
-sig values = [Int]
+let values :: [Int]
 let values = [dynamic, ${values.slice(1).join(", ")}]
 let sorted = ${sort}
 return checksum (sorted, 0, 0)
