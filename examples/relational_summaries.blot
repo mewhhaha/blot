@@ -3,7 +3,7 @@ open import "blot:prelude"
 
 const count = fn values => Array.length values
 
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn values => fn index => case index >= 0 && index < count values of
   #True => @array.get values index
   #False => 0

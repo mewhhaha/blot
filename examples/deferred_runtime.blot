@@ -4,28 +4,28 @@
 
 open import "blot:prelude"
 
-sig choose = Bool -> Int ~> Int
+let choose :: Bool -> Int ~> Int
 let choose = fn condition => fn ~fallback => case condition of
   #True => fallback
   #False => 42
 
-sig run = Int -> Int
+let run :: Int -> Int
 let run = fn divisor => choose (divisor != 0) (84 / divisor)
 
 let demand_either = fn condition => fn ~value => case condition of
   #True => value
   #False => value
 
-sig both = Int -> Int
+let both :: Int -> Int
 let both = fn value => demand_either (value == 0) (value + 1)
 
-sig skip = Int ~> Int
+let skip :: Int ~> Int
 let skip = fn ~_ => 42
 
-sig take = Int ~> Int
+let take :: Int ~> Int
 let take = fn ~value => value
 
-sig choice = (Int, Int) -> Int
+let choice :: (Int, Int) -> Int
 let choice = fn (flag, divisor) => do:
   let selected = case flag == 0 of
     #True => skip
@@ -38,7 +38,7 @@ let demand_through_helper = fn condition => fn ~value => do:
     #True => get ()
     #False => get ()
 
-sig helper = Int -> Int
+let helper :: Int -> Int
 let helper = fn value => demand_through_helper (value == 0) (value + 1)
 
 return { .default = run; .both = both; .choice = choice; .helper = helper; }

@@ -9,10 +9,10 @@
 // with `()`, while an already-applied expression is sequenced as written.
 //
 // The row is inferred and it is also writable. `A -> B ~ { Console }` is what a
-// function that performs `Console` prints as, and a `sig` spells it the same
+// function that performs `Console` prints as, and a signature spells it the same
 // way — an effect is an ordinary compile-time value, so a row is the ordinary
 // list of them. A bare `->` is not silence about effects: it is the empty row,
-// so `sig greet = Unit -> Text;` below would be rejected.
+// so `let greet :: Unit -> Text` below would be rejected.
 
 open import "blot:prelude"
 
@@ -32,7 +32,7 @@ const Terminal =
     .read = Unit -> Text;
   }
 
-sig ask = Unit -> Text ~ { Terminal }
+let ask :: Unit -> Text ~ { Terminal }
 let ask = fn () => do:
   answer <- Terminal.read ()
   return answer <> "!"
@@ -46,9 +46,9 @@ let answering =
     .return = fn value => value;
   }
 
-// Performing is a call, and the row follows from it. The `sig` says the same
+// Performing is a call, and the signature says the same
 // thing the printer would: the body may perform `Console` and nothing else.
-sig greet = Unit -> Text ~ { Console }
+let greet :: Unit -> Text ~ { Console }
 let greet = fn () => do:
   <- Console.write "hello"
   <- Console.write "world"

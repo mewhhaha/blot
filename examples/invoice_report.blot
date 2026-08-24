@@ -20,10 +20,10 @@ const Totals =
     .items = Int;
   }
 
-sig line_total = Line -> Int
+let line_total :: Line -> Int
 let line_total = fn line => line.quantity * line.unit_price
 
-sig add_line = (Totals, Line) -> Totals
+let add_line :: (Totals, Line) -> Totals
 let add_line = fn (totals, line) => do:
   let amount = line_total line
   let tax = case line.taxable of
@@ -35,7 +35,7 @@ let add_line = fn (totals, line) => do:
     .items = totals.items + line.quantity;
   }
 
-sig lines = [Line]
+let lines :: [Line]
 let lines =
   [
     {
@@ -58,9 +58,9 @@ let lines =
     }
   ]
 
-sig line_totals = [Int]
+let line_totals :: [Int]
 let line_totals = map (lines, line_total)
-sig totals = Totals
+let totals :: Totals
 let totals =
   fold (
     lines,

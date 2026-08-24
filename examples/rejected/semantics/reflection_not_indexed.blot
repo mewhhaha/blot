@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-sig reflected = Int -> 0
+let reflected :: Int -> 0
 let reflected = fn value => case @type.reflect value of
   #Shape payload => payload
   _ => 0

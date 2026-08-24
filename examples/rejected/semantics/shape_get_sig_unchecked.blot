@@ -1,6 +1,6 @@
 // `@shape.get` names its field with a value, so no signature can state what it
 // produces. That is not a reason to answer with a type variable: every
-// constraint on a variable holds, so the `sig` below would be believed rather
+// constraint on a variable holds, so the signature below would be believed rather
 // than checked and the program would export the type `0` for a value that is
 // `7`.
 //
@@ -13,6 +13,6 @@
 open import "blot:prelude"
 
 let r = { .a = 7; }
-sig z = 0
+let z :: 0
 let z = @shape.get r "a"
 return z

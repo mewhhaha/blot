@@ -4,7 +4,8 @@ import { decodePortableModule, encodePortableModule } from "./portable.ts";
 
 Deno.test("a portable AST round trip preserves the lowered module", async () => {
   const parsed = await parse(
-    `const answer = 41
+    `const answer :: Int
+const answer = 41
 return fn offset => answer + offset
 `,
   );

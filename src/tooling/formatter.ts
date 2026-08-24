@@ -240,11 +240,15 @@ function formatOneStatementValue(
   root: ConcreteRule,
 ): string {
   const statements: ConcreteRule[] = [];
+  collectRules(root, "signature", statements);
   collectRules(root, "binding", statements);
   collectRules(root, "result", statements);
   statements.sort((left, right) => left.span.start - right.span.start);
   for (const statement of statements) {
     let introducer = directToken(statement, "return");
+    if (statement.name === "signature") {
+      introducer = directToken(statement, "::");
+    }
     if (statement.name === "binding") introducer = directToken(statement, "=");
     if (introducer === null) continue;
     let value = directRule(statement, "value");
@@ -971,14 +975,18 @@ function collectIndentRegions(
   ancestors: readonly ConcreteRule[] = [],
 ): void {
   if (node.type !== "rule") return;
-  if (node.name === "binding") {
+  if (node.name === "binding" || node.name === "signature") {
     const indentedValue = directRule(node, "indented_value");
     let value: ConcreteRule | null = null;
     if (indentedValue !== null) value = indentedBindingValue(indentedValue);
     if (value !== null) {
-      const equals = directToken(node, "=");
-      if (equals === null) throw new Error("binding has no equals token");
-      const startsAtLine = lineAtOffset(lineStarts, equals.span.start);
+      const introducer = node.name === "signature"
+        ? directToken(node, "::")
+        : directToken(node, "=");
+      if (introducer === null) {
+        throw new Error(`${node.name} has no value introducer`);
+      }
+      const startsAtLine = lineAtOffset(lineStarts, introducer.span.start);
       const endsAtLine = lineAtOffset(
         lineStarts,
         Math.max(value.span.start, ruleContentSpan(value).end - 1),

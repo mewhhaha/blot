@@ -34,10 +34,10 @@ const measure_int = measuring Int
 // Each call site is typed against the arrow it actually got. `measure_text 41`
 // would be rejected here, and before this it was `measure_text "hello"` that
 // was rejected — against the branch that did not run.
-sig text_length = Int
+let text_length :: Int
 let text_length = measure_text "hello"
 
-sig int_itself = Int
+let int_itself :: Int
 let int_itself = measure_int 41
 
 // A guard rather than a choice: one lambda, and the type is checked before it

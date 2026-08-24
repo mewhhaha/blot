@@ -16,10 +16,10 @@ open import "blot:prelude"
 // steps something the program wrote down.
 const lane = F32.of_int
 
-sig axis = F32x4
+let axis :: F32x4
 let axis = F32x4.of (lane 1, lane 2, lane 3, lane 4)
 
-sig ten = F32x4
+let ten :: F32x4
 let ten = F32x4.splat (lane 10)
 
 // --- arithmetic -------------------------------------------------------------
@@ -29,19 +29,19 @@ let ten = F32x4.splat (lane 10)
 // closures and lazy boundaries still box because a heap value must outlive the
 // native worker that produced it.
 
-sig scaled = F32x4
+let scaled :: F32x4
 let scaled = F32x4.mul (F32x4.add axis ten) ten
 
-sig difference = F32x4
+let difference :: F32x4
 let difference = F32x4.sub scaled ten
 
-sig halved = F32x4
+let halved :: F32x4
 let halved = F32x4.div scaled (F32x4.splat (lane 2))
 
-sig selected = F32x4
+let selected :: F32x4
 let selected = F32x4.select (F32x4.less axis ten) ten axis
 
-sig shuffled = F32x4
+let shuffled :: F32x4
 let shuffled = F32x4.shuffle (selected, halved, 0, 5, 2, 7)
 
 // --- reading a lane ---------------------------------------------------------
@@ -50,10 +50,10 @@ let shuffled = F32x4.shuffle (selected, halved, 0, 5, 2, 7)
 // choose between them at run time, so a `get` taking a number could not lower —
 // naming them is what makes that limit visible rather than a surprise.
 
-sig first = Int
+let first :: Int
 let first = F32.truncate (F32x4.x scaled)
 
-sig last = Int
+let last :: Int
 let last = F32.truncate (F32x4.w scaled)
 
 // --- what the lanes are for -------------------------------------------------
@@ -61,19 +61,19 @@ let last = F32.truncate (F32x4.w scaled)
 // A dot product is a lane-wise multiply and a horizontal sum, so it is prelude
 // source: it is writable over the two instructions below it.
 
-sig dot = Int
+let dot :: Int
 let dot = F32.truncate (F32x4.dot axis axis)
 
 // `dot` is `sum` over a lane-wise multiply, and `sum` is one instruction where
 // four extracts and three adds would be seven. It is a primitive for the same
 // reason the four arithmetic operations are: the target has an instruction and
 // blot has no way to write one.
-sig total = Int
+let total :: Int
 let total = F32.truncate (F32x4.sum scaled)
 
 // Single precision, still: the lanes round the way `F32` does, and a sum that
 // needs more than 24 bits of mantissa says so here as much as anywhere.
-sig thirds = Int
+let thirds :: Int
 let thirds =
   F32.truncate (F32x4.dot
     (F32x4.splat (F32.of_float (F64.div 1.0 3.0)))

@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 const text = tag ("text", (), (fn _ => "changed"))
-sig value = I32
+let value :: I32
 @[text]
 let value = 1
 

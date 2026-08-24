@@ -349,8 +349,7 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
-sig frame =
-  ({
+let frame :: ({
     .mesh = (F32x4, Int, F32, Text) -> Unit ~ { Canvas };
     .sprite = (F32x4, F32, Text) -> Unit ~ { Canvas };
     } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }

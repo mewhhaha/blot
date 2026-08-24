@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-sig mix_go = (Int, Int) -> Int
+const rec mix_go :: (Int, Int) -> Int
 const rec mix_go =
   fn (remaining, state) => do:
     if remaining <= 0:
@@ -9,7 +9,7 @@ const rec mix_go =
     let next = (state * 48271 + remaining) % 2147483647
     return mix_go (remaining - 1, next)
 
-sig mix = Int -> Int
+const mix :: Int -> Int
 const mix = fn count => mix_go (count, 1)
 
 return { .mix = mix; }

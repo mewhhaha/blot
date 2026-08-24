@@ -60,7 +60,7 @@ The reserved words are:
 
 ```text
 module with import
-let const sig return
+let const return
 if else case of rec open
 for in break do compdo fn
 ```
@@ -395,6 +395,12 @@ const pattern = value
 let rec name = fn parameter => body
 const rec name = fn parameter => body
 
+let name :: type
+let name = value
+
+let rec name :: type
+let rec name = fn parameter => body
+
 let descriptive_pattern =
   value
 ```
@@ -417,6 +423,12 @@ closures may later be specialized into runtime code when called.
 after `let` or `const`, and the binding must name exactly one function. The old
 expression-shaped spelling `let name = rec (fn ... )` is not accepted. Section
 6.5 defines recursive groups and their lowering.
+
+A signature header repeats the binding's complete header and replaces `=` with
+`::`. It must be immediately followed by exactly that binding: `let` or `const`,
+the presence of `rec`, and the name must all agree. A signature binds no value
+and admits no declaration tags. Its type is an ordinary compile-time expression,
+evaluated before the binding is checked.
 
 A `const` takes its type from the value it evaluated to, not from the expression
 that produced it. When that value is a function, its type is the type of the
@@ -523,10 +535,11 @@ let value = source
 ```
 
 binds `outer.transform (inner.transform source)`. The replacement is the value
-matched by the binding pattern and may have a different type. An adjacent `sig`
-constrains that final value. A `let` transform runs in the binding's runtime
-phase and contributes its ordinary effects; a `const` transform runs at compile
-time. Tags are not admitted on `sig` because a signature binds no value.
+matched by the binding pattern and may have a different type. An adjacent
+signature header constrains that final value. A `let` transform runs in the
+binding's runtime phase and contributes its ordinary effects; a `const`
+transform runs at compile time. Tags are not admitted on signature headers
+because a signature binds no value.
 
 Tags lower to ordinary descriptor bindings, function application, and a block. A
 tagged `let rec` or `const rec` is first bound directly under its source name
@@ -546,7 +559,7 @@ checking, evaluation, and building never execute tests.
 ### 4.3 Signatures
 
 ```blot
-sig name = type_value
+let name :: type_value
 let name = value
 ```
 
@@ -979,9 +992,9 @@ Deferral is a property of the arrow, not of the call. `A ~> B` is the type of a
 function whose parameter is deferred, and `@type.deferred_arrow` is the
 primitive the operator names. The two arrows are unrelated: a strict function
 does not satisfy a deferred signature and a deferred one does not satisfy a
-strict signature, in a `sig`, at an application, and under `refines` alike. Both
-arrows associate to the right, so `Bool -> Int ~> Int` describes a strict first
-parameter followed by a deferred second parameter.
+strict signature, in a signature header, at an application, and under `refines`
+alike. Both arrows associate to the right, so `Bool -> Int ~> Int` describes a
+strict first parameter followed by a deferred second parameter.
 
 A deferred parameter may be read at most once along one execution path. Reading
 it once in each side of a runtime branch is valid because the sides are
@@ -1069,9 +1082,9 @@ a lambda to one name, and at a change of kind. A `let rec` run and a `const rec`
 run are therefore separate groups, because a `const` may not capture a `let`
 (section 4.1) and the members of a group are bound together.
 
-A `sig` neither joins a run nor ends one. A signature must be immediately
-followed by the binding it constrains, so a `sig` written inside a run is one
-member's own signature.
+A signature header neither joins a run nor ends one. Because it must be
+immediately followed by the binding it constrains, a header written inside a run
+belongs to that member.
 
 A tagged binding (section 4.2) is not a member and ends a run. A tag replaces
 the binding's value with the transform applied to it, so what the binding holds
@@ -1245,7 +1258,7 @@ rather than a type the target could be constrained to — so the members the arm
 do not name are reported, and the target's own type is left alone.
 
 ```blot
-sig rank = 1 | 2 | 3 -> Int
+let rank :: 1 | 2 | 3 -> Int
 let rank = fn level => case level of
   1 => 100
   2 => 200
@@ -1259,7 +1272,7 @@ range with an open end — cannot be exhausted by listed literal arms. Such a
 `case` is refused rather than accepted in silence:
 
 ```blot
-sig describe = Int -> Text
+let describe :: Int -> Text
 let describe = fn n => case n of
   1 => "one"
   2 => "two"
@@ -1330,7 +1343,7 @@ cross-product: a combination of columns no arm accepts is
 target. So
 
 ```blot
-sig join = (Option Int, Option Int) -> Int
+let join :: (Option Int, Option Int) -> Int
 let join = fn pair => case pair of
   (#Some a, #Some b) => a + b
   (#Some a, #None) => a
@@ -1341,19 +1354,19 @@ let join = fn pair => case pair of
 is total with no irrefutable arm at all, and dropping its last arm is refused
 with `` No arm covers `(#None, #None)` ``.
 
-The `sig` supplies the finite domains there. Without it, a column the checker
-cannot enumerate must be covered by an irrefutable pattern. No checked closed
-`case` retains a path to `BLOT_NO_MATCH`.
+The signature supplies the finite domains there. Without it, a column the
+checker cannot enumerate must be covered by an irrefutable pattern. No checked
+closed `case` retains a path to `BLOT_NO_MATCH`.
 
 Each column is covered on its own terms. A column whose type is a constructor
 set must have every constructor named in it, and the arms are what close a
-column no `sig` declared: a column naming `#Some` and `#None` makes the
+column no signature declared: a column naming `#Some` and `#None` makes the
 scrutinee's column that union, so a target declared wider is refused there. A
 column whose type has more values than arms can list — `Int`, `F64`, an opaque
 type, a shape — can only be covered by an irrefutable pattern in that column, so
 
 ```blot
-sig pick = (Int, Option Int) -> Int
+let pick :: (Int, Option Int) -> Int
 let pick = fn pair => case pair of
   (1, #Some a) => a
   (_, #None) => 0
@@ -1363,7 +1376,7 @@ is refused with `` No arm covers `(_, #Some)` ``: the first arm cannot help with
 an integer other than `1`, and the arm that can does not name `#Some`.
 
 Nested tuples and constructor payloads are columns like any other, and are read
-the same way when a `sig` says what they hold. Where nothing does, an inner
+the same way when a signature says what they hold. Where nothing does, an inner
 column carries no requirement — only a column of the scrutinee's own tuple is
 closed by its arms.
 
@@ -1441,7 +1454,7 @@ branch reached because it was not, the name's type is the part of its declared
 set that the condition allows.
 
 ```blot
-sig name = 1 | 2 | 3 -> Text
+let name :: 1 | 2 | 3 -> Text
 let name = fn n =>
   if n == 1:
     return case n of
@@ -1490,7 +1503,7 @@ Inference records that value relationship in the refinement context rather than
 in the integer's type:
 
 ```blot
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn xs => fn n =>
   if n >= 0:
     if n < @array.len xs:
@@ -1857,21 +1870,22 @@ let apply = fn (function, value) => function value
 // apply : ('a -> 'b, 'a) -> 'b, with the callback's effect row preserved
 ```
 
-A `sig` is a constraint program written with ordinary compile-time type values.
-Each use instantiates its `@forall` binders freshly. Structural records provide
-trait-like behavior by width subtyping, while effect rows describe callable
-behavior separately from parameter and result representation:
+A signature header is a constraint program written with ordinary compile-time
+type values. Each use instantiates its `@forall` binders freshly. Structural
+records provide trait-like behavior by width subtyping, while effect rows
+describe callable behavior separately from parameter and result representation:
 
 ```blot
 const Named = { .name = Text; }
 
-sig label = @forall (fn T => Named -> T -> Text)
+let label :: @forall (fn T => Named -> T -> Text)
 let label = fn named => fn _ => named.name
 
 const Console = @effect { .write = Text -> Unit; }
-sig map_logged =
+let map_logged ::
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
+let map_logged = fn transform => fn value => transform value
 ```
 
 Layout and proof facts remain explicit layers. `I32` is the ordinary integer
@@ -1960,12 +1974,12 @@ Compiler output uses notation that is not additional source syntax:
 
 Array lengths and affine relations are not display types. Diagnostics that need
 to explain a failed proof render propositions such as `index < length(values)`
-directly from `Phi`; a `sig` cannot name them.
+directly from `Phi`; a signature cannot name them.
 
 An effect row is the one piece of this notation that is also source:
 `A -> B ~ { Console }` is a closed row, while `A -> B ~ { Console, ..e }` names
-the rest of the row inside a `sig` (§12.4). The checker prints inferred open
-rows with the same `..e` notation.
+the rest of the row inside a signature header (§12.4). The checker prints
+inferred open rows with the same `..e` notation.
 
 ### 10.4 Type-value primitives
 
@@ -2553,13 +2567,13 @@ not silently mangled.
 
 ### 12.4 Written effect rows
 
-A function type carries the row it performs, and a `sig` writes that row the way
-the checker prints it:
+A function type carries the row it performs, and a signature header writes that
+row the way the checker prints it:
 
 ```blot
 const Console = @effect { .write = Text -> Unit; }
 
-sig map_logged =
+let map_logged ::
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
 let map_logged = fn callback => fn value =>
@@ -2574,21 +2588,21 @@ compile-time effect values, optionally ending in one tail `..name`.
 open through `e`. A function that performs exactly nothing is still written with
 bare `->`; `{}` remains the empty shape rather than an effect row.
 
-A tail name is scoped to the immediately containing `sig`. Every occurrence of
-the same tail name in that signature denotes the same inferred effect-row
-variable, and the tail must appear in at least two positions. That repeated-use
-rule prevents a signature from introducing an unconstrained row variable that
-could admit arbitrary effects. A row has at most one tail and the tail is last.
-This facility is specific to effect-label sets; it does not add record row
-polymorphism.
+A tail name is scoped to the immediately containing signature header. Every
+occurrence of the same tail name in that signature denotes the same inferred
+effect-row variable, and the tail must appear in at least two positions. That
+repeated-use rule prevents a signature from introducing an unconstrained row
+variable that could admit arbitrary effects. A row has at most one tail and the
+tail is last. This facility is specific to effect-label sets; it does not add
+record row polymorphism.
 
 A written row remains an upper bound. The binding's inferred type must be a
 subtype of the signature, and fewer effects is a subtype, so a body may perform
 fewer named effects than its signature promises. A closed
-`sig quiet = Int ->
-Int ~ { Console }` over a pure body is therefore accepted.
-Conversely, bare `->` is the exactly-empty row, so a body that performs is
-rejected when its signature omits `~`.
+`let quiet :: Int -> Int ~ { Console }` over a pure body is therefore accepted
+when immediately followed by `let quiet = ...`. Conversely, bare `->` is the
+exactly-empty row, so a body that performs is rejected when its signature omits
+`~`.
 
 Only effects in scope can be named directly. A tail can nevertheless preserve an
 effect identity supplied by a callback or dependency without making that effect
@@ -2736,7 +2750,7 @@ They are typed at the call site instead, by the name:
 
 ```blot
 let r = { .a = 7; }
-sig z = 0
+let z :: 0
 let z = @shape.get r "a"
 // BLOT_TYPE_ERROR: `7` is outside `0`.
 ```
@@ -2745,7 +2759,7 @@ A name known only at run time has no structural result type: a heterogeneous
 record has no one element type, and width subtyping hides its complete field
 set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
 `BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
-evaluating; their unevidenced result variables cannot prove a `sig`. Runtime
+evaluating; their unevidenced result variables cannot prove a signature. Runtime
 dynamic keys belong in the prelude's homogeneous `Map` abstraction. When the
 name is static, all three shape operations may project or rebuild a record whose
 field values are available only at runtime.
@@ -2898,7 +2912,7 @@ fallback would either discard an owned element or encode an optional element as
 an unconstrained array.
 
 ```blot
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at = fn xs => fn n => if n >= 0 && n < @array.len xs:
   return @array.get xs n
 else:
@@ -2954,9 +2968,9 @@ for (index, value) in Iter.indexed xs:
 
 ### 13.3.1 Applying a requirement
 
-The checker has one judgment, `subject satisfies requirement`. Both a `sig` and
-`@satisfies` use it; `sig` additionally drives bidirectional checking of a
-following lambda and therefore requires the canonical type form.
+The checker has one judgment, `subject satisfies requirement`. Both a signature
+header and `@satisfies` use it; the header additionally drives bidirectional
+checking of a following lambda and therefore requires the canonical type form.
 
 `@satisfies value requirement` is the expression form. It returns `value`
 unchanged and accepts either form of requirement. The compiler retains a
@@ -3073,8 +3087,8 @@ has no value representing an empty compile-time union.
 A saturated reflection that evaluates at compile time receives the exact type of
 this result. A generic payload which cannot yet be related to the reflected
 input is marked unevidenced: compile-time generic code may manipulate it, but it
-cannot discharge a runtime `sig`. A fresh inference variable is therefore never
-permission to claim an arbitrary reflection payload type.
+cannot discharge a runtime signature. A fresh inference variable is therefore
+never permission to claim an arbitrary reflection payload type.
 
 `#Forall` deliberately carries no payload. The compiler's binder identity and
 the open body are not source values: use `@type.instantiate quantified argument`

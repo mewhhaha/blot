@@ -263,6 +263,16 @@ export function encodePortableModule(module: Module): PortableModule {
     declarations.push(null);
     let encoded: unknown;
     switch (declaration.tag) {
+      case "signature":
+        encoded = {
+          tag: declaration.tag,
+          kind: declaration.kind,
+          recursive: declaration.recursive,
+          name: declaration.name,
+          value: expressionId(declaration.value),
+          span: declaration.span,
+        };
+        break;
       case "binding":
         encoded = {
           tag: declaration.tag,
@@ -823,6 +833,28 @@ export function decodePortableModule(
     const span = decodeSpan(node.span, `${location} declaration ${index} span`);
     let decoded: Decl;
     switch (tag) {
+      case "signature":
+        decoded = {
+          tag,
+          kind: signatureKind(
+            node.kind,
+            `${location} declaration ${index} signature kind`,
+          ),
+          recursive: boolean(
+            node.recursive,
+            `${location} declaration ${index} recursive flag`,
+          ),
+          name: text(node.name, `${location} declaration ${index} name`),
+          value: expression(
+            reference(
+              node.value,
+              encodedExpressions.length,
+              `${location} declaration ${index} value`,
+            ),
+          ),
+          span,
+        };
+        break;
       case "binding":
         decoded = {
           tag,
@@ -1033,11 +1065,13 @@ function qualifier(
 function declarationKind(
   value: unknown,
   location: string,
-): "let" | "effect" | "const" | "sig" {
-  if (
-    value === "let" || value === "effect" || value === "const" ||
-    value === "sig"
-  ) return value;
+): "let" | "effect" | "const" {
+  if (value === "let" || value === "effect" || value === "const") return value;
+  throw new Error(`${location} has unknown value ${String(value)}`);
+}
+
+function signatureKind(value: unknown, location: string): "let" | "const" {
+  if (value === "let" || value === "const") return value;
   throw new Error(`${location} has unknown value ${String(value)}`);
 }
 

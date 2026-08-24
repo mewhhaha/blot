@@ -18,7 +18,7 @@ let rec total_odd = fn values => case values of
   #Done => 0
   #Odd node => node.0 + total_even node.1
 
-sig mutual_recursive_values = Int -> Int
+let mutual_recursive_values :: Int -> Int
 let mutual_recursive_values = fn count => total_even (build_even count)
 
 return { .mutual_recursive_values = mutual_recursive_values; }

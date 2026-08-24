@@ -9,7 +9,7 @@ open import "blot:prelude"
 const Light = #Red | #Green | #Yellow
 const Event = #Timer | #Emergency | #Reset
 
-sig step = (Light, Event) -> Light
+let step :: (Light, Event) -> Light
 let step = fn pair => case pair of
   (#Red, #Timer) => #Green
   (#Green, #Timer) => #Yellow
@@ -19,7 +19,7 @@ let step = fn pair => case pair of
   (#Green, #Reset) => #Green
   (#Yellow, #Reset) => #Yellow
 
-sig run = Light -> [Event] -> Light
+let run :: Light -> [Event] -> Light
 let run = fn initial => fn events => fold (events, initial, fn (state, event) => step (state, event))
 
 return {

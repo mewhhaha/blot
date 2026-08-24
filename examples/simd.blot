@@ -28,7 +28,7 @@ const Console =
 // one produced, so a vector is never rebuilt in between — that is the property
 // the opcode assertions are really about, and a chain is the only way to state
 // it in a program.
-sig normalize = F32x4 -> F32x4
+let normalize :: F32x4 -> F32x4
 let normalize = fn input => do:
   let gain = F32x4.splat (F32.of_int 10)
   let biased = F32x4.add input gain
@@ -36,7 +36,6 @@ let normalize = fn input => do:
   let centered = F32x4.sub scaled gain
   return F32x4.div centered (F32x4.splat (F32.of_int 2))
 
-sig normalized = F32x4
 normalized <- normalize (do:
     <- Console.write "sampling"
     return F32x4.of (
@@ -47,16 +46,16 @@ normalized <- normalize (do:
     )
   )
 
-sig gain = F32x4
+let gain :: F32x4
 let gain = F32x4.splat (F32.of_int 10)
 
-sig selected = F32x4
+let selected :: F32x4
 let selected = F32x4.select (F32x4.less normalized gain) gain normalized
 
-sig exact = F32x4
+let exact :: F32x4
 let exact = F32x4.select (F32x4.equal selected selected) selected gain
 
-sig shuffled = F32x4
+let shuffled :: F32x4
 let shuffled = F32x4.shuffle (exact, normalized, 0, 5, 2, 7)
 
 // Every intermediate lane is a whole number a single-precision float holds

@@ -3,6 +3,6 @@
 
 open import "blot:prelude"
 
-sig level = 1 | 2 | 3
+let level :: 1 | 2 | 3
 let level = 7
 return level

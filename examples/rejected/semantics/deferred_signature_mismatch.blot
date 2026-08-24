@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-sig strict = Int -> Int
+let strict :: Int -> Int
 let strict = fn ~value => value
 
 return strict 1

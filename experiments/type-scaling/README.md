@@ -108,10 +108,11 @@ rather than feature demonstrations. They expose five concrete friction points:
    currently reconstructs every known field. A dedicated shape-preserving record
    update could retain the input row identity without reopening general spread.
 2. Empty collection accumulators and higher-order `fold`/`map` pipelines need
-   explicit `sig` anchors to retain useful public types. Without them the first
-   pass inferred `⊥` for invoice line totals and singleton `0` results for the
-   dictionary queries, despite correct evaluation. Bidirectional expected-type
-   flow into collection combinators is more valuable than extra surface syntax.
+   explicit signature headers to retain useful public types. Without them the
+   first pass inferred `⊥` for invoice line totals and singleton `0` results for
+   the dictionary queries, despite correct evaluation. Bidirectional
+   expected-type flow into collection combinators is more valuable than extra
+   surface syntax.
 3. Counting a dictionary entry requires `get`, an `Option` case, `put`, and `.1`
    to discard the previous value. A prelude-level `Map.alter` or `Map.update`
    would remove this repetition without a primitive.

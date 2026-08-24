@@ -65,13 +65,13 @@ let effect_result =
 const Natural = refine (Int, fn value => value >= 0)
 const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
 
-sig keep_natural = Natural -> Natural
+let keep_natural :: Natural -> Natural
 let keep_natural = fn value => value
 
 // `Contracts.count` came from another module. Its body-derived relational
 // summary contributes `index < length(values)` to Phi, authorizing the direct
 // array read without putting a length in `[Int]` or trusting an annotation.
-sig at = [Int] -> Int -> Int
+let at :: [Int] -> Int -> Int
 let at =
   fn values => fn index => case index >= 0 && index < Contracts.count values of
     #True => @array.get values index

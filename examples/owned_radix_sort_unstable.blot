@@ -2,7 +2,7 @@
 
 open import "blot:prelude"
 
-sig values = [{ .key = Int; .id = Int; }]
+let values :: [{ .key = Int; .id = Int; }]
 let values =
   [{ .key = 3; .id = 3; }, { .key = 1; .id = 1; }, { .key = 2; .id = 2; }]
 

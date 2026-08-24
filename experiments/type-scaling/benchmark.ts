@@ -274,7 +274,7 @@ function unionSource(size: number): string {
   }
   return moduleSource([
     `const Event = ${members.join(" | ")}`,
-    "sig read = Event -> Int",
+    "let read :: Event -> Int",
     `let read = fn event => case event of\n${arms.join("\n")}`,
   ], `read (#Event${size - 1} ${size})`);
 }
@@ -294,7 +294,7 @@ function refinementSource(size: number): string {
   for (let index = 1; index <= size; index += 1) {
     declarations.push(
       `const Range${index} = refine (Int, fn value => value >= 0 && value <= ${index})`,
-      `sig keep${index} = Range${index} -> Range${index}`,
+      `let keep${index} :: Range${index} -> Range${index}`,
       `let keep${index} = fn value => value`,
       `let value${index} = keep${index} ${index}`,
     );
@@ -322,7 +322,7 @@ function measureSource(size: number): string {
     );
   }
   declarations.push(
-    "sig at = [Int] -> Int -> Int",
+    "let at :: [Int] -> Int -> Int",
     `let at = fn values => fn index => case index >= 0 && index < count${size} values of\n` +
       "  #True => @array.get values index\n" +
       "  #False => 0",

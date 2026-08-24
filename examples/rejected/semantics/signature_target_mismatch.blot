@@ -1,0 +1,9 @@
+// A signature repeats the binding header so the two lines remain aligned.
+// Changing any part of that header, including `rec`, leaves no binding for the
+// signature to constrain.
+
+open import "blot:prelude"
+
+let rec identity :: Int -> Int
+let identity = fn value => value
+return identity 42

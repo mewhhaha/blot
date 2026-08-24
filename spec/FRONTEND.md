@@ -141,6 +141,12 @@ Refutable iteration requires `for case`; ordinary `for pattern in iterator`
 requires an irrefutable pattern. This prevents a pattern edit from silently
 changing iteration cardinality.
 
+A source signature lowers to a distinct, non-binding declaration containing its
+`let` or `const` kind, `rec` marker, name, and compile-time requirement. Before
+checking a block, the compiler requires the next declaration to be a binding
+with exactly the same kind, recursion marker, and single name. The signature
+does not enter lexical scope or split an adjacent recursive group.
+
 ## 6. Name resolution and hygiene
 
 Resolution maps every source read, write, signature, control target, import, and

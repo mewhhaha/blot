@@ -22,6 +22,9 @@
 (binding
   kind: _ @keyword.storage.type)
 
+(signature
+  kind: _ @keyword.storage.type)
+
 (result
   "return" @keyword.control.return)
 

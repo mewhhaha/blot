@@ -197,6 +197,20 @@ return clear
   );
 });
 
+Deno.test("formatting aligns a recursive signature with its binding", async () => {
+  await assertStableFormatting(
+    `let rec factorial ::
+  Int -> Int
+let rec factorial = fn value => value
+return factorial
+`,
+    `let rec factorial :: Int -> Int
+let rec factorial = fn value => value
+return factorial
+`,
+  );
+});
+
 Deno.test("formatting indents a separated return inside a colon block", async () => {
   const returnedValue = "x".repeat(70);
   const source = `let choose = fn ready => do:

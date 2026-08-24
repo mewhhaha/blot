@@ -1455,6 +1455,7 @@ impl Checker {
                     Span { start: 0, end: 0 },
                 )
             })?;
+        validate_module_signature_headers(&loaded.module)?;
         let mut dependency_types = BTreeMap::new();
         for (specifier, dependency) in &loaded.imports {
             let checked = self.check(dependency)?;
@@ -2111,24 +2112,13 @@ impl Checker {
         signatures: &mut BTreeMap<String, Type>,
     ) -> Result<Type, Diagnostic> {
         match declaration {
-            Declaration::Binding {
-                kind: DeclarationKind::Sig,
-                pattern,
-                value,
-                span,
-                ..
+            Declaration::Signature {
+                name, value, span, ..
             } => {
-                let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize] else {
-                    return Err(Diagnostic::new(
-                        "BLOT_SIG_PATTERN",
-                        "A signature must name one binding.",
-                        span,
-                    ));
-                };
                 let signature_value = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Requirement::Type(signature) = self.requirement(signature_value) else {
                     return Err(Diagnostic::new(
-                        "BLOT_SIG_NOT_A_TYPE",
+                        "BLOT_SIGNATURE_NOT_A_TYPE",
                         format!("The signature for `{name}` is not a type value."),
                         span,
                     ));
@@ -2143,12 +2133,12 @@ impl Checker {
                         span,
                     ));
                 }
-                if let Some(body) = declaration_closure_body(module, name) {
+                if let Some(body) = declaration_closure_body(module, &name) {
                     self.signed_closure_types
                         .borrow_mut()
                         .insert((path.to_owned(), body), signature.clone());
                 }
-                signatures.insert(name.clone(), signature);
+                signatures.insert(name, signature);
                 Ok(Type::Effects(BTreeSet::new()))
             }
             Declaration::Binding {
@@ -2923,7 +2913,7 @@ impl Checker {
                     }
                     if self.phase.get() == Phase::Runtime {
                         return Err(Diagnostic::new(
-                            "BLOT_SIG_NOT_COMPTIME",
+                            "BLOT_REQUIREMENT_NOT_COMPTIME",
                             "The second argument to `@satisfies` must be a compile-time type value or predicate. Make a requirement combinator `const` so calls specialize it.",
                             span,
                         ));
@@ -7993,10 +7983,7 @@ fn future_binding_names(module: &Module, declarations: &[DeclarationId]) -> BTre
         .iter()
         .flat_map(
             |declaration| match &module.arena.declarations[declaration.0 as usize] {
-                Declaration::Binding {
-                    kind: DeclarationKind::Sig,
-                    ..
-                } => Vec::new(),
+                Declaration::Signature { .. } => Vec::new(),
                 Declaration::Binding { pattern, .. } => pattern_names(module, *pattern),
                 Declaration::Shadow { .. } | Declaration::Open { .. } => Vec::new(),
             },
@@ -8006,18 +7993,11 @@ fn future_binding_names(module: &Module, declarations: &[DeclarationId]) -> BTre
 
 fn declaration_closure_body(module: &Module, name: &str) -> Option<ExpressionId> {
     module.declarations.iter().find_map(|declaration| {
-        let Declaration::Binding {
-            kind,
-            pattern,
-            value,
-            ..
-        } = &module.arena.declarations[declaration.0 as usize]
+        let Declaration::Binding { pattern, value, .. } =
+            &module.arena.declarations[declaration.0 as usize]
         else {
             return None;
         };
-        if *kind == DeclarationKind::Sig {
-            return None;
-        }
         let Pattern::Name {
             name: bound_name, ..
         } = &module.arena.patterns[pattern.0 as usize]
@@ -8043,13 +8023,13 @@ fn remove_declaration_names(
     declaration: DeclarationId,
     names: &mut BTreeSet<String>,
 ) {
+    if signature_declaration(module, declaration) {
+        return;
+    }
     let Declaration::Binding { pattern, .. } = &module.arena.declarations[declaration.0 as usize]
     else {
         return;
     };
-    if signature_declaration(module, declaration) {
-        return;
-    }
     for name in pattern_names(module, *pattern) {
         names.remove(&name);
     }
@@ -8069,11 +8049,118 @@ fn recursive_declaration(module: &Module, declaration: DeclarationId) -> bool {
 fn signature_declaration(module: &Module, declaration: DeclarationId) -> bool {
     matches!(
         module.arena.declarations[declaration.0 as usize],
-        Declaration::Binding {
-            kind: DeclarationKind::Sig,
-            ..
-        }
+        Declaration::Signature { .. }
     )
+}
+
+fn validate_signature_headers(
+    module: &Module,
+    declarations: &[DeclarationId],
+) -> Result<(), Diagnostic> {
+    for (index, declaration) in declarations.iter().enumerate() {
+        let Declaration::Signature {
+            kind: expected_kind,
+            recursive: expected_recursive,
+            name: expected_name,
+            span,
+            ..
+        } = &module.arena.declarations[declaration.0 as usize]
+        else {
+            continue;
+        };
+        let Some(next) = declarations.get(index + 1) else {
+            return Err(signature_target_diagnostic(
+                expected_name,
+                *expected_kind,
+                *expected_recursive,
+                None,
+                *span,
+            ));
+        };
+        let next = &module.arena.declarations[next.0 as usize];
+        let Declaration::Binding {
+            kind,
+            pattern,
+            value,
+            ..
+        } = next
+        else {
+            return Err(signature_target_diagnostic(
+                expected_name,
+                *expected_kind,
+                *expected_recursive,
+                None,
+                *span,
+            ));
+        };
+        let actual_name = match &module.arena.patterns[pattern.0 as usize] {
+            Pattern::Name { name, .. } => Some(name.as_str()),
+            _ => None,
+        };
+        let actual_recursive = matches!(
+            module.arena.expressions[value.0 as usize],
+            Expression::Rec { .. }
+        );
+        if *kind == *expected_kind
+            && actual_recursive == *expected_recursive
+            && actual_name == Some(expected_name.as_str())
+        {
+            continue;
+        }
+        let actual = actual_name.map(|name| (*kind, actual_recursive, name));
+        return Err(signature_target_diagnostic(
+            expected_name,
+            *expected_kind,
+            *expected_recursive,
+            actual,
+            *span,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_module_signature_headers(module: &Module) -> Result<(), Diagnostic> {
+    validate_signature_headers(module, &module.declarations)?;
+    for expression in &module.arena.expressions {
+        if let Expression::Block { declarations, .. } = expression {
+            validate_signature_headers(module, declarations)?;
+        }
+    }
+    Ok(())
+}
+
+fn signature_target_diagnostic(
+    expected_name: &str,
+    expected_kind: DeclarationKind,
+    expected_recursive: bool,
+    actual: Option<(DeclarationKind, bool, &str)>,
+    span: Span,
+) -> Diagnostic {
+    let expected = declaration_header(expected_kind, expected_recursive, expected_name);
+    let message = match actual {
+        Some((kind, recursive, name)) => format!(
+            "Signature header `{expected} ::` must be followed by `{}`, found `{}`.",
+            declaration_header(expected_kind, expected_recursive, expected_name),
+            declaration_header(kind, recursive, name),
+        ),
+        None => format!(
+            "Signature header `{expected} ::` must be immediately followed by its matching binding."
+        ),
+    };
+    Diagnostic::new("BLOT_SIGNATURE_TARGET", message, span)
+}
+
+fn declaration_header(kind: DeclarationKind, recursive: bool, name: &str) -> String {
+    let kind = match kind {
+        DeclarationKind::Let => "let",
+        DeclarationKind::Const => "const",
+        DeclarationKind::Effect => "effect",
+    };
+    if recursive {
+        format!("{kind} rec {name}")
+    } else {
+        format!("{kind} {name}")
+    }
 }
 
 fn scalar_bound(value: &Value) -> Option<Scalar> {
@@ -8740,7 +8827,8 @@ fn expression_contains_intrinsic(
         } => {
             declarations.iter().any(|declaration| {
                 let value = match &module.arena.declarations[declaration.0 as usize] {
-                    Declaration::Binding { value, .. }
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 };
@@ -8824,7 +8912,8 @@ fn expression_has_generic_reflection(
             for declaration in declarations {
                 let declaration = &module.arena.declarations[declaration.0 as usize];
                 let value = match declaration {
-                    Declaration::Binding { value, .. }
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 };
@@ -9023,6 +9112,11 @@ fn free_name_span(
             for declaration in declarations {
                 let declaration = &module.arena.declarations[declaration.0 as usize];
                 match declaration {
+                    Declaration::Signature { value, .. } => {
+                        if let Some(span) = free_name_span(module, *value, name, block_bound) {
+                            return Some(span);
+                        }
+                    }
                     Declaration::Binding {
                         tags,
                         pattern,

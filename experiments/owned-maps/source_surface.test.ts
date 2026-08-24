@@ -40,7 +40,7 @@ return valid * 10000 + before * 1000 + present * 100 + absent * 10 + after +
 Deno.test("OrderedTextMap handles empty and singleton roots", async () => {
   const result = await evaluate(
     `open import "blot:prelude"
-sig empty_source = [OrderedTextMap.entry Int]
+let empty_source :: [OrderedTextMap.entry Int]
 let empty_source = Array.empty
 let empty = OrderedTextMap.copy empty_source
 let empty_length = OrderedTextMap.length (&empty)

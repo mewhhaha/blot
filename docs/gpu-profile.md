@@ -19,20 +19,20 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     122 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     120 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
-| `islandCount`               |      66 | one island for every grammar rule                  |
-| `islandStates`              |     389 |                                                    |
-| `islandTransitions`         |     397 |                                                    |
+| `islandCount`               |      67 | one island for every grammar rule                  |
+| `islandStates`              |     399 |                                                    |
+| `islandTransitions`         |     411 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 574,164 | immutable device table                             |
-| `packedBytes`               | 449,881 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 593,712 | immutable device table                             |
+| `packedBytes`               | 464,654 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 66 rules as islands is what preserves
+and edge arrays directly. Declaring all 67 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 Removing the expression-local `reuse fn` assertion saves three lexer states, two
@@ -87,6 +87,13 @@ island states, dense transitions, candidate multiplicity, contraction rounds,
 scratch bounds, the root loop, and parallel long-region admission are unchanged.
 The surface modifier lowers to the existing recursive-expression AST, so this
 grammar cost does not extend into evaluation or compilation.
+
+Replacing the former signature binding kind with a separate `let name :: type`
+or `const name :: type` signature rule adds one island, ten island states,
+fourteen island transitions, 19,548 dense-transition bytes, and 14,773 packed
+bytes. Removing its reserved keyword saves two lexer states. Candidate
+multiplicity, contraction rounds, scratch bounds, the root loop, and parallel
+long-region admission are unchanged.
 
 ## Historical strict-profile measurements
 

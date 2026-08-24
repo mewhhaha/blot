@@ -4,7 +4,7 @@ open import "../../../src/prelude/prelude.blot"
 // products. The first captures two runtime values, the second one, and the
 // third one that only exists inside its own branch. Both applications go
 // through the same joined table.
-sig select = (Int, Int) -> Int
+let select :: (Int, Int) -> Int
 let select = fn (flag, value) => do:
   let bias = value * 2
   let selected = case flag > 10 of

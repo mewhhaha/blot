@@ -2,9 +2,9 @@
 
 open import "blot:prelude"
 
-sig stable_ids = Int -> Int
+const stable_ids :: Int -> Int
 const stable_ids = fn dynamic => do:
-  sig values = [{ .key = Int; .id = Int; }]
+  let values :: [{ .key = Int; .id = Int; }]
   let values =
     [
       { .key = 2; .id = 10; },
@@ -23,9 +23,9 @@ const stable_ids = fn dynamic => do:
   let d = Array.expect_get ((&sorted), 3)
   return a.id * 1000000 + b.id * 10000 + c.id * 100 + d.id
 
-sig empty_length = Int -> Int
+const empty_length :: Int -> Int
 const empty_length = fn capacity => do:
-  sig values = [Int]
+  let values :: [Int]
   let values = Scratch.finish (Scratch.with_capacity capacity)
   return Array.length (&values)
 

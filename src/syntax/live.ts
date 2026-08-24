@@ -51,7 +51,7 @@ function declarationLiveness(
       addDependencies(dependencies, freeNames(declaration.value));
       continue;
     }
-    if (declaration.kind === "sig") continue;
+    if (declaration.tag === "signature") continue;
 
     const names = patternNames(declaration.pattern);
     const demanded = names.some((name) => dependencies.has(name));

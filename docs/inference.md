@@ -80,7 +80,7 @@ let logged = fn f => fn x =>
 `logged` adds `Console` to whatever its callback performs. Nothing there is
 annotated.
 
-A row is also source: `sig greet = Text -> Unit ~ { Console }` is checked like
+A row is also source: `let greet :: Text -> Unit ~ { Console }` is checked like
 any other signature, by subsumption — so a body may perform fewer effects than
 its signature names, and a bare `->` is the empty row rather than an unwritten
 one. What cannot be written is the `e`. A signature is an upper bound, and an
@@ -117,13 +117,13 @@ something left unhandled.
 
 ## Types are values, so checking runs the evaluator
 
-A `sig` is an ordinary expression. Checking one means evaluating it and bridging
-the result into the lattice — there is no type-level sublanguage to translate
-from. The same is true of a `const` whose value _is_ a type:
+A signature is an ordinary expression. Checking one means evaluating it and
+bridging the result into the lattice — there is no type-level sublanguage to
+translate from. The same is true of a `const` whose value _is_ a type:
 
 ```blot
 const Bit = 0 | 1      // an ordinary union of two integers
-sig b = Bit
+let b :: Bit
 let b = 1
 ```
 
@@ -188,7 +188,7 @@ Stated plainly, because a checker that quietly admits these is worse than one
 that says so.
 
 **Range arithmetic.** `@int.add` returns the full signed integer domain, because
-it does not prove its result fits a width. So `sig f = I32 -> I32` over
+it does not prove its result fits a width. So `let f :: I32 -> I32` over
 arithmetic is a real proof obligation blot does not discharge, and `Int` is the
 honest signature. Range-refining arithmetic — `(a..b) + (c..d) : (a+c)..(b+d)` —
 is what would close it, and it is the same machinery that would turn

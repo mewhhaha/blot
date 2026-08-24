@@ -3,7 +3,7 @@
 
 open import "blot:prelude"
 
-sig remove = [Int] -> Int -> (Int, [Int])
+let remove :: [Int] -> Int -> (Int, [Int])
 let remove = fn values => fn index => @array.take values index
 
 return remove

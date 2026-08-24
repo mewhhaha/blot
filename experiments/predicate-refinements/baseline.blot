@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const Byte = range (0, 255)
 
-sig keep = Byte -> Byte
+let keep :: Byte -> Byte
 let keep = fn value => value
 
 return keep 120

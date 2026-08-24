@@ -24,7 +24,7 @@ let classify = fn value => case value of
 // A declared literal union is a set, so its arms have to exhaust it the same
 // way a constructor set's do. Dropping the `3` arm is a type error here rather
 // than a trap at the call that passes `3`.
-sig rank = 1 | 2 | 3 -> Int
+let rank :: 1 | 2 | 3 -> Int
 let rank = fn level => case level of
   1 => 100
   2 => 200

@@ -283,6 +283,7 @@ fn transform_expression(
             let mut nested = bindings.clone();
             for declaration in declarations {
                 match &module.arena.declarations[declaration.0 as usize] {
+                    crate::ast::Declaration::Signature { .. } => {}
                     crate::ast::Declaration::Binding { pattern, value, .. } => {
                         let relation = transform_expression(
                             summaries,

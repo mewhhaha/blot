@@ -6,7 +6,7 @@ open import "blot:prelude"
 const Money = #Money I32 <+ { .of = fn n => #Money n; }
 
 const priced = fn amount => do:
-  sig converted = Money
+  let converted :: Money
   let converted = Money.of amount
   return converted
 

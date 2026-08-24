@@ -17,6 +17,7 @@ export interface HoverDescription {
 }
 
 interface BindingDescription {
+  readonly header: string;
   readonly name: string;
   readonly preview: string | null;
   readonly documentationStart: number | null;
@@ -50,7 +51,7 @@ export function hoverAt(
 
   const lines: string[] = [];
   if (binding.type !== null) {
-    lines.push(`sig ${binding.name} = ${binding.type}`);
+    lines.push(`${binding.header} :: ${binding.type}`);
   }
   if (binding.preview !== null) {
     lines.push(binding.preview);
@@ -88,6 +89,7 @@ function bindingAt(
     let type: string | null = null;
     if (inferred !== null) type = inferred;
     return {
+      header: `let ${site.name}`,
       name: site.name,
       preview: `.${site.name} = ${value}`,
       documentationStart:
@@ -105,6 +107,7 @@ function bindingAt(
       let type = typeAt(checked, site.expression.span);
       if (type === null) type = typeAt(checked, member.value.span);
       return {
+        header: `let ${member.name}`,
         name: member.name,
         preview: `.${member.name} = ${value}`,
         documentationStart: null,
@@ -145,13 +148,22 @@ function bindingAt(
     name = expressionName(occurrence, token);
   }
   if (name === null) return null;
+  let header = `let ${name}`;
   let preview: string | null = null;
   let documentationStart: number | null = null;
   if (declaration !== null) {
     preview = compactDeclaration(declaration, source);
     documentationStart = declaration.span.start;
+    if (declaration.tag === "binding") {
+      let kind = "let";
+      if (declaration.kind === "const") kind = "const";
+      let recursive = "";
+      if (declaration.value.tag === "rec") recursive = " rec";
+      header = `${kind}${recursive} ${name}`;
+    }
   }
   return {
+    header,
     name,
     preview,
     documentationStart,
@@ -530,7 +542,7 @@ function declarationAt(
         found = declaration;
         return;
       }
-    } else if (declaration.tag === "binding" && declaration.kind !== "sig") {
+    } else if (declaration.tag === "binding") {
       visitPattern(declaration.pattern, declaration);
     }
     visitExpression(declaration.value);
@@ -585,7 +597,9 @@ function documentationBefore(source: string, offset: number): string | null {
     const previousEnd = lineStart - 1;
     const previousStart = source.lastIndexOf("\n", previousEnd - 1) + 1;
     const previousLine = source.slice(previousStart, previousEnd).trimStart();
-    if (previousLine.startsWith("sig ")) anchor = previousStart;
+    if (/^(let|const)( rec)? [A-Za-z_][A-Za-z0-9_]* ::/.test(previousLine)) {
+      anchor = previousStart;
+    }
   }
   const before = source.slice(0, anchor);
   const lines = before.split(/\r?\n/);
@@ -628,7 +642,6 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   prefix: "This retired keyword described a prefix operator.",
   let: "Binds a runtime value in the current scope.",
   const: "Evaluates and binds a compile-time value.",
-  sig: "Constrains the declaration immediately following it.",
   return: "Supplies the result of the nearest module or explicit `do` scope.",
   if:
     "Selects a branch; a standalone suite inherits its surrounding control targets.",
@@ -655,7 +668,8 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   ",": "Separates tuple entries, arguments, or array elements.",
   ";": "Separates fields inside a structural record.",
   ".": "Projects a field or introduces a named record field.",
-  "=": "Associates a binding, signature, field, or pattern with its value.",
+  "=": "Associates a binding, field, or pattern with its value.",
+  "::": "Associates a repeated binding header with its signature.",
   ":=": "Rebinds an existing name while preserving its stable type.",
   "<-":
     "Executes an effect value. `name <- effect` binds its result; leading `<- effect` discards it. A nullary effect value is forced with `()`.",

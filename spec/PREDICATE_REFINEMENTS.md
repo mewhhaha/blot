@@ -209,10 +209,10 @@ constrain an unknown.
 
 ### 4.3 Signatures
 
-A `sig` uses the same canonical requirement classifier and subtype relation. It
-accepts only the canonical branch because an adjacent lambda may require
-bidirectional rank-N checking; an arbitrary observational predicate cannot
-elaborate an open lambda.
+A signature header uses the same canonical requirement classifier and subtype
+relation. It accepts only the canonical branch because an adjacent lambda may
+require bidirectional rank-N checking; an arbitrary observational predicate
+cannot elaborate an open lambda.
 
 Requirements may be abstracted only when staging supplies them before checking
 the returned closure:
@@ -223,7 +223,7 @@ let checked = require { .name = Text; } { .name = "Ada"; .age = 36; }
 ```
 
 An ordinary run-time requirement parameter is rejected with
-`BLOT_SIG_NOT_COMPTIME`; it is never trusted as an unchecked predicate.
+`BLOT_REQUIREMENT_NOT_COMPTIME`; it is never trusted as an unchecked predicate.
 
 ## 5. Type reflection basis
 
@@ -257,10 +257,10 @@ and disjunction remain ordinary source code.
 Predicate-defined canonical types do not replace branch refinement. For example:
 
 ```blot
-sig consume = Natural -> Int
+let consume :: Natural -> Int
 let consume = fn value => value
 
-sig checked = Int -> Int
+let checked :: Int -> Int
 let checked = fn value => do:
   if value >= 0:
     return consume value

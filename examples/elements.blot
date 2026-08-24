@@ -31,8 +31,7 @@ let text = Render.text
 let div = Render.div
 let icon = Render.icon
 
-sig Button =
-  {
+let Button :: {
     .label = Text;
     .disabled? = Bool;
     .order? = Int;

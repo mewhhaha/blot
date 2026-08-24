@@ -1,5 +1,5 @@
 // A written arrow with no `~` is the claim that the function performs nothing,
-// not the absence of a claim. `notify` performs `Console`, so its `sig` has to
+// not the absence of a claim. `notify` performs `Console`, so its signature has to
 // say `Text -> Unit ~ { Console }`.
 //
 // The alternative — reading a bare arrow as "says nothing about effects" —
@@ -14,7 +14,7 @@ const Console =
     .write = Text -> Unit;
   }
 
-sig notify = Text -> Unit
+let notify :: Text -> Unit
 let notify = fn message => do:
   result <- Console.write message
   return result

@@ -5,8 +5,8 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    Declaration, DeclarationId, DeclarationKind, DeclarationTag, Expression, ExpressionId, Module,
-    Pattern, PatternId, Qualifier, ShapeMember, Span,
+    Declaration, DeclarationId, DeclarationTag, Expression, ExpressionId, Module, Pattern,
+    PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{Context, live_declarations_for};
@@ -818,10 +818,7 @@ fn walk_declarations(declarations: &[DeclarationId], scope: &ScopeRef, analysis:
 fn walk_declaration(declaration_id: DeclarationId, scope: &ScopeRef, analysis: &mut Analysis) {
     let declaration = analysis.module.arena.declarations[declaration_id.0 as usize].clone();
     match declaration {
-        Declaration::Binding {
-            kind: DeclarationKind::Sig,
-            ..
-        } => {}
+        Declaration::Signature { .. } => {}
         Declaration::Binding {
             pattern,
             value,
@@ -5332,10 +5329,7 @@ fn application_spine(
 fn signature_declaration(module: &Module, declaration: DeclarationId) -> bool {
     matches!(
         module.arena.declarations[declaration.0 as usize],
-        Declaration::Binding {
-            kind: DeclarationKind::Sig,
-            ..
-        }
+        Declaration::Signature { .. }
     )
 }
 
@@ -5496,7 +5490,8 @@ fn recursion_paths(
         } => {
             let values = declarations.iter().map(|declaration| {
                 match &module.arena.declarations[declaration.0 as usize] {
-                    Declaration::Binding { value, .. }
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 }
@@ -5620,7 +5615,8 @@ fn recursive_calls_are_tail(
         } => {
             declarations.iter().all(|declaration| {
                 let value = match &module.arena.declarations[declaration.0 as usize] {
-                    Declaration::Binding { value, .. }
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 };
@@ -5709,7 +5705,8 @@ fn collect_free_names(
             for declaration in declarations {
                 let declaration = &module.arena.declarations[declaration.0 as usize];
                 let value = match declaration {
-                    Declaration::Binding { value, .. }
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 };

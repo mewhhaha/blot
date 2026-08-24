@@ -100,10 +100,11 @@ a recorded value, and every program in the corpus — the prelude included — i
 accepted and materialized by Baba 9's CPU frontend.
 
 Type inference (M2) landed too: `blot check` infers principal types with no
-annotations anywhere, enforces `sig` by subsumption, and rejects unhandled
-effects at the module boundary. See [docs/inference.md](docs/inference.md),
-including what it does _not_ yet prove. The declarative relation, solver lemmas,
-transactional implementation invariants, and performance gates are in
+annotations anywhere, enforces signature headers by subsumption, and rejects
+unhandled effects at the module boundary. See
+[docs/inference.md](docs/inference.md), including what it does _not_ yet prove.
+The declarative relation, solver lemmas, transactional implementation
+invariants, and performance gates are in
 [spec/TYPECHECKING.md](spec/TYPECHECKING.md).
 
 A branch proves what its condition computes, and the proof is set algebra on
@@ -203,9 +204,9 @@ for why that check exists.
 Declarations end at a logical newline; indentation delimits suites:
 
 ```blot
+let name :: type         // signature header for the following runtime binding
 let name = expr          // runtime binding
 const name = expr        // must evaluate at compile time
-sig name = expr          // constraint on the following binding
 open expr                // spread every field into scope
 for src:                 // loop; see below
   ...
@@ -439,13 +440,13 @@ accessors attached to it, so one binding is both the type and its namespace:
 ```blot
 const Point = struct { .x = I32; .y = I32; }   // Point is (I32, I32)
 
-sig p = Point
+let p :: Point
 let p = Point.new { .y = 20; .x = 10; }        // (10, 20)
 let x = Point.x p                              // and so is p.0
 ```
 
 The members are invisible to typing — the bridge, equality, and inhabitation see
-straight through — so `sig p = Point;` constrains `p` to the tuple and nothing
+straight through — so `let p :: Point` constrains `p` to the tuple and nothing
 about the namespace reaches the lattice. The storage is a tuple rather than an
 array because a tuple keeps one type per slot; `[I32, Text]` collapses to "an
 array of int-or-text" the moment inference looks at it, and storage that is
@@ -496,7 +497,7 @@ why `derive` is a function rather than a macro.
 
 Effects are a shape of operation types handed to one primitive, and performing
 one is an ordinary call, so the row is inferred rather than declared. It is
-still writable: `sig report = Unit -> Text ~ { Console }` is a closed row and a
+still writable: `let report :: Unit -> Text ~ { Console }` is a closed row and a
 bare `->` is exactly empty. Higher-order signatures may name the rest of a row
 with a signature-local tail such as
 `(a -> b ~ { ..e }) -> a -> b ~ { Console,

@@ -1,6 +1,6 @@
 open import "../../../src/prelude/prelude.blot"
 
-sig run = (Int, Int) -> Int
+let run :: (Int, Int) -> Int
 let run = fn (flag, value) => do:
   let selected = case flag > 0 of
     #True => fn record => record.x + flag

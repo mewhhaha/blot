@@ -194,6 +194,7 @@ impl FactorScan<'_> {
             } => {
                 for declaration in declarations {
                     match &self.module.arena.declarations[declaration.0 as usize] {
+                        Declaration::Signature { value, .. } => self.expression(*value),
                         Declaration::Binding { pattern, value, .. } => {
                             self.pattern(*pattern);
                             self.expression(*value);

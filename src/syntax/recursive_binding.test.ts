@@ -42,10 +42,10 @@ return factorial
   assertEquals(parsed.ok, false);
 });
 
-Deno.test("a signature cannot carry the rec binding modifier", async () => {
-  const parsed = await parse(`sig rec factorial = Int -> Int
+Deno.test("a recursive signature header aligns with its binding", async () => {
+  const parsed = await parse(`let rec factorial :: Int -> Int
 let rec factorial = fn n => n
 return factorial
 `);
-  assertEquals(parsed.ok, false);
+  assertEquals(parsed.ok, true);
 });

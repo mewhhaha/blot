@@ -2,7 +2,7 @@ open import "blot:prelude"
 
 const table = [F32.of_int 10, F32.of_int 20, F32.of_int 30]
 
-sig classify = Int -> Int
+const classify :: Int -> Int
 const classify = fn index => do:
   let value = case Array.get (table, index) of
     #Some found => found

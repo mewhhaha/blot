@@ -27,7 +27,7 @@ function reportUnused(
 ): void {
   for (let index = 0; index < declarations.length; index += 1) {
     const declaration = declarations[index];
-    if (declaration.tag !== "binding" || declaration.kind === "sig") continue;
+    if (declaration.tag !== "binding") continue;
     if (!context.hasConcreteOrigin(declaration, "binding")) continue;
     if (declaration.tags.length > 0 || declaration.kind === "effect") continue;
     const names = patternNames(declaration.pattern);

@@ -268,7 +268,7 @@ Deno.test("direct recursive functions close over dynamic values", async () => {
   const source = `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 offset <- Source.value 0
-sig add_depth = Int -> Int
+let rec add_depth :: Int -> Int
 let rec add_depth = fn depth => do:
   if depth <= 0:
     return offset
@@ -322,7 +322,7 @@ Deno.test("a user wrapper carries the rejoin witness across its boundary", async
   // ordinary linear value, so the wrapper certifies by deferring its join
   // proof to this call site.
   const source = `open import "blot:prelude"
-sig rejoin_parts =
+let rejoin_parts ::
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
   fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
@@ -345,7 +345,7 @@ return case Array.get (frozen, 2) of
 
 Deno.test("a user wrapper cannot launder reversed parts past the witness", async () => {
   const source = `open import "blot:prelude"
-sig rejoin_parts =
+let rejoin_parts ::
   (@region.rejoin, @region.type Int, @region.type Int) -> @region.type Int
 let rejoin_parts =
   fn (!rejoin, !left, !right) => Slice.join ((!rejoin), (!left), (!right))
@@ -367,7 +367,7 @@ Deno.test("a wrapper freeze of a split part is caught at the call site", async (
   // The full-root proof defers through the wrapper parameter and is
   // discharged against the caller's concrete part authority.
   const source = `open import "blot:prelude"
-sig freeze_it = @region.type Int -> [Int]
+let freeze_it :: @region.type Int -> [Int]
 let freeze_it = fn !region => Slice.freeze (!region)
 let whole = Slice.copy [4, 5, 6]
 return case Slice.split ((!whole), 1) of

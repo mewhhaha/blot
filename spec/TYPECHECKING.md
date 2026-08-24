@@ -47,10 +47,15 @@ Gamma |- subject satisfies canonical(A)   iff Gamma |- subject <= A
 Gamma |- subject satisfies predicate(p)   iff close(subject) and p(reify(subject)) = True
 ```
 
-Both `sig` and `@satisfies` call this judgment. `sig` accepts only
-`canonical(A)` because its following lambda may need bidirectional and rank-N
-checking. Predicate requirements are observations of a closed result: they may
-reject, but never grant an operation or add a solver node.
+Both a signature header and `@satisfies` call this judgment. A header accepts
+only `canonical(A)` because its following lambda may need bidirectional and
+rank-N checking. Predicate requirements are observations of a closed result:
+they may reject, but never grant an operation or add a solver node.
+
+For `k r? x :: R` followed by `k r? x = e`, elaboration evaluates `R` at compile
+time and requires `R` to bridge to `canonical(A)`, then checks `e` against `A`.
+Any difference in `k`, the presence of `rec`, or `x` is a source diagnostic
+before either declaration contributes a binding.
 
 ## 1. Type algebra
 
@@ -770,9 +775,10 @@ authority rather than duplicating it:
   checker mints the rotated witnesses only after exact parent-child identity
   succeeds, and certificate replay validates the same relation.
 - A written effect-row tail elaborates to one signature-local row variable. The
-  same `..e` identity is reused at each occurrence in that `sig`, and lowering
-  refuses a tail with fewer than two occurrences before ordinary inference. Open
-  effect rows are erased before Runtime HIR and do not alter record subtyping.
+  same `..e` identity is reused at each occurrence in that signature header, and
+  lowering refuses a tail with fewer than two occurrences before ordinary
+  inference. Open effect rows are erased before Runtime HIR and do not alter
+  record subtyping.
 
 The second theory bounce tightens one implementation consequence. An array
 projection identity includes its parent identity, so rebinding a record

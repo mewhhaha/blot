@@ -56,7 +56,7 @@ Deno.test("value hover shows its inferred signature, compact definition, and doc
   const source = `open import "blot:prelude"
 
 /// Adds two integers without changing either input.
-sig add = Int -> Int -> Int
+let add :: Int -> Int -> Int
 let add = fn left => fn right => left + right
 let answer = add 20 22
 return answer
@@ -72,7 +72,7 @@ return answer
     service.open(uri, source, 1);
     const hover = await service.hover(uri, { line: 5, character: 14 });
     assert(hover !== null);
-    assertStringIncludes(hover.contents.value, "sig add = Int -> Int -> Int");
+    assertStringIncludes(hover.contents.value, "let add :: Int -> Int -> Int");
     assertStringIncludes(
       hover.contents.value,
       "let add = fn left => fn right => body",
@@ -83,7 +83,7 @@ return answer
     );
     const parameter = await service.hover(uri, { line: 4, character: 14 });
     assert(parameter !== null);
-    assertStringIncludes(parameter.contents.value, "sig left = Int");
+    assertStringIncludes(parameter.contents.value, "let left :: Int");
   } finally {
     await service.destroy();
   }
@@ -121,7 +121,7 @@ return count
     assert(field !== null);
     assertStringIncludes(
       field.contents.value,
-      "sig Array.length = ['a] -> Int",
+      "let Array.length :: ['a] -> Int",
     );
     const imported = await service.hover(uri, { line: 0, character: 7 });
     assert(imported !== null);
@@ -165,13 +165,13 @@ return (reflected, point)
       character: 4,
     });
     assert(shapeMember !== null);
-    assertStringIncludes(shapeMember.contents.value, "sig hello = 42");
+    assertStringIncludes(shapeMember.contents.value, "let hello :: 42");
     assertStringIncludes(
       shapeMember.contents.value,
       ".hello = Point.fields",
     );
     assertEquals(
-      shapeMember.contents.value.includes("sig Point.fields"),
+      shapeMember.contents.value.includes("let Point.fields ::"),
       false,
     );
 
@@ -181,7 +181,7 @@ return (reflected, point)
     });
     assert(attachedMember !== null);
     assertEquals(
-      attachedMember.contents.value.includes("sig Point.new"),
+      attachedMember.contents.value.includes("let Point.new ::"),
       false,
     );
     assertStringIncludes(
@@ -299,7 +299,7 @@ Deno.test("a terminal Option match offers a compiler-checked guard action", asyn
   const directory = await Deno.makeTempDir();
   const path = join(directory, "option-guard.blot");
   const source = `open import "blot:prelude"
-sig unwrap = Option Unit -> Unit
+let unwrap :: Option Unit -> Unit
 let unwrap = fn option => do:
   return case option of
     #None => do:

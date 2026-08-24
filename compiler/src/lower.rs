@@ -395,11 +395,37 @@ fn lower_declaration(
 ) -> Result<DeclarationId, String> {
     let span = cst.span(Cursor::Rule(rule))?;
     match cst.rule_name(rule)? {
+        "signature" => {
+            let kind = match token_text(cst, required(cst, rule, "kind")?)?.as_str() {
+                "let" => DeclarationKind::Let,
+                "const" => DeclarationKind::Const,
+                value => return Err(format!("unknown signature kind {value}")),
+            };
+            let value_cursor = required(cst, rule, "value")?;
+            let row_tails = effect_row_tail_uses(cst, value_cursor)?;
+            if let Some(unconstrained) = row_tails.iter().find(|tail| tail.count < 2) {
+                return Err(format!(
+                    "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED: effect-row tail `..{}` must occur at least twice in one signature",
+                    unconstrained.name
+                ));
+            }
+            let mut value = lower_value(cst, value_cursor, context, arena)
+                .map_err(|error| format!("while lowering its type value: {error}"))?;
+            if !row_tails.is_empty() {
+                value = quantify_effect_row_tails(value, &row_tails, span, arena);
+            }
+            Ok(arena.declaration(Declaration::Signature {
+                kind,
+                recursive: cst.field(rule, "recursive")?.is_some(),
+                name: token_text(cst, required(cst, rule, "name")?)?,
+                value,
+                span,
+            }))
+        }
         "binding" => {
             let kind = match token_text(cst, required(cst, rule, "kind")?)?.as_str() {
                 "let" => DeclarationKind::Let,
                 "const" => DeclarationKind::Const,
-                "sig" => DeclarationKind::Sig,
                 value => return Err(format!("unknown binding kind {value}")),
             };
             let mut tags = Vec::new();
@@ -415,11 +441,6 @@ fn lower_declaration(
                     span: cst.span(Cursor::Rule(tag))?,
                 });
             }
-            if kind == DeclarationKind::Sig && !tags.is_empty() {
-                return Err(
-                    "BLOT_TAGGED_SIG: a signature cannot carry a declaration tag".to_owned(),
-                );
-            }
             let pattern = lower_pattern(cst, required(cst, rule, "pattern")?, arena)
                 .map_err(|error| format!("while lowering its pattern: {error}"))?;
             let value_cursor = required(cst, rule, "value")?;
@@ -430,19 +451,11 @@ fn lower_declaration(
                 ));
             }
             let row_tails = effect_row_tail_uses(cst, value_cursor)?;
-            if !row_tails.is_empty() && kind != DeclarationKind::Sig {
+            if !row_tails.is_empty() {
                 return Err(
-                    "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIG: an effect-row tail is scoped by a `sig`"
+                    "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE: an effect-row tail is scoped by a signature header"
                         .to_owned(),
                 );
-            }
-            if kind == DeclarationKind::Sig
-                && let Some(unconstrained) = row_tails.iter().find(|tail| tail.count < 2)
-            {
-                return Err(format!(
-                    "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED: effect-row tail `..{}` must occur at least twice in one `sig`",
-                    unconstrained.name
-                ));
             }
             let mut value = lower_value(cst, value_cursor, context, arena)
                 .map_err(|error| format!("while lowering its value: {error}"))?;
@@ -455,9 +468,6 @@ fn lower_declaration(
                         end: value_span.end,
                     },
                 });
-            }
-            if kind == DeclarationKind::Sig && !row_tails.is_empty() {
-                value = quantify_effect_row_tails(value, &row_tails, span, arena);
             }
             if !tags.is_empty() {
                 value = lower_tagged_value(kind, pattern, value, &tags, span, arena);

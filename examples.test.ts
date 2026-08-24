@@ -62,10 +62,14 @@ const REJECTIONS: Record<
   "unhandled_effect": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "effect_in_let": { code: "BLOT_UNSEQUENCED_EFFECT", stage: "check" },
   "sig_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
+  "signature_target_mismatch": {
+    code: "BLOT_SIGNATURE_TARGET",
+    stage: "check",
+  },
   "rank_n_monomorphic": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Both halves of how a member call is typed, and both would be *accepted* by
   // a rule that answered with a type variable: the first because the computed
-  // value would never be compared against the `sig`, the second because a
+  // value would never be compared against the signature, the second because a
   // variable satisfies every constraint put on it.
   "member_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "literal_outside_union": { code: "BLOT_TYPE_ERROR", stage: "check" },
@@ -79,7 +83,7 @@ const REJECTIONS: Record<
   "missing_tuple_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "unlisted_tuple_column": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   // A field named by a value is still named at compile time, and a rule that
-  // answered with a type variable would have this `sig` believed rather than
+  // answered with a type variable would have this signature believed rather than
   // checked — the mistake `member_sig_unchecked` is the other half of.
   "shape_get_sig_unchecked": { code: "BLOT_TYPE_ERROR", stage: "check" },
   // Both of these would be *accepted* by an `if` rule that narrowed on the
@@ -251,7 +255,6 @@ const REJECTIONS: Record<
   },
   "generic_refused": { code: "BLOT_REFUSED", stage: "check" },
   "zero_integer_width": { code: "BLOT_REFUSED", stage: "run" },
-  "tagged_sig": { code: "BLOT_TAGGED_SIG", stage: "check" },
   "bad_declaration_tag": {
     code: "BLOT_BAD_DECLARATION_TAG",
     stage: "check",
@@ -323,7 +326,7 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
-  // A bare `->` is the empty row, so a `sig` without `~` on an effectful
+  // A bare `->` is the empty row, so a signature without `~` on an effectful
   // binding is a mismatch rather than an omission.
   "sig_without_row": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "guard_may_continue": {
@@ -347,7 +350,7 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "runtime_requirement": {
-    code: "BLOT_SIG_NOT_COMPTIME",
+    code: "BLOT_REQUIREMENT_NOT_COMPTIME",
     stage: "check",
   },
 };

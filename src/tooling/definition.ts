@@ -79,6 +79,7 @@ function visitDeclarations(
       continue;
     }
     visitExpression(declaration.value, source, scope, references);
+    if (declaration.tag === "signature") continue;
     if (declaration.tag === "open") continue;
     if (declaration.tag === "shadow") {
       const span = identifierSpan(declaration.span, declaration.name, source);
@@ -90,7 +91,6 @@ function visitDeclarations(
     for (const tag of declaration.tags) {
       visitExpression(tag.descriptor, source, scope, references);
     }
-    if (declaration.kind === "sig") continue;
     scope = bindPattern(declaration.pattern, source, scope, references);
   }
   return scope;

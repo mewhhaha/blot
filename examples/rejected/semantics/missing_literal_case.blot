@@ -6,7 +6,7 @@
 
 open import "blot:prelude"
 
-sig describe = 1 | 2 | 3 -> Text
+let describe :: 1 | 2 | 3 -> Text
 let describe = fn level => case level of
   1 => "low"
 return describe

@@ -136,7 +136,7 @@ function persistentSource(size: number): string {
   return `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 
-sig update_all = (Map.of (Text, Int), Int, Int) -> Map.of (Text, Int)
+let rec update_all :: (Map.of (Text, Int), Int, Int) -> Map.of (Text, Int)
 let rec update_all = fn (entries, index, base) =>
   return case Array.get (entries, index) of
     #None => entries
@@ -156,14 +156,14 @@ function ownedSource(size: number): string {
   return `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 
-sig replace_keep =
+let replace_keep ::
   (OrderedTextMap.of Int, Text, Int) -> (OrderedTextMap.of Int, Int)
 let replace_keep = fn (!entries, key, value) =>
   return case OrderedTextMap.replace ((!entries), key, value) of
     #MapReplaced (previous, !updated) => (updated, previous)
     #MapMissing (returned, !original) => (original, returned)
 
-sig update_all =
+let rec update_all ::
   (OrderedTextMap.of Int, [Text], Int, Int) -> OrderedTextMap.of Int
 let rec update_all = fn (!entries, keys, index, base) =>
   let count = Array.length keys

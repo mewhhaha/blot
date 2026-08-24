@@ -140,7 +140,7 @@ export type LiteralKind =
   | "let"
   | "const"
   | "rec"
-  | "sig"
+  | "::"
   | "@"
   | "["
   | "]"
@@ -231,6 +231,7 @@ export type RuleName =
   | "fixity_declaration"
   | "declaration"
   | "statement"
+  | "signature"
   | "binding"
   | "indented_value"
   | "declaration_tag"
@@ -362,10 +363,19 @@ export interface DeclarationCursor extends RuleCursorBase<"declaration"> {
 export interface StatementCursor extends RuleCursorBase<"statement"> {
 }
 
+export interface SignatureCursor extends RuleCursorBase<"signature"> {
+  field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let">;
+  field(name: "name"): TokenCursor<"named", "IDENT"> | TokenCursor<"named", "TYPE_IDENT">;
+  field(name: "recursive"): TokenCursor<"literal", "rec"> | null;
+  field(name: "value"): IndentedValueCursor | ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface BindingCursor extends RuleCursorBase<"binding"> {
-  field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let"> | TokenCursor<"literal", "sig">;
+  field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let">;
   field(name: "pattern"): BindingPatternCursor;
-  field(name: "recursive"): TokenCursor<"literal", "rec"> | null | null;
+  field(name: "recursive"): TokenCursor<"literal", "rec"> | null;
   field(name: "tags"): ReadonlyArray<DeclarationTagCursor>;
   field(name: "value"): IndentedValueCursor | ValueCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -744,6 +754,7 @@ export type AnyRuleCursor =
   | FixityDeclarationCursor
   | DeclarationCursor
   | StatementCursor
+  | SignatureCursor
   | BindingCursor
   | IndentedValueCursor
   | DeclarationTagCursor
