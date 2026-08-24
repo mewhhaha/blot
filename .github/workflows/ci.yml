@@ -38,14 +38,16 @@ jobs:
           git show 11cc0a0a904f69484fb46869506d9689dafe5f61:.github/workflows/ci.yml > .github/workflows/ci.yml
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           source = Path('.github/workflows/apply-v8-wasm3-target.yml').read_text()
           start_marker = "          python3 - <<'PY'\n"
           end_marker = "\n          PY\n\n      - name: Format changed files"
           start = source.index(start_marker) + len(start_marker)
           end = source.index(end_marker, start)
-          code = textwrap.dedent(source[start:end])
+          code = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in source[start:end].splitlines()
+          )
           exec(compile(code, 'apply-v8-wasm3-target.py', 'exec'), {})
           Path('.github/workflows/apply-v8-wasm3-target.yml').unlink()
           PY
