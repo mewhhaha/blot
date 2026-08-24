@@ -6882,6 +6882,14 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 visit(result, binders)?
             )),
             Type::Record(values) => fields("record", values, binders),
+            Type::RecordUpdate {
+                base,
+                fields: values,
+            } => Some(format!(
+                "record-update({},{})",
+                visit(base, binders)?,
+                fields("", values, binders)?
+            )),
             Type::Array(element) => Some(format!("array({})", visit(element, binders)?)),
             Type::Region(element) => Some(format!("region({})", visit(element, binders)?)),
             Type::Scratch(element) => Some(format!("scratch({})", visit(element, binders)?)),
