@@ -6,6 +6,7 @@ mod eval;
 mod fixity;
 mod frontend;
 mod hir;
+mod host_transport;
 mod layout;
 mod lower;
 mod ownership;
@@ -142,6 +143,123 @@ pub extern "C" fn destroy_compiler_session(handle: u32) -> i32 {
         }
         0
     })
+}
+
+#[unsafe(no_mangle)]
+/// Registers UTF-8 module/include paths and returns stable session-local IDs.
+///
+/// # Safety
+///
+/// `frame_pointer` must address `frame_byte_count` initialized bytes in this
+/// module's linear memory for the duration of the call.
+pub unsafe extern "C" fn register_compiler_session_paths(
+    handle: u32,
+    frame_pointer: *const u8,
+    frame_byte_count: u32,
+) -> u32 {
+    let frame = unsafe { std::slice::from_raw_parts(frame_pointer, frame_byte_count as usize) };
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let session = sessions
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            host_transport::register_paths(session, frame)
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+/// Applies a validated ABI-2 binary graph delta in one guest call.
+///
+/// # Safety
+///
+/// `frame_pointer` must address `frame_byte_count` initialized bytes in this
+/// module's linear memory for the duration of the call.
+pub unsafe extern "C" fn apply_compiler_session_delta(
+    handle: u32,
+    frame_pointer: *const u8,
+    frame_byte_count: u32,
+) -> u32 {
+    let frame = unsafe { std::slice::from_raw_parts(frame_pointer, frame_byte_count as usize) };
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let session = sessions
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            host_transport::apply_delta(session, frame)
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn check_compiler_session_module_v2(handle: u32, module_id: u32) -> u32 {
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            host_transport::check_module(session, module_id)
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn analyze_compiler_session_module_v2(
+    handle: u32,
+    module_id: u32,
+    requested_fact_mask: u32,
+) -> u32 {
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            host_transport::analyze_module(session, module_id, requested_fact_mask)
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+/// Removes one resident module and all private state owned by its revision.
+///
+/// # Safety
+///
+/// `path_pointer` must address `path_unit_count` initialized `i32` words in
+/// this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn remove_compiler_session_module(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let removed = decode_utf16_words(path_words, "module path").and_then(|path| {
+        let index = session_index(handle)?;
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let session = sessions
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            Ok(session.remove_module(&path))
+        })
+    });
+    let result = match removed {
+        Ok(removed) => serde_json::json!({ "ok": true, "removed": removed }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("module removal serialization failed"))
 }
 
 #[unsafe(no_mangle)]

@@ -4,6 +4,7 @@ import {
   describeCompilerArtifact,
   validateCompilerArtifact,
 } from "./compiler_artifact.ts";
+import { COMPILER_HOST_ABI_VERSION } from "../src/compiler/host_abi.ts";
 
 const emptyWasm = Uint8Array.of(0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0);
 const commit = "1".repeat(40);
@@ -23,7 +24,7 @@ Deno.test("compiler artifact manifest authenticates bytes and source tree", asyn
   );
   const manifest = decodeCompilerArtifactManifest(JSON.stringify(described));
   await validateCompilerArtifact(emptyWasm, manifest, {
-    hostAbi: 1,
+    hostAbi: COMPILER_HOST_ABI_VERSION,
     preludeSha256: prelude,
     compilerInputsSha256: inputs,
   });

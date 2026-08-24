@@ -3,9 +3,12 @@ export {
   Compiler,
   type CompilerAnalysis,
   type CompilerArtifact,
+  type CompilerExplanation,
   type CompilerHost,
   type CompilerOptions,
+  type CompilerSyntaxSnapshot,
   type EvaluatedModule,
+  explanationAt,
 } from "./compiler/session.ts";
 export {
   CompilerInvariantFailure,

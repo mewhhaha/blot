@@ -71,6 +71,42 @@ pub struct Context {
 }
 
 impl Context {
+    pub(crate) fn remove_module_state(&self, path: &str) {
+        self.modules.borrow_mut().remove(path);
+        self.module_results.borrow_mut().remove(path);
+        self.live_declarations
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.evaluated_bindings.borrow_mut().remove(path);
+        self.captured_binding_modules.borrow_mut().remove(path);
+        self.expression_types
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.closure_signatures
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.recursive_closures
+            .borrow_mut()
+            .retain(|(module, _)| module != path);
+        self.ownership_contracts
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.effect_ids
+            .borrow_mut()
+            .retain(|identity, _| identity.module != path);
+        self.named_effects
+            .borrow_mut()
+            .retain(|(module, _, _), _| module != path);
+        if self
+            .module_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|(module, _)| module == path)
+        {
+            self.module_cache.borrow_mut().take();
+        }
+    }
+
     fn fresh_effect_id(&self) -> u32 {
         let id = self.next_effect.get() + 1;
         self.next_effect.set(id);

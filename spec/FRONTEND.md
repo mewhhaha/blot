@@ -60,6 +60,14 @@ Every compact node retains enough source origin to produce stable diagnostics.
 Compiler-generated nodes created after parsing retain an origin pointing to the
 source construct whose elaboration required them.
 
+The resident Rust frontend owns the canonical compact snapshot. It serializes
+tokens, nodes, edges, parser-execution telemetry, and an explicit old-to-new
+node reuse map. Semantics, diagnostics, hover, definition, lints, and the
+formatter consume that one snapshot; tooling does not invoke a second parser for
+the accepted editor revision. The TypeScript Baba parser remains only as a
+fresh-equivalence oracle and for validating proposed formatted or quick-fix
+candidate text before publication.
+
 ## 3. Fixed operator folding
 
 The grammar emits flat operator chains. Folding uses the generated table derived

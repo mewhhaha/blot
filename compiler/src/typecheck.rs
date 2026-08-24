@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -108,6 +108,10 @@ pub enum Type {
         result: Rc<Type>,
     },
     Record(TypeList<(String, Type)>),
+    RecordUpdate {
+        base: Rc<Type>,
+        fields: TypeList<(String, Type)>,
+    },
     Array(Rc<Type>),
     Region(Rc<Type>),
     Scratch(Rc<Type>),
@@ -126,9 +130,57 @@ pub enum Type {
     Bottom,
 }
 
+pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) -> Type {
+    match base {
+        Type::Record(fields) => {
+            let mut fields = fields.into_iter().collect::<Vec<_>>();
+            for (name, type_) in updates {
+                if let Some((_, current)) =
+                    fields.iter_mut().find(|(candidate, _)| candidate == &name)
+                {
+                    *current = type_;
+                } else {
+                    fields.push((name, type_));
+                }
+            }
+            Type::Record(fields.into())
+        }
+        Type::RecordUpdate { base, fields } => {
+            let mut combined = fields.into_iter().collect::<Vec<_>>();
+            for (name, type_) in updates {
+                if let Some((_, current)) = combined
+                    .iter_mut()
+                    .find(|(candidate, _)| candidate == &name)
+                {
+                    *current = type_;
+                } else {
+                    combined.push((name, type_));
+                }
+            }
+            Type::RecordUpdate {
+                base,
+                fields: combined.into(),
+            }
+        }
+        base => Type::RecordUpdate {
+            base: Rc::new(base),
+            fields: updates,
+        },
+    }
+}
+
 enum Requirement {
     Type(Type),
     Predicate(Value),
+}
+
+struct EvaluatedClosure<'a> {
+    module_path: &'a str,
+    parameter: PatternId,
+    body: ExpressionId,
+    captures: &'a ValueEnvironment,
+    self_name: Option<&'a str>,
+    deferred: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
@@ -168,6 +220,10 @@ enum ConstraintTypeNode {
         result: ConstraintTypeId,
     },
     Record(Vec<(String, ConstraintTypeId)>),
+    RecordUpdate {
+        base: ConstraintTypeId,
+        fields: Vec<(String, ConstraintTypeId)>,
+    },
     Array(ConstraintTypeId),
     Region(ConstraintTypeId),
     Scratch(ConstraintTypeId),
@@ -226,6 +282,13 @@ impl ConstraintTypeArena {
                     .map(|(name, type_)| (name.clone(), self.intern(type_)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => ConstraintTypeNode::RecordUpdate {
+                base: self.intern(base),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| (name.clone(), self.intern(type_)))
+                    .collect(),
+            },
             Type::Array(element) => ConstraintTypeNode::Array(self.intern(element)),
             Type::Region(element) => ConstraintTypeNode::Region(self.intern(element)),
             Type::Scratch(element) => ConstraintTypeNode::Scratch(self.intern(element)),
@@ -288,6 +351,13 @@ impl ConstraintTypeArena {
                     .map(|(name, type_)| (name.clone(), self.expand(*type_)))
                     .collect(),
             ),
+            ConstraintTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.expand(*base)),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| (name.clone(), self.expand(*type_)))
+                    .collect(),
+            },
             ConstraintTypeNode::Array(element) => Type::Array(Rc::new(self.expand(*element))),
             ConstraintTypeNode::Region(element) => Type::Region(Rc::new(self.expand(*element))),
             ConstraintTypeNode::Scratch(element) => Type::Scratch(Rc::new(self.expand(*element))),
@@ -336,6 +406,12 @@ impl ConstraintTypeArena {
             | ConstraintTypeNode::Variant { cases: fields, .. } => fields
                 .iter()
                 .map(|(_, field)| self.level_of(*field, variables))
+                .max()
+                .unwrap_or(0),
+            ConstraintTypeNode::RecordUpdate { base, fields } => fields
+                .iter()
+                .map(|(_, field)| self.level_of(*field, variables))
+                .chain(std::iter::once(self.level_of(*base, variables)))
                 .max()
                 .unwrap_or(0),
             ConstraintTypeNode::Array(element)
@@ -462,6 +538,19 @@ impl ConstraintTypeArena {
             (ConstraintTypeNode::Record(left), ConstraintTypeNode::Record(right)) => {
                 self.same_fields(left, right, rigids)
             }
+            (
+                ConstraintTypeNode::RecordUpdate {
+                    base: left_base,
+                    fields: left_fields,
+                },
+                ConstraintTypeNode::RecordUpdate {
+                    base: right_base,
+                    fields: right_fields,
+                },
+            ) => {
+                self.same_with_rigids(*left_base, *right_base, rigids)
+                    && self.same_fields(left_fields, right_fields, rigids)
+            }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right))
             | (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right))
             | (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
@@ -517,6 +606,13 @@ struct BoundInsertion {
     direction: BoundDirection,
 }
 
+#[derive(Clone, Copy)]
+struct WorkItem {
+    left: ConstraintTypeId,
+    right: ConstraintTypeId,
+    span: Span,
+}
+
 #[derive(Clone)]
 struct ResidualVariable {
     type_: Type,
@@ -536,6 +632,7 @@ struct CompilerWork {
     boundary_materializations: u64,
     capture_candidates: u64,
     captures_bridged: u64,
+    solver_worklist_peak: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -717,6 +814,10 @@ enum FlatTypeNode {
         result: FlatTypeId,
     },
     Record(Vec<(String, FlatTypeId)>),
+    RecordUpdate {
+        base: FlatTypeId,
+        fields: Vec<(String, FlatTypeId)>,
+    },
     Array(FlatTypeId),
     Region(FlatTypeId),
     Scratch(FlatTypeId),
@@ -737,6 +838,68 @@ enum FlatTypeNode {
 
 struct FlatTypeArena {
     nodes: Vec<FlatTypeNode>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SealedModuleBoundary {
+    schema: u32,
+    compiler_semantic_version: String,
+    certificate_schema: u32,
+    types: Vec<FlatTypeNode>,
+    result: FlatTypeId,
+    effects: FlatTypeId,
+    parameter: Option<FlatTypeId>,
+}
+
+impl SealedModuleBoundary {
+    const SCHEMA: u32 = 1;
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != Self::SCHEMA {
+            return Err(format!(
+                "sealed module boundary schema is {}, expected {}",
+                self.schema,
+                Self::SCHEMA,
+            ));
+        }
+        if self.compiler_semantic_version != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "sealed module boundary compiler version is {}, expected {}",
+                self.compiler_semantic_version,
+                env!("CARGO_PKG_VERSION"),
+            ));
+        }
+        if self.certificate_schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
+            return Err(format!(
+                "sealed module boundary certificate schema is {}, expected {}",
+                self.certificate_schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            ));
+        }
+        let arena = FlatTypeArena {
+            nodes: self.types.clone(),
+        };
+        validate_certificate_type(&arena, self.result, &mut HashSet::new())?;
+        validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
+        if let Some(parameter) = self.parameter {
+            validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+        }
+        Ok(())
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        rmp_serde::to_vec(self)
+            .map_err(|error| format!("could not encode sealed module boundary: {error}"))
+    }
+
+    #[cfg(test)]
+    fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let boundary: Self = rmp_serde::from_slice(bytes)
+            .map_err(|error| format!("could not decode sealed module boundary: {error}"))?;
+        boundary.validate()?;
+        Ok(boundary)
+    }
 }
 
 #[derive(Default)]
@@ -836,6 +999,173 @@ impl CachedModuleInterface {
             ownership_contracts: certificate.ownership_contracts,
         })
     }
+
+    fn sealed_boundary_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut builder = FlatTypeBuilder::default();
+        let mut rigids = Vec::new();
+        let mut next_rigid = 0;
+        let result = copy_boundary_type(
+            &self.types,
+            self.result,
+            &mut rigids,
+            &mut next_rigid,
+            &mut builder,
+        )?;
+        let effects = copy_boundary_type(
+            &self.types,
+            self.effects,
+            &mut rigids,
+            &mut next_rigid,
+            &mut builder,
+        )?;
+        let parameter = self
+            .parameter
+            .map(|parameter| {
+                copy_boundary_type(
+                    &self.types,
+                    parameter,
+                    &mut rigids,
+                    &mut next_rigid,
+                    &mut builder,
+                )
+            })
+            .transpose()?;
+        SealedModuleBoundary {
+            schema: SealedModuleBoundary::SCHEMA,
+            compiler_semantic_version: env!("CARGO_PKG_VERSION").to_owned(),
+            certificate_schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            types: builder.nodes,
+            result,
+            effects,
+            parameter,
+        }
+        .to_bytes()
+    }
+}
+
+fn copy_boundary_type(
+    source: &FlatTypeArena,
+    type_: FlatTypeId,
+    rigids: &mut Vec<(VariableId, VariableId)>,
+    next_rigid: &mut VariableId,
+    target: &mut FlatTypeBuilder,
+) -> Result<FlatTypeId, String> {
+    let node = source
+        .nodes
+        .get(type_.0 as usize)
+        .ok_or_else(|| format!("sealed boundary references missing type {}", type_.0))?;
+    let copied = match node {
+        FlatTypeNode::Rigid(variable) => {
+            let canonical = rigids
+                .iter()
+                .rev()
+                .find_map(|(source, target)| (source == variable).then_some(*target))
+                .ok_or_else(|| {
+                    format!("sealed boundary contains free rigid variable {variable}")
+                })?;
+            FlatTypeNode::Rigid(canonical)
+        }
+        FlatTypeNode::Forall { variables, body } => {
+            let checkpoint = rigids.len();
+            let mut canonical_variables = Vec::with_capacity(variables.len());
+            for variable in variables {
+                let canonical = *next_rigid;
+                *next_rigid = next_rigid
+                    .checked_add(1)
+                    .ok_or_else(|| "sealed boundary rigid identity overflow".to_owned())?;
+                rigids.push((*variable, canonical));
+                canonical_variables.push(canonical);
+            }
+            let body = copy_boundary_type(source, *body, rigids, next_rigid, target)?;
+            rigids.truncate(checkpoint);
+            FlatTypeNode::Forall {
+                variables: canonical_variables,
+                body,
+            }
+        }
+        FlatTypeNode::Range { domain, low, high } => FlatTypeNode::Range {
+            domain: *domain,
+            low: low.clone(),
+            high: high.clone(),
+        },
+        FlatTypeNode::Unit => FlatTypeNode::Unit,
+        FlatTypeNode::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => FlatTypeNode::Function {
+            deferred: *deferred,
+            parameter: copy_boundary_type(source, *parameter, rigids, next_rigid, target)?,
+            effects: copy_boundary_type(source, *effects, rigids, next_rigid, target)?,
+            result: copy_boundary_type(source, *result, rigids, next_rigid, target)?,
+        },
+        FlatTypeNode::Record(fields) => {
+            let mut fields = fields.clone();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        }
+        FlatTypeNode::RecordUpdate { base, fields } => {
+            let mut fields = fields.clone();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::RecordUpdate {
+                base: copy_boundary_type(source, *base, rigids, next_rigid, target)?,
+                fields: fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        }
+        FlatTypeNode::Array(element) => FlatTypeNode::Array(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Region(element) => FlatTypeNode::Region(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Scratch(element) => FlatTypeNode::Scratch(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Variant { cases, open } => {
+            let mut cases = cases.clone();
+            cases.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::Variant {
+                cases: cases
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                open: *open,
+            }
+        }
+        FlatTypeNode::Effects(labels) => FlatTypeNode::Effects(labels.clone()),
+        FlatTypeNode::OpenEffects { labels, tail } => FlatTypeNode::OpenEffects {
+            labels: labels.clone(),
+            tail: copy_boundary_type(source, *tail, rigids, next_rigid, target)?,
+        },
+        FlatTypeNode::Union(members) => FlatTypeNode::Union(
+            members
+                .iter()
+                .map(|member| copy_boundary_type(source, *member, rigids, next_rigid, target))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        FlatTypeNode::Opaque(name) => FlatTypeNode::Opaque(name.clone()),
+        FlatTypeNode::Top => FlatTypeNode::Top,
+        FlatTypeNode::Bottom => FlatTypeNode::Bottom,
+    };
+    Ok(target.intern(copied))
 }
 
 impl CheckedModuleCertificate {
@@ -964,6 +1294,12 @@ fn validate_certificate_type(
                 validate_child(*field, bound)?;
             }
         }
+        FlatTypeNode::RecordUpdate { base, fields } => {
+            validate_child(*base, bound)?;
+            for (_, field) in fields {
+                validate_child(*field, bound)?;
+            }
+        }
         FlatTypeNode::Array(element)
         | FlatTypeNode::Region(element)
         | FlatTypeNode::Scratch(element) => {
@@ -995,6 +1331,19 @@ pub struct CachedModuleAnalyses {
     safety: Result<(), Diagnostic>,
 }
 
+#[derive(Default)]
+struct SpecializationBinding {
+    keys: BTreeMap<String, SpecializationKey>,
+}
+
+struct SpecializationKey {
+    reason: &'static str,
+    call_sites: Vec<(String, Span)>,
+}
+
+const SPECIALIZATION_SOFT_LIMIT: usize = 2;
+const SPECIALIZATION_HARD_LIMIT: usize = 256;
+
 pub struct Checker {
     context: Rc<Context>,
     variables: RefCell<Vec<Variable>>,
@@ -1007,6 +1356,7 @@ pub struct Checker {
     boundary_materializations: Cell<u64>,
     capture_candidates: Cell<u64>,
     captures_bridged: Cell<u64>,
+    solver_worklist_peak: Cell<u64>,
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     next_skolem: Cell<VariableId>,
@@ -1022,6 +1372,7 @@ pub struct Checker {
     analysis_expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
     ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
+    specializations: RefCell<HashMap<(String, ExpressionId), SpecializationBinding>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -1056,6 +1407,7 @@ impl Checker {
             boundary_materializations: Cell::new(0),
             capture_candidates: Cell::new(0),
             captures_bridged: Cell::new(0),
+            solver_worklist_peak: Cell::new(0),
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             next_skolem: Cell::new(0x8000_0000),
@@ -1071,6 +1423,7 @@ impl Checker {
             analysis_expression_types: RefCell::new(HashMap::new()),
             declaration_tags: RefCell::new(HashMap::new()),
             ownership_facts: RefCell::new(HashMap::new()),
+            specializations: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -1097,7 +1450,7 @@ impl Checker {
     fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
         let after = self.work_snapshot();
         CompilerWork {
-            schema: 1,
+            schema: 2,
             type_nodes: after.type_nodes - before.type_nodes,
             type_interns: after.type_interns - before.type_interns,
             constraints: after.constraints - before.constraints,
@@ -1108,6 +1461,7 @@ impl Checker {
                 - before.boundary_materializations,
             capture_candidates: after.capture_candidates - before.capture_candidates,
             captures_bridged: after.captures_bridged - before.captures_bridged,
+            solver_worklist_peak: self.solver_worklist_peak.get(),
         }
     }
 
@@ -1129,11 +1483,11 @@ impl Checker {
                 Span { start: 0, end: 0 },
             ));
         }
-        let work_before = self
-            .active
-            .borrow()
-            .is_empty()
-            .then(|| self.work_snapshot());
+        let root_request = self.active.borrow().is_empty();
+        if root_request {
+            self.solver_worklist_peak.set(0);
+        }
+        let work_before = root_request.then(|| self.work_snapshot());
         self.active.borrow_mut().push(path.to_owned());
         let result = self
             .check_uncached(path)
@@ -1243,6 +1597,14 @@ impl Checker {
             .retain(|path, result| result.is_ok() && interfaces.contains_key(path));
     }
 
+    pub fn sealed_boundary_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.module_interfaces
+            .borrow()
+            .get(path)
+            .ok_or_else(|| format!("module {path} has no closed checked interface"))?
+            .sealed_boundary_bytes()
+    }
+
     pub fn invalidate(&self, paths: &HashSet<String>) {
         self.modules
             .borrow_mut()
@@ -1265,6 +1627,19 @@ impl Checker {
         self.ownership_facts
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
+        self.specializations
+            .borrow_mut()
+            .retain(|(path, _), binding| {
+                if paths.contains(path) {
+                    return false;
+                }
+                binding.keys.retain(|_, key| {
+                    key.call_sites
+                        .retain(|(call_path, _)| !paths.contains(call_path));
+                    !key.call_sites.is_empty()
+                });
+                !binding.keys.is_empty()
+            });
         self.module_work
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
@@ -1356,6 +1731,60 @@ impl Checker {
                 fact["span"]["start"].as_u64().unwrap_or_default(),
             )
         });
+        let mut specializations = self
+            .specializations
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((module_path, body), binding)| {
+                let (span, name) = specialization_binding(&module, *body);
+                let keys = binding
+                    .keys
+                    .iter()
+                    .map(|(representation, key)| {
+                        let mut call_sites = key
+                            .call_sites
+                            .iter()
+                            .map(|(path, span)| {
+                                serde_json::json!({
+                                    "path": path,
+                                    "span": span,
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        call_sites.sort_by_key(|site| {
+                            (
+                                site["path"].as_str().unwrap_or_default().to_owned(),
+                                site["span"]["start"].as_u64().unwrap_or_default(),
+                            )
+                        });
+                        serde_json::json!({
+                            "representation": representation,
+                            "reason": key.reason,
+                            "callSites": call_sites,
+                            "runtimeHirNodes": 0,
+                            "wasmFunctionBytes": 0,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "binding": {
+                        "path": module_path,
+                        "name": name,
+                        "span": span,
+                    },
+                    "specializationCount": keys.len(),
+                    "softLimit": SPECIALIZATION_SOFT_LIMIT,
+                    "hardLimit": SPECIALIZATION_HARD_LIMIT,
+                    "keys": keys,
+                })
+            })
+            .collect::<Vec<_>>();
+        specializations.sort_by_key(|fact| {
+            fact["binding"]["span"]["start"]
+                .as_u64()
+                .unwrap_or_default()
+        });
         serde_json::json!({
             "ok": true,
             "type": self.show(&checked.result),
@@ -1363,6 +1792,7 @@ impl Checker {
             "types": types,
             "tags": tags,
             "ownership": ownership,
+            "specializations": specializations,
             "work": self.module_work.borrow().get(path),
         })
     }
@@ -1836,6 +2266,18 @@ impl Checker {
                     })
                     .collect(),
             ),
+            FlatTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.inflate_interface_type(arena, *base, rigids)),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| {
+                        (
+                            name.clone(),
+                            self.inflate_interface_type(arena, *type_, rigids),
+                        )
+                    })
+                    .collect(),
+            },
             FlatTypeNode::Array(element) => Type::Array(Rc::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
@@ -2378,12 +2820,14 @@ impl Checker {
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         types,
                         dependencies,
                         None,
@@ -2699,6 +3143,42 @@ impl Checker {
                         ));
                     }
                 }
+                if member_arguments.len() == 2
+                    && let Ok(Value::Primitive { name, .. }) =
+                        self.evaluate(path, member_callee, values, Phase::Comptime)
+                    && name == "@shape.update"
+                {
+                    let target = self.infer(
+                        path,
+                        module,
+                        member_arguments[0],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let patch = self.infer(
+                        path,
+                        module,
+                        member_arguments[1],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let Type::Record(fields) = patch.type_ else {
+                        return Err(Diagnostic::new(
+                            "BLOT_SHAPE_UPDATE_FIELDS",
+                            "Shape.update requires a statically known record of fields.",
+                            span,
+                        ));
+                    };
+                    return Ok(Inferred {
+                        type_: Type::RecordUpdate {
+                            base: Rc::new(target.type_),
+                            fields,
+                        },
+                        effects: self.join_effects(target.effects, patch.effects)?,
+                    });
+                }
                 if member_arguments.len() > 1
                     && let Expression::Field { target, name, .. } =
                         &module.arena.expressions[member_callee.0 as usize]
@@ -2735,12 +3215,14 @@ impl Checker {
                     let mut function_type = self.infer_evaluated_closure(
                         path,
                         module,
-                        &closure_module,
-                        parameter,
-                        body,
-                        &closure_values,
-                        self_name.as_deref(),
-                        deferred,
+                        EvaluatedClosure {
+                            module_path: &closure_module,
+                            parameter,
+                            body,
+                            captures: &closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred,
+                        },
                         environment,
                         dependencies,
                         None,
@@ -2796,12 +3278,14 @@ impl Checker {
                     let function_type = self.infer_evaluated_closure(
                         path,
                         module,
-                        &closure_module,
-                        parameter,
-                        body,
-                        &closure_values,
-                        self_name.as_deref(),
-                        deferred,
+                        EvaluatedClosure {
+                            module_path: &closure_module,
+                            parameter,
+                            body,
+                            captures: &closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred,
+                        },
                         environment,
                         dependencies,
                         None,
@@ -2999,15 +3483,18 @@ impl Checker {
                     }) = evaluated_function.as_ref()
                     && self_name.is_none()
                 {
+                    self.record_specialization(closure_module, *body, &argument.type_, path, span)?;
                     let function = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         environment,
                         dependencies,
                         Some(argument.type_.clone()),
@@ -3081,15 +3568,18 @@ impl Checker {
                     }) = evaluated_function.as_ref()
                     && self_name.is_none()
                 {
+                    self.record_specialization(closure_module, *body, &argument_type, path, span)?;
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         environment,
                         dependencies,
                         Some(argument_type.clone()),
@@ -3675,20 +4165,69 @@ impl Checker {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn record_specialization(
+        &self,
+        closure_module: &str,
+        body: ExpressionId,
+        parameter_type: &Type,
+        call_path: &str,
+        call_span: Span,
+    ) -> Result<(), Diagnostic> {
+        let representation = self.show_analysis(&self.settle(parameter_type.clone(), true));
+        let mut specializations = self.specializations.borrow_mut();
+        let binding = specializations
+            .entry((closure_module.to_owned(), body))
+            .or_default();
+        if !binding.keys.contains_key(&representation)
+            && binding.keys.len() >= SPECIALIZATION_HARD_LIMIT
+        {
+            return Err(Diagnostic::new(
+                "BLOT_SPECIALIZATION_LIMIT",
+                format!(
+                    "This binding requires more than {SPECIALIZATION_HARD_LIMIT} runtime representations. Narrow the structural parameter, add a public signature, move a compile-time parameter to runtime, or introduce an explicit stable representation."
+                ),
+                call_span,
+            ));
+        }
+        let reason = if binding.keys.is_empty() {
+            "initial parameter representation"
+        } else {
+            "parameter representation differs"
+        };
+        let key = binding
+            .keys
+            .entry(representation)
+            .or_insert_with(|| SpecializationKey {
+                reason,
+                call_sites: Vec::new(),
+            });
+        if !key
+            .call_sites
+            .iter()
+            .any(|site| site == &(call_path.to_owned(), call_span))
+        {
+            key.call_sites.push((call_path.to_owned(), call_span));
+        }
+        Ok(())
+    }
+
     fn infer_evaluated_closure(
         &self,
         path: &str,
         module: &Module,
-        closure_module: &str,
-        parameter: PatternId,
-        body: ExpressionId,
-        closure_values: &ValueEnvironment,
-        self_name: Option<&str>,
-        deferred: bool,
+        closure: EvaluatedClosure<'_>,
         environment: &TypeEnvironment,
         dependencies: &BTreeMap<String, Type>,
         parameter_type: Option<Type>,
     ) -> Result<Type, Diagnostic> {
+        let EvaluatedClosure {
+            module_path: closure_module,
+            parameter,
+            body,
+            captures: closure_values,
+            self_name,
+            deferred,
+        } = closure;
         let closure_loaded = self
             .context
             .modules
@@ -4104,6 +4643,13 @@ impl Checker {
                     .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.freshen(Rc::unwrap_or_clone(base), level, fresh)),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
+                    .collect(),
+            },
             Type::Array(element) => Type::Array(Rc::new(self.freshen(
                 Rc::unwrap_or_clone(element),
                 level,
@@ -4281,6 +4827,13 @@ impl Checker {
                     .map(|(name, field)| (name, self.extrude(field, polarity, level, copies)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.extrude(Rc::unwrap_or_clone(base), polarity, level, copies)),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, field)| (name, self.extrude(field, polarity, level, copies)))
+                    .collect(),
+            },
             Type::Array(element) => Type::Array(Rc::new(self.extrude(
                 Rc::unwrap_or_clone(element),
                 polarity,
@@ -4369,9 +4922,9 @@ impl Checker {
         &self,
         variable: VariableId,
         bound: ConstraintTypeId,
+        work: &mut VecDeque<WorkItem>,
         span: Span,
-        seen: &mut HashSet<(VariableId, VariableId)>,
-    ) -> Result<(), Diagnostic> {
+    ) {
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -4395,20 +4948,23 @@ impl Checker {
                 if let Some(predecessor) = self.constraint_variable(lower) {
                     pending.push(predecessor);
                 } else {
-                    self.constrain_ids(lower, bound, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: lower,
+                        right: bound,
+                        span,
+                    });
                 }
             }
         }
-        Ok(())
     }
 
     fn add_lower_bound(
         &self,
         variable: VariableId,
         bound: ConstraintTypeId,
+        work: &mut VecDeque<WorkItem>,
         span: Span,
-        seen: &mut HashSet<(VariableId, VariableId)>,
-    ) -> Result<(), Diagnostic> {
+    ) {
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -4432,11 +4988,14 @@ impl Checker {
                 if let Some(successor) = self.constraint_variable(upper) {
                     pending.push(successor);
                 } else {
-                    self.constrain_ids(bound, upper, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: bound,
+                        right: upper,
+                        span,
+                    });
                 }
             }
         }
-        Ok(())
     }
 
     fn constrain_ids(
@@ -4446,6 +5005,22 @@ impl Checker {
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
+        let mut work = VecDeque::from([WorkItem { left, right, span }]);
+        while let Some(item) = work.pop_front() {
+            self.constrain_work_item(item, seen, &mut work)?;
+            self.solver_worklist_peak
+                .set(self.solver_worklist_peak.get().max(work.len() as u64));
+        }
+        Ok(())
+    }
+
+    fn constrain_work_item(
+        &self,
+        item: WorkItem,
+        seen: &mut HashSet<(VariableId, VariableId)>,
+        work: &mut VecDeque<WorkItem>,
+    ) -> Result<(), Diagnostic> {
+        let WorkItem { left, right, span } = item;
         self.constraints.set(self.constraints.get() + 1);
         if self.constraint_types.borrow().same(left, right) {
             return Ok(());
@@ -4463,14 +5038,22 @@ impl Checker {
                 let body = self.expand_constraint(body);
                 let instantiated = self.instantiate_forall(variables, body);
                 let instantiated = self.constraint_type(&instantiated);
-                self.constrain_ids(instantiated, right, span, seen)?;
+                work.push_back(WorkItem {
+                    left: instantiated,
+                    right,
+                    span,
+                });
                 true
             }
             (_, ConstraintTypeNode::Forall { variables, body }) => {
                 let body = self.expand_constraint(body);
                 let rigid = self.skolemize(variables, body);
                 let rigid = self.constraint_type(&rigid);
-                self.constrain_ids(left, rigid, span, seen)?;
+                work.push_back(WorkItem {
+                    left,
+                    right: rigid,
+                    span,
+                });
                 true
             }
             (ConstraintTypeNode::Unit, ConstraintTypeNode::Unit) => true,
@@ -4511,9 +5094,23 @@ impl Checker {
                         span,
                     );
                 }
-                self.constrain_ids(right_parameter, left_parameter, span, seen)?;
-                self.constrain_ids(left_effects, right_effects, span, seen)?;
-                self.constrain_ids(left_result, right_result, span, seen)?;
+                work.extend([
+                    WorkItem {
+                        left: right_parameter,
+                        right: left_parameter,
+                        span,
+                    },
+                    WorkItem {
+                        left: left_effects,
+                        right: right_effects,
+                        span,
+                    },
+                    WorkItem {
+                        left: left_result,
+                        right: right_result,
+                        span,
+                    },
+                ]);
                 true
             }
             (ConstraintTypeNode::Record(left_fields), ConstraintTypeNode::Record(right_fields)) => {
@@ -4531,28 +5128,112 @@ impl Checker {
                             span,
                         );
                     };
-                    self.constrain_ids(*left_field, right_field, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: *left_field,
+                        right: right_field,
+                        span,
+                    });
                 }
                 true
             }
+            (
+                ConstraintTypeNode::RecordUpdate { base, fields },
+                ConstraintTypeNode::Record(right_fields),
+            ) => {
+                for (name, right_field) in right_fields {
+                    if let Some((_, updated)) =
+                        fields.iter().find(|(candidate, _)| candidate == &name)
+                    {
+                        work.push_back(WorkItem {
+                            left: *updated,
+                            right: right_field,
+                            span,
+                        });
+                        continue;
+                    }
+                    let required = self.constraint_type(&Type::Record(
+                        vec![(name, self.expand_constraint(right_field))].into(),
+                    ));
+                    work.push_back(WorkItem {
+                        left: base,
+                        right: required,
+                        span,
+                    });
+                }
+                true
+            }
+            (
+                ConstraintTypeNode::RecordUpdate {
+                    base: left_base,
+                    fields: left_fields,
+                },
+                ConstraintTypeNode::RecordUpdate {
+                    base: right_base,
+                    fields: right_fields,
+                },
+            ) => {
+                if left_fields.len() != right_fields.len() {
+                    false
+                } else {
+                    work.push_back(WorkItem {
+                        left: left_base,
+                        right: right_base,
+                        span,
+                    });
+                    for (name, left_field) in left_fields {
+                        let Some((_, right_field)) = right_fields
+                            .iter()
+                            .find(|(candidate, _)| candidate == &name)
+                        else {
+                            return self.type_error(
+                                self.expand_constraint(left),
+                                self.expand_constraint(right),
+                                span,
+                            );
+                        };
+                        work.push_back(WorkItem {
+                            left: left_field,
+                            right: *right_field,
+                            span,
+                        });
+                    }
+                    true
+                }
+            }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
+                work.push_back(WorkItem { left, right, span });
                 let empty = self
                     .constraint_variable(left)
                     .is_some_and(|variable| self.empty_array_elements.borrow().contains(&variable));
                 if empty {
-                    self.constrain_ids(right, left, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    });
                 }
                 true
             }
             (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
-                self.constrain_ids(right, left, span, seen)?;
+                work.extend([
+                    WorkItem { left, right, span },
+                    WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    },
+                ]);
                 true
             }
             (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
-                self.constrain_ids(right, left, span, seen)?;
+                work.extend([
+                    WorkItem { left, right, span },
+                    WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    },
+                ]);
                 true
             }
             (
@@ -4577,7 +5258,11 @@ impl Checker {
                         if let Some((_, right)) =
                             right.iter().find(|(candidate, _)| candidate == &name)
                         {
-                            self.constrain_ids(left, *right, span, seen)?;
+                            work.push_back(WorkItem {
+                                left,
+                                right: *right,
+                                span,
+                            });
                         }
                     }
                     true
@@ -4599,7 +5284,11 @@ impl Checker {
                     .collect::<BTreeSet<_>>();
                 if !missing.is_empty() {
                     let missing = self.constraint_type(&Type::Effects(missing));
-                    self.constrain_ids(missing, right_tail, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: missing,
+                        right: right_tail,
+                        span,
+                    });
                 }
                 true
             }
@@ -4614,7 +5303,11 @@ impl Checker {
                     false
                 } else {
                     let right = self.constraint_type(&Type::Effects(right));
-                    self.constrain_ids(left_tail, right, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: left_tail,
+                        right,
+                        span,
+                    });
                     true
                 }
             }
@@ -4634,7 +5327,11 @@ impl Checker {
                     .collect::<BTreeSet<_>>();
                 if !missing.is_empty() {
                     let missing = self.constraint_type(&Type::Effects(missing));
-                    self.constrain_ids(missing, right_tail, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: missing,
+                        right: right_tail,
+                        span,
+                    });
                 }
                 let same_tail = self.constraint_types.borrow().same(left_tail, right_tail);
                 if !same_tail {
@@ -4642,7 +5339,11 @@ impl Checker {
                         labels: right_labels,
                         tail: Rc::new(self.expand_constraint(right_tail)),
                     });
-                    self.constrain_ids(left_tail, right_row, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: left_tail,
+                        right: right_row,
+                        span,
+                    });
                 }
                 true
             }
@@ -4684,10 +5385,10 @@ impl Checker {
                 self.record_bound_insertion(left_variable, BoundDirection::Upper);
                 self.record_bound_insertion(right_variable, BoundDirection::Lower);
                 for lower in lowers {
-                    self.add_lower_bound(right_variable, lower, span, seen)?;
+                    self.add_lower_bound(right_variable, lower, work, span);
                 }
                 for upper in uppers {
-                    self.add_upper_bound(left_variable, upper, span, seen)?;
+                    self.add_upper_bound(left_variable, upper, work, span);
                 }
                 true
             }
@@ -4698,12 +5399,16 @@ impl Checker {
                 };
                 let variable_level = self.variables.borrow()[variable as usize].level;
                 if bound_level <= variable_level {
-                    self.add_upper_bound(variable, right, span, seen)?;
+                    self.add_upper_bound(variable, right, work, span);
                 } else {
                     let bound = self.expand_constraint(right);
                     let extruded = self.extrude(bound, false, variable_level, &mut HashMap::new());
                     let extruded = self.constraint_type(&extruded);
-                    self.constrain_ids(left, extruded, span, seen)?;
+                    work.push_back(WorkItem {
+                        left,
+                        right: extruded,
+                        span,
+                    });
                 }
                 true
             }
@@ -4714,12 +5419,16 @@ impl Checker {
                 };
                 let variable_level = self.variables.borrow()[variable as usize].level;
                 if bound_level <= variable_level {
-                    self.add_lower_bound(variable, left, span, seen)?;
+                    self.add_lower_bound(variable, left, work, span);
                 } else {
                     let bound = self.expand_constraint(left);
                     let extruded = self.extrude(bound, true, variable_level, &mut HashMap::new());
                     let extruded = self.constraint_type(&extruded);
-                    self.constrain_ids(extruded, right, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: extruded,
+                        right,
+                        span,
+                    });
                 }
                 true
             }
@@ -4826,6 +5535,12 @@ impl Checker {
                     pending.push((result, bound));
                 }
                 Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                    for (_, field) in fields {
+                        pending.push((field, bound.clone()));
+                    }
+                }
+                Type::RecordUpdate { base, fields } => {
+                    pending.push((base, bound.clone()));
                     for (_, field) in fields {
                         pending.push((field, bound.clone()));
                     }
@@ -5012,6 +5727,26 @@ impl Checker {
                     })
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => record_update_type(
+                self.residual_signature_type(
+                    Rc::unwrap_or_clone(base),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                ),
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        (
+                            name,
+                            self.residual_signature_type(
+                                type_, seen, resolved, unresolved, recursive,
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
             Type::Array(element) => Type::Array(Rc::new(self.residual_signature_type(
                 Rc::unwrap_or_clone(element),
                 seen,
@@ -5182,6 +5917,13 @@ impl Checker {
                 )),
             },
             Type::Record(fields) => Type::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
+                    .collect(),
+            ),
+            Type::RecordUpdate { base, fields } => record_update_type(
+                self.settle_seen(Rc::unwrap_or_clone(base), positive, seen, cacheable),
                 fields
                     .into_iter()
                     .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
@@ -6003,6 +6745,15 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
+            Type::RecordUpdate { base, fields } => format!(
+                "update {} with {{ {} }}",
+                self.show_settled(base),
+                fields
+                    .iter()
+                    .map(|(name, type_)| format!(".{name} = {}", self.show_settled(type_)))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
             Type::Array(element) => {
                 let shown = self.show_settled(element);
                 if matches!(element.as_ref(), Type::Union(_)) && shown.contains(" | ") {
@@ -6153,6 +6904,14 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 visit(result, binders)?
             )),
             Type::Record(values) => fields("record", values, binders),
+            Type::RecordUpdate {
+                base,
+                fields: values,
+            } => Some(format!(
+                "record-update({},{})",
+                visit(base, binders)?,
+                fields("", values, binders)?
+            )),
             Type::Array(element) => Some(format!("array({})", visit(element, binders)?)),
             Type::Region(element) => Some(format!("region({})", visit(element, binders)?)),
             Type::Scratch(element) => Some(format!("scratch({})", visit(element, binders)?)),
@@ -6226,6 +6985,12 @@ fn free_rigid_variables(
             free_rigid_variables(result, bound, free);
         }
         Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+            for (_, field) in fields {
+                free_rigid_variables(field, bound, free);
+            }
+        }
+        Type::RecordUpdate { base, fields } => {
+            free_rigid_variables(base, bound, free);
             for (_, field) in fields {
                 free_rigid_variables(field, bound, free);
             }
@@ -6537,6 +7302,9 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@text.concat" => curried(vec![text.clone(), text.clone()], text),
         "@text.len" => curried(vec![text], int),
+        "@text.scalar_at" => curried(vec![text.clone(), int], text),
+        "@text.slice" => curried(vec![text.clone(), int.clone(), int], text),
+        "@text.find_from" => curried(vec![text.clone(), text, int.clone()], int),
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
         "@text.contains" => curried(vec![text.clone(), text], bool_),
         "@text.of_int" => curried(vec![int], text),
@@ -6718,6 +7486,10 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@shape.names" => curried(vec![checker.fresh()], Type::Array(Rc::new(text))),
         "@shape.has" => curried(vec![checker.fresh(), text], bool_),
         "@shape.get" | "@shape.remove" => curried(vec![checker.fresh(), text], checker.fresh()),
+        "@shape.update" => {
+            let target = checker.fresh();
+            curried(vec![target.clone(), checker.fresh()], target)
+        }
         "@shape.set" => curried(
             vec![checker.fresh(), text, checker.fresh()],
             checker.fresh(),
@@ -7337,6 +8109,13 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
                 .map(|(name, field)| (name, substitute_rigid(field, replacements)))
                 .collect(),
         ),
+        Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+            base: Rc::new(substitute_rigid(Rc::unwrap_or_clone(base), replacements)),
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| (name, substitute_rigid(field, replacements)))
+                .collect(),
+        },
         Type::Array(element) => Type::Array(Rc::new(substitute_rigid(
             Rc::unwrap_or_clone(element),
             replacements,
@@ -8989,6 +9768,40 @@ fn expression_span(expression: &Expression) -> Span {
     }
 }
 
+fn specialization_binding(module: &Module, body: ExpressionId) -> (Span, Option<String>) {
+    for declaration_id in &module.declarations {
+        let Declaration::Binding {
+            pattern,
+            value,
+            span,
+            ..
+        } = &module.arena.declarations[declaration_id.0 as usize]
+        else {
+            continue;
+        };
+        if closure_body(module, *value) != Some(body) {
+            continue;
+        }
+        let name = match &module.arena.patterns[pattern.0 as usize] {
+            Pattern::Name { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        return (*span, name);
+    }
+    (module.arena.expression_span(body), None)
+}
+
+fn closure_body(module: &Module, expression: ExpressionId) -> Option<ExpressionId> {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Lambda { body, .. } => Some(*body),
+        Expression::Rec { lambda, .. } => match &module.arena.expressions[lambda.0 as usize] {
+            Expression::Lambda { body, .. } => Some(*body),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn closure_free_name_span(
     module: &Module,
     parameter: PatternId,
@@ -9275,6 +10088,12 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
         Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
             .iter()
             .all(|(_, field)| closed_checked_type(field, bound)),
+        Type::RecordUpdate { base, fields } => {
+            closed_checked_type(base, bound)
+                && fields
+                    .iter()
+                    .all(|(_, field)| closed_checked_type(field, bound))
+        }
         Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
             closed_checked_type(element, bound)
         }
@@ -9339,6 +10158,15 @@ fn flatten_interface_type(
                 })
                 .collect::<Option<Vec<_>>>()?,
         ),
+        Type::RecordUpdate { base, fields } => FlatTypeNode::RecordUpdate {
+            base: flatten_interface_type(base, bound, types)?,
+            fields: fields
+                .iter()
+                .map(|(name, type_)| {
+                    Some((name.clone(), flatten_interface_type(type_, bound, types)?))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        },
         Type::Array(element) => FlatTypeNode::Array(flatten_interface_type(element, bound, types)?),
         Type::Region(element) => {
             FlatTypeNode::Region(flatten_interface_type(element, bound, types)?)
@@ -9666,6 +10494,63 @@ mod tests {
         assert_ne!(first_variables, second_variables);
         assert!(matches!(*first_body, Type::Rigid(id) if id == first_variables[0]));
         assert!(matches!(*second_body, Type::Rigid(id) if id == second_variables[0]));
+    }
+
+    #[test]
+    fn sealed_boundaries_are_alpha_canonical_and_ignore_private_facts() {
+        let interface = |variable, private_type| CheckedModule {
+            result: Type::Forall {
+                variables: vec![variable],
+                body: Rc::new(Type::Record(
+                    vec![("value".to_owned(), Type::Rigid(variable))].into(),
+                )),
+            },
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: vec![(ExpressionId(99), private_type)],
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+        };
+        let first = CachedModuleInterface::from_checked(&interface(7, Type::Unit))
+            .expect("first interface should close")
+            .sealed_boundary_bytes()
+            .expect("first boundary should serialize");
+        let second = CachedModuleInterface::from_checked(&interface(42, int_type()))
+            .expect("second interface should close")
+            .sealed_boundary_bytes()
+            .expect("second boundary should serialize");
+
+        assert_eq!(first, second);
+        let decoded =
+            SealedModuleBoundary::from_bytes(&first).expect("canonical boundary should round-trip");
+        assert_eq!(decoded.schema, SealedModuleBoundary::SCHEMA);
+        assert_eq!(decoded.compiler_semantic_version, env!("CARGO_PKG_VERSION"),);
+    }
+
+    #[test]
+    fn sealed_boundaries_change_with_public_types() {
+        let interface = |result| CheckedModule {
+            result,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+        };
+        let first = CachedModuleInterface::from_checked(&interface(Type::Unit))
+            .expect("first interface should close")
+            .sealed_boundary_bytes()
+            .expect("first boundary should serialize");
+        let second = CachedModuleInterface::from_checked(&interface(int_type()))
+            .expect("second interface should close")
+            .sealed_boundary_bytes()
+            .expect("second boundary should serialize");
+
+        assert_ne!(first, second);
     }
 
     #[test]

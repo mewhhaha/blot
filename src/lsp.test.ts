@@ -40,7 +40,30 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
         position: { line: 0, character: 8 },
       },
     },
-    { jsonrpc: "2.0", id: 4, method: "shutdown", params: null },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "textDocument/completion",
+      params: {
+        textDocument: { uri },
+        position: { line: 0, character: 7 },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "textDocument/hover",
+      params: {
+        textDocument: { uri },
+        position: { line: 0, character: 8 },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      method: "$/cancelRequest",
+      params: { id: 6 },
+    },
+    { jsonrpc: "2.0", id: 5, method: "shutdown", params: null },
     { jsonrpc: "2.0", method: "exit", params: null },
   ];
   const encoder = new TextEncoder();
@@ -93,10 +116,23 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
   };
   assertEquals(initialize.result.capabilities.codeActionProvider, true);
   assertEquals(initialize.result.capabilities.hoverProvider, true);
+  assertEquals(initialize.result.capabilities.referencesProvider, true);
+  assertEquals(initialize.result.capabilities.inlayHintProvider, true);
   const codeAction = responses.find((response) => response.id === 2) as {
     readonly result: readonly { readonly title: string }[];
   };
   assertEquals(codeAction.result.map((action) => action.title), [
     "Replace `Int.rem` with `%`",
   ]);
+  const completion = responses.find((response) => response.id === 4) as {
+    readonly result: readonly { readonly label: string }[];
+  };
+  assertEquals(
+    completion.result.some((item) => item.label === "return"),
+    true,
+  );
+  const cancelled = responses.find((response) => response.id === 6) as {
+    readonly error: { readonly code: number };
+  };
+  assertEquals(cancelled.error.code, -32800);
 });

@@ -75,12 +75,42 @@ cannot replace an effect atom. Equal seal inputs reconstruct a seal; a
 declaration occurrence is not its identity. Equal-looking intervals under
 another Store are not interchangeable.
 
+### 2.1 Compiler-owned source inspection
+
+Installing a changed source revision in the resident Rust session is also its
+semantic dependency-discovery pass. The successful installation returns the
+resident module handle, literal import and include specifiers with source spans,
+and a deterministic portable-AST digest. Node resolves those reported sites and
+then configures that already-installed module; it does not ask the compiler to
+parse the same revision a second time.
+
+The compiler-owned inspection result also carries the canonical compact syntax
+snapshot used by formatting and editor tooling. The TypeScript parser remains a
+fresh-equivalence oracle and may validate a proposed replacement revision, but
+it is not run again for the accepted editor revision and is not a second source
+of semantic graph edges. Nonliteral include paths and syntax failures are
+diagnostics from the Rust inspection before graph configuration.
+
 ## 3. Dependency invalidation
 
-The source graph carries import and include edges. Changing a node invalidates
-that node and the transitive reverse-dependency closure for every phase that can
-observe the changed edge. Unrelated modules retain their revisions and closed
-artifacts.
+The source graph carries import and include edges. Changing a node marks only
+that node dirty. Its next semantic request checks it in isolation and publishes
+a canonical `SealedModuleBoundary` containing the compiler/schema version,
+settled parameter/result/effect types, compile-time result fingerprint, and
+ordered direct-dependency boundaries. Publication is transactional: an invalid
+revision has no active boundary.
+
+Exact boundary-byte equality stops propagation. A changed boundary marks only
+direct importers dirty; each importer is checked and may stop the wave in the
+same way. Unrelated modules retain their identities and closed artifacts. The
+request-local invalidation report lists dirty and checked modules, changed and
+unchanged boundaries, invalidated importers, and reused artifacts. Telemetry is
+an observation and never enters a semantic key or certificate.
+
+This is the transitive reverse-dependency invalidation required for every phase
+that can observe a changed edge: an unchanged sealed boundary proves that the
+phase cannot observe the private change and stops its closure. Unrelated modules
+retain their revisions and closed artifacts.
 
 An ordinary effect reachable from a published interface adds the complete owning
 module-instance occurrence to the key. Reuse is sound only when that identity is
@@ -108,6 +138,12 @@ incremental_frontend(previous, edit)
 including token identities, compact nodes, fields, edges, operator folding,
 resolved AST, origins, and diagnostics.
 
+An identical source revision reuses the complete resident compact tree without
+lexing or parsing. A changed revision resynchronizes an unchanged token suffix,
+publishes a deterministic old-to-new compact-node reuse map, and may reuse a
+complete compact tree when the resulting syntax-token sequence is identical.
+Every reuse decision remains subordinate to fresh-frontend equivalence.
+
 Operator identity uses the generated fixed language-plan revision. Source
 modules have no custom fixity environment to preserve or compare.
 
@@ -116,6 +152,16 @@ modules have no custom fixity environment to preserve or compare.
 Declaration liveness is keyed by module revision and the enclosing block's
 resolved expression identity. Replacing the module invalidates every liveness
 entry before evaluation can observe another AST.
+
+An in-process checker may stop reverse propagation after rechecking a changed
+module only when a sealed boundary fingerprint is unchanged. That fingerprint
+contains the closed type/effect boundary, relational-summary schema and facts,
+every checked live source node that can constrain an importer, includes, capsule
+input, and dependency fingerprints. Dead source may be omitted only by a
+separate proof that it cannot affect inference, evaluation, diagnostics, or a
+published fact. Cache publication is transactional: failure publishes no
+replacement and the failed revision cannot consult the previous boundary as
+semantic authority.
 
 A changed module may reuse evaluated declaration values only for a maximal
 unchanged top-level prefix when all of these remain equal:
@@ -225,6 +271,14 @@ Registry capsules remain package-controlled inputs. A package hash proves only
 unchanged transport. It does not prove that a claimed interface follows from its
 AST unless a separately checked certificate establishes that judgment more
 cheaply than ordinary checking.
+
+An active workspace graph owns the resident module set. Removing a node from
+that set removes its frontend snapshot, mutable inference generation,
+compile-time evaluation caches, effect-identity entries, closed programs, and
+request-local analyses. A later module with the same path is a new revision and
+must install and validate its payload again. Stable sealed boundaries and
+checked snapshots are self-contained; none retains a live variable or another
+private generation merely because a removed module once published it.
 
 ## 10. Diagnostic and limit reuse
 

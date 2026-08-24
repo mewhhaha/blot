@@ -1,0 +1,29 @@
+open import "blot:prelude"
+
+const numbers =
+  Array.build (
+    3,
+    fn builder => do:
+      let builder = Array.Builder.push (builder, 4)
+      let builder = Array.Builder.push (builder, 5)
+      let builder = Array.Builder.push (builder, 6)
+      return builder
+  )
+
+const maps = Map.with Int.eq
+let (_, entries) = maps.put (maps.empty, 1, 10)
+let (_, entries) = maps.update (entries, 1, fn value => Some (value + 1))
+let (_, entries) =
+  maps.alter (
+    entries,
+    2,
+    fn previous => case previous of
+      #Some value => Some (value + 1)
+      #None => Some 20
+  )
+
+return (
+  Array.length (&numbers),
+  maps.get (entries, 1),
+  maps.get (entries, 2)
+  )

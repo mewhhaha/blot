@@ -55,6 +55,23 @@ export interface IncludedFile {
   readonly source: string;
 }
 
+export interface InspectedDependencySite {
+  readonly specifier: string;
+  readonly span: { readonly start: number; readonly end: number };
+}
+
+export interface SourceInspection {
+  readonly imports: readonly InspectedDependencySite[];
+  readonly includes: readonly InspectedDependencySite[];
+  readonly moduleHandle: string;
+  readonly portableAstDigest: string;
+}
+
+export type SourceInspector = (
+  path: string,
+  source: string,
+) => Promise<SourceInspection | undefined> | SourceInspection | undefined;
+
 /** `blot:name` names a prelude module; package specifiers require async resolution. */
 export function resolvePath(specifier: string, importer: string): string {
   if (specifier.startsWith("blot:")) {
@@ -197,9 +214,12 @@ const modules = new Map<string, Loaded>();
  * objects in this cache. Reading the known graph before each service build keeps those identities
  * stable for unchanged files and replaces the complete dependent closure after an edit.
  */
-export async function refreshLoadedModules(): Promise<void> {
+export async function refreshLoadedModules(
+  cache: Map<string, Loaded> = modules,
+  overlayPaths: ReadonlySet<string> = new Set(),
+): Promise<void> {
   const changed = new Set<string>();
-  await Promise.all([...modules].map(async ([path, loaded]) => {
+  await Promise.all([...cache].map(async ([path, loaded]) => {
     if (loaded.storage.tag === "capsule") {
       try {
         if (
@@ -221,19 +241,21 @@ export async function refreshLoadedModules(): Promise<void> {
       }
       return;
     }
-    try {
-      if (await readFile(path, "utf8") !== loaded.source) changed.add(path);
-    } catch (error) {
-      if (isNotFound(error)) {
-        changed.add(path);
-        return;
+    if (!overlayPaths.has(path)) {
+      try {
+        if (await readFile(path, "utf8") !== loaded.source) changed.add(path);
+      } catch (error) {
+        if (isNotFound(error)) {
+          changed.add(path);
+          return;
+        }
+        throw new Error(
+          `could not refresh cached Blot source ${JSON.stringify(path)}`,
+          {
+            cause: error,
+          },
+        );
       }
-      throw new Error(
-        `could not refresh cached Blot source ${JSON.stringify(path)}`,
-        {
-          cause: error,
-        },
-      );
     }
     for (const included of loaded.includedFiles.values()) {
       try {
@@ -260,7 +282,7 @@ export async function refreshLoadedModules(): Promise<void> {
   let foundDependent = true;
   while (foundDependent) {
     foundDependent = false;
-    for (const [path, loaded] of modules) {
+    for (const [path, loaded] of cache) {
       if (changed.has(path)) continue;
       if (
         [...loaded.dependencies.values()].some((dependency) =>
@@ -272,13 +294,14 @@ export async function refreshLoadedModules(): Promise<void> {
       }
     }
   }
-  for (const path of changed) modules.delete(path);
+  for (const path of changed) cache.delete(path);
 }
 
 export async function load(
   path: string,
   cache: Map<string, Loaded> = modules,
   active: readonly string[] = [],
+  inspect?: SourceInspector,
 ): Promise<Loaded> {
   const absolute = resolve(path);
   const cached = cache.get(absolute);
@@ -296,25 +319,35 @@ export async function load(
   const nextActive = [...active, absolute];
 
   if (absolute.endsWith(".blotc")) {
-    return await loadModuleCapsule(absolute, cache, active);
+    return await loadModuleCapsule(absolute, cache, active, inspect);
   }
 
   const source = await readFile(absolute, "utf8");
-  return await loadSourceRevision(absolute, source, cache, nextActive, false);
+  return await loadSourceRevision(
+    absolute,
+    source,
+    cache,
+    nextActive,
+    false,
+    inspect,
+  );
 }
 
 /** Loads an editor revision without writing it over the source on disk. */
 export async function loadSource(
   path: string,
   source: string,
+  cache: Map<string, Loaded> = new Map(),
+  inspect?: SourceInspector,
 ): Promise<Loaded> {
   const absolute = resolve(path);
   return await loadSourceRevision(
     absolute,
     source,
-    new Map(),
+    cache,
     [absolute],
     false,
+    inspect,
   );
 }
 
@@ -333,6 +366,7 @@ export async function loadUncheckedSource(
     new Map(),
     [absolute],
     true,
+    undefined,
   );
 }
 
@@ -342,6 +376,7 @@ async function loadSourceRevision(
   cache: Map<string, Loaded>,
   active: readonly string[],
   skipSourceValidation: boolean,
+  inspect: SourceInspector | undefined,
 ): Promise<Loaded> {
   const parsed = skipSourceValidation
     ? await parseConcrete(source)
@@ -352,7 +387,10 @@ async function loadSourceRevision(
 
   const dependencySites = dependencyExpressions(parsed.module);
   const invalidIncludePath = dependencySites.invalidIncludePaths[0];
-  if (invalidIncludePath !== undefined) {
+  const inspection = inspect === undefined
+    ? undefined
+    : await inspect(absolute, source);
+  if (invalidIncludePath !== undefined && inspection === undefined) {
     throw new LoadError(absolute, source, [{
       code: "BLOT_INCLUDE_PATH",
       message: "`@include` requires a literal text path.",
@@ -360,14 +398,43 @@ async function loadSourceRevision(
     }]);
   }
 
+  const syntaxImports = [...new Set(dependencySites.imports.values())];
+  const syntaxIncludes = [...new Set(dependencySites.includes.values())];
+  const inspectedImports = inspection?.imports.map((site) => site.specifier);
+  const inspectedIncludes = inspection?.includes.map((site) => site.specifier);
+  if (inspectedImports !== undefined) {
+    requireDependencyParity(
+      absolute,
+      "imports",
+      syntaxImports,
+      inspectedImports,
+    );
+  }
+  if (inspectedIncludes !== undefined) {
+    requireDependencyParity(
+      absolute,
+      "includes",
+      syntaxIncludes,
+      inspectedIncludes,
+    );
+  }
+  const imports = inspectedImports ?? syntaxImports;
+  const includes = inspectedIncludes ?? syntaxIncludes;
+
   const dependencies = new Map<string, Loaded>();
-  for (const specifier of new Set(dependencySites.imports.values())) {
-    const dependency = await loadImport(specifier, absolute, cache, active);
+  for (const specifier of new Set(imports)) {
+    const dependency = await loadImport(
+      specifier,
+      absolute,
+      cache,
+      active,
+      inspect,
+    );
     dependencies.set(specifier, dependency);
   }
 
   const includedFiles = new Map<string, IncludedFile>();
-  for (const [site, specifier] of dependencySites.includes) {
+  for (const specifier of new Set(includes)) {
     let includedPath = specifier;
     if (!isAbsolute(specifier)) {
       includedPath = resolve(dirname(absolute), specifier);
@@ -377,10 +444,17 @@ async function loadSourceRevision(
       includedSource = await readFile(includedPath, "utf8");
     } catch (error) {
       if (isNotFound(error)) {
+        const inspectedSite = inspection?.includes.find((site) =>
+          site.specifier === specifier
+        );
+        const syntaxSite = [...dependencySites.includes].find(([, candidate]) =>
+          candidate === specifier
+        )?.[0];
         throw new LoadError(absolute, source, [{
           code: "BLOT_INCLUDE_NOT_FOUND",
           message: `Included file \`${specifier}\` does not exist.`,
-          span: site.span,
+          span: inspectedSite?.span ?? syntaxSite?.span ??
+            { start: 0, end: 0 },
         }]);
       }
       throw new Error(
@@ -412,20 +486,21 @@ async function loadImport(
   importer: string,
   cache: Map<string, Loaded>,
   active: readonly string[],
+  inspect: SourceInspector | undefined,
 ): Promise<Loaded> {
   if (!isPackageSpecifier(specifier)) {
-    return await load(resolvePath(specifier, importer), cache, active);
+    return await load(resolvePath(specifier, importer), cache, active, inspect);
   }
   const exported = await resolvePackageExport(specifier, importer);
   if (exported.built !== undefined) {
     try {
-      return await load(exported.built, cache, active);
+      return await load(exported.built, cache, active, inspect);
     } catch (error) {
       if (!(error instanceof PackageArtifactError)) throw error;
     }
   }
   try {
-    return await load(exported.source, cache, active);
+    return await load(exported.source, cache, active, inspect);
   } catch (cause) {
     if (!(isNotFound(cause))) throw cause;
     throw new PackageArtifactError(
@@ -443,6 +518,7 @@ async function loadModuleCapsule(
   path: string,
   cache: Map<string, Loaded>,
   active: readonly string[],
+  inspect: SourceInspector | undefined,
 ): Promise<Loaded> {
   let source: string;
   try {
@@ -507,6 +583,7 @@ async function loadModuleCapsule(
           path,
           cache,
           [...active, path],
+          inspect,
         );
       }
       dependencies.set(imported.specifier, dependency);
@@ -568,6 +645,22 @@ function validateCapsuleDependencies(
       } that do not match its source`,
     );
   }
+}
+
+function requireDependencyParity(
+  path: string,
+  kind: "imports" | "includes",
+  syntax: readonly string[],
+  inspected: readonly string[],
+): void {
+  const syntaxSet = [...new Set(syntax)].sort();
+  const inspectedSet = [...new Set(inspected)].sort();
+  if (syntaxSet.join("\0") === inspectedSet.join("\0")) return;
+  throw new Error(
+    `${path} ${kind} differ between tooling syntax [${
+      syntaxSet.join(", ")
+    }] and compiler inspection [${inspectedSet.join(", ")}]`,
+  );
 }
 
 export function loadedSource(path: string): string | undefined {

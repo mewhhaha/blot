@@ -2,6 +2,45 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join, toFileUrl } from "@std/path";
 import { LanguageService } from "./language_service.ts";
 
+Deno.test("ordered range changes update one editor revision", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:range-sync.blot";
+  try {
+    service.open(uri, "return 10\n", 1);
+    service.changeRanges(uri, [{
+      range: {
+        start: { line: 0, character: 8 },
+        end: { line: 0, character: 9 },
+      },
+      rangeLength: 1,
+      text: "2",
+    }, {
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 8 },
+      },
+      rangeLength: 1,
+      text: "4",
+    }], 2);
+    assertEquals(service.version(uri), 2);
+    const formatting = await service.formatting(uri);
+    assertEquals(formatting, []);
+    assertThrowsVersion(service, uri);
+  } finally {
+    await service.destroy();
+  }
+});
+
+function assertThrowsVersion(service: LanguageService, uri: string): void {
+  let thrown = false;
+  try {
+    service.change(uri, "return 1\n", 2);
+  } catch {
+    thrown = true;
+  }
+  assert(thrown);
+}
+
 Deno.test("language diagnostics check the open editor revision", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "revision.blot");
@@ -28,6 +67,30 @@ Deno.test("language diagnostics check the open editor revision", async () => {
   }
 });
 
+Deno.test("language diagnostics report compiler target preflight refusals", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "target-refusal.blot");
+  const source = `open import "blot:prelude"
+
+let vector :: F32 -> F32x4
+let vector = fn value => F32x4.splat value
+return vector
+`;
+  const uri = toFileUrl(path).href;
+  const service = new LanguageService();
+  try {
+    service.open(uri, source, 1);
+    const diagnostics = await service.diagnostics(uri);
+    const refusal = diagnostics.find((diagnostic) =>
+      diagnostic.code === "BLOT_TARGET_REFUSAL"
+    );
+    assert(refusal !== undefined);
+    assertStringIncludes(refusal.message, "SIMD");
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("language formatting returns one whole-document edit", async () => {
   const service = new LanguageService();
   const uri = "untitled:format.blot";
@@ -45,6 +108,91 @@ Deno.test("language formatting returns one whole-document edit", async () => {
       `return 1
 `,
     );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("inference-centered editor features share one resident revision", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:inference-features.blot";
+  const source = `open import "blot:prelude"
+let add :: Int -> Int -> Int
+let add = fn left => fn right => left
+let answer = add 20 22
+return answer
+`;
+  try {
+    service.open(uri, source, 1);
+    const completion = await service.completion(uri, {
+      line: 4,
+      character: 7,
+    });
+    assert(completion.some((item) => item.label === "add"));
+    assert(completion.some((item) => item.label === "answer"));
+
+    const signature = await service.signatureHelp(uri, {
+      line: 3,
+      character: 21,
+    });
+    assert(signature !== null);
+    assertStringIncludes(signature.signatures[0].label, "Int -> Int -> Int");
+
+    const hints = await service.inlayHints(uri);
+    assert(hints.some((hint) => hint.label.includes("Int")));
+
+    const symbols = await service.documentSymbols(uri);
+    assertEquals(symbols.map((symbol) => symbol.name), ["add", "answer"]);
+
+    const references = await service.references(uri, {
+      line: 2,
+      character: 5,
+    });
+    assert(references.length >= 2);
+    const rename = await service.rename(
+      uri,
+      { line: 2, character: 5 },
+      "sum",
+    );
+    assert(rename !== null);
+    assert(rename.changes[uri]?.every((edit) => edit.newText === "sum"));
+
+    const workspace = await service.workspaceSymbols("ans");
+    assertEquals(workspace.map((symbol) => symbol.name), ["answer"]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("definition follows an imported field to its exported source binding", async () => {
+  const directory = await Deno.makeTempDir();
+  const libraryPath = join(directory, "library.blot");
+  const mainPath = join(directory, "main.blot");
+  const librarySource = `let answer = 42
+return { .answer = answer; }
+`;
+  const mainSource = `const Library = import "./library.blot"
+return Library.answer
+`;
+  await Deno.writeTextFile(libraryPath, librarySource);
+  await Deno.writeTextFile(mainPath, mainSource);
+  const libraryUri = toFileUrl(libraryPath).href;
+  const mainUri = toFileUrl(mainPath).href;
+  const service = new LanguageService();
+  try {
+    service.open(libraryUri, librarySource, 1);
+    service.open(mainUri, mainSource, 1);
+    const definition = await service.definition(mainUri, {
+      line: 1,
+      character: 16,
+    });
+    assertEquals(definition, {
+      uri: libraryUri,
+      range: {
+        start: { line: 0, character: 4 },
+        end: { line: 0, character: 10 },
+      },
+    });
   } finally {
     await service.destroy();
   }

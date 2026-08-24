@@ -4,6 +4,51 @@ import { encodePortableModule } from "../syntax/portable.ts";
 
 const revisionKeyByLoaded = new WeakMap<Loaded, string>();
 
+export type InstalledStorage = "source" | "ast" | "snapshot";
+
+export interface InstalledModuleRevision {
+  readonly payloadDigest: string;
+  readonly configurationDigest: string;
+  readonly storage: InstalledStorage;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/** Local payload identity; transitive dependency revisions deliberately do not enter. */
+export function loadedPayloadDigest(loaded: Loaded): string {
+  if (loaded.storage.tag === "source") {
+    return digest({
+      path: loaded.path,
+      storage: "source",
+      source: loaded.source,
+    });
+  }
+  return digest({
+    path: loaded.path,
+    storage: "ast",
+    module: encodePortableModule(loaded.module),
+  });
+}
+
+/** Exact direct graph-edge and include identity for one configured module. */
+export function loadedConfigurationDigest(loaded: Loaded): string {
+  const imports = [...loaded.dependencies]
+    .map(([specifier, dependency]) => [specifier, dependency.path] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const includes = [...loaded.includedFiles]
+    .map(([specifier, included]) =>
+      [
+        specifier,
+        included.path,
+        included.source,
+      ] as const
+    )
+    .sort(([left], [right]) => left.localeCompare(right));
+  return digest({ imports, includes });
+}
+
 /**
  * Exact process-local compiler-output identity for one loaded graph node.
  *
@@ -30,14 +75,12 @@ export function loadedRevisionKey(loaded: Loaded): string {
       source: included.source,
     }),
   );
-  const key = createHash("sha256")
-    .update(JSON.stringify({
-      path: loaded.path,
-      module: encodePortableModule(loaded.module),
-      dependencies,
-      includedFiles,
-    }))
-    .digest("hex");
+  const key = digest({
+    path: loaded.path,
+    module: encodePortableModule(loaded.module),
+    dependencies,
+    includedFiles,
+  });
   revisionKeyByLoaded.set(loaded, key);
   return key;
 }

@@ -1,5 +1,10 @@
 # Compiler host and distribution
 
+Protocol versions and the concise capability inventory are generated from
+[`compiler/current-implementation.json`](../compiler/current-implementation.json)
+and [`compiler/protocol.json`](../compiler/protocol.json); see the
+[current implementation report](../generated/CURRENT_IMPLEMENTATION.md).
+
 Blot has one semantic compiler. It is implemented in Rust, built as Wasm, and
 hosted by Node for ordinary commands and library use.
 
@@ -102,8 +107,16 @@ installing anything.
 
 ## Host ABI
 
-The compiler exports one versioned session ABI for source and portable-AST
-installation, graph configuration, checking, analysis, evaluation, tagged test
+Compiler-host ABI 2 registers UTF-8 paths once and refers to them through stable
+session-local `ModuleId` values. Changed UTF-8 source or compact AST/snapshot
+bytes, resolved import edges, included bytes, and removals travel in validated
+batched binary delta frames. UTF-8 decoding reconstructs the frontend's UTF-16
+offset space, so source spans retain their documented units without copying one
+32-bit word per source unit. Successful checks return compact binary summaries;
+full diagnostics and requested analysis facts remain available in the same
+versioned response envelope.
+
+The compiler also exports session operations for evaluation, tagged test
 execution, canonical AST export, Runtime-HIR preparation, and compilation.
 Transport failures preserve the compiler's three public classes:
 
@@ -138,6 +151,15 @@ checking, diagnostics, ownership, staging, and lowering contracts.
 the direct compiler-Wasm transport. Both routes execute the same semantic
 implementation; the comparison measures host overhead and first confirms that
 Runtime HIR and ABI artifacts are identical.
+
+`pnpm benchmark:compiler-profiles` compares release profiles `s`, `2`, and `3`
+under identical LTO, codegen-unit, panic, strip, and stack controls. It records
+artifact and shipped compiler-payload bytes, compile/instantiate time, fresh and
+incremental checks, type-scaling work, prepare/emission time, and a 10,000-edit
+memory soak. The checked-in
+[profile decision](../experiments/compiler-profile-decision.md) keeps
+`opt-level = "s"` from the latest raw matrix; scheduled runs record wall time
+without making it an ordinary pull-request gate.
 
 ## CI boundary
 

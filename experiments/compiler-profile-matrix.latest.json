@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "controls": {
+    "lto": "fat",
+    "codegenUnits": 1,
+    "panic": "abort",
+    "strip": true,
+    "stackBytes": 8388608
+  },
+  "node": "v24.19.0",
+  "v8": "13.6.233.17-node.51",
+  "results": [
+    {
+      "optLevel": "s",
+      "artifactBytes": 3606573,
+      "artifactSha256": "155894e707afe722781516400ec0911923d8075febf00c89f329252e7cb8a492",
+      "shippedCompilerPayloadBytes": 3989551,
+      "compileMilliseconds": 8.370209000000614,
+      "instantiateMilliseconds": 0.4344669999991311,
+      "freshCheckMilliseconds": 14.209901000009268,
+      "semanticEditMilliseconds": 0.5565889999998035,
+      "prepareMilliseconds": 4.93351299999631,
+      "compileAfterPrepareMilliseconds": 4.0419699999911245,
+      "soakEdits": 10000,
+      "soakMilliseconds": 532.9126580000011,
+      "memoryPagesBeforeSoak": 133,
+      "memoryPagesAfterSoak": 133,
+      "emittedWasmBytes": 1124,
+      "typeScaling": [
+        {
+          "declarations": 32,
+          "checkMilliseconds": 14.793921000004048,
+          "typeNodes": 325,
+          "constraints": 704,
+          "settleVisits": 1252
+        },
+        {
+          "declarations": 64,
+          "checkMilliseconds": 5.192112000004272,
+          "typeNodes": 645,
+          "constraints": 1408,
+          "settleVisits": 2500
+        },
+        {
+          "declarations": 128,
+          "checkMilliseconds": 10.648518000001786,
+          "typeNodes": 1285,
+          "constraints": 2816,
+          "settleVisits": 4996
+        },
+        {
+          "declarations": 256,
+          "checkMilliseconds": 18.174083999998402,
+          "typeNodes": 2565,
+          "constraints": 5632,
+          "settleVisits": 9988
+        }
+      ]
+    },
+    {
+      "optLevel": "2",
+      "artifactBytes": 4706760,
+      "artifactSha256": "b1e02388044fec948ad8a6589b12742b0e8e1d7ed84ba1292a12a90056dd8901",
+      "shippedCompilerPayloadBytes": 5089738,
+      "compileMilliseconds": 10.482465999986744,
+      "instantiateMilliseconds": 0.7643579999858048,
+      "freshCheckMilliseconds": 18.080925999995088,
+      "semanticEditMilliseconds": 0.9736899999843445,
+      "prepareMilliseconds": 6.191200000001118,
+      "compileAfterPrepareMilliseconds": 4.553962000005413,
+      "soakEdits": 10000,
+      "soakMilliseconds": 477.6524159999972,
+      "memoryPagesBeforeSoak": 133,
+      "memoryPagesAfterSoak": 133,
+      "emittedWasmBytes": 1124,
+      "typeScaling": [
+        {
+          "declarations": 32,
+          "checkMilliseconds": 24.82916500000283,
+          "typeNodes": 325,
+          "constraints": 704,
+          "settleVisits": 1252
+        },
+        {
+          "declarations": 64,
+          "checkMilliseconds": 6.870450999995228,
+          "typeNodes": 645,
+          "constraints": 1408,
+          "settleVisits": 2500
+        },
+        {
+          "declarations": 128,
+          "checkMilliseconds": 13.340175999997882,
+          "typeNodes": 1285,
+          "constraints": 2816,
+          "settleVisits": 4996
+        },
+        {
+          "declarations": 256,
+          "checkMilliseconds": 24.379183999990346,
+          "typeNodes": 2565,
+          "constraints": 5632,
+          "settleVisits": 9988
+        }
+      ]
+    },
+    {
+      "optLevel": "3",
+      "artifactBytes": 4850759,
+      "artifactSha256": "744e42e9db41343dbb406ea180d12e7715b6abf05a701b0bf33e306ef434b0df",
+      "shippedCompilerPayloadBytes": 5233737,
+      "compileMilliseconds": 28.30613800001447,
+      "instantiateMilliseconds": 1.2472479999996722,
+      "freshCheckMilliseconds": 25.856514999992214,
+      "semanticEditMilliseconds": 0.7722910000011325,
+      "prepareMilliseconds": 5.461233000009088,
+      "compileAfterPrepareMilliseconds": 3.9993459999968763,
+      "soakEdits": 10000,
+      "soakMilliseconds": 410.08481599998777,
+      "memoryPagesBeforeSoak": 133,
+      "memoryPagesAfterSoak": 133,
+      "emittedWasmBytes": 1124,
+      "typeScaling": [
+        {
+          "declarations": 32,
+          "checkMilliseconds": 17.05757199996151,
+          "typeNodes": 325,
+          "constraints": 704,
+          "settleVisits": 1252
+        },
+        {
+          "declarations": 64,
+          "checkMilliseconds": 5.083459999994375,
+          "typeNodes": 645,
+          "constraints": 1408,
+          "settleVisits": 2500
+        },
+        {
+          "declarations": 128,
+          "checkMilliseconds": 12.084926999988966,
+          "typeNodes": 1285,
+          "constraints": 2816,
+          "settleVisits": 4996
+        },
+        {
+          "declarations": 256,
+          "checkMilliseconds": 26.279504999984056,
+          "typeNodes": 2565,
+          "constraints": 5632,
+          "settleVisits": 9988
+        }
+      ]
+    }
+  ]
+}

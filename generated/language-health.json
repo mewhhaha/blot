@@ -1,6 +1,6 @@
 {
   "protocol": {
-    "compilerHostAbi": 1,
+    "compilerHostAbi": 2,
     "checkedModuleCertificate": 13,
     "runtimeHir": 4
   },
@@ -268,6 +268,7 @@
     "BLOT_REBINDING_FRAME",
     "BLOT_RECURSIVE_OWNERSHIP_RESULT",
     "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
+    "BLOT_REFINEMENT_BUDGET",
     "BLOT_REFINEMENT_NOT_COMPTIME",
     "BLOT_REFINEMENT_PREDICATE",
     "BLOT_REFLECTION_NOT_INDEXED",
@@ -292,13 +293,16 @@
     "BLOT_SCRATCH_NOT_OWNED",
     "BLOT_SCRATCH_RECYCLE_LINEAR",
     "BLOT_SHADOWED_ACCUMULATOR",
+    "BLOT_SHAPE_UPDATE_FIELDS",
     "BLOT_SHARED_ARRAY_UPDATE",
     "BLOT_SIGNATURE_NOT_A_TYPE",
     "BLOT_SIGNATURE_TARGET",
     "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
     "BLOT_SIMD_IMMEDIATE_RANGE",
+    "BLOT_SPECIALIZATION_LIMIT",
     "BLOT_SPREAD_MAY_OVERWRITE",
     "BLOT_TARGET_REFUSAL",
+    "BLOT_TEXT_BOUNDS",
     "BLOT_TYPE",
     "BLOT_TYPE_ERROR",
     "BLOT_TYPE_INSTANTIATE",
@@ -525,11 +529,15 @@
     "@shape.names",
     "@shape.remove",
     "@shape.set",
+    "@shape.update",
     "@text.cmp",
     "@text.concat",
     "@text.contains",
+    "@text.find_from",
     "@text.len",
     "@text.of_int",
+    "@text.scalar_at",
+    "@text.slice",
     "@type.arrow",
     "@type.attach",
     "@type.deferred_arrow",
@@ -617,6 +625,7 @@
     "collect",
     "List",
     "Map",
+    "Shape",
     "Set",
     "Dict",
     "OrderedTextMap",
@@ -692,27 +701,27 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 10147
+      "lines": 11032
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9232
+      "lines": 9280
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 5761
+      "lines": 5767
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 5038
+      "lines": 5428
+    },
+    {
+      "path": "compiler/src/eval.rs",
+      "lines": 3525
     },
     {
       "path": "compiler/src/frontend_plan.rs",
       "lines": 3513
-    },
-    {
-      "path": "compiler/src/eval.rs",
-      "lines": 3489
     },
     {
       "path": "compiler/src/lower.rs",
@@ -720,7 +729,11 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 2954
+      "lines": 3148
+    },
+    {
+      "path": "compiler/src/session.rs",
+      "lines": 2766
     },
     {
       "path": "src/syntax/lower.ts",
@@ -728,27 +741,23 @@
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2113
-    },
-    {
-      "path": "compiler/src/session.rs",
-      "lines": 1852
+      "lines": 2181
     },
     {
       "path": "compiler/src/value.rs",
       "lines": 1417
     },
     {
-      "path": "src/runtime/hir.ts",
-      "lines": 1359
+      "path": "compiler/src/safety.rs",
+      "lines": 1393
     },
     {
-      "path": "compiler/src/safety.rs",
-      "lines": 1349
+      "path": "src/runtime/hir.ts",
+      "lines": 1362
     },
     {
       "path": "src/tooling/formatter.ts",
-      "lines": 1238
+      "lines": 1243
     }
   ]
 }

@@ -1,0 +1,14 @@
+open import "blot:prelude"
+
+const cleaned = Text.trim "  α,beta,γ\r\n  "
+const parts = Text.split (cleaned, ",")
+
+return (
+  cleaned,
+  Array.length (&parts),
+  Text.scalar_at (cleaned, 0),
+  Text.find (cleaned, "beta"),
+  Text.replace (cleaned, "beta", "B"),
+  Text.starts_with (cleaned, "α"),
+  Text.ends_with (cleaned, "γ")
+  )

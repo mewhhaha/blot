@@ -1,0 +1,5 @@
+open import "blot:prelude"
+
+const rename = fn value => Shape.update value { .name = "new"; }
+
+return (rename { .name = "old"; .count = 3; }).count

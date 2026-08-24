@@ -14,6 +14,7 @@ const nodeWords = 8;
 const edgeWords = 4;
 
 export interface CompactSchema {
+  readonly ruleNames?: readonly string[];
   readonly fieldNames: readonly string[];
   readonly namedTokenKinds: readonly string[];
   readonly repeatedFields: readonly string[];
@@ -74,9 +75,15 @@ class CpuCstMaterializer {
     this.#originalOffset = originalOffset;
     this.#schema = schema;
     this.#repeatedFields = new Set(schema.repeatedFields);
-    this.#ruleNameById = new Map(
-      frontend.plan.islands.map((island) => [island.ruleId, island.ruleName]),
-    );
+    if (schema.ruleNames === undefined) {
+      this.#ruleNameById = new Map(
+        frontend.plan.islands.map((island) => [island.ruleId, island.ruleName]),
+      );
+    } else {
+      this.#ruleNameById = new Map(
+        schema.ruleNames.map((ruleName, ruleId) => [ruleId, ruleName]),
+      );
+    }
     if (program.tokens.length % tokenWords !== 0) {
       throw new Error(
         `Baba CPU frontend returned ${program.tokens.length} token words`,

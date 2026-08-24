@@ -1,0 +1,96 @@
+name: Scheduled compiler performance
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - run: pnpm install --frozen-lockfile
+      - name: Build compiler artifact
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Unified compiler benchmark
+        run: >-
+          pnpm benchmark:compiler --
+          --samples=9
+          --output=experiments/compiler-bench.latest.json
+      - name: Compiler optimization profile matrix
+        run: >-
+          pnpm benchmark:compiler-profiles --
+          --edits=10000
+          --output=experiments/compiler-profile-matrix.latest.json
+      - name: Type-scaling counters
+        run: pnpm benchmark:type-scaling > experiments/type-scaling.latest.json
+      - name: Generated-code parity
+        run: pnpm benchmark > experiments/generated-code.latest.json
+      - name: Owned collection benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm benchmark:owned-arrays > experiments/owned-arrays.latest.json
+          pnpm benchmark:owned-regions > experiments/owned-regions.latest.json
+          pnpm benchmark:owned-maps > experiments/owned-maps.latest.json
+          pnpm benchmark:owned-sorts > experiments/owned-sorts.latest.json
+      - name: Resident 10,000-edit soak
+        run: >-
+          pnpm benchmark:compiler-soak --
+          examples/minimal.blot
+          experiments/compiler-soak.latest.json
+      - name: Record compiler sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const paths = [
+              "generated/compiler/compiler.wasm",
+              "generated/compiler/prelude.snapshot"
+            ];
+            const files = Object.fromEntries(
+              paths.map((path) => [path, fs.statSync(path).size])
+            );
+            fs.writeFileSync(
+              "experiments/compiler-sizes.latest.json",
+              JSON.stringify({ schema: 1, files }, null, 2) + "\n"
+            );
+          '
+      - name: Upload measurements
+        uses: actions/upload-artifact@v7
+        with:
+          name: compiler-performance-${{ github.run_id }}
+          path: |
+            experiments/*.latest.json
+            experiments/compiler-bench.latest.json
+          if-no-files-found: error
+          retention-days: 90

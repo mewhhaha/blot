@@ -159,6 +159,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.seal"
         | "@satisfies"
         | "@shape.get"
+        | "@shape.update"
         | "@shape.remove"
         | "@shape.has"
         | "@array.get"
@@ -179,6 +180,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@text.concat"
         | "@text.cmp"
         | "@text.contains"
+        | "@text.scalar_at"
         | "@json.parse"
         | "@float.add"
         | "@float.sub"
@@ -198,7 +200,9 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@f32x4.eq"
         | "@f32x4.less" => 2,
         "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.replace"
-        | "@region.swap" | "@region.join" | "@f32x4.select" => 3,
+        | "@region.swap" | "@region.join" | "@text.slice" | "@text.find_from" | "@f32x4.select" => {
+            3
+        }
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -427,6 +431,13 @@ pub fn run_primitive(
                 text(&arguments[1], span, name)?.to_owned(),
                 arguments[2].clone(),
             );
+            Ok(Value::Shape(fields))
+        }
+        "@shape.update" => {
+            let mut fields = shape(&arguments[0], span, name)?.clone();
+            for (field, value) in shape(&arguments[1], span, name)? {
+                fields.insert(field.clone(), value.clone());
+            }
             Ok(Value::Shape(fields))
         }
         "@shape.remove" => {
@@ -764,6 +775,49 @@ pub fn run_primitive(
         "@text.len" => Ok(Value::Int(BigInt::from(
             text(&arguments[0], span, name)?.chars().count(),
         ))),
+        "@text.scalar_at" => {
+            let source = text(&arguments[0], span, name)?;
+            let index = text_index(&arguments[1], span, name)?;
+            source
+                .chars()
+                .nth(index)
+                .map(|scalar| Value::Text(scalar.to_string()))
+                .ok_or_else(|| text_bounds_error(name, span))
+        }
+        "@text.slice" => {
+            let source = text(&arguments[0], span, name)?;
+            let start = text_index(&arguments[1], span, name)?;
+            let end = text_index(&arguments[2], span, name)?;
+            let count = source.chars().count();
+            if start > end || end > count {
+                return Err(text_bounds_error(name, span));
+            }
+            Ok(Value::Text(
+                source.chars().skip(start).take(end - start).collect(),
+            ))
+        }
+        "@text.find_from" => {
+            let source = text(&arguments[0], span, name)?;
+            let query = text(&arguments[1], span, name)?;
+            let start = text_index(&arguments[2], span, name)?;
+            let count = source.chars().count();
+            let Some(start_byte) = source
+                .char_indices()
+                .nth(start)
+                .map(|(byte, _)| byte)
+                .or_else(|| (start == count).then_some(source.len()))
+            else {
+                return Ok(Value::Int(BigInt::from(-1)));
+            };
+            let found = source[start_byte..]
+                .find(query)
+                .map(|relative| start + source[start_byte..start_byte + relative].chars().count());
+            Ok(Value::Int(BigInt::from(
+                found
+                    .and_then(|index| i64::try_from(index).ok())
+                    .unwrap_or(-1),
+            )))
+        }
         "@text.cmp" => Ok(ordering(text(&arguments[0], span, name)?.cmp(text(
             &arguments[1],
             span,
@@ -1182,6 +1236,20 @@ fn text<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a str, Diagnos
         Value::Text(value) => Ok(value),
         _ => Err(type_error(what, "text", value, span)),
     }
+}
+
+fn text_index(value: &Value, span: Span, primitive: &str) -> Result<usize, Diagnostic> {
+    integer(value, span, primitive)?
+        .to_usize()
+        .ok_or_else(|| text_bounds_error(primitive, span))
+}
+
+fn text_bounds_error(primitive: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        "BLOT_TEXT_BOUNDS",
+        format!("`{primitive}` received invalid Unicode scalar bounds."),
+        span,
+    )
 }
 
 fn shape<'a>(value: &'a Value, span: Span, what: &str) -> Result<&'a OrderedFields, Diagnostic> {

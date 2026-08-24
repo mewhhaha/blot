@@ -59,6 +59,7 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | `collect` | `blot:prelude` |
 | `List` | `blot:prelude` |
 | `Map` | `blot:prelude` |
+| `Shape` | `blot:prelude` |
 | `Set` | `blot:prelude` |
 | `Dict` | `blot:prelude` |
 | `OrderedTextMap` | `blot:prelude` |

@@ -9,8 +9,8 @@ engine compatibility.
 
 The compatibility snapshot is dated 2026-08-24. Engine and interpreter support
 must be rechecked before expanding either target profile. The repository's
-unflagged engine matrix, rather than this dated prose snapshot, is the acceptance
-gate for each emitted artifact revision.
+unflagged engine matrix, rather than this dated prose snapshot, is the
+acceptance gate for each emitted artifact revision.
 
 The review used the WebAssembly feature-status table, proposal specifications,
 current V8 feature declarations, wasm-tools support, the wasm3 interpreter's

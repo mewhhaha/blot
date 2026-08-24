@@ -94,6 +94,12 @@ accepts only `strict`. WebGPU remains a comparison target.
 
 ## Status
 
+The generated
+[current implementation manifest](generated/CURRENT_IMPLEMENTATION.md) is the
+machine-checked source for protocol versions, the production path, supported
+public values, target restrictions, editor capabilities, and current benchmark
+pointers.
+
 It runs. M0 (the Baba-profile grammar) and M1 (elaboration, the comptime
 evaluator, and the prelude) are done. Every example in `examples/` evaluates to
 a recorded value, and every program in the corpus — the prelude included — is
@@ -185,11 +191,12 @@ pnpm blot build examples/minimal.blot examples/arithmetic.blot
 ```
 
 Blot owns parsing policy, checking, staging, specialization, Runtime HIR,
-canonical ABI adapters, and target orchestration. Baba's generated Wasm lexer
-and general-profile CPU island executor own syntax. Gpupaper owns Core-to-Wasm
-planning and uses its embedded Rust/Wasm emitter for the final bytes. Node
-supplies filesystem and package access and hosts both Wasm modules. No compiler
-command initializes WebGPU or invokes Deno, Cargo, or a native Rust binary.
+canonical ABI adapters, direct Rust/Wasm emission, and target orchestration.
+Baba's generated Wasm lexer and general-profile CPU island executor own syntax.
+Gpupaper remains an explicit conformance and research oracle; it is not the
+production emitter. Node supplies filesystem and package access and hosts the
+compiler Wasm. No compiler command initializes WebGPU or invokes Deno, Cargo, or
+a native Rust binary.
 
 `just install` builds the Tree-sitter grammar from the same grammar source as
 the GPU parser, installs highlight, indent, textobject, tag, and rainbow

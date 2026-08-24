@@ -1,5 +1,5 @@
 import { LanguageService } from "./language_service.ts";
-import type { Position, Range } from "./language_service.ts";
+import type { ContentChange, Position, Range } from "./language_service.ts";
 
 type RequestId = number | string | null;
 
@@ -31,7 +31,7 @@ interface OpenParams {
 
 interface ChangeParams {
   readonly textDocument: VersionedTextDocument;
-  readonly contentChanges: readonly { readonly text: string }[];
+  readonly contentChanges: readonly ContentChange[];
 }
 
 interface PositionParams extends TextDocumentParams {
@@ -42,6 +42,26 @@ interface CodeActionParams extends TextDocumentParams {
   readonly range: Range;
 }
 
+interface ReferenceParams extends PositionParams {
+  readonly context: { readonly includeDeclaration: boolean };
+}
+
+interface RenameParams extends PositionParams {
+  readonly newName: string;
+}
+
+interface RangeParams extends TextDocumentParams {
+  readonly range: Range;
+}
+
+interface WorkspaceSymbolParams {
+  readonly query: string;
+}
+
+interface CancelParams {
+  readonly id: RequestId;
+}
+
 export async function runLanguageServer(
   input: ReadableStream<Uint8Array> = Deno.stdin.readable,
   output: WritableStream<Uint8Array> = Deno.stdout.writable,
@@ -49,6 +69,41 @@ export async function runLanguageServer(
   const reader = new MessageReader(input.getReader());
   const writer = output.getWriter();
   const service = new LanguageService();
+  const cancelled = new Set<RequestId>();
+  const requestDocuments = new Map<RequestId, string | null>();
+  let workTail: Promise<void> = Promise.resolve();
+  const enqueueBackground = (operation: () => Promise<void>): void => {
+    workTail = workTail.then(operation).catch(async (error: unknown) => {
+      let message = String(error);
+      if (error instanceof Error) message = error.message;
+      await notify(writer, "window/logMessage", { type: 1, message });
+    });
+  };
+  const enqueueRequest = (
+    message: RpcMessage,
+    uri: string | null,
+    operation: () => Promise<unknown>,
+  ): void => {
+    const id = message.id;
+    if (id === undefined) return;
+    requestDocuments.set(id, uri);
+    workTail = workTail.then(async () => {
+      if (cancelled.delete(id)) {
+        await reject(writer, id, -32800, "request cancelled");
+        return;
+      }
+      try {
+        const result = await operation();
+        await respondUnlessCancelled(writer, cancelled, id, result);
+      } catch (error) {
+        let messageText = String(error);
+        if (error instanceof Error) messageText = error.message;
+        await reject(writer, id, -32603, messageText);
+      } finally {
+        requestDocuments.delete(id);
+      }
+    });
+  };
   let shutdown = false;
   try {
     while (true) {
@@ -59,9 +114,25 @@ export async function runLanguageServer(
         if (message.method === "initialize") {
           await respond(writer, message.id, {
             capabilities: {
-              textDocumentSync: 1,
+              textDocumentSync: {
+                openClose: true,
+                change: 2,
+                save: { includeText: false },
+              },
               definitionProvider: true,
+              referencesProvider: true,
+              renameProvider: true,
               hoverProvider: true,
+              completionProvider: {
+                resolveProvider: false,
+                triggerCharacters: [".", "#"],
+              },
+              signatureHelpProvider: {
+                triggerCharacters: [" ", "("],
+              },
+              inlayHintProvider: true,
+              documentSymbolProvider: true,
+              workspaceSymbolProvider: true,
               documentFormattingProvider: true,
               codeActionProvider: true,
             },
@@ -69,10 +140,12 @@ export async function runLanguageServer(
           });
           continue;
         }
-        if (
-          message.method === "initialized" ||
-          message.method === "$/cancelRequest"
-        ) {
+        if (message.method === "initialized") {
+          continue;
+        }
+        if (message.method === "$/cancelRequest") {
+          const params = message.params as CancelParams;
+          if (requestDocuments.has(params.id)) cancelled.add(params.id);
           continue;
         }
         if (message.method === "shutdown") {
@@ -91,32 +164,47 @@ export async function runLanguageServer(
             params.textDocument.text,
             params.textDocument.version,
           );
-          await publishDiagnostics(service, writer, params.textDocument.uri);
+          enqueueBackground(() =>
+            publishDiagnostics(service, writer, params.textDocument.uri)
+          );
           continue;
         }
         if (message.method === "textDocument/didChange") {
           const params = message.params as ChangeParams;
-          const change = params.contentChanges.at(-1);
-          if (change === undefined) {
+          if (params.contentChanges.length === 0) {
             throw new Error(
-              `document ${params.textDocument.uri} changed without replacement text`,
+              `document ${params.textDocument.uri} changed without content changes`,
             );
           }
-          service.change(
+          service.changeRanges(
             params.textDocument.uri,
-            change.text,
+            params.contentChanges,
             params.textDocument.version,
           );
-          await publishDiagnostics(service, writer, params.textDocument.uri);
+          cancelDocumentRequests(
+            requestDocuments,
+            cancelled,
+            params.textDocument.uri,
+          );
+          enqueueBackground(() =>
+            publishDiagnostics(service, writer, params.textDocument.uri)
+          );
           continue;
         }
         if (message.method === "textDocument/didSave") {
           const params = message.params as TextDocumentParams;
-          await publishDiagnostics(service, writer, params.textDocument.uri);
+          enqueueBackground(() =>
+            publishDiagnostics(service, writer, params.textDocument.uri)
+          );
           continue;
         }
         if (message.method === "textDocument/didClose") {
           const params = message.params as TextDocumentParams;
+          cancelDocumentRequests(
+            requestDocuments,
+            cancelled,
+            params.textDocument.uri,
+          );
           service.close(params.textDocument.uri);
           await notify(writer, "textDocument/publishDiagnostics", {
             uri: params.textDocument.uri,
@@ -126,35 +214,112 @@ export async function runLanguageServer(
         }
         if (message.method === "textDocument/definition") {
           const params = message.params as PositionParams;
-          const location = await service.definition(
+          enqueueRequest(
+            message,
             params.textDocument.uri,
-            params.position,
+            () => service.definition(params.textDocument.uri, params.position),
           );
-          await respond(writer, message.id, location);
           continue;
         }
         if (message.method === "textDocument/hover") {
           const params = message.params as PositionParams;
-          const hover = await service.hover(
+          enqueueRequest(
+            message,
             params.textDocument.uri,
-            params.position,
+            () => service.hover(params.textDocument.uri, params.position),
           );
-          await respond(writer, message.id, hover);
+          continue;
+        }
+        if (message.method === "textDocument/completion") {
+          const params = message.params as PositionParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () => service.completion(params.textDocument.uri, params.position),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/signatureHelp") {
+          const params = message.params as PositionParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () =>
+              service.signatureHelp(params.textDocument.uri, params.position),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/inlayHint") {
+          const params = message.params as RangeParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () => service.inlayHints(params.textDocument.uri, params.range),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/documentSymbol") {
+          const params = message.params as TextDocumentParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () => service.documentSymbols(params.textDocument.uri),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/references") {
+          const params = message.params as ReferenceParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () =>
+              service.references(
+                params.textDocument.uri,
+                params.position,
+                params.context.includeDeclaration,
+              ),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/rename") {
+          const params = message.params as RenameParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () =>
+              service.rename(
+                params.textDocument.uri,
+                params.position,
+                params.newName,
+              ),
+          );
+          continue;
+        }
+        if (message.method === "workspace/symbol") {
+          const params = message.params as WorkspaceSymbolParams;
+          enqueueRequest(
+            message,
+            null,
+            () => service.workspaceSymbols(params.query),
+          );
           continue;
         }
         if (message.method === "textDocument/formatting") {
           const params = message.params as TextDocumentParams;
-          const edits = await service.formatting(params.textDocument.uri);
-          await respond(writer, message.id, edits);
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () => service.formatting(params.textDocument.uri),
+          );
           continue;
         }
         if (message.method === "textDocument/codeAction") {
           const params = message.params as CodeActionParams;
-          const actions = await service.codeActions(
+          enqueueRequest(
+            message,
             params.textDocument.uri,
-            params.range,
+            () => service.codeActions(params.textDocument.uri, params.range),
           );
-          await respond(writer, message.id, actions);
           continue;
         }
         await reject(
@@ -178,6 +343,7 @@ export async function runLanguageServer(
       }
     }
   } finally {
+    await workTail;
     await service.destroy();
     writer.releaseLock();
     reader.releaseLock();
@@ -189,12 +355,24 @@ async function publishDiagnostics(
   writer: WritableStreamDefaultWriter<Uint8Array>,
   uri: string,
 ): Promise<void> {
+  const version = service.version(uri);
   const diagnostics = await service.diagnostics(uri);
+  if (service.version(uri) !== version) return;
   await notify(writer, "textDocument/publishDiagnostics", {
     uri,
-    version: service.version(uri),
+    version,
     diagnostics,
   });
+}
+
+function cancelDocumentRequests(
+  requests: ReadonlyMap<RequestId, string | null>,
+  cancelled: Set<RequestId>,
+  uri: string,
+): void {
+  for (const [id, requestUri] of requests) {
+    if (requestUri === uri) cancelled.add(id);
+  }
 }
 
 async function respond(
@@ -204,6 +382,20 @@ async function respond(
 ): Promise<void> {
   if (id === undefined) return;
   await writeMessage(writer, { jsonrpc: "2.0", id, result });
+}
+
+async function respondUnlessCancelled(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  cancelled: Set<RequestId>,
+  id: RequestId | undefined,
+  result: unknown,
+): Promise<void> {
+  if (id === undefined) return;
+  if (cancelled.delete(id)) {
+    await reject(writer, id, -32800, "request cancelled");
+    return;
+  }
+  await respond(writer, id, result);
 }
 
 async function reject(

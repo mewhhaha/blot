@@ -1,6 +1,7 @@
 use crate::ast::Span;
+use serde::Serialize;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Diagnostic {
     pub code: &'static str,
     pub message: String,
