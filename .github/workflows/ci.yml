@@ -12,79 +12,152 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-v8-wasm3-target:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'codex/v8-wasm3-target' && github.actor != 'github-actions[bot]'
+  formal:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+      - name: Check stable Core metatheory
+        uses: leanprover/lean-action@v1
         with:
-          ref: codex/v8-wasm3-target
-          fetch-depth: 0
+          lake-package-directory: formal/lean
+          build: true
+          test: false
+          leanchecker: true
+      - name: Reject admitted formal declarations
+        shell: bash
+        run: |
+          if git grep -n -E '(^|[^[:alnum:]_])(sorry|admit|axiom)([^[:alnum:]_]|$)' \
+            -- formal/lean/Blot.lean 'formal/lean/Blot/*.lean'; then
+            echo 'Formal sources must not contain admitted declarations.' >&2
+            exit 1
+          fi
+
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-          components: rustfmt
-      - name: Apply reviewed target changes
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Upload Rust compiler artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-rust-compiler
+          path: |
+            generated/compiler/compiler.wasm
+            generated/compiler/compiler-artifact.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Check generated-code Rust formatting
+        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
+      - name: Check Rust lint
+        run: >-
+          cargo clippy
+          --manifest-path compiler/Cargo.toml
+          --target wasm32-unknown-unknown
+          -- -D warnings
+      - name: Test Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml
+      - name: Check TypeScript
+        run: deno check .
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Check lint
+        run: deno lint
+      - name: Verify generated frontend artifacts
+        run: deno task check:generated
+      - name: Pack runnable Node workspace
         shell: bash
         run: |
           set -euo pipefail
-          git show 11cc0a0a904f69484fb46869506d9689dafe5f61:.github/workflows/ci.yml > .github/workflows/ci.yml
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source = Path('.github/workflows/apply-v8-wasm3-target.yml').read_text()
-          start_marker = "          python3 - <<'PY'\n"
-          end_marker = "\n          PY\n\n      - name: Format changed files"
-          start = source.index(start_marker) + len(start_marker)
-          end = source.index(end_marker, start)
-          code = '\n'.join(
-              line[10:] if line.startswith('          ') else line
-              for line in source[start:end].splitlines()
-          )
-          exec(compile(code, 'apply-v8-wasm3-target.py', 'exec'), {})
-          Path('.github/workflows/apply-v8-wasm3-target.yml').unlink()
-          PY
-      - name: Format changed files
-        shell: bash
-        run: |
-          cargo fmt --manifest-path compiler/Cargo.toml
-          deno fmt \
-            .github/workflows/ci.yml \
-            docs/abi.md \
-            docs/backend.md \
-            docs/wasm-target-profile.md \
-            package.json \
-            spec/README.md \
-            spec/RUNTIME.md \
-            src/node/v8_wasm.test.ts
-      - name: Compile backend tests
-        run: cargo test --manifest-path compiler/Cargo.toml backend::tests
-      - name: Commit target implementation
+          {
+            git ls-files -z
+            printf 'generated/compiler/compiler.wasm\0'
+            printf 'generated/compiler/compiler-artifact.json\0'
+            printf '.pnp.cjs\0'
+            printf 'node_modules\0'
+          } > "$RUNNER_TEMP/blot-node-workspace.files"
+          tar \
+            --create \
+            --gzip \
+            --file=blot-node-workspace.tar.gz \
+            --null \
+            --files-from="$RUNNER_TEMP/blot-node-workspace.files"
+      - name: Verify packed Node workspace
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
-          git checkout HEAD -- \
-            .github/workflows/ci.yml \
-            .github/workflows/apply-v8-wasm3-target.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            compiler/src/backend.rs \
-            src/node/v8_wasm.test.ts \
-            package.json \
-            docs/abi.md \
-            docs/backend.md \
-            docs/wasm-target-profile.md \
-            spec/README.md \
-            spec/RUNTIME.md
-          git diff --cached --check
-          git commit -m "Target V8 with the WebAssembly 3 profile"
-          git push origin HEAD:codex/v8-wasm3-target
+          workspace="$RUNNER_TEMP/blot-node-workspace"
+          mkdir "$workspace"
+          tar -xzf blot-node-workspace.tar.gz -C "$workspace"
+          cd "$workspace"
+          test -f AGENTS.md
+          test -f case-studies/agent/main.blot
+          test -f experiments/node-wasm-benchmark.ts
+          test -f generated/compiler/compiler.wasm
+          test -f generated/compiler/compiler-artifact.json
+          test -s .pnp.cjs
+          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
+          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
+          pnpm conformance
+      - name: Upload runnable Node workspace
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-node-workspace-${{ github.sha }}
+          path: blot-node-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+      - run: pnpm test
+      - run: pnpm run check
+      - run: pnpm run smoke
+      - run: pnpm blot run examples/node-runner-demo.blot
+      - run: pnpm test:compiler
+      - run: pnpm verify:compiler
+      - name: Verify the V8 / Wasm 3 target on Node 24 LTS
+        run: pnpm test:v8-wasm
+      - name: Select Node 26 Current
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.7.0
+      - name: Verify the V8 / Wasm 3 target on Node 26 Current
+        run: pnpm test:v8-wasm
+      - run: pnpm run benchmark -- examples/storage.blot
+      - name: Verify compiler artifact is derived output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s generated/compiler/compiler.wasm
+          test -s generated/compiler/compiler-artifact.json
+          git check-ignore --quiet generated/compiler/compiler.wasm
+          git check-ignore --quiet generated/compiler/compiler-artifact.json
+          if git ls-files --error-unmatch generated/compiler/compiler.wasm >/dev/null 2>&1; then
+            echo 'generated/compiler/compiler.wasm must not be tracked' >&2
+            exit 1
+          fi
