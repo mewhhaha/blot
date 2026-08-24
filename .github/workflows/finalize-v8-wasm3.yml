@@ -42,12 +42,6 @@ jobs:
                   )
               file.write_text(text.replace(old, new))
 
-          ci_path = Path(".github/workflows/ci.yml")
-          ci = ci_path.read_text()
-          start = ci.index("  format-probe:\n")
-          end = ci.index("  formal:\n", start)
-          ci_path.write_text(ci[:start] + ci[end:])
-
           backend_path = Path("compiler/src/backend.rs")
           backend = backend_path.read_text()
           feature_marker = "\nfn required_wasm_features(module: &RuntimeModule)"
@@ -151,8 +145,6 @@ jobs:
             constant-stack recursion guarantee;
           ''',
           )
-
-          Path(".github/workflows/finalize-v8-wasm3.yml").unlink()
           PY
 
           deno fmt
