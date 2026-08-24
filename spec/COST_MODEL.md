@@ -119,15 +119,14 @@ live in
 
 Resident analysis schema 2 reports deterministic counters for unique interned
 type nodes, recursive interning attempts, constraints, settle/freshen/union
-visits, boundary materializations, closure free-name candidates, values
-actually bridged, and peak pending solver worklist items. These counters are
-process observations, not certificates and not ABI facts. The scaling gate
-counts semantic decisions—constraints, boundary
-materializations, and capture selection—separately from recursive graph visits.
-The latter remain visible in the report because a shared constant-time visit may
-still reveal a representation target even when it no longer dominates wall time.
-Timing and both counter classes must be reported; one must not be relabeled as
-the other.
+visits, boundary materializations, closure free-name candidates, values actually
+bridged, and peak pending solver worklist items. These counters are process
+observations, not certificates and not ABI facts. The scaling gate counts
+semantic decisions—constraints, boundary materializations, and capture
+selection—separately from recursive graph visits. The latter remain visible in
+the report because a shared constant-time visit may still reveal a
+representation target even when it no longer dominates wall time. Timing and
+both counter classes must be reported; one must not be relabeled as the other.
 
 Progressive Runtime-HIR construction visits each settled Core node once and
 stores `O(H_s)` compact builder state. Preparation subsequently visits the `H_p`

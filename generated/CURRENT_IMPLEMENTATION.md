@@ -7,7 +7,7 @@
 | Frontend | `baba-general-cpu-hosted-by-rust-wasm` |
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
-| Compiler-host ABI | 1 |
+| Compiler-host ABI | 2 |
 | Checked-module certificate | 13 |
 | Runtime HIR | 4 |
 | Public ABI | 1.0 |
@@ -36,13 +36,20 @@
 ## Editor features
 
 - diagnostics
+- formatting
+- code actions
 - document symbols
 - definition
+- references and safe local rename
+- workspace symbols for open documents
 - hover
-- semantic tokens
+- completion
+- signature help
+- selective inlay hints
 
 ## Latest benchmark records
 
 - [experiments/resident-leaf-check-performance.md](../experiments/resident-leaf-check-performance.md)
 - [experiments/revision-key-performance.md](../experiments/revision-key-performance.md)
+- [experiments/compiler-profile-matrix.latest.json](../experiments/compiler-profile-matrix.latest.json)
 - [experiments/generated-code/latest.json](../experiments/generated-code/latest.json)

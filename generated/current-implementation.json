@@ -29,17 +29,24 @@
   ],
   "editorFeatures": [
     "diagnostics",
+    "formatting",
+    "code actions",
     "document symbols",
     "definition",
+    "references and safe local rename",
+    "workspace symbols for open documents",
     "hover",
-    "semantic tokens"
+    "completion",
+    "signature help",
+    "selective inlay hints"
   ],
   "latestBenchmarks": [
     "experiments/resident-leaf-check-performance.md",
     "experiments/revision-key-performance.md",
+    "experiments/compiler-profile-matrix.latest.json",
     "experiments/generated-code/latest.json"
   ],
-  "compilerHostAbi": 1,
+  "compilerHostAbi": 2,
   "checkedModuleCertificate": 13,
   "runtimeHir": 4
 }

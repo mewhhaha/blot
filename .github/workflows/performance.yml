@@ -45,6 +45,11 @@ jobs:
           pnpm benchmark:compiler --
           --samples=9
           --output=experiments/compiler-bench.latest.json
+      - name: Compiler optimization profile matrix
+        run: >-
+          pnpm benchmark:compiler-profiles --
+          --edits=10000
+          --output=experiments/compiler-profile-matrix.latest.json
       - name: Type-scaling counters
         run: pnpm benchmark:type-scaling > experiments/type-scaling.latest.json
       - name: Generated-code parity

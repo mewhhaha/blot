@@ -24,6 +24,7 @@
     "benchmark:type-scaling": "tsx --import ./src/node/polyfills.mjs experiments/type-scaling/benchmark.ts",
     "benchmark:compiler": "tsx --import ./src/node/polyfills.mjs experiments/compiler-bench/benchmark.ts",
     "benchmark:compiler-soak": "tsx --import ./src/node/polyfills.mjs experiments/compiler-soak.ts",
+    "benchmark:compiler-profiles": "tsx --import ./src/node/polyfills.mjs experiments/compiler-profile-matrix.ts",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
     "test:compiler": "cargo test --manifest-path compiler/Cargo.toml && deno run --allow-read scripts/verify_runtime.ts",
     "conformance": "deno run --allow-read scripts/verify_runtime.ts",
