@@ -122,6 +122,24 @@ keeping split/join authority in ownership evidence. Quicksort remains ordinary
 Store and control-flow code; there is no quicksort, partition, or collection
 specialization primitive.
 
+## V8 and WebAssembly 3.0
+
+The production module is standard WebAssembly 3.0 and keeps the existing ABI 1
+memory32 boundary. The manifest declares the core specification and the exact
+feature families used by each artifact. Current emission uses bulk-memory,
+internal multi-value results, fixed-width SIMD when the source requests vector
+operations, and direct tail calls.
+
+A `call.direct` whose result is returned immediately from an internal function
+lowers to `return_call`. The backend verifies parameter and result flattening
+before emission. This removes recursive Wasm frames without changing Blot's
+source observation model. Export wrappers are not tail-called because they must
+restore allocation checkpoints and perform canonical result lowering.
+
+CI validates and executes the target without feature flags on the current Node
+24 LTS and Node 26 Current V8 lines. The detailed adoption and deferral
+rationale is in [`wasm-target-profile.md`](wasm-target-profile.md).
+
 ## Module authority and host effects
 
 An entry module's `module with init` record is its complete host authority. A

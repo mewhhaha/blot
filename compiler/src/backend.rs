@@ -10,8 +10,8 @@ use wasm_encoder::{
 };
 
 use crate::hir::{
-    RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation, RuntimeTerminator,
-    RuntimeType, WireConstant,
+    RuntimeBlock, RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation,
+    RuntimeTerminator, RuntimeType, WireConstant,
 };
 
 const HEAP_GLOBAL: u32 = 0;
@@ -123,6 +123,10 @@ struct AbiFunction {
 struct AbiPolicy {
     major: u8,
     minor: u8,
+    #[serde(rename = "coreSpecification")]
+    core_specification: &'static str,
+    #[serde(rename = "requiredFeatures")]
+    required_features: Vec<&'static str>,
     memory: &'static str,
     #[serde(rename = "stringEncoding")]
     string_encoding: &'static str,
@@ -296,11 +300,14 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
             });
         }
     }
+    let required_features = required_wasm_features(module)?;
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
             major: 1,
             minor: 0,
+            core_specification: "3.0",
+            required_features,
             memory: "memory32",
             string_encoding: "utf-8",
             maximum_flat_parameters: 16,
@@ -312,6 +319,98 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
         exports,
         imports,
     })
+}
+
+fn exported_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
+    module
+        .exports
+        .iter()
+        .filter_map(|exported| match exported {
+            RuntimeExport::Runtime { function, .. } => Some(*function),
+            RuntimeExport::Comptime { .. } => None,
+        })
+        .collect()
+}
+
+fn direct_tail_call(block: &RuntimeBlock) -> Option<&RuntimeOperation> {
+    let RuntimeTerminator::Return { value, .. } = &block.terminator else {
+        return None;
+    };
+    let operation = block.operations.last()?;
+    (operation.kind == "call.direct" && operation.result == *value).then_some(operation)
+}
+
+fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, String> {
+    let exported_functions = exported_runtime_function_ids(module);
+    let internal_functions = module
+        .functions
+        .iter()
+        .filter(|function| !exported_functions.contains(&function.id))
+        .collect::<Vec<_>>();
+    let internal_ids = internal_functions
+        .iter()
+        .map(|function| function.id)
+        .collect::<BTreeSet<_>>();
+    let mut features = BTreeSet::new();
+
+    // `cabi_realloc` always contains `memory.copy`, so every emitted artifact
+    // requires bulk-memory even when the source does not allocate dynamically.
+    features.insert("bulk-memory");
+
+    let helper_uses_multi_value = module.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block
+                .operations
+                .iter()
+                .any(|operation| operation.kind == "text.from-i64")
+        })
+    });
+    let mut uses_multi_value = helper_uses_multi_value;
+    for function in &internal_functions {
+        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+            format!(
+                "{}: runtime function {} references unknown signature {}",
+                module.source, function.id, function.signature
+            )
+        })?;
+        uses_multi_value |= flattened_runtime_type(module, signature.result)?.len() > 1;
+    }
+    if uses_multi_value {
+        features.insert("multi-value");
+    }
+
+    let uses_simd = module.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.parameters.iter().any(|parameter| {
+                matches!(
+                    module.types.get(parameter.type_id),
+                    Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
+                )
+            }) || block.operations.iter().any(|operation| {
+                operation.kind == "vector"
+                    || matches!(
+                        module.types.get(operation.type_id),
+                        Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
+                    )
+            })
+        })
+    });
+    if uses_simd {
+        features.insert("simd");
+    }
+
+    let uses_tail_calls = internal_functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            direct_tail_call(block)
+                .and_then(|operation| operation.function)
+                .is_some_and(|target| internal_ids.contains(&target))
+        })
+    });
+    if uses_tail_calls {
+        features.insert("tail-call");
+    }
+
+    Ok(features.into_iter().collect())
 }
 
 fn canonical_type(
@@ -647,14 +746,7 @@ fn emit_dynamic_module(
         i64_to_text: i64_to_text_index,
     };
 
-    let exported_functions = module
-        .exports
-        .iter()
-        .filter_map(|exported| match exported {
-            RuntimeExport::Runtime { function, .. } => Some(*function),
-            RuntimeExport::Comptime { .. } => None,
-        })
-        .collect::<BTreeSet<_>>();
+    let exported_functions = exported_runtime_function_ids(module);
     let mut runtime_function_indices = HashMap::new();
     let internal_functions = module
         .functions
@@ -931,7 +1023,9 @@ fn dynamic_internal_function(
                 .i32_const(block.id as i32)
                 .i32_eq()
                 .if_(BlockType::Empty);
-            for operation in &block.operations {
+            let tail_call = direct_tail_call(block);
+            let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
+            for operation in &block.operations[..operation_count] {
                 emit_dynamic_operation(
                     &mut instructions,
                     module,
@@ -947,14 +1041,25 @@ fn dynamic_internal_function(
                     runtime_function_indices,
                 )?;
             }
-            emit_internal_terminator(
-                &mut instructions,
-                module,
-                function,
-                &block.terminator,
-                &value_locals,
-                dispatcher,
-            )?;
+            if let Some(operation) = tail_call {
+                emit_direct_tail_call(
+                    &mut instructions,
+                    module,
+                    function,
+                    operation,
+                    &value_locals,
+                    runtime_function_indices,
+                )?;
+            } else {
+                emit_internal_terminator(
+                    &mut instructions,
+                    module,
+                    function,
+                    &block.terminator,
+                    &value_locals,
+                    dispatcher,
+                )?;
+            }
             instructions.end();
         }
         instructions.unreachable().end().unreachable().end();
@@ -2074,7 +2179,13 @@ fn emit_structured_loop_block(
             module.source, block.id
         ));
     }
-    for operation in &block.operations {
+    let tail_call = if matches!(result, StructuredResult::Internal) {
+        direct_tail_call(block)
+    } else {
+        None
+    };
+    let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
+    for operation in &block.operations[..operation_count] {
         emit_dynamic_operation(
             instructions,
             module,
@@ -2089,6 +2200,17 @@ fn emit_structured_loop_block(
             scratch_index,
             runtime_function_indices,
         )?;
+    }
+    if let Some(operation) = tail_call {
+        emit_direct_tail_call(
+            instructions,
+            module,
+            function,
+            operation,
+            value_locals,
+            runtime_function_indices,
+        )?;
+        return Ok(());
     }
     match &block.terminator {
         RuntimeTerminator::Branch {
@@ -2231,6 +2353,81 @@ fn emit_structured_return(
         }
     }
     instructions.return_();
+    Ok(())
+}
+
+fn emit_direct_tail_call(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    operation: &RuntimeOperation,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    runtime_function_indices: &HashMap<usize, u32>,
+) -> Result<(), String> {
+    let target = operation
+        .function
+        .ok_or_else(|| format!("{}: call.direct omitted its function", module.source))?;
+    let function_index = runtime_function_indices.get(&target).ok_or_else(|| {
+        format!(
+            "{}: tail call references unavailable function {target}",
+            module.source
+        )
+    })?;
+    let target_function = module
+        .functions
+        .iter()
+        .find(|candidate| candidate.id == target)
+        .ok_or_else(|| {
+            format!(
+                "{}: tail call references unknown function {target}",
+                module.source
+            )
+        })?;
+    let caller_signature = module.signatures.get(function.signature).ok_or_else(|| {
+        format!(
+            "{}: runtime function {} references unknown signature {}",
+            module.source, function.id, function.signature
+        )
+    })?;
+    let target_signature = module
+        .signatures
+        .get(target_function.signature)
+        .ok_or_else(|| {
+            format!(
+                "{}: tail-call target {target} references unknown signature {}",
+                module.source, target_function.signature
+            )
+        })?;
+    let caller_results = flattened_runtime_type(module, caller_signature.result)?;
+    let operation_results = flattened_runtime_type(module, operation.type_id)?;
+    let target_results = flattened_runtime_type(module, target_signature.result)?;
+    if caller_results != operation_results || caller_results != target_results {
+        return Err(format!(
+            "{}: tail call from function {} changes its Wasm result layout",
+            module.source, function.id
+        ));
+    }
+    if operation.operands.len() != target_signature.parameters.len() {
+        return Err(format!(
+            "{}: tail call to function {target} supplies {} arguments for {} parameters",
+            module.source,
+            operation.operands.len(),
+            target_signature.parameters.len()
+        ));
+    }
+    for (operand, parameter_type) in operation.operands.iter().zip(&target_signature.parameters) {
+        let operand_type = runtime_value_type(function, *operand)?;
+        if flattened_runtime_type(module, operand_type)?
+            != flattened_runtime_type(module, *parameter_type)?
+        {
+            return Err(format!(
+                "{}: tail call to function {target} changes an argument's Wasm layout",
+                module.source
+            ));
+        }
+        emit_local_values(instructions, locals_for(module, value_locals, *operand)?);
+    }
+    instructions.return_call(*function_index);
     Ok(())
 }
 
@@ -4507,6 +4704,49 @@ mod tests {
             .expect("Scratch needs a private layout inside indirect carriers");
         assert_eq!(flattened_type(&internal), vec![ValType::I32; 3]);
         assert_eq!(memory_layout(&internal).size, 12);
+    }
+
+    #[test]
+    fn direct_call_return_is_a_tail_call_candidate() {
+        let operation = RuntimeOperation {
+            kind: "call.direct",
+            result: 7,
+            type_id: 1,
+            operands: vec![0],
+            ownership: "plain",
+            span: span(),
+            value: None,
+            update: None,
+            case: None,
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function: Some(2),
+            signature: None,
+        };
+        let block = RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![operation],
+            terminator: RuntimeTerminator::Return {
+                value: 7,
+                span: span(),
+            },
+        };
+        assert_eq!(
+            direct_tail_call(&block).map(|candidate| candidate.result),
+            Some(7)
+        );
+
+        let mut not_tail = block.clone();
+        not_tail.terminator = RuntimeTerminator::Return {
+            value: 8,
+            span: span(),
+        };
+        assert!(direct_tail_call(&not_tail).is_none());
     }
 
     fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
