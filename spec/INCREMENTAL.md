@@ -1,9 +1,9 @@
 # Incremental and cached compilation
 
-## 1. Principle
+## Status and principle
 
-Incremental compilation is memoization of the fresh compilation judgment. It
-does not define a weaker language mode. For a phase `P`, reuse is sound when
+Incremental compilation is memoization of the fresh compiler judgment. It is not
+a weaker language mode. For a phase `P`, reuse is sound only when:
 
 ```text
 key_P(x) = key_P(x')    validate(cached(P(x')), x)
@@ -11,200 +11,258 @@ key_P(x) = key_P(x')    validate(cached(P(x')), x)
 P(x) = cached(P(x'))
 ```
 
-where equality means the same semantic artifact and diagnostics, modulo fresh
-internal identities explicitly hidden by the phase relation.
+Equality includes the same semantic artifact and ordered diagnostics, modulo only
+fresh administrative identities explicitly hidden by the phase relation.
 
-## 2. Revisions
+Cross-document identity and failure rules are in
+[`COHERENCE.md`](COHERENCE.md); the whole compiler judgment is in
+[`COMPILER.md`](COMPILER.md).
 
-A module revision includes every input the module may observe:
+## 1. Revisions
+
+A complete compilation revision includes every input any selected phase may
+observe:
 
 ```text
-Revision(m) = hash(
-  compiler schema,
-  generated parser plan,
-  source bytes,
-  resolved import revisions,
-  included bytes and include transform,
+Revision(G,tau) = hash(
+  compiler and certificate schema,
+  generated parser and operator plan,
+  root and dependency source bytes,
+  resolved import occurrence graph,
+  included bytes and transforms,
   primitive catalog,
+  package/capsule policy,
   target and ABI policy
 )
 ```
 
-A phase key may omit a component only after proving that phase cannot observe
-it. Source identity and semantic identity are distinct. If lowering two source
-texts produces equal ASTs including source origins, downstream semantic phases
-may share a revision. If an edit moves a diagnostic span, that equality does not
-hold.
+A phase key may omit a component only after proving that phase cannot observe it.
+Source identity and semantic identity are distinct. If two source texts elaborate
+to equal artifacts including source origins, a downstream phase may share a key.
+If a diagnostic span, import occurrence, or origin changes, that equality does
+not hold.
 
-A recursive key names each direct dependency by a fixed-size digest of that
-dependency's own canonical key material:
+A dependency edge contains a fixed-size digest of the dependency's canonical
+phase key:
 
 ```text
-key_P(m) = H(local_P(m), [(specifier_i, key_P(dep_i))])
+key_P(m) = H(local_P(m), [(specifier_i, digest(key_P(dep_i)))])
 ```
 
-`key_P(dep_i)` is the digest, not the serialized payload that produced it.
-Recursively embedding complete child keys is semantically redundant and makes an
-importer's key construction repeat transitive dependency bytes. Digesting the
-canonical child key once preserves the same phase equality while bounding every
-dependency edge to constant-size identity material. The digest algorithm and
-canonical encoding are part of the process-local compiler implementation; a
-persistent cache additionally namespaces them by compiler/schema version.
+The digest algorithm and canonical encoding are part of the process-local
+implementation and the persistent cache namespace. Recursively embedding full
+child key material is unnecessary and would repeat transitive bytes at every
+edge.
 
-An editor buffer is another supplier of the root module's exact source bytes,
-not a weaker checking mode. Checking an in-memory root revision replaces that
-module's source component while its imports and includes retain their resolved
-filesystem revisions. The resident compiler applies the same invalidation and
-fresh-compilation judgment as it does after a disk edit.
+An editor buffer supplies exact root-module bytes for another revision. Imports
+and includes retain their resolved revisions. In-memory checking uses the same
+invalidation and fresh-equivalence judgment as disk checking.
+
+## 2. Identity separation
+
+Cache identity must preserve the identity class owned by the cached fact:
+
+- source expression identity for diagnostics and certificates;
+- binding identity for settled interfaces and ownership summaries;
+- import occurrence and complete module-instance stack for evaluated module
+  results;
+- generative effect occurrence for ordinary effects;
+- canonical public name and invariant carrier for applicative seals;
+- Store/root and produced-value lineage for destructive permissions; and
+- complete revision identity for serialized artifacts.
+
+A module definition path cannot replace a module instance. An equal source name
+cannot replace an effect atom. Equal seal inputs reconstruct a seal; a declaration
+occurrence is not its identity. Equal-looking intervals under another Store are
+not interchangeable.
 
 ## 3. Dependency invalidation
 
 The source graph carries import and include edges. Changing a node invalidates
-that node and the transitive reverse-dependency closure for every phase that
-observes the changed edge. Unrelated modules retain their identities and closed
+that node and the transitive reverse-dependency closure for every phase that can
+observe the changed edge. Unrelated modules retain their revisions and closed
 artifacts.
 
-Generative declarations add an identity dependency. Reusing a module interface
-is sound only when every generative identity reachable from that interface is
-preserved by the same revision. Otherwise specialization and effect equality
-must miss the cache.
+An ordinary effect reachable from a published interface adds the complete owning
+module-instance occurrence to the key. Reuse is sound only when that identity is
+preserved. A seal instead reuses when its canonical applicative inputs are equal.
+
+Package resolution, include transforms, generated language-plan revisions, and
+target/ABI policy participate only in the phases that observe them, but a phase
+may not omit one merely because current examples do not expose a difference.
 
 ## 4. Frontend reuse
 
-An incremental lexer may retain a token only when the source prefix containing
-every code point examined to decide that token is unchanged. The dependency end
-can exceed the accepted token end because maximal munch observes the following
-input. All other tokens are rederived. Island parsing then consumes the complete
-resulting stream.
+An incremental lexer may retain a token only when every source position examined
+to decide that token is unchanged. Maximal munch can make the dependency extent
+longer than the accepted token span.
 
-The frontend reuse theorem is:
+Island parsing consumes the complete resulting token stream. The frontend reuse
+theorem is:
 
 ```text
-incremental_frontend(previous, edit) = fresh_frontend(edited_source)
+incremental_frontend(previous, edit)
+  = fresh_frontend(edited_source)
 ```
 
-including token arrays, compact nodes, edges, AST, and diagnostics. Prefix reuse
-is an implementation technique, not a different parser contract.
+including token identities, compact nodes, fields, edges, operator folding,
+resolved AST, origins, and diagnostics.
 
-## 5. Interface and specialization caches
+Operator identity uses the generated fixed language-plan revision. Source modules
+have no custom fixity environment to preserve or compare.
 
-A cached module interface contains settled closed schemes, effects, result and
-parameter types, verified erased relational summaries reachable from the
-compile-time boundary, closure ownership contracts, and a dependency
-fingerprint. Encoding rejects live inference variables and unbound rigid
-identities. Decoding instantiates quantified identities freshly.
+## 5. Demand reuse
 
-An in-process checker may stop reverse propagation after rechecking a changed
-module only when a sealed boundary fingerprint is unchanged. That fingerprint
-contains the closed type/effect boundary, relational-summary schema and facts,
-every checked live source node that can constrain an importer, includes, capsule
-input, and dependency fingerprints. Dead source may be omitted only by a
-separate proof that it cannot affect inference, evaluation, diagnostics, or a
-published fact. Cache publication is transactional: failure leaves the previous
-revision intact.
+Declaration liveness is keyed by module revision and the enclosing block's
+resolved expression identity. Replacing the module invalidates every liveness
+entry before evaluation can observe another AST.
 
-A specialization capsule additionally contains deterministic compile-time values
-and closed source closures. Its coherence law is given in
-[`TYPECHECKING.md`](TYPECHECKING.md). Mutable bounds, pending worklists, AST
-object identities, and fact sinks do not cross the cache boundary.
+A changed module may reuse evaluated declaration values only for a maximal
+unchanged top-level prefix when all of these remain equal:
 
-An ownership contract is keyed by the defining module and closure body and may
-retain pattern identities only from the exact AST packaged by that interface.
-Changing that AST invalidates the contract with the rest of the module. An
-importer resolves a source closure value to this identity and substitutes the
-argument through the published pattern; it never re-runs the dependency's
-ownership analysis or recognizes a source name.
+- module input pattern;
+- generated language-plan revision;
+- every reachable expression, pattern, declaration, and source origin in the
+  prefix;
+- resolved dependency and include mappings; and
+- every semantic input observed by those declarations.
 
-Checked compile-time environments, ownership results, safety certificates,
-Runtime HIR, and emitted artifacts may be retained only under the strongest
-revision of any input they observe. A complete checked environment may replace a
-second module evaluation only under the `checked-environment` premise in
-[`TYPECHECKING.md`](TYPECHECKING.md).
+A change to a preceding declaration invalidates the suffix because earlier
+values form the later environment. Reuse removes deterministic evaluation work;
+every declaration in the new revision is still inferred and checked unless a
+separately validated closed interface is reused.
 
-The Node resident checker currently uses a deliberately narrower full-check
-boundary. A dependency may retain its complete locally settled check only when
-it is a **leaf**, takes no explicit module input, publishes a closed
-specialization interface, and that interface carries no generative effect brand.
-The first check runs against an isolated staging sink and settles before
-publication; a later importer reinstalls only the closed interface into its own
-staging sink. The retained module result is a read-only scheme template: the
-ordinary import instantiation freshens it before importer constraints are added.
-Therefore caller-specific fact reads and mutable inference instances do not
-cross the cache boundary. A new leaf revision misses because loader identity
-changes. Closed interfaces with generative brands may be used by the compilation
-that created them but are not retained across compilations; unclosed and
-parameterized leaves take the ordinary per-compilation path.
+Dead source may be omitted from a key only with the source liveness proof that it
+cannot affect demanded evaluation, diagnostics, ownership, or a published fact.
 
-A changed module may retain successful declaration-value evaluations only for
-its maximal unchanged top-level declaration prefix. Equality includes the module
-input pattern and fixities plus every reachable expression, pattern,
-declaration, and source span in that prefix. The resolved dependency and include
-mappings must also be unchanged. A change to any preceding declaration
-invalidates the suffix because its values form the later declarations'
-environment; a dependency change invalidates the importer through the ordinary
-reverse-dependency closure. Reuse removes deterministic evaluation only: every
-declaration in the new revision is still inferred and checked.
+## 6. Interface caches
 
-Declaration liveness is derived from a lowered module and may be cached by
-module path plus the enclosing block's expression identity. Replacing that
-module invalidates every such entry before evaluation can observe the
-replacement AST.
+A cached module interface may contain:
 
-## 6. Prelude snapshots
+- settled closed schemes and effect rows;
+- module parameter and result types;
+- verified erased relational summaries;
+- closure ownership contracts;
+- public seal identities in canonical form;
+- reachable ordinary-effect identities tied to their instance occurrence; and
+- a complete dependency fingerprint.
 
-The prelude is an ordinary module and obeys the same rules. A distributed
-prelude snapshot may contain compact AST, closed checked interface,
-compile-time-value capsule, certificates, and prepared Runtime HIR. Its key must
-include the exact prelude source, compiler schema, parser plan, dependency
-closure, primitive catalog, and target policy.
+Encoding rejects live inference variables, mutable bounds, pending worklists,
+unbound rigid identities, AST object addresses, and process-local fact sinks.
+Decoding validates scopes and freshens quantified identities.
 
-Loading the snapshot validates its schema, arenas, and references before
-exposing any artifact. A cache snapshot whose source is independently available
-may fall back to ordinary compilation after validation fails. A
-compiler-distributed snapshot instead fails as a corrupt distribution because
-its authority comes from that distribution, not from a self-reported content
-hash. A snapshot is a serialized certified cache entry, not an intrinsic or
-privileged prelude.
+A closure ownership contract is keyed by defining module revision and exact
+closure-body identity. It may retain pattern identities only from the packaged
+AST. An importer substitutes arguments through the published pattern; it does
+not rerun dependency ownership analysis or recognize a source binding name.
 
-The same rule applies to registry-distributed modules. The portable capsule
-format and its source fallback are specified in [`PACKAGES.md`](PACKAGES.md).
-The current schema caches the validated lowered AST graph only; it deliberately
-makes no checked-interface or specialization-cache claim.
+A changed module may stop reverse invalidation after rechecking only when the
+closed boundary fingerprint is unchanged. That fingerprint includes every live
+source fact capable of constraining an importer, not merely a printed signature.
+Publication is transactional: failure leaves the prior revision intact.
 
-The full Rust compiler additionally ships the dependency-free prelude's portable
-AST and closed checked interface as a generated artifact beside the compiler
-WebAssembly. Git tracks this source-derived snapshot; CI packages it with the
-compiler binary whose source-tree manifest names the same revision. The loader
-resolves the explicit `blot:prelude` import to that artifact, installs it under
-the same module identity, and evaluates its validated AST once per compiler
-session. The compiler artifact is already part of the trusted computing base, so
-this is equivalent to retaining a successful frontend and check in a process
-cache across compiler sessions. The build regenerates the snapshot from the
-exact source with the current Baba plan and checker; its check mode rejects a
-stale snapshot before materializing the untracked compiler binary. Loading
-validates the AST arena, certificate schema, every flat-arena reference, and
-closed rigid-variable scope before installing it. The compiler then evaluates
-the validated module once per session and retains that compile-time result
-rather than asserting a serialized value graph.
+## 7. Checked-environment reuse
 
-This authority does not extend to registry capsules. A package-controlled hash
-proves only that its payload was transported unchanged; it cannot prove that the
-package's claimed interface follows from its AST. Registry modules continue
-through ordinary checking until Blot has a proof certificate whose validation is
-cheaper than reconstructing the judgment.
+A complete checked environment may replace another module evaluation only under
+the checked-environment premise in [`TYPECHECKING.md`](TYPECHECKING.md). It must
+preserve:
 
-## 7. Determinism under parallel work
+- module-instance identity;
+- compile-time values and their identity policy;
+- settled interfaces;
+- ownership and relationship summaries;
+- staging sink contents; and
+- every diagnostic-relevant origin.
+
+The current Node resident checker deliberately uses a narrower boundary for
+retained full checks. A dependency may retain a complete local check only when it
+is a leaf, has no explicit module input, publishes a closed specialization
+interface, and exposes no generative ordinary-effect atom across the retained
+boundary.
+
+The first check runs against an isolated staging sink. A later importer installs
+only the closed interface and freshly instantiates its schemes. Caller-specific
+facts and mutable inference state never cross the boundary. A new leaf revision
+misses the cache.
+
+## 8. Staging and specialization caches
+
+A specialization capsule may contain deterministic compile-time values, closed
+source closures, residual Core, and closed representation choices. Its key
+includes every explicit input the staged computation observed.
+
+Ordinary effects retain complete generative occurrence identity. Seals retain
+canonical applicative inputs. A staged result containing process-local mutable
+state, unresolved polymorphism, live proof values, or unvalidated private
+references is not serializable.
+
+Runtime HIR and emitted artifacts use the strongest revision of any source,
+certificate, target, ABI, or language-plan input they observe. Revalidation is
+required after decoding; a content hash establishes transport integrity, not the
+semantic truth of a producer-controlled interface claim.
+
+## 9. Prelude and package snapshots
+
+The prelude is an ordinary module under the same semantic rules. A distributed
+prelude snapshot may contain compact AST, a closed checked interface,
+compile-time-value capsule, certificates, and prepared Runtime HIR only when its
+manifest names the exact:
+
+- prelude source and dependency closure;
+- compiler and certificate schema;
+- generated parser and operator plan;
+- primitive catalog; and
+- target/ABI policy.
+
+Loading validates arena references, closed rigid-variable scope, certificate
+schema, and semantic identity before exposing an artifact. A source-backed cache
+may fall back to ordinary compilation after validation failure. A compiler-
+distributed snapshot instead reports corrupt distribution when its authority is
+the distribution itself.
+
+Registry capsules remain package-controlled inputs. A package hash proves only
+unchanged transport. It does not prove that a claimed interface follows from its
+AST unless a separately checked certificate establishes that judgment more
+cheaply than ordinary checking.
+
+## 10. Diagnostic and limit reuse
+
+A cached `SourceDiagnostic` is reusable only under the exact source and semantic
+inputs that make its failed premise stable.
+
+A cached `LimitDiagnostic` additionally names the configured deterministic
+resource bound. It does not become a source diagnostic. Raising the bound must
+miss or reclassify the cache entry so the same source may continue checking.
+
+`TargetRefusal` includes target and ABI policy in its key.
+`InvariantFailure` is not a reusable semantic result; it signals a compiler defect
+or corrupt artifact.
+
+## 11. Parallel work
 
 Independent ready modules may run concurrently. Commit order follows canonical
-module order, and diagnostic order follows source order. No mutable inference
-graph crosses a worker boundary. A parallel schedule is valid only if its final
-artifact equals the sequential judgment byte for byte.
+module order; diagnostics follow source order. No mutable inference graph,
+ownership state, or staging sink crosses a worker boundary.
 
-## 8. Cache verification
+A parallel schedule is valid only when its final diagnostics, interfaces,
+certificates, Runtime HIR, manifest, and emitted bytes equal the sequential fresh
+judgment.
 
-Tests compare fresh and incremental compilation after replacement, insertion,
-deletion, token merging, import changes, include changes, and generative
-declaration changes. They compare diagnostics, settled interfaces, certificates,
-Runtime HIR, ABI bytes, WebAssembly observations, and invalidation sets. A
-timing improvement without this equality is not an incremental compiler
-optimization.
+## 12. Verification
+
+Fresh-versus-incremental tests cover:
+
+- replacement, insertion, deletion, and token merging;
+- operator-plan revision changes;
+- import occurrence and dependency changes;
+- include bytes and transform changes;
+- ordinary generative-effect changes and applicative seal reconstruction;
+- ownership/certificate identity changes;
+- source versus limit diagnostic changes;
+- target and ABI policy changes; and
+- concurrent scheduling.
+
+Tests compare invalidation sets, ordered diagnostics, settled interfaces,
+certificates, staged values, Runtime HIR, manifest bytes, WebAssembly bytes, and
+source/Wasm observations. A timing improvement without fresh-result equivalence
+is not a valid incremental optimization.

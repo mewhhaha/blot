@@ -2,208 +2,335 @@
 
 ## Status and scope
 
-[`LANGUAGE.md`](../LANGUAGE.md) remains the normative description of accepted
-source. This document owns the focused semantic obligations that connect source
-evaluation to checking and staging when identity, demand, effects, or module
-instantiation matter. [`PAPER.md`](PAPER.md) supplies the integrated model;
+[`LANGUAGE.md`](../LANGUAGE.md), subject to
+[`COHERENCE.md`](COHERENCE.md), defines accepted-source behavior. This document
+owns the focused Core rules for demand, application, semantic identity, module
+instances, algebraic effects, handlers, one-shot continuations, progress, and
+divergence.
+
+[`PAPER.md`](PAPER.md) supplies the integrated model;
 [`COMPILER.md`](COMPILER.md) supplies the pass graph; and
-[`CORRECTNESS.md`](CORRECTNESS.md) supplies the translation theorems.
+[`CORRECTNESS.md`](CORRECTNESS.md) supplies the translation theorem package.
 
-The purpose of this document is to prevent several different notions of "same
-value" or "same module" from becoming interchangeable compiler cache keys.
+## 1. Configurations and observations
 
-## 1. Identity classes
+A closed Core computation has finite observations:
 
-The compiler uses identities with different allocation and lifetime rules:
+```text
+Return(v)
+Request(ell, operation, argument, continuation-protocol)
+Trap(specified-trap)
+```
 
-| Identity          | Allocated by                   | Equality means                                                 | May cross revision/cache?                                  |
-| ----------------- | ------------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------- |
-| expression        | frontend AST                   | same expression in one source revision                         | only through a serialized stable expression id             |
-| binding           | elaboration/checking           | same lexical binding in one source revision                    | only through a closed certificate                          |
-| immutable value   | refinement analysis            | same runtime value origin for `Phi`                            | no, unless reconstructed by a certificate                  |
-| effect atom       | compile-time evaluation        | same generative effect instance                                | only when the owning module-instance identity is preserved |
-| seal              | compile-time type construction | same public name and canonical invariant carrier               | yes, when both inputs are reconstructed                    |
-| module definition | resolver                       | same resolved source/module artifact                           | yes under the ordinary revision rules                      |
-| import occurrence | frontend/resolved source graph | same written import site in one importer revision              | yes only with that importer revision                       |
-| module instance   | module evaluation              | same import occurrence under the same enclosing instance stack | yes only under that complete instance identity             |
-| Store/root        | ownership/lowering             | same physical authority root                                   | only through the corresponding ownership certificate       |
-| revision          | incremental compiler           | same complete observed compiler input                          | yes; this identity exists for cache reuse                  |
+Divergence is a maximal execution with infinitely many reduction steps. It is
+not another current-state constructor.
 
-No pass may replace one identity class with another because their printable data
-happen to match. In particular, a module-definition path is not a
-module-instance identity and a source name is not an effect atom.
+Internal allocation identities, administrative reductions, closure indices,
+Store headers, and private representation choices are hidden unless a source or
+ABI relation explicitly exposes a corresponding value.
 
-## 2. Demand and pure declarations
+A request is compared as a protocol. Related executions agree on effect identity,
+operation, and related argument. Related host responses resume related one-shot
+continuations. Raw continuation addresses are not source observations.
 
-Liveness is a lexical graph judgment, not an observation guessed by an
-optimizer. For a block with declarations `d_1 ... d_n` and result `r`, construct
-the resolved dependency graph after surface elaboration. Start with the free
-binding identities of `r`; walk declarations backwards, retaining a declaration
-when it is semantically forced or when it defines an identity already needed,
-then add that declaration's resolved reads to the needed set.
+## 2. Values and computations
 
-Write the resulting finite set as:
+Core distinguishes values from computations:
+
+```text
+Gamma |- v : A
+Gamma |- c : A ! epsilon
+```
+
+A value is already formed. A computation may return a value, issue a request
+named by `epsilon`, trap according to a specified rule, or diverge.
+
+Representative forms are:
+
+```text
+c ::= return v
+    | bind x <- c in c
+    | apply v v
+    | primitive(v*)
+    | perform[ell, operation] v
+    | handle ell c with h
+    | if v then c else c
+    | case v of K_i x_i => c_i
+```
+
+The implementation may introduce administrative forms when they are related to
+these configurations.
+
+### 2.1 One application rule
+
+Every application is a computation:
+
+```text
+Gamma |- f : A ->{epsilon} B
+Gamma |- a : A
+-------------------------------- application
+Gamma |- apply f a : B ! epsilon
+```
+
+Function position is evaluated before the strict argument at the surface-to-Core
+boundary. An empty row means that the application issues no algebraic-effect
+request. It does not create a second pure application relation, and it does not
+exclude a return, specified trap, or divergence.
+
+A source pure position admits an application only after its final row settles to
+the empty row. Elaboration still schedules the call through this computation
+rule and binds the returned value. Surface `<-` admits a non-empty row and is also
+the explicit sequencing form for a suspended nullary effect value. Such a value
+is applied to unit exactly once; an already applied computation is not applied
+again.
+
+## 3. Demand and pure declarations
+
+Liveness is a lexical source judgment, not an observation guessed by an
+optimizer. For a block with resolved declarations `d_1 ... d_n` and result `r`,
+walk the binding-dependency graph backwards from:
+
+- every binding identity read by `r`; and
+- every declaration that source semantics classifies as forced.
+
+Write:
 
 ```text
 live(block, result) = L
 ```
 
-Pure declarations outside `L` are absent from source evaluation. Remaining pure
-declarations evaluate exactly once in source order. Operational declarations
-such as signatures, effect declarations, explicit shadowing, and `open` remain
-forced according to their existing source rules.
+A pure declaration outside `L` is absent from source evaluation. Every retained
+pure declaration evaluates exactly once in source order. This is not call-by-name
+or first-use forcing; no run-time thunk is introduced.
 
-The proof obligation is:
+Operational declarations such as signatures, ordinary effect declarations,
+explicit shadowing, and `open` remain forced according to their source rules.
+
+The erasure obligation is:
 
 ```text
 erase_dead(block, L)
 ```
 
-preserves every demanded return, effect request, specified trap, and divergence.
-An optimization cannot justify its own liveness input by first erasing the
-behavior whose absence it is trying to prove.
+preserves every demanded return, request, specified trap, and divergence. An
+optimizer cannot first erase a behavior and then use that absence as evidence
+that the declaration was dead.
 
-## 3. Module definitions, occurrences, and instances
+Ownership is checked over the demanded program. A move, cancellation, destructor,
+or consuming call occurring only in an erased declaration is absent and cannot
+discharge a linear obligation. Intentional consuming discard must be sequenced or
+otherwise contribute to a demanded result.
 
-Let `m` be a resolved module definition and `o` a written import occurrence in
-an importer instance `p`.
+A retained empty-row computation may still trap or diverge. Reordering requires
+an independent totality and dependency proof; effect emptiness is not enough.
+
+## 4. Identity classes
+
+The compiler uses identities with different allocation and lifetime rules:
+
+| Identity | Allocated by | Equality means | Cache rule |
+| --- | --- | --- | --- |
+| expression | frontend AST | same expression in one source revision | serialize a stable expression ID |
+| binding | elaboration/checking | same lexical binding in one revision | only through a closed certificate |
+| immutable value | relationship analysis | same value origin for `Phi` | reconstruct or certify explicitly |
+| effect atom | compile-time evaluation | same generative effect occurrence | preserve complete module-instance identity |
+| seal | compile-time type construction | same public name and canonical carrier | reconstruct canonical inputs |
+| module definition | resolver | same resolved module artifact | ordinary revision rules |
+| import occurrence | resolved source graph | same written import site in one importer revision | retain importer revision |
+| module instance | module evaluation | same occurrence under same parent stack | retain complete instance stack |
+| Store/root | ownership/lowering | same physical authority root | retain ownership certificate |
+| revision | incremental compiler | same complete observed compiler input | cache namespace identity |
+
+No pass may replace one identity class with another because their printed data
+match. A module path is not a module instance, a source name is not an effect
+atom, and a source value identity is not a Store root.
+
+## 5. Module definitions, occurrences, and instances
+
+Let `m` be a resolved module definition and `o` a written import occurrence under
+parent instance `p`:
 
 ```text
 ModuleDef(m)
-ImportSite(p, span, m) = o
-instantiate(o, argument) = ModuleInstance(o)
+ImportSite(p, importer-revision, source-site, m) = o
+ModuleInstance(parent-stack(p) ++ [o]) = iota
 ```
 
 Bare `import` supplies unit. `import ... with value` supplies the explicit
-argument. Evaluation of the occurrence yields the instance result; it does not
+argument. Evaluating the occurrence evaluates that instance's top-level
+declarations once in source order and yields the instance result. It does not
 return an uninvoked source module function.
 
-One written occurrence owns one semantic instance in the staged source graph.
-Its top-level declarations evaluate once in source order. Aliasing, projecting,
-or returning the resulting value does not instantiate the module again. A second
-written occurrence is a distinct instance even when its resolved module and
-supplied argument are equal.
+Aliasing, projecting, or returning the result shares it and does not replay
+initialization. A second written occurrence is a second instance even when its
+resolved module and argument are equal. The same nested import site under two
+parent instances is distinct because the complete parent stack differs.
 
-Nested instances include the complete enclosing occurrence stack in their
-identity. Thus two instances of a parent module do not merge a generative effect
-created by the same nested import site.
+Inlining may erase a module shell but must preserve instance identity and
+observations. A cached result requires the complete instance identity and source
+revision. A definition path alone is invalid for a result that may contain or
+capture generative values, closures, traps, or divergence.
 
-A compiler may inline an instance and erase its module shell. It may cache the
-result of evaluating an instance only under the complete instance identity and
-source revision. A cache keyed only by module-definition path is invalid for a
-result that may contain or capture generative values.
+## 6. Generative effects
 
-## 4. Generative effects
-
-For an ordinary source effect declaration evaluated in module instance `o`,
-allocation is:
+For an ordinary source effect declaration:
 
 ```text
-newEffect(o, source_node, compile_time_scope, Sigma)
+newEffect(module-instance, source-node, compile-time-scope, Sigma)
   => effect(ell, Sigma)
 ```
 
-where `ell` is fresh with respect to every different tuple of those identity
-inputs. Re-evaluating the same source node administratively during checking or
-lowering must recover the recorded `ell`; evaluating the declaration in a
-different module instance must not.
+`ell` is fresh for every different tuple. Administrative compiler re-evaluation
+of the same recorded tuple recovers the same atom. Evaluation in another module
+instance mints another atom.
 
 Aliases preserve the atom. Structural equality of operation descriptors does not
-identify effects. Named compiler-private effects may use their separately
-specified applicative identity rule; they are not evidence that ordinary
-`@effect` is applicative.
+identify ordinary effects. A compiler-private named capability may have a
+separately specified applicative identity rule; that does not change ordinary
+`@effect`.
 
-## 5. Handler row elimination
+Seals do not use this rule. They are applicative identities of public name and
+canonical invariant carrier, as specified by `TYPECHECKING.md` and `STAGING.md`.
 
-Let the handled computation have row `epsilon_c` and let all handler clauses,
-including the optional return clause, contribute row `epsilon_h`. Handling `ell`
-has the rule:
+## 7. Effect requests
+
+If:
+
+```text
+Signature(ell, operation) = A -> B
+```
+
+then:
+
+```text
+Gamma |- v : A
+--------------------------------------------- perform
+Gamma |- perform[ell, operation](v) : B ! {ell}
+```
+
+The atom is part of the capability. An equal-looking signature under another
+atom does not handle or authorize the request.
+
+## 8. Handler reduction and rows
+
+Let `E` be the delimited evaluation context captured by the handler. A request
+for the handled atom reduces as:
+
+```text
+handle ell (E[perform[ell, operation](v)]) with h
+  --> h.operation(v, resume)
+
+resume = one-shot (lambda b.
+  handle ell (E[return b]) with h)
+```
+
+A successful resume re-enters the handler around the captured context. The
+operation clause itself is not recursively enclosed by the same handler. A
+clause that performs `ell` therefore emits a new request and reintroduces the
+label.
+
+Let all operation clauses and the optional return clause contribute
+`epsilon_h`. Handling has the row rule:
 
 ```text
 Gamma |- c : A ! epsilon_c
 Gamma |- h : Handler(ell, A, B, epsilon_h)
------------------------------------------------------------
+----------------------------------------------------------- handle
 Gamma |- handle ell c with h
   : B ! ((epsilon_c \ {ell}) union epsilon_h)
 ```
 
-Set difference is part of the rule. Factoring the premise as
-`epsilon union {ell}` without an absence side condition is insufficient because
-set union is idempotent and does not determine `epsilon` uniquely.
+Set subtraction is part of the rule. Factoring the premise as
+`epsilon union {ell}` without an absence condition is non-unique because union is
+idempotent.
 
-A handler clause that performs `ell` reintroduces the label through `epsilon_h`;
-the operation is not recursively swallowed by the handler whose clause is
-currently running.
+Handling an atom absent from `epsilon_c` is valid. Operation clauses are
+unreachable for that computation, while the return clause may still transform
+the normal result.
 
-Handling an effect absent from `epsilon_c` is valid. Its operation clauses are
-unreachable for that computation, while its return clause may still transform
-the normal result. This is a checked redundant handler, not a diagnostic.
+## 9. One-shot continuations
 
-## 6. One-step progress and divergence
+A captured continuation can be consumed at most once. Ownership assigns its
+binding an affine or linear obligation:
 
-For a closed computation well typed at `A ! epsilon`, one-step progress says it
-is one of:
+- affine: resume or cancel zero or one time;
+- linear: one consuming action on every terminating clause exit.
+
+`Continuation.cancel` is an explicit sequenced consuming destructor. It spends
+the continuation without entering its captured context. It cannot be erased as a
+dead pure `let`, forged for an arbitrary closure, or used to justify a later
+resume.
+
+Cancellation accounts for structural ownership of the continuation. It does not
+execute consumers or finalizers inside the discarded context. Current linearity
+is therefore a unique-use discipline, not a must-finalize resource theorem.
+
+A future must-finalize resource requires one of:
+
+1. a separate explicit finalization effect or consuming operation;
+2. checked cancellation evidence covering every captured must-use resource; or
+3. a restriction requiring the continuation to resume exactly once.
+
+A defensive spent flag may remain at run time, but accepted source must not rely
+on it to reject a second resume.
+
+## 10. Progress and maximal executions
+
+For a closed well-typed computation `c : A ! epsilon`, one-step progress says
+that `c` is one of:
 
 - `return v` for an appropriate value;
 - able to take a reduction step;
-- poised to request an operation whose label is in `epsilon`; or
+- poised to request an operation whose atom is in `epsilon`; or
 - at a specified language trap.
 
-It is not stuck on an unclassified internal state.
+It is not stuck on an unclassified machine state.
 
-Divergence is an execution property, not another current syntactic form. The
-corresponding maximal-execution theorem says that every maximal execution either
-reaches one of the classified finite outcomes above or contains infinitely many
-reduction steps.
+The maximal-execution theorem says every maximal execution either reaches a
+classified finite outcome or contains infinitely many reduction steps.
+Divergence is handled here, not as a fifth one-step progress form.
 
-Compiler divergence preservation is stated over those infinite executions: a
-target may not turn demanded source divergence into a return or unrelated trap,
-and an optimization may not erase demanded divergence.
+A compiler pass must not turn demanded source divergence into a return or
+unrelated trap, erase demanded divergence through liveness or optimization, or
+manufacture divergence by infinite administrative stuttering.
 
-## 7. Continuation cancellation boundary
+## 11. Host boundary
 
-The implemented ownership judgment is a use discipline. A linear obligation
-means that one consuming action accounts for the value on every terminating exit;
-it does not, by itself, assert that a domain-specific finalizer has run.
+Ordinary source effects must be handled before a closed module boundary. An
+explicit admitted host capability may remain and lower to a typed import. The
+entry input and explicitly supplied host capabilities are the complete ambient
+run-time authority.
 
-The language permits explicit sequenced cancellation of a one-shot continuation
-after ownership proves that the continuation binding is consumed.
-`Continuation.cancel` is a consuming destructor for that continuation: it spends
-the continuation without entering the captured evaluation context. This proves
-that the continuation cannot later be resumed and that its structural ownership
-is accounted for. It does not execute consumers or finalizers located inside the
-discarded continuation.
+A conforming host follows the declared request/response and ownership protocol.
+A host may diverge, take a specified host trap, or fail to respond. Canonical
+adapters validate untrusted representation claims before constructing source
+values.
 
-Consequently, existing tracked values follow a unique-use model, while a future
-must-finalize host resource cannot be modeled merely by assigning it the current
-linear marker. Before such resources are introduced, the language must add and
-specify one of these extensions:
+## 12. Obligations and evidence
 
-1. required finalization is an explicit effect or consuming operation separate
-   from structural linearity;
-2. cancellation carries checked evidence that finalizes every captured must-use
-   obligation; or
-3. a continuation with a must-use capture cannot be cancelled and must resume
-   exactly once.
+This boundary owes:
 
-This boundary does not weaken the current no-duplication and use-accounting
-theorems. It limits what those theorems claim about observable resource cleanup.
+1. one computation semantics for all applications;
+2. lexical-demand determinism and dead-declaration erasure adequacy;
+3. ownership compatibility with demand;
+4. separation of every identity class;
+5. occurrence-scoped module instantiation;
+6. generative ordinary-effect identity;
+7. subtraction-based handler rows;
+8. one-shot continuation use and explicit cancellation;
+9. preservation and one-step progress; and
+10. maximal-execution classification including divergence.
 
-## 8. Executable obligations
+Maintained regressions should distinguish:
 
-Maintained regressions for this boundary must establish at least:
+- repeated administrative evaluation of one import occurrence from a second
+  written occurrence;
+- aliases of one effect from structurally equal fresh effects;
+- nested imports under different parent instances;
+- re-performing a handled effect from discharging it;
+- handling an absent effect with a transforming return clause;
+- empty-row calls that return, trap, and diverge; and
+- a consuming use in live code from the same syntax inside a dead declaration.
 
-- two written imports of one effect-producing module yield distinct effect
-  identities;
-- an alias of one imported effect preserves that identity;
-- the same nested import site in two parent instances remains distinct;
-- a handler clause may reintroduce the effect it discharges, and the resulting
-  row exposes that label;
-- handling an absent effect is accepted and a return clause may transform the
-  result; and
-- repeated compiler evaluation of one import occurrence recovers the same
-  generative atom rather than minting a second one.
-
-Production and auxiliary implementations remain subject to the same semantic
-rules. A conformance test may exercise a boundary, but it does not become an
-alternative authority for demand, identity, handler rows, or module instances.
+Tests exercise these boundaries but do not become an alternative authority for
+demand, application, identity, handlers, or progress.

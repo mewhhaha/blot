@@ -1,126 +1,248 @@
 # Safety analyses and certificates
 
-## 1. Separation from inference
+## Status and scope
 
-Coverage, relational facts, and ownership consume inferred types without adding
-constructors to the type lattice. The combined judgment is summarized as
+This document owns coverage, relational proof, ownership, and reusable safety
+certificate judgments. Ordinary type inference is owned by
+[`TYPECHECKING.md`](TYPECHECKING.md); source demand and Core observations are
+owned by [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md). Cross-document constraints are
+in [`COHERENCE.md`](COHERENCE.md).
+
+The analyses consume the demanded typed program. They do not add constructors to
+the ordinary type lattice.
+
+## 1. Combined judgment
+
+Summarize the safety boundary as:
 
 ```text
-Gamma ; K ; Phi ; R ; Omega |- e : A ! E ; C
+Gamma ; K ; Phi ; R ; Omega |- c : A ! epsilon ; C
 ```
 
-where `Gamma |- e : A ! E` is ordinary inference, `Phi` is a proposition
-context, `R` assigns stable value identities, `Omega` tracks ownership paths,
-and `C` is finite erasable evidence. Erasing `Phi`, `R`, `Omega`, and `C` leaves
-the same principal ordinary type.
+where:
+
+- `Gamma` is the ordinary type environment;
+- `K` contains compile-time facts available to checking;
+- `Phi` is a duplicable proposition context;
+- `R` maps bindings and expressions to stable immutable-value identities;
+- `Omega` tracks mode-indexed ownership paths; and
+- `C` is finite erasable evidence.
+
+Erasing `Phi`, `R`, `Omega`, and `C` leaves the same ordinary type and effect row.
+Relationships and ownership cannot be used as hidden subtype dimensions.
+
+The input is the live Core artifact. A proof, move, cancellation, or destructor
+inside an erased pure declaration is absent and cannot satisfy an obligation in
+this judgment.
 
 ## 2. Coverage
 
-Coverage is set subtraction over the finite part of the scrutinee domain.
-Constructor unions, booleans, finite integer ranges, tuple products, and nested
-patterns contribute finite spaces. Open or unlistable domains require an
+Coverage is set subtraction over the representable portion of the scrutinee
+domain. Constructor unions, booleans, finite integer ranges, products, and nested
+patterns contribute finite spaces. An open or unlistable domain requires an
 irrefutable arm.
 
-For rows `p1 ... pn`, acceptance establishes
+For pattern rows `p_1 ... p_n`, acceptance establishes:
 
 ```text
-domain(A) \ covered(p1 ... pn) = empty
+domain(A) \ covered(p_1 ... p_n) = empty
 ```
 
-or records that the final row is irrefutable. Guards subtract only what their
-proved proposition entails. A failed value conditional does not transfer control
-to an enclosing function; statement-control elaboration expresses that transfer
-before coverage runs.
+or records that an arm is irrefutable.
 
-## 3. Relationships
+Coverage is computed over the complete cross-product of pattern columns. A guard
+covers only the subset entailed by its proved proposition. An arbitrary boolean
+expression cannot be treated as unconditionally true because examples happen to
+exercise it that way.
 
-Relational propositions are outside types:
+Statement control is elaborated before coverage. A failed statement condition
+does not escape an enclosing function unless explicit Core control represents
+that transfer.
+
+The coverage theorem is:
 
 ```text
-Phi ::= t = u | t < u | t <= u
+Gamma |- v : A    covers(A, arms)
+----------------------------------
+some arm matches v
 ```
 
-Array creation assigns a stable `ValueId`; a transparent alias preserves it and
-a new construction, rebinding, or unknown result replaces it. A direct array
-access requires a replayable derivation of
+An explicit panic in an irrefutable arm is a specified source trap, not a latent
+missing-match state.
+
+## 3. Relationship context
+
+Relational propositions are outside ordinary types. The first solver admits a
+decidable affine fragment such as:
 
 ```text
-0 <= i and i < len(a)
+x = y
+x = y + k
+x < y
+x <= y
+0 <= i
+i < length(alpha)
+length(beta) = length(alpha) + k
+InBounds(alpha,i)
 ```
 
-whose certificate names both the array and index identities. Total access
-returns the source-level optional result and needs no proof. Immutable array
-length makes a verified certificate stable until either identity changes.
+`Phi` refers to stable immutable-value identities. An alias preserves identity;
+a new construction, identity-changing rebind, unknown result, or module-instance
+change produces another identity unless a checked summary establishes a precise
+relation.
 
-The refinement solver may grow more expressive without changing ordinary
-subtyping. Failure to prove a true proposition rejects only the proof-requiring
-operation; it does not license an unchecked lowering.
+Failure to prove a true proposition is a conservative rejection of the
+proof-required operation. It never licenses unchecked lowering.
 
-## 4. Ownership
+## 4. Total and proof-required operations
 
-Ownership is a flow analysis over structural paths:
+A total array access performs the source bounds decision and returns the
+source-level optional result. It requires no relationship certificate.
+
+A direct access has a premise:
 
 ```text
-Omega(path) = Live | Moved | Partial(children)
+Gamma ; Phi |- a : Array A
+Gamma ; Phi |- i : Int
+Phi entails 0 <= i < length(identity(a))
+------------------------------------------------
+Gamma ; Phi |- get_proved(a,i) : A
+```
+
+The certificate names:
+
+- compiler and certificate schema;
+- source revision;
+- saturated operation identity;
+- exact array and index value identities;
+- normalized proposition; and
+- every premise derivation or checked summary it uses.
+
+A validator reconstructs the proposition independently. Copying evidence to
+another occurrence, using it after an identity-changing rebind, loading it under
+another revision, or substituting a matching printed name is invalid.
+
+A successful direct-read certificate permits lowering without a second target
+bounds branch. A total source operation still performs its ordinary source guard
+before any proved read it reaches.
+
+## 5. Ownership state
+
+Ownership is a structural flow analysis. Each stable path has one mode and
+state. Explanatory modes are:
+
+```text
+U  unrestricted: arbitrary use
+B  borrowed: inspect only; no move or escape
+A  affine: at most one consuming use; discard allowed
+L  linear: exactly one consuming action on every terminating exit
+```
+
+A path state is conceptually:
+
+```text
+Live | Moved | Partial(children)
 ```
 
 Moving a field changes that leaf and its ancestors. Whole-value use requires a
-live root. Branch joins preserve exactly the paths live on every continuing
-branch, and linear paths must have equal terminal consumption. Borrows preserve
-the tree but cannot be used to recover or move an owning parent.
+live root. Aggregates carry the joined obligations of their children, and
+closures carry captured paths.
 
-The no-double-move lemma and exact branch rules live in
-[`TYPECHECKING.md`](TYPECHECKING.md). Destructive Store reuse is permitted only
-by an ownership certificate for the final consuming update; source arrays remain
-immutable whether or not the target reuses storage.
+Branches begin with the same incoming ownership state. Continuing branch outputs
+must agree for linear paths; affine joins are conservative and may discard a path
+but cannot duplicate it. A borrow preserves the ownership tree but cannot recover
+or move the owning parent, escape its lexical region, or cross the host boundary.
 
-An `@[assert.reuse]` tag is checked after those permissions exist. It rejects a
-persistent Store update in the function's residual frame but cannot manufacture
-a permission, reinterpret a last use as consumption, or change the inferred
-function type. Materialized checked functions publish the discharged assertion
-retained by Runtime-HIR schema 4 for independent validation.
+A function publishes a type-independent ownership summary describing parameter,
+callback, and result-path use. Passing a linear closure once to a function that
+invokes it twice is a duplication and is rejected.
 
-Checked-module certificate schema 10 retains the schema-9 inferred
-parameter-input authority tree, produced-result tree, and structural lineage.
-Each owning destination path names its earlier binding identity and source path.
-Dynamic proof-refined `@array.take` lineage contains exactly the selected and
-remainder parts; `@array.split` contains exactly the prefix, selected, and
-suffix parts. The independent verifier rejects an unknown source identity,
-malformed path, duplicate lineage, invalid part, or incomplete partition. Bounds
-failure is not an ownership path: an unproved extraction is rejected before
-lineage is minted.
+Current linearity is a structural unique-use theorem. A consuming action runs a
+domain-specific finalizer only when that operation's contract explicitly says
+so. `Continuation.cancel` accounts for the continuation without executing the
+discarded context.
 
-## 5. Certificate discipline
+## 6. Destructive reuse
 
-A certificate contains:
+Source arrays, records, and other persistent values remain immutable. A target
+Store update is permitted only by an ownership certificate for the exact final
+consuming source operation.
+
+The certificate proves:
+
+- unique consuming use at that occurrence;
+- no source-observable alias remains live afterward;
+- every contained owned path is transferred or consumed; and
+- required relationship and representation facts hold.
+
+Syntactic last occurrence, source immutability, or a matching Store shape cannot
+manufacture this permission.
+
+An `@[assert.reuse]` declaration tag is checked after permission exists. It may
+reject a residual persistent Store update, but it cannot create ownership,
+reinterpret a use as consuming, or change the inferred function type.
+
+## 7. Partitioned authority
+
+A split certificate records family, root, parent footprint, ordered children,
+factorization event, and produced-value lineage. Every child is accounted for.
+A join consumes the exact witness and exact child authorities.
+
+Family validation establishes disjointness, exact cover, deterministic focus,
+frame locality, and mode-indexed ownership conservation.
+
+Partial composition is not assumed to have universal proof-tree rotation.
+Reassociation succeeds only when the family validates the proposed intermediate
+composition; equality is required when both bracketings exist.
+
+Dynamic proof-refined extraction lineage names exactly its selected and remainder
+parts. Bounds failure is not an ownership path: if the relationship premise is
+unproved, the extraction is rejected before lineage is minted.
+
+## 8. Certificate discipline
+
+A certificate has the abstract shape:
 
 ```text
-Certificate = (rule, conclusion, premises, sourceOrigin, revision)
+Certificate = (
+  rule,
+  conclusion,
+  premise identities,
+  source origin,
+  revision,
+  schema
+)
 ```
 
-The consumer checks the rule and premise identities independently. Copying a
-certificate to another expression, using it after an identity-changing rebind,
-or loading it under a different revision is invalid. Evidence is erased from
-runtime values after it has authorized lowering. A certified direct array read
-therefore needs no second target bounds decision; total source access still
-performs its ordinary guard before reaching that read.
+The consumer reconstructs every premise. A certificate checker reduces trust only
+when it is smaller than the producer and refuses unknown rules, malformed paths,
+duplicate lineage, invalid partitions, foreign identities, and stale revisions.
 
-Certificate failure after a successful analysis is an invariant failure. Failure
-to construct evidence from user source is a diagnostic at the source operation
-that required it.
+Evidence erases from run-time values after authorizing lowering. Compact Runtime-
+HIR references may remain only to let validation connect a destructive or
+proof-required occurrence to its replayed result.
 
-## 6. Safety theorem obligations
+Failure to construct evidence from source is a `SourceDiagnostic` at the
+operation requiring it. Producer success followed by validator failure is an
+`InvariantFailure`. Exhausting a documented solver or compiler budget is a
+`LimitDiagnostic`, not an approximate proof.
 
-Accepted safety certificates establish:
+## 9. Theorem obligations
 
-- a closed `case` does not reach a missing arm;
-- proved array operations do not reach an array-bounds trap;
-- no ownership path is moved twice or moved through a borrow;
-- affine obligations are consumed at most once;
-- linear obligations are consumed exactly once on every terminating exit;
-- every certified consuming extraction accounts for each output partition; and
-- permitted target mutation is observationally equal to immutable source update.
+Accepted safety evidence establishes:
 
-Independent certificate replay, generated finite-domain coverage tests,
-path-generated ownership tests, and three-execution agreement are evidence for
-these obligations.
+- a closed match does not reach a missing arm;
+- every proof-required operation satisfies its exact proposition;
+- no path is moved twice or moved through a borrow;
+- no borrow escapes its admitted boundary;
+- affine paths are consumed at most once and may be discarded;
+- linear paths are consumed exactly once on every terminating exit;
+- aggregate, closure, callback, and partition ownership is conserved by mode;
+- a consuming action erased by demand contributes no ownership transition; and
+- every permitted target mutation is observationally related to the persistent
+  source operation it implements.
+
+Finite-domain coverage generation, proposition mutation tests, path-generated
+ownership tests, certificate replay, source/Rust/Wasm differential execution,
+and Store-write classification are evidence for these obligations. None becomes
+a second safety semantics.

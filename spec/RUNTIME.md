@@ -1,313 +1,287 @@
-# Runtime representation and lowering
+# Runtime HIR and WebAssembly boundary
 
-## 1. Boundary
+## Status and scope
 
-The runtime boundary begins after staging and specialization. Its input is a
-closed program with settled types, explicit effects, safety evidence, and
-ownership permissions. Its output is validated Blot Runtime HIR.
+This document owns:
 
-Blot owns Runtime HIR, its validator, ABI policy, the module shell, and direct
-Rust/WebAssembly emission. Gpupaper is an independent conformance oracle and is
-not part of the production runtime boundary.
+- the admissible Runtime-HIR language;
+- validation before emission;
+- the semantic representation relation between source, Runtime HIR, and caller
+  values;
+- public-layout admissibility; and
+- the Runtime-HIR-to-WebAssembly correctness obligation.
 
-## 2. Runtime HIR
+[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 1 bytes,
+canonical lifting/lowering encodings, and caller ownership. Its **Runtime target
+status** section is operational and cannot weaken a rule for an artifact the
+compiler accepts. Cross-document corrections are in
+[`COHERENCE.md`](COHERENCE.md).
 
-Write
+## 1. Runtime-HIR boundary
 
-```text
-Delta_rep ; C |- lower(e) => h : HType
-```
+Runtime HIR is the first artifact whose operations and representations are fully
+target-facing. It is constructed only after ordinary checking, safety analysis,
+ownership checking, staging, and representation-closing specialization.
 
-where `Delta_rep` maps every residual binding to a concrete representation and
-`C` is the certificate set. Runtime HIR validation establishes:
+A Runtime-HIR module contains:
 
-1. every operand and result has a closed monomorphic representation;
-2. every projection and constructor names a complete structural layout;
-3. every effect operation has a concrete capability, operation, and signature;
-4. every proved operation carries valid evidence;
-5. every destructive Store operation carries ownership permission;
-6. every private Region operation carries checked authority and uses one
-   Store-plus-bounds representation;
-7. every private recursive root was authorized by a checked closure-SCC
-   certificate and has a finite constructor case;
-8. every private function-choice table has at least one alternative, one case
-   per alternative, and one capture product per case; and
-9. every function marked `reuse: "checked"` contains no persistent Store update
-   in its materialized Runtime-HIR frame;
-10. every private Scratch value carries a closed element layout, initialized
-    length no greater than capacity, and affine operation lineage; and
-11. every export and import is admitted by the selected ABI policy.
+- first-order control-flow graphs;
+- closed scalar and aggregate representations;
+- explicit calls and host requests;
+- explicit Store allocation, read, write, root, and release operations;
+- explicit traps classified by source or boundary contract;
+- closed closure environments where supported;
+- complete public import/export metadata; and
+- compact references to replayed certificates where validation still requires
+  them.
 
-Validation does not infer a missing source fact. A well-typed internal program
-that reaches an open shape or polymorphic operation exposes a specialization or
-lowering bug.
+It contains no:
 
-## 3. Closed program and public layout
+- source inference variable or unresolved `forall`;
+- open record, variant, effect, or representation choice;
+- compile-time value, reflection object, or proof-only package;
+- general run-time thunk introduced only for a known deferred source call;
+- source binding name used as semantic evidence;
+- unchecked proof-required operation; or
+- private capability object crossing ABI 1.
 
-Closing maps Runtime HIR and its public boundary to one artifact:
+## 2. Validation
 
-```text
-close(h, tau) = ClosedProgram(h, PublicLayout(manifest, adapters))
-```
-
-Records, tuples, and variants receive deterministic layouts. Source effects
-become explicit capabilities or specialized control. Canonical adapters surround
-the private runtime representation. The manifest and adapters are projections of
-the same `PublicLayout`; neither may independently infer field order, variant
-tags, flattening, or post-return ownership.
-
-Closing preserves evaluation order and host request order. It may erase types,
-certificates, and compile-time fields only after their last compiler use.
-
-## 4. Public representation relation
-
-For every public source type `A`, ABI policy defines a relation
+Write:
 
 ```text
-R_A(sourceValue, callerValue, memory)
+validate_hir(H, facts, target_policy) = Ok(H_valid)
 ```
 
-and partial boundary functions:
+Validation independently checks at least:
+
+1. every block, value, operation, and metadata reference is in range;
+2. control-flow predecessors and branch arguments agree;
+3. every operation receives its closed expected representation;
+4. calls agree with closed parameter, result, effect, and calling-convention
+   metadata;
+5. proof-required operations name replayable certificates for the exact
+   occurrence and premise identities;
+6. destructive Store operations name ownership permission for the exact
+   consumed path and source occurrence;
+7. Store/root lineage is not duplicated, forged, or crossed between families;
+8. every public boundary has an admissible closed source type and adapter policy;
+9. no compile-time or proof-only value remains; and
+10. every target feature used is admitted by the selected production policy.
+
+The producer and validator may share data structures, but validation is a
+separate judgment. A missing fact after successful earlier checking is an
+`InvariantFailure`, not a new source diagnostic.
+
+## 3. Runtime observations
+
+Finite Runtime-HIR observations are related to source observations:
 
 ```text
-lift_A  : caller representation -> Result(sourceValue, abiTrap)
-lower_A : sourceValue -> caller representation + ownership obligation
+Return(value)
+Request(capability, operation, argument, continuation protocol)
+Trap(specified source or malformed-boundary trap)
 ```
 
-For every valid public value:
+Divergence is an infinite maximal execution. Allocation addresses, Store
+headers, closure indices, administrative blocks, and private tags are hidden by
+the relation.
+
+A host request is compared as a protocol. Related runs agree on the declared
+capability identity, operation, and related argument. A host response resumes a
+related one-shot continuation. Raw target continuation addresses are not source
+values and need not be equal.
+
+## 4. Store semantics
+
+A Store is target authority over storage. Store and root identities are not
+ordinary source value identities.
+
+Source arrays, records, and other persistent values remain immutable. A
+Runtime-HIR Store write may implement a source-persistent operation only when a
+replayed ownership certificate proves:
+
+- a unique consuming use at the exact source occurrence;
+- no source-observable alias remains usable afterward;
+- every owned component path is transferred or otherwise accounted for; and
+- the write preserves the operation's relationship and representation
+  invariants.
+
+The target write is related to construction of a fresh source result. It does not
+retroactively make source aliases mutable.
+
+Borrowed reads never grant Store ownership. Splits and joins consume exact family,
+root, footprint, and produced-value lineage. Equal-looking intervals or roots are
+not interchangeable.
+
+## 5. Public layout judgment
+
+Public layout is a checked partial function:
 
 ```text
-lift_A(lower_A(v)) = v
+publicLayout(version, A, ownership_policy)
+  : Result<PublicLayout(A), TargetRefusal>
 ```
 
-up to allocation identity and canonical ordering. Lifting validates pointers,
-lengths, alignment, UTF-8, booleans, and discriminants before constructing a
-source value. Lowering obeys post-return ownership. The exact layouts are
-normative in [`docs/abi.md`](../docs/abi.md).
+It accepts only closed ABI-admissible types. Private layouts, live capabilities,
+proof witnesses, compiler closures without a public representation, and
+unsupported recursive roots return `TargetRefusal` before emission.
 
-Private heap headers, internal tags, and object addresses never satisfy `R_A`
-directly.
+Reaching the emitter with a public boundary for which `publicLayout` has no case
+is an `InvariantFailure`.
 
-## 5. Emission
-
-The direct Rust emitter consumes only validated Runtime HIR and its
-`PublicLayout`. It deterministically produces a WebAssembly module.
-
-For each validated Runtime-HIR step, emitted WebAssembly takes zero or more
-administrative steps and reaches a related state. A target trap is permitted
-only when it corresponds to a specified language trap, malformed ABI input, or
-an unreachable defensive check. Integer arithmetic uses the source trapping or
-wrapping rule chosen before Runtime HIR.
-
-A residual recursive binding with a settled first-order signature is an ordinary
-Runtime-HIR function connected by `call.direct`; exported first-order functions
-use the same function bodies with canonical parameter and result adapters.
-Closure conversion appends the binding's lexically free runtime values to the
-function signature and to every direct call. Function identity includes the
-argument representation, capture representations, and specialized source
-signature. A recursive body is residualized when either its argument or one of
-those captures is dynamic; wholly static recursion may still be evaluated. Tail
-position is not an admission requirement. It permits the later back-edge
-rewrite, while a non-tail self-call remains `call.direct`. Development and
-production lowering must agree on the specialized argument, result, capture, and
-effect representations before either form reaches Runtime-HIR validation.
-
-A dynamic branch whose arms produce functions has no single closure to convert,
-so the join defunctionalizes them. Every reachable arm normalizes to one
-alternative: a lambda's module and body with the environment it closed in, or a
-partially applied primitive with the arguments it already holds, together with
-that arm's ordered runtime captures. The joined value is a private sum whose
-case selects an alternative and whose payload is that alternative's capture
-product. Two arms share a case only when they name the same source _and_ the
-same closed environment or equal already-applied arguments: a captured
-compile-time value is part of what a function means, so two closures over one
-body may not be merged on the body alone. An arm that is already such a choice
-contributes the alternatives it carries, so nested choices flatten into one
-finite table rather than nesting.
-
-One case's payload occupies the sum's payload slots from the first one on, so
-alternatives whose capture products are prefixes of the widest are carried
-directly. When they are not — an `Int` captured in one arm and an `F64` in
-another — every case carries a private indirection to its capture product
-instead, which is one slot whatever it points at.
-
-At application the choice dispatches on its tag, projects the payload back into
-the alternative's captures, and applies the selected function, so each call site
-specializes for the argument representation it supplies. `n` alternatives cost
-`n - 1` tests: the last needs none.
-
-The table is Runtime HIR's own bookkeeping. Its cases name compiler-local
-closure sources, so ABI 1 refuses it at any public boundary with a diagnostic
-that names the private layout. A branch that joins a function with a value that
-is neither a lambda, a partially applied primitive, nor another choice has an
-open source set; that refusal reports the offending value and the signature the
-checker inferred for the function. A closed source set must compile.
-
-Staged non-empty arrays become ordinary Store construction. If one or more
-elements are residual, recursive call-site substitution first settles the
-element representation from the concrete elements, and argument lowering uses
-that representation for the whole Store. Store memory uses the canonical scalar
-layout internally as well as at adapters, so reads and writes preserve `i64`,
-`f32`, and `f64` element representations rather than reinterpreting an
-unconstrained element as `Unit`.
-
-A block parameter joining two exclusive branches keeps reusable-Store meaning
-exactly when both incoming values carry it. This transports the ownership
-certificate through SSA control flow; it does not prove ownership anew. Any
-plain or shared incoming value makes the join plain.
-
-A residual direct call materializes a plain runtime value first, then reapplies
-the callee's certified produced-result tree. A Store component becomes reusable
-only where that tree identifies the successor of a consuming parameter. This is
-the inter-function counterpart of the block-join rule and never infers authority
-from the Store layout.
-
-Validation derives a closed layout witness for every Runtime-HIR type:
+For every admitted type `A`, the compiler constructs:
 
 ```text
-LayoutWitness = (fingerprint, size, alignment, stride)
+lift_A  : caller representation -> Result<source A, boundary trap>
+lower_A : source A -> caller representation plus ownership obligation
 ```
 
-The fingerprint recursively names the selected representation; products record
-aligned offsets and sums record every payload representation. `indirect` and
-`Store` are explicit recursion boundaries. A direct inline cycle has no finite
-layout and is rejected before emission. These witnesses are compiler evidence,
-not source types and not ABI values.
+For every valid public source value:
 
-Persistent array decomposition is a residual operation, not a staging-only
-convenience. `@array.take` and `@array.split` are saturated direct operations
-whose array-index certificate proves `0 <= index < length(array)` before Runtime
-HIR. When the array or index is dynamic, they lower to ordinary Runtime-HIR
-control flow over `store.length`, `store.read`, `store.empty`, and persistent
-`store.grow`, but no bounds-failure edge or result tag remains. The selected
-element is read once and every retained element is copied once, in source order,
-into one remainder Store for `take` or the two contiguous result Stores for
-`split`. The source ownership certificate has already partitioned element
-obligations; Runtime HIR preserves that tuple shape but carries no second
-ownership or refinement calculus.
+```text
+lift_A(lower_A(v)) ~= v
+```
 
-No `uncons`, partition, or quicksort operation is admitted at this boundary.
-`Array.uncons` remains the total prelude branch that proves index zero before
-calling `@array.take`, and `Array.partition` remains an ordinary fold.
-Type-directed residualization must therefore retain the settled element
-representation of polymorphic empty Stores and closed constructor joins even
-when their first runtime inhabitant is produced only inside a recursive call. A
-well-typed first-order collection program may not be made compilable by
-replacing its dynamic input with a staged constant.
+`~=` preserves source-visible structure while ignoring private allocation
+identity and respecting canonical ordering.
 
-A residual Region is one compiler-private product of a Store, inclusive start,
-and exclusive end. `copy` is the explicit source allocation boundary. Its
-physical work is elided only for a fresh Store whose binding ownership proves it
-unavailable elsewhere; a shared or unknown Store receives one persistent copy
-before authority is minted. Relative reads and writes add the start only after
-proving the relative index inside `[0,end-start)`. `split` branches on the
-relative offset and returns either two products over the same Store or the
-unchanged parent. The ownership pass has already checked the linear
-recombination witness, so `join` erases that witness and rebuilds the parent
-bounds. `freeze` erases a complete root product to its Store. Region products
-and live witnesses are private layouts and are refused at ABI 1.
+## 6. Boundary validation
 
-`replace` performs the same relative bounds proof as `set`, reads the displaced
-slot, writes the replacement only on the success edge, and returns both the old
-value and unchanged region product. Its failure edge returns the replacement and
-unchanged region without a write. The ownership certificate, not Runtime HIR,
-carries positional element obligations. Witness reassociation is validated
-before Runtime HIR and is erased completely: it performs no Store access,
-allocation, or emitted instruction.
+Lifting validates before constructing an interior source value. Required checks
+include, where applicable:
 
-An owned-reuse Store growth receives the previous pointer and byte length. The
-validator admits that annotation only when the first operand is owned and the
-source and result have the same closed layout fingerprint. When that allocation
-ends at the private heap cursor and still satisfies the requested alignment,
-`cabi_realloc` extends it in place; otherwise it allocates and copies. A
-persistent growth never supplies the previous allocation and therefore cannot
-overwrite or extend storage observable through an older Store value. Linear and
-affine consumption both justify owned reuse because neither permits a second
-observation after the consuming occurrence. The public result adapter
-checkpoints the private heap at entry and restores it after scalar results or
-canonical post-return, so these internal allocations form a scratch arena per
-outer export call.
+- UTF-8 validity;
+- canonical boolean encoding;
+- discriminant range and payload shape;
+- pointer range, alignment, and memory extent;
+- length overflow and element extent;
+- canonical ordering requirements;
+- caller/callee ownership state; and
+- absence of private or stale capability handles.
 
-Runtime-HIR schema 4 retains the optional `reuse: "checked"` function
-certificate introduced by schema 3. It is emitted only after the source
-`@[assert.reuse]` tag has been discharged. The independent validator replays the
-local condition: every `store.write` and `store.grow` in that materialized
-function must say `owned-reuse`. This flag is not operation evidence and the
-emitter never consults it to select destructive lowering; each operation still
-carries and validates its own ownership and closed-layout permission.
+If a required check is not implemented for a public type, the compiler refuses
+that boundary. Accepting an unchecked boundary is not an implementation
+limitation hidden inside a successful artifact; it is an `InvariantFailure`.
 
-A residual recursive result whose representation is not yet closed receives a
-private pending `indirect` carrier. The first conditional join with a finite
-direct base case fixes that carrier's pointee type and wraps the direct arm;
-later consumers load the pointee before structural projection. A recursive
-result that reaches function completion without such a constructor remains an
-invariant failure.
+Malformed input takes the versioned boundary trap before a Blot value is
+constructed. A conforming host may still diverge, trap according to its declared
+contract, or fail to respond.
 
-Finite recursive structures may use the prelude `Arena`: nodes occupy a
-homogeneous Store and contain stable integer indices to other nodes. This is a
-typed indexed graph, not an ABI pointer. Safe lookup retains the Store bounds
-proof, and the arena cannot escape through an index alone. Once the safety
-certificate has been replayed, `store.read` omits a duplicate target bounds
-decision. The total `Arena.get` path reaches that operation only after its
-ordinary source guard succeeds. General recursive algebraic values still require
-an explicit recursive Runtime-HIR representation; the indexed form does not
-pretend to provide one.
+## 7. Seals at the boundary
 
-A direct self-tail call may become a branch to the function entry block. The
-returned value may pass only through block parameters, the compiler-private
-early-return sum envelope, and product projection followed by exact
-reconstruction; these operations neither trap nor perform effects. Any other
-operation after the call prevents the rewrite. The call operands become entry
-arguments and are assigned in parallel before the back-edge, so argument
-permutations observe the same old parameter values as a call. Mutual recursion
-and indirect calls remain calls.
+A seal is nominal in source through its public name and canonical invariant
+carrier. ABI 1 may lower it transparently to the carrier representation, while
+the manifest records the public name and carrier contract.
 
-An entry-cycle function may be emitted as one WebAssembly `loop` when treating
-every edge to the entry as a back-edge leaves an acyclic, tree-shaped reachable
-graph: unfolding may not revisit a block through two predecessors. The emitter
-unfolds that graph into nested target conditionals, assigns entry arguments in
-parallel, and emits each entry edge as `br`; returns remain returns. Unfolding
-has an explicit block budget. A shared join, non-entry cycle, invalid target, or
-graph over that budget retains the block dispatcher. This criterion makes
-reducibility and code-size growth explicit rather than relying on source syntax:
-recursive functions and desugared `for` forms use the same rule.
+The public name therefore distinguishes contracts for conforming tooling and in
+the semantic representation relation. Equal raw Core Wasm carrier bytes do not
+dynamically contain the name. A hostile caller can physically pass one equal
+carrier where another is expected; the ABI theorem assumes a caller that obeys
+the declared manifest, just as it assumes declared ownership and operation
+protocols.
 
-Before that test, Runtime HIR may bypass representation-only control
-round-trips. A conditional that materializes opposite booleans solely to branch
-on the result becomes a direct conditional. Likewise, known sum constructors
-that flow to one tag decision may branch directly to their matching payload
-blocks when those blocks have no other predecessor. Constructor payloads become
-block arguments. These rewrites do not duplicate or discard source operations,
-effects, or traps; they remove only the constructor/tag/projection steps whose
-outcome is already fixed.
+No claim of dynamic nominal enforcement follows from the byte layout alone.
 
-The emitter may remove an empty block whose only terminator forwards its
-parameters unchanged. Predecessors then target the forwarded block directly,
-preserving arguments, branch choice, effects, traps, and source evaluation
-order. This administrative simplification does not authorize folding a source
-computation or discarding an ownership edge.
+## 8. Manifest coherence
 
-The executable acceptance boundary for persistent decomposition includes:
+The public manifest is part of the artifact theorem. The compiler emits one
+canonical byte sequence and, where both forms are produced, requires:
 
-- host-dynamic, proof-refined `@array.take` and `@array.split` calls with plain
-  tuple results, plus rejection of unproved and statically out-of-bounds calls;
-- a host-dynamic `Array.uncons` / `Array.partition` / `<>` quicksort whose full
-  output agrees in the evaluator and emitted Wasm;
-- Runtime-HIR inspection proving the sort remains ordinary Store/control-flow
-  code rather than a collection-specific operation; and
-- high-level host and direct Rust/Wasm compiler acceptance for the same source.
+```text
+embedded_manifest_bytes = sidecar_manifest_bytes
+```
 
-## 6. Runtime theorem obligations
+The manifest includes ABI version, imports, exports, closed public types,
+ownership policy, seal names where relevant, and every representation parameter
+needed by a conforming adapter.
 
-Successful lowering and emission establish:
+Manifest ordering and encoding are deterministic. A caller may reject an unknown
+version before invoking the module.
 
-- Runtime HIR execution simulates specialized source execution;
-- WebAssembly execution simulates Runtime HIR execution;
-- public lifting rejects malformed representations before observation;
-- public lowering and lifting round-trip valid values; and
-- the sidecar and embedded manifest bytes are identical.
+## 9. WebAssembly emission
 
-The reference evaluator, independent conformance evaluator, emitted Wasm corpus,
-ABI round trips, and malformed-input tests are executable evidence. Current
-implementation coverage and target restrictions remain operationally documented
-in [`docs/backend.md`](../docs/backend.md).
+Emission translates validated Runtime HIR to WebAssembly accepted by the
+WebAssembly Core validator. Target code may contain administrative checks and
+steps, but their observation status is constrained.
+
+A target trap is permitted only when it corresponds to:
+
+- a specified source trap; or
+- a malformed-input or ownership trap required by the public ABI.
+
+A defensive internal check may remain only with proof that related validated
+states cannot reach it. Reaching one is an `InvariantFailure`, not a third class
+of permitted target trap.
+
+Integer arithmetic, memory operations, and host calls use the source or ABI
+behavior selected by their validated Runtime-HIR operation. A convenient Wasm
+instruction is not permission to change overflow, bounds, NaN, evaluation-order,
+or ownership semantics.
+
+## 10. Correctness relation
+
+Let `R_H` relate specialized Core configurations to Runtime-HIR configurations,
+and `R_W` relate Runtime HIR to WebAssembly configurations.
+
+Finite steps may be matched weakly:
+
+```text
+R(x, y)    x -> x'
+-----------------------------
+exists y'. y ->* y' and R(x', y')
+```
+
+This clause is necessary but not sufficient. Each relation also provides:
+
+1. **stuttering control:** an empty target match decreases a well-founded rank;
+2. **finite-outcome adequacy:** a related source return, request, or trap reaches
+   the matching target observation after finitely many administrative steps;
+3. **reflection:** every target return, request, or trap is matched by the source;
+4. **protocol correspondence:** related host responses resume related one-shot
+   continuations; and
+5. **divergence adequacy:** demanded infinite execution is not replaced by a
+   finite unrelated target outcome, nor manufactured by infinite administrative
+   stuttering.
+
+A progress-sensitive weak bisimulation is an equivalent proof form.
+
+For a closed accepted program, validated adapters, and related conforming host
+responses, composition of `R_H`, `R_W`, and the public representation relation
+preserves and reflects returns, requests, specified traps, malformed-boundary
+traps, and divergence.
+
+## 11. Target refusal versus invariant failure
+
+`TargetRefusal` is allowed when the selected, explicitly documented policy does
+not admit a checked program, for example an unsupported public type or an
+experimental feature not enabled for production.
+
+It is not allowed to hide:
+
+- an unresolved representation for a closed production-supported internal type;
+- a certificate the compiler previously claimed to produce;
+- a missing required adapter check for a boundary the compiler accepted;
+- a private capability that leaked past specialization; or
+- a target-only observation introduced by emission.
+
+Those are invariant failures.
+
+## 12. Obligations
+
+The runtime boundary owes:
+
+1. Runtime-HIR structural and representation validation;
+2. exact replay of safety and ownership permission;
+3. Store-write adequacy for persistent source operations;
+4. total public-layout construction over the declared supported type set;
+5. rejection of unsupported public layouts before emission;
+6. validation of malformed caller inputs before source-value construction;
+7. valid-value lift/lower round trips up to `~=`;
+8. deterministic manifest and byte emission;
+9. WebAssembly validation; and
+10. progress-sensitive preservation and reflection of source observations.
+
+Passing Wasm validation establishes target well-formedness, not source-language
+correctness. ABI round trips, differential execution, and validation tests are
+separate evidence for the obligations above.

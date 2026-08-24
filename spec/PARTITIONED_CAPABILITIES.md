@@ -1,39 +1,36 @@
 # Partitioned capability algebra
 
-Status: compiler design and implementation contract. `LANGUAGE.md` remains the
-normative source-language specification. This document defines the reusable
-ownership proof beneath concrete collection APIs such as `Slice`.
+## Status and scope
 
-## 1. Purpose and boundary
+[`LANGUAGE.md`](../LANGUAGE.md), subject to
+[`COHERENCE.md`](COHERENCE.md), remains the source-language authority. This
+document owns the reusable ownership proof beneath concrete collection adapters
+such as `Slice`.
 
-`Slice` is not the general concept. It is the first runtime adapter for a more
-general one:
+A partitioned capability is exclusive authority over a footprint of one
+resource. It may be factored into authorities for an exact disjoint cover,
+transformed locally, and recombined only with the exact proof produced by that
+factorization.
 
-> A partitioned capability is an exclusive authority over a footprint of one
-> resource. It may be factored into authorities for an exact disjoint cover,
-> transformed locally, and recombined only with the proof produced by that
-> factorization.
+The generic layer proves conservation and exclusivity. A family adapter decides
+what a footprint, address, and local transform mean for arrays, maps, tiles,
+trees, arenas, or another resource.
 
-The generic layer answers whether authority and owned members are conserved. It
-does not know how an integer indexes an array, how a key selects a map entry,
-how a path reaches a tree node, or how any of those structures are represented
-at runtime. Those decisions belong to a family adapter.
+## 1. Boundary
 
-This separation preserves Blot's existing constraints:
+The design preserves these constraints:
 
-- ownership remains a flow analysis outside the type lattice;
-- ordinary wrappers remain source code rather than privileged names;
-- only operations that cannot be expressed in Blot earn primitives;
-- proof-only values disappear before Runtime HIR and the public ABI; and
-- Rust producers and host consumers validate the same certificate.
+- ownership remains a flow judgment outside ordinary subtyping;
+- source wrappers are ordinary code rather than privileged names;
+- proof-only values erase before Runtime HIR and ABI closure;
+- only registered compiler families may mint separation evidence;
+- Rust producers and target validators check the same family-tagged certificate;
+  and
+- a source abstraction invariant is separate from the generic authority proof.
 
-The destructive Runtime-HIR registry exposes the array-interval family, reused
-by `Slice` and the ordered-text-map adapter. The proof kernel additionally has
-law adapters for finite key sets and rectangular tensor tiles. Those adapters
-prove the generic algebra without pretending a tensor or hash-map runtime
-representation exists. A family registry is a compiler trust boundary, not a
-source extension point: arbitrary source code cannot claim that two footprints
-are disjoint or manufacture a partition witness.
+The family registry is a compiler trust boundary. Arbitrary source code cannot
+claim two footprints are disjoint, assert exact cover, manufacture a root, or
+forge a partition witness.
 
 ## 2. Family model
 
@@ -42,11 +39,13 @@ A capability family `F` supplies:
 ```text
 Root_F       resource identities
 Foot_F       footprint descriptions
-Place_F      addressable member positions
-empty_F      the empty footprint
-(*)_F        partial ordered composition of footprints
-places_F(p)  the positions authorized by p
-focus_F(p,a) the position selected by address a, when it exists
+Place_F      owned member positions
+Address_F    operation addresses
+empty_F      empty footprint
+whole_F      complete root footprint
+(*)_F        partial ordered composition
+places_F(p)  positions authorized by p
+focus_F(p,a) selected position, when defined
 ```
 
 An authority is written:
@@ -55,29 +54,31 @@ An authority is written:
 Cap(F, root, p, E)
 ```
 
-where `p : Foot_F` and `E` is the hidden ownership payload indexed by the
-positions of `p`. `E` is analysis state, not a source-visible field or type.
+where `p : Foot_F` and `E` is the hidden ownership payload indexed by positions
+of `p`. `E` is analysis state, not a source-visible type member or run-time
+capability object.
 
-The composition operator is deliberately **not assumed commutative**. Array and
-list segments have an observable order; tree children may have named or ordered
-positions. A particular family may prove commutativity, as a key-set partition
-usually can, but the generic checker never swaps operands silently.
+The composition operator is deliberately ordered and partial. The generic core
+does not assume commutativity. Array segments, list segments, tree children, and
+ordered map ranges have observable order. A family such as finite key sets may
+prove a stronger commutative law for its own operations.
 
-For a single root, `p * q` is defined only when the family proves the two
-footprints compatible. A valid family satisfies these laws.
+## 3. Family laws
 
-### 2.1 Root agreement
+### 3.1 Family and root agreement
 
-Composition never crosses resources:
+Composition never crosses families or roots:
 
 ```text
-Cap(F, r, p, _) * Cap(F, s, q, _) is defined only if r = s
+Cap(F,r,p,_) * Cap(G,s,q,_)
 ```
 
-Family identity is part of the proof. Equal-looking footprints from different
-families are never interchangeable.
+is defined only when `F = G` and `r = s`.
 
-### 2.2 Separation
+Equal-looking footprints under different resources or family adapters are not
+interchangeable.
+
+### 3.2 Separation
 
 If `p * q` is defined, the authorized write sets are disjoint:
 
@@ -85,9 +86,9 @@ If `p * q` is defined, the authorized write sets are disjoint:
 places_F(p) intersect places_F(q) = empty
 ```
 
-This is the safety property that permits simultaneous live child authorities.
+This permits both child authorities to remain live simultaneously.
 
-### 2.3 Exact cover
+### 3.3 Exact cover
 
 Composition neither drops nor invents positions:
 
@@ -97,265 +98,234 @@ places_F(p * q) = places_F(p) union places_F(q)
 
 The hidden ownership payload is partitioned by the same cover.
 
-### 2.4 Unit
+### 3.4 Unit
 
-The empty footprint authorizes no write and is a two-sided unit whenever the
-family's representation admits it:
+The empty footprint authorizes no write:
 
 ```text
-empty_F * p = p = p * empty_F
 places_F(empty_F) = empty
 ```
 
-Families may avoid constructing empty runtime views while still validating the
-law for proof purposes.
-
-### 2.5 Associativity and coherence
-
-Whenever either side is defined, both bracketings describe the same footprint:
+Whenever the corresponding compositions are admitted:
 
 ```text
+empty_F * p = p
+p * empty_F = p
+```
+
+A family may avoid constructing empty run-time views while validating the unit
+law at the proof level.
+
+### 3.5 Conditional associativity
+
+Because composition is partial, the generic law is result coherence when both
+bracketings exist:
+
+```text
+(p * q) * r defined    p * (q * r) defined
+------------------------------------------------
 (p * q) * r = p * (q * r)
 ```
 
-The proof objects are not definitionally equal: they are different trees.
-Witness reassociation is the explicit coherence operation relating the trees. It
-consumes the old witnesses and creates the rotated witnesses without touching
-runtime state.
+Definedness of one bracketing does not imply definedness of the other.
+Rectangular tiles are the canonical counterexample: two adjacent top tiles may
+compose into a full-width strip that composes with a bottom strip, while one top
+tile composed with the bottom strip would form a forbidden L shape.
 
-### 2.6 Deterministic focus
+A particular family may prove the stronger partial-monoid property that either
+bracketing implies the other. The generic checker does not assume it.
+
+### 3.6 Deterministic focus
 
 An address resolves to at most one authorized position:
 
 ```text
-focus_F(p, a) = x and focus_F(p, a) = y implies x = y
+focus_F(p,a) = x    focus_F(p,a) = y
+-------------------------------------
+x = y
 ```
 
-If `p * q` is defined, a successful focus belongs to exactly one non-empty side.
-This prevents a structure adapter from using one address to spend two member
-obligations.
+When `p * q` is defined, a successful focus belongs to exactly one non-empty
+child. One address cannot spend two member obligations.
 
-### 2.7 Frame locality
+### 3.7 Frame locality
 
-A transform through `p` cannot change state reachable only through a disjoint
-frame `q`:
+A transform through `p` cannot change observations reachable only through a
+disjoint frame `q`:
 
 ```text
 p * q defined
-transform(state, p, a, v) = state'
------------------------------------
-observe(state, q) = observe(state', q)
+transform(state,p,a,v) = state'
+--------------------------------
+observe(state,q) = observe(state',q)
 ```
 
-This is the semantic connection between footprint separation and destructive
-Runtime-HIR operations.
+Frame locality connects footprint separation to destructive Runtime-HIR
+operations.
 
-## 3. Proof objects
+### 3.8 Ownership conservation
 
-Factoring an authority produces two capabilities and a linear witness:
+Let `Omega(x)` be the multiset of affine and linear obligations inside analysis
+value `x`. Every outcome of a capability operation satisfies:
 
 ```text
-Cap(F,r,p,E)  p = l * rgt  E = E_l * E_r
+Omega(consumed inputs) = Omega(returned values in that outcome)
+```
+
+The equation is path-sensitive. Alternative success and failure outcomes are
+checked independently; their obligations are not added together.
+
+## 4. Proof objects
+
+Factoring an authority produces two child capabilities and a linear witness:
+
+```text
+Cap(F,r,p,E)    p = l * rgt    E = E_l * E_r
 ------------------------------------------------ partition
-Cap(F,r,l,E_l), Cap(F,r,rgt,E_r), Part(F,r,p,l,rgt)
+Cap(F,r,l,E_l), Cap(F,r,rgt,E_r), Part(F,r,p,l,rgt,k)
 ```
 
-`Part` records family, root, parent, ordered children, and the identity of the
-factorization. It contains no resource element. A combine consumes the exact
-witness and exact child authorities:
+`k` is the factorization-event identity. `Part` records family, root, parent,
+ordered children, and event lineage. It contains no resource element.
+
+Combination consumes the exact witness and exact children:
 
 ```text
-Part(F,r,p,l,rgt), Cap(F,r,l,E_l), Cap(F,r,rgt,E_r)
---------------------------------------------------- combine
+Part(F,r,p,l,rgt,k)
+Cap(F,r,l,E_l)
+Cap(F,r,rgt,E_r)
+------------------------------------------------ combine
 Cap(F,r,p,E_l * E_r)
 ```
 
-Matching by footprint alone is insufficient. Two equal extents created by
-different resource roots or different factorization events are not the same
-permission. The certificate therefore retains produced-value lineage as well as
-the family equations.
+Matching only family, root, or equal footprint is insufficient. A stale witness,
+a witness from another split event, or equal extents under another produced-value
+lineage cannot authorize combination.
 
-No operation may fabricate `Part`. It is minted only after the family adapter
-validates an exact cover, or by a coherence rewrite over already valid
-witnesses.
+No source operation fabricates `Part`. It is minted only after the registered
+family validates factorization, or by an admissible coherence rewrite over
+already valid witnesses.
 
-## 4. Conservation law
+## 5. Proof-tree coherence
 
-Let `Omega(x)` be the multiset of affine and linear ownership obligations inside
-analysis value `x`. Every accepted capability operation preserves the multiset
-across its consumed inputs and every possible result:
+Given:
 
 ```text
-Omega(inputs consumed by an outcome) = Omega(values returned by that outcome)
+J1 : Part(F,r,abc,a,bc,k1)
+J2 : Part(F,r,bc,b,c,k2)
 ```
 
-This law is path-sensitive. Alternative success and failure outcomes are checked
-separately; their obligations are not added together.
+left reassociation proposes:
 
-### 4.1 Acquisition and release
+```text
+ab = a * b
+J4 : Part(F,r,abc,ab,c,k4)
+J3 : Part(F,r,ab,a,b,k3)
+```
+
+The operation succeeds only when the family adapter validates `a * b` and the
+resulting parent equations. It consumes `J1` and `J2` and returns `J3` and `J4`.
+Right reassociation has the symmetric condition.
+
+If the target intermediate composition is undefined, reassociation is refused
+and the original proof tree remains the only admissible bracketing. This is not
+an ownership failure: the existing capabilities are still valid; only that proof
+rotation is unavailable.
+
+Coherence is proof-only:
+
+```text
+runtime(reassociate(...)) = unit
+```
+
+Its compiler cost may be constant for a family with canonical footprints, but a
+family registration must state and test its actual proof-normalization cost.
+The checker cannot normalize by silently resurrecting consumed witnesses.
+
+## 6. Generic operations
+
+### 6.1 Acquisition and release
 
 ```text
 acquire_F(Resource(E)) = Cap(F,r,whole_F,E)
 release_F(Cap(F,r,whole_F,E)) = Resource(E)
 ```
 
-An acquisition may copy runtime storage only when `E` is unrestricted. If `E`
-contains owned values, acquisition must consume the source and transfer `E`.
+Acquisition may copy run-time storage only when copying the payload is permitted.
+If `E` contains owned values, acquisition consumes and transfers the source
+payload or is rejected.
 
-Release requires the family's complete root footprint. Releasing an arbitrary
-part would discard the complement's authority or expose aliased storage.
+Release requires the complete root footprint. Releasing an arbitrary part would
+drop complement authority or expose aliased mutable storage.
 
-### 4.2 Borrowed observation
+### 6.2 Borrowed observation
 
 ```text
-observe_F(&Cap(F,r,p,E), a) -> &E[a]
+observe_F(&Cap(F,r,p,E), a) -> &E[position]
 ```
 
-A source operation may return an ordinary copied value only when the selected
-member is unrestricted. A true borrow remains subject to Blot's lexical borrow
-rules and cannot escape.
+A source operation may return an ordinary copied member only when the selected
+member is unrestricted. A true borrow remains lexical and cannot escape.
 
-### 4.3 Consuming exchange
+### 6.3 Consuming exchange
 
 Exchange is the ownership-general member update:
 
 ```text
 exchange_F(!Cap(F,r,p,E), a, !N)
-  -> #Exchanged(!E[a], !Cap(F,r,p,E[a := N]))
+  -> #Exchanged(!E[position], !Cap(F,r,p,E[position := N]))
    | #NotFound(!N, !Cap(F,r,p,E))
 ```
 
-Both outcomes return every incoming obligation exactly once. The failure outcome
-performs no runtime mutation. A discarding write is merely the special case
-where the family proves the displaced member unrestricted.
+Both outcomes return every incoming obligation exactly once. Failure performs no
+run-time mutation. A discarding write is a special case permitted only when the
+displaced member is unrestricted or another explicit consumer accounts for it.
 
-### 4.4 Permutation and structure transforms
+### 6.4 Permutation and shape transform
 
-A permutation changes positions but not the ownership multiset:
+A permutation preserves the ownership multiset:
 
 ```text
 Omega(permute_F(Cap(F,r,p,E), pi)) = Omega(E)
 ```
 
-A shape transform may change the footprint representation only when it provides
-an isomorphism between old and new positions and preserves root identity.
+A shape transform changes footprint representation only with a checked
+isomorphism between old and new positions, preservation of root identity, and
+frame locality.
 
-## 5. Coherence of partition trees
+## 7. Generic core versus family adapter
 
-Given:
+| Concern | Generic capability core | Family adapter |
+| --- | --- | --- |
+| exclusive use through branches and calls | yes | no |
+| family and root identity | checks | supplies |
+| exact witness lifecycle | yes | validates factorization |
+| ownership conservation | yes | maps positions to payloads |
+| proof-tree reassociation | consumes exact witnesses | validates target partial composition |
+| address meaning | no | supplies index, key, path, or handle semantics |
+| bounds or membership proof | no | supplies |
+| run-time representation | no | supplies Store, nodes, buckets, pages, or links |
+| destructive lowering | authorizes one occurrence | emits family operation |
+| acquisition/release cost | checks transfer safety | chooses copy, reuse, or materialization |
 
-```text
-J1 : Part(F,r,abc,a,bc)
-J2 : Part(F,r,bc,b,c)
-```
+The division avoids both hardcoding every collection into ownership flow and
+allowing source code to assert unverified separation.
 
-left reassociation consumes both and returns:
+## 8. Family examples
 
-```text
-J4 : Part(F,r,abc,ab,c)
-J3 : Part(F,r,ab,a,b)
-```
-
-where `ab = a * b`. Right reassociation is the inverse. The generic proof needs
-only family equality, exact parent-child identity, and family composition. It
-does not need to know whether footprints are intervals, key sets, list segments,
-or tree contexts.
-
-Coherence is proof-only:
-
-```text
-runtime(reassociate(J1,J2)) = unit
-cost(reassociate(J1,J2)) = O(1) analysis, O(0) runtime
-```
-
-The checker may normalize proof trees internally, but source-visible witnesses
-remain linear values so normalization cannot resurrect a consumed proof.
-
-## 6. Generic operations versus family adapters
-
-| Concern                                 | Generic capability core   | Family adapter                       |
-| --------------------------------------- | ------------------------- | ------------------------------------ |
-| exclusive use across branches and calls | yes                       | no                                   |
-| family/root identity                    | yes                       | supplies identities                  |
-| exact-cover witness lifecycle           | yes                       | validates factorization              |
-| ownership conservation                  | yes                       | maps positions to member payloads    |
-| witness reassociation                   | yes                       | supplies partial composition         |
-| address meaning                         | no                        | index, key, path, handle, coordinate |
-| bounds/membership proof                 | no                        | family-specific                      |
-| runtime representation                  | no                        | Store, links, buckets, nodes, pages  |
-| destructive lowering                    | authorizes one occurrence | emits the operation                  |
-| acquisition/release cost                | checks transfer safety    | chooses copy/reuse/materialization   |
-
-The division prevents two opposite mistakes:
-
-1. hardcoding every collection into ownership flow; and
-2. allowing user code to assert unverified separation facts.
-
-## 7. Candidate family instantiations
-
-### 7.1 Arrays, vectors, buffers, and strings
+### 8.1 Array intervals
 
 ```text
-Foot = half-open interval [lo,hi)
+Foot = [lo,hi)
 [a,b) * [b,c) = [a,c)
 Address = relative integer index
 ```
 
-This is the current `Slice` adapter. Typed buffers and strings can reuse the
-interval algebra, although string addressing must choose bytes, scalar values,
-or grapheme clusters and keep that choice stable.
+This is the production family used by `Slice` and by the positional authority
+under the ordered-text-map adapter. It admits the stronger associative
+definedness property for adjacent ordered intervals.
 
-### 7.2 Matrices and tensors
-
-Rectangular tiles compose along one complete matching face. Root and both axis
-ranges are part of the footprint, so equal numeric bounds in different tensors
-never mix. General tilings require a partition tree because an L-shaped union is
-not rectangular.
-
-```text
-Foot = (root, [x0,x1), [y0,y1))
-Address = (x,y)
-```
-
-`compiler/src/partition.rs` implements this partial composition and containment
-model. Its tests cover horizontal and vertical faces, foreign roots,
-containment, and refusal of L-shaped unions. This is a trusted proof adapter;
-destructive tensor lowering still requires a row-major Store/stride adapter and
-the registration suite in section 10.
-
-### 7.3 Linked sequences
-
-A list segment can be identified by root plus ordered endpoint identities. Its
-combine proof is a splice boundary or zipper context, not arithmetic adjacency.
-
-```text
-Foot = segment(start,end)
-Address = cursor or bounded traversal
-```
-
-Zero-copy partition additionally requires exclusive links. A persistent list may
-implement the same source operation by copying its spine; the ownership algebra
-does not promise a particular representation.
-
-### 7.4 Trees
-
-A subtree authority is insufficient to reconstruct the whole tree. Partition
-must return the selected subtree, the disjoint remainder or sibling pieces, and
-a zipper-shaped witness recording the parent context. Child names or positions
-make composition ordered.
-
-```text
-Foot = path-indexed subtree or forest
-Address = child path
-Witness = typed zipper context
-```
-
-Rebalancing is a footprint isomorphism and must update witnesses; a stale path
-cannot remain authoritative after rotation.
-
-### 7.5 Maps and sets
-
-Stable key sets form a mostly commutative separation algebra:
+### 8.2 Finite key sets
 
 ```text
 Foot = finite key set
@@ -363,125 +333,124 @@ P * Q defined when P intersect Q = empty
 Address = key
 ```
 
-Hash buckets are a runtime detail and must not be the logical footprint if
-rehashing can move them. A range-partitioned ordered map may instead use key
-ranges, with explicit treatment of boundary keys.
+This family is usually commutative. A production registration still requires a
+stable key identity and a run-time adapter; a proof-law model alone does not
+create a supported map representation.
 
-`OWNED_ORDERED_MAPS.md` specifies the first production collection adapter along
-that second route. Strictly ordered immutable text keys refine existing array
-intervals into contiguous key ranges, so the adapter reuses the `array-interval`
-compiler family. It is evidence that one proof family can support more than one
-public data-structure API; it is not yet the non-contiguous `map-key-set` family
-modeled by the law tests.
-
-### 7.6 Arenas and allocators
-
-An arena can partition handle sets, page ranges, or allocation classes. Handle
-generation is part of position identity; otherwise a freed and reallocated slot
-could satisfy a stale capability.
+### 8.3 Rectangular tensor tiles
 
 ```text
-Foot = set of (slot,generation) or page intervals
-Address = generational handle
+Foot = ([x0,x1), [y0,y1))
+Address = (x,y)
 ```
 
-### 7.7 Graphs and DAGs
+Tiles compose only along one complete matching face. An L-shaped union is not a
+rectangle. Therefore not every proof-tree rotation is admissible. The law model
+must test equality where both bracketings exist and refusal where a proposed
+intermediate is L-shaped.
 
-Graphs are not an immediate instance. Disjoint node sets can still share or
-cross edges, and a mutation through one partition may invalidate the other's
-adjacency. A valid family must choose and prove one of:
+A destructive tensor family additionally needs a Store/stride representation
+and end-to-end target registration.
 
-- ownership of nodes plus every incident edge;
-- an explicit cut set returned with the partition;
-- separate node and edge capabilities; or
-- a read-only shared capability combined with exclusive local mutation.
+### 8.4 Linked sequences
 
-Without such a model, `node-set intersection = empty` does not imply frame
-locality. The generic core must reject a graph adapter that proves only node
-disjointness.
+A list segment may be identified by root plus ordered endpoint identities. Its
+combine proof is a splice boundary or zipper context rather than arithmetic
+adjacency. Zero-copy partition requires exclusive links; a persistent list may
+implement the same source operation by copying a spine.
 
-## 8. Non-goals
+### 8.5 Trees
 
-This design does not introduce:
+A subtree alone is not enough to rebuild the whole tree. Partition returns the
+selected subtree, disjoint siblings or remainder, and a zipper-shaped witness.
+Rebalancing changes paths and must transform every live witness through a checked
+footprint isomorphism.
 
-- ownership qualifiers into algebraic subtyping;
-- lifetime or region parameters in source types;
-- user-defined unsafe primitives;
-- a promise that every data structure admits zero-copy partition;
-- fractional/shared write permissions;
-- implicit witness search by equal-looking footprints; or
-- a runtime capability object crossing Blot Core Wasm ABI 1.
+### 8.6 Ordered maps
 
-Read sharing remains ordinary immutable persistence or lexical borrowing.
-Concurrent shared mutation would require a different algebra and synchronization
-semantics.
+The current `OrderedTextMap` is not a separate compiler family. It refines an
+array interval with a constructor-established strict-ordering protocol. The
+compiler proves interval authority; the source adapter preserves ordering. A
+true non-contiguous key-set family is a separate future registration.
+
+### 8.7 Arenas and allocators
+
+An arena may partition page ranges or sets of `(slot,generation)` handles.
+Generation is part of position identity; otherwise a freed and reallocated slot
+could satisfy a stale capability.
+
+### 8.8 Graphs
+
+Disjoint node sets do not automatically imply disjoint mutation because edges
+may cross the cut. A graph family must own incident edges, return an explicit cut
+set, separate node and edge authority, or combine read sharing with exclusive
+local mutation. Node-set disjointness alone does not prove frame locality.
 
 ## 9. Compiler representation
 
-The ownership implementations should converge on family-tagged analysis values:
+The ownership checker uses family-tagged analysis values:
 
 ```text
 Capability {
   family,
-  authority,
-  members
+  root,
+  footprint,
+  payload-lineage
 }
 
 PartitionWitness {
   family,
+  root,
   parent,
   left,
-  right
+  right,
+  factorization-event
 }
 ```
 
-The array adapter translates existing `@region.*` calls into these generic
-values with `family = array-interval`. Generic ownership operations perform
-substitution, branch joining, obligation calculation, witness matching, and
-coherence. The adapter alone interprets indexes and lowers Store operations.
+Family identity and semantic revision are serialized in closure ownership
+contracts and certificates. A cached contract from a compiler that assigns a
+different meaning to a family is invalid.
 
-Family identity is serialized in closure ownership contracts and is included in
-their semantic revision. A cached contract from a compiler that assigned a
-different meaning to a family cannot be reused.
+Proof-only values erase before Runtime HIR. Runtime HIR receives only the
+validated permission attached to one destructive occurrence and the family's
+closed run-time representation.
 
-The public `Slice` type and API need not change. This is a compiler fact
-refactoring that makes the existing proof honest about what is universal and
-what belongs to arrays.
+## 10. Non-goals
 
-### 9.1 First extraction
+This algebra does not introduce:
 
-This PR extracts exact witness combination and proof-tree reassociation into
-`compiler/src/partition.rs`. That module is parameterized by family and
-footprint and contains no Slice, Store, interval, or index operation. The
-existing Region ownership fact is the array-interval adapter that supplies
-produced-value equality and composition.
+- ownership qualifiers into ordinary subtyping;
+- source lifetime or region parameters;
+- user-defined unsafe family registration;
+- a promise that every data structure admits zero-copy partition;
+- fractional shared-write permissions;
+- implicit witness search by equal-looking footprints;
+- universal proof-tree reassociation; or
+- a public run-time capability object in ABI 1.
 
-The law tests instantiate the same core with ordered intervals, disjoint map key
-sets, and rectangular tensor tiles. The key-set and rectangle models are
-evidence about the abstraction, not unsupported source operations or invented
-runtime layouts. Promoting either to a destructive Runtime-HIR family still
-requires family-tagged serialized `Produced` values, a representation adapter,
-and the remaining end-to-end registration items below. The trusted registry is
-intentionally not a source extension mechanism.
+Read sharing remains immutable persistence or lexical borrowing. Concurrent
+shared mutation requires another algebra and synchronization semantics.
 
-## 10. Registration requirements
+## 11. Registration requirements
 
-A future production family is accepted only after Node and Rust independently
-test all of the following:
+A production family is accepted only after independent producer and validator
+evidence for:
 
 1. family and root separation;
-2. disjointness and exact cover for every partition constructor;
-3. unit and associativity on admitted footprints;
-4. deterministic focus and frame locality;
-5. success and failure ownership conservation;
-6. exact witness consumption and rejection of stale or foreign witnesses;
-7. reassociation and inverse coherence;
-8. acquisition/release behavior for unrestricted and owned members;
-9. proof erasure and ABI refusal for live capabilities or witnesses;
-10. Rust-evaluator and emitted-Wasm observation agreement; and
-11. an explicit cost model distinguishing semantic guarantees from optimized
-    representation reuse.
+2. disjointness and exact cover for every factorization constructor;
+3. unit laws on admitted footprints;
+4. equality whenever both associative bracketings are admitted;
+5. refusal of reassociation when the target intermediate is undefined;
+6. deterministic focus and frame locality;
+7. path-sensitive ownership conservation on success and failure;
+8. exact witness consumption and rejection of stale, foreign, or copied proof;
+9. acquisition/release behavior for unrestricted and owned members;
+10. proof erasure and ABI refusal for live capabilities or witnesses;
+11. source, Runtime-HIR, Rust evaluator, and emitted-Wasm observation agreement;
+    and
+12. an explicit cost model separating semantic guarantees from optimized reuse.
 
-Passing only examples is insufficient. Each adapter requires law tests over a
-generated or exhaustively bounded footprint domain plus end-to-end catalog
-programs.
+Law tests use generated or exhaustively bounded footprint domains. Passing a few
+examples is not registration evidence, and a law adapter does not by itself
+create a run-time representation.

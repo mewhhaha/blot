@@ -1,238 +1,295 @@
 # Staging and specialization
 
-## 1. Phase separation
+## Status and scope
 
-Blot has one value language observed at two phases. Compile-time availability is
-evidence about an expression, not a second type system. Let
+[`LANGUAGE.md`](../LANGUAGE.md), subject to
+[`COHERENCE.md`](COHERENCE.md), defines which source expressions are required to
+resolve at compile time. This document owns compile-time evaluation,
+phase-erasure, specialization, and representation-closure obligations.
 
-```text
-K : ExpressionId -> CompileTimeValue
-```
+Staging is not an optimizer that may guess whether an expression is convenient
+to evaluate. Required compile-time evaluation is part of checking; optional
+partial evaluation must preserve the same residual source meaning.
 
-record successful deterministic evaluation during checking. A type may be a
-compile-time value; it has no runtime representation merely because it appears
-in the ordinary value language.
+## 1. Phase judgments
 
-Residualization is written
-
-```text
-K |- e => v          fully evaluated compile-time value
-K |- e => ~r         residual runtime expression
-```
-
-Failure to evaluate a pure runtime expression speculatively does not authorize
-its erasure. It remains residual unless the language requires compile-time
-evaluation and reports a diagnostic.
-
-## 2. Phase safety
-
-Let `erase(K, e)` remove compile-time declarations after substituting the code
-and representation decisions they produced. The phase-safety obligation is:
+Compile-time availability and run-time typing are separate judgments:
 
 ```text
-K |- e => ~r
--------------------------------
-free_runtime(r) intersect dom(K) = {}
+Delta ; I |-ct e downarrow w ; I'
+Gamma |-rt c : A ! epsilon
 ```
 
-and for any two compile-time environments that produce the same residual code,
-runtime observations agree. A compile-time value may change runtime behavior
-only through the residual code, layout, effect identity, or adapter it
-explicitly generates.
+`Delta` contains only compile-time-available bindings. `I` is the
+compiler-controlled identity and explicit-input world. It includes the source
+revision, resolved module-instance stack, included byte identities, compiler
+schema, primitive catalog, and other inputs that the evaluated expression may
+observe.
 
-Compile-time evaluation is deterministic for a fixed source graph. Fuel or
-resource exhaustion is an implementation refusal, not a silently chosen value.
-Host effects and ambient I/O are unavailable unless represented by explicit
-compile-time input in the source graph.
+A run-time binding cannot occur free in a compile-time type, effect descriptor,
+layout, declaration tag, reflection decision, specialization choice, or public
+ABI shape.
 
-## 3. Modules and generative identity
+## 2. Compile-time authority
 
-An import occurrence evaluates one internal module closure over its explicit
-input. The closure retains its defining module revision and closed lexical
-environment. Returning a value reached through it from another module does not
-replace that origin.
+Compile-time evaluation has no ambient host authority. It may observe only:
 
-Checking records the returned tail's effect row separately from effects in
-preceding top-level declarations. When that result row settles to empty, staging
-may normalize the tail to a pure returned value even if initialization performed
-host effects. A non-empty result row keeps its ordered tail; staging must not
-infer purity again from expression shape.
+- compile-time bindings in `Delta`;
+- dependency-resolved module inputs;
+- explicitly included bytes and their declared transform;
+- deterministic compiler primitives admitted by the staging contract; and
+- compiler-owned identity allocation under `I`.
 
-Generative declarations, currently effects and seals, mint an identity per
-evaluated declaration occurrence. Cache reuse preserves an identity only when
-the complete declaration revision is unchanged; reevaluation after invalidation
-mints another identity. Spelling is not identity.
+Source effects and public host capabilities are unavailable. An import or include
+is not an ambient filesystem read: dependency resolution supplies an explicit
+revisioned input before evaluation begins.
 
-The closed specialization capsule and its coherence law are specified in
-[`TYPECHECKING.md`](TYPECHECKING.md). A capsule contains no live inference
-variable, mutable solver state, or undeclared dependency.
+Operator spelling and precedence are not staged values. They are fixed by the
+generated language plan before elaboration.
 
-## 4. Specialization judgment
+## 3. Checked bridges
 
-Specialization converts typed, owned residual source into representation-closed
-runtime code:
+A compile-time value acquires semantic authority only through the bridge owned by
+its use site:
 
 ```text
-K ; Sigma ; C |- e => r : Rep(A)
+bridgeType   : CTValue -> Result<CoreType, SourceDiagnostic>
+bridgeEffect : CTValue -> Result<EffectDescriptor, SourceDiagnostic>
+bridgeLayout : CTValue -> Result<LayoutDescriptor, SourceDiagnostic>
+bridgeTag    : CTValue -> Result<DeclarationTag, SourceDiagnostic>
 ```
 
-`Sigma` contains settled schemes and concrete call-site shapes. `C` contains the
-certificates produced by inference and safety analyses. `Rep(A)` is a closed
-physical representation; it contains no inference variable, open record row,
-open variant row, compile-time type value, dynamic structural name, or
-unresolved handler.
+The bridges are partial. A closure that can compute a type is not itself a type;
+it must be applied at compile time. A record that resembles an effect descriptor
+has no effect identity until `bridgeEffect` validates it. A layout value cannot
+smuggle a run-time dependency or private target pointer into public metadata.
 
-Specialization may clone a definition for distinct concrete representations. Two
-clones must remain contextually equivalent to the source definition at their
-respective call types. Memoization keys include closure identity, argument
-representation, effect identity, and every compile-time value observed while
-selecting the result.
-
-Those components are structural identities. `TyRepId` identifies a node in the
-settled type graph, representation identities identify already-closed Runtime
-layouts, and generative compile-time values retain their owning instance
-identity. A formatted type or value is diagnostic output only; it is not a
-specialization, cache, or recursion key. The key is published only after every
-component is closed. Until then the specialization remains pending and cannot
-choose a convenient scalar or indirect fallback.
-
-For a closure `lambda x. e`, let `FV_r(e)` be the lexically free bindings whose
-values contain residual runtime components. Closure conversion is:
+A decoder may return a concrete value with a widened sound type:
 
 ```text
-FV_r(e) = { c1 : C1, ..., cn : Cn }
------------------------------------------------------------- closure-convert
-rec f x = e  =>  fun f(x : A, c1 : C1, ..., cn : Cn) = e'
+(w, A, proof that w inhabits A)
 ```
 
-where `e'` replaces each captured runtime component with the corresponding
-function parameter. A recursive application passes the same explicit captures.
-Compile-time free bindings remain in the evaluator environment and do not become
-runtime parameters. The dynamicity test is over the argument and the free
-variables unless the evaluator holds a finite staged driver:
+This is checked evidence, not an unchecked type annotation and not a second
+run-time value.
+
+## 4. Determinism and limits
+
+For fixed `Delta`, `I`, compiler schema, and primitive catalog, successful
+compile-time evaluation is deterministic up to alpha-renaming of identities that
+are explicitly hidden by the result relation.
+
+A required compile-time computation may diverge in the source semantics. The
+implementation may stop first at a documented deterministic fuel, stack, memory,
+or expansion bound. Such exhaustion is a `LimitDiagnostic`, including
+`BLOT_EVALUATION_LIMIT`:
+
+- it is not a source value;
+- it is not a source trap or divergent execution;
+- it proves neither acceptance nor rejection; and
+- raising the bound may let the same source revision finish without changing
+  language meaning.
+
+A semantic bridge failure, forbidden phase dependency, or effectful compile-time
+expression is instead a `SourceDiagnostic`.
+
+Optional speculative evaluation has a weaker contract. Failure to evaluate an
+otherwise residual empty-row expression does not authorize erasure; the
+expression remains residual unless the language requires compile-time
+resolution.
+
+## 5. Generative and applicative identities
+
+### 5.1 Ordinary effects
+
+Ordinary source effects are generative. Evaluating a declaration allocates under:
 
 ```text
-Dynamic(x) or exists c in FV(e). Dynamic(c)
--------------------------------------------- residual-recursion
-residualize(rec f x = e)
+(module instance, declaration node, compile-time scope, signature)
 ```
 
-If neither premise holds, ordinary static evaluation may continue. A finite
-staged iterator or a captured finite staged array paired with a static index is
-a stronger witness: recursion unfolds around the dynamic accumulator until that
-driver is exhausted. This is what permits a compile-time field-name array to
-drive residual projections. In the absence of that witness, recursion controlled
-by a dynamic captured bound must not be unrolled merely because its initial
-accumulator is static.
+Administrative re-evaluation of the same recorded occurrence recovers the same
+atom. Evaluation under another module-instance stack mints a distinct atom even
+when the operation descriptors are structurally equal.
 
-A dynamic branch that produces a function has no single closure to convert. Let
-`f_1, ..., f_n` be the functions its arms can produce, each a lambda or a
-partially applied primitive, and let `FV_r(f_i)` be that arm's runtime captures.
-The join is defunctionalized:
+A reusable cache entry containing an ordinary effect is valid only when the
+complete owning instance identity and revision are preserved. A module path or
+declaration spelling alone is insufficient.
+
+### 5.2 Seals
+
+Seals are applicative rather than generative. Their identity is:
 
 ```text
-f_i = source_i with captures FV_r(f_i) = { c_i1 : C_i1, ..., c_ik : C_ik }
------------------------------------------------------------------- choice-join
-join(f_1, ..., f_n)  =>  #choice_i { c_i1, ..., c_ik } : Choice(f_1, ..., f_n)
+(public name, canonical closed invariant carrier)
 ```
 
-`Choice` is compiler-local. Two arms share a case only when they name the same
-source and the same closed environment, or the same primitive with equal applied
-arguments; a captured compile-time value distinguishes two closures over one
-body. An arm that is already a `Choice` contributes its own alternatives, so the
-table stays flat and finite. Applying the join dispatches on the case, projects
-the payload back into `FV_r(f_i)` through ordinary closure conversion, and
-applies `f_i` — so the body still specializes per argument representation. A
-branch that joins a function with anything outside this grammar has an open
-source set and is refused with the offending value and the inferred signature; a
-closed set must specialize.
+Reconstructing equal inputs reconstructs the same seal across evaluations and
+revisions. Cache identity therefore retains the normalized public name and
+canonical carrier; it does not substitute a declaration occurrence or fresh
+atom.
 
-When a higher-order argument supplies a concrete arrow for an abstract arrow,
-specialization records the induced representation substitution. For example,
-matching `(A, T) -> A` with `(Store S, Int) -> Store S` establishes
-`Rep(A) = Store(Rep(S))` and `Rep(T) = i64` for nested closures evaluated in
-that lexical scope. Every representation hole has a globally fresh identity in
-the checked module; two unrelated `Bottom` positions must not unify merely
-because their signatures were reified in separate traversals.
+### 5.3 Other compile-time identities
 
-Call-site facts are transactional. Matching an expected type expression `A`
-against an argument with layout `rho` records `Rep(A) = rho`. Products also
-record a structural key made from their field names and nesting, because scalar
-refinements do not affect layout:
+Every identity-producing primitive states whether it is:
+
+- generative under a complete semantic occurrence;
+- applicative in canonical input values; or
+- merely an administrative compiler identity hidden by the semantic relation.
+
+A new identity class cannot inherit the rule of an existing class because its
+printed representation happens to match.
+
+## 6. Required phase erasure
+
+After staging, residual run-time code is closed over compile-time bindings.
+Erased values include, where applicable:
+
+- type representations;
+- effect and layout descriptors;
+- reflection values;
+- declaration tags;
+- proof-only relationship packages;
+- ownership summaries and certificates;
+- included-data computations; and
+- known specialization decisions.
+
+Erasure consumes these values into residual code or checked metadata. A residual
+read of an erased binding is an invariant failure.
+
+The phase-safety obligation is contextual:
+
+> Replacing an erased compile-time value while holding its checked residual
+> artifact fixed cannot change run-time observations.
+
+The qualification about the residual artifact matters: changing a type or layout
+may legitimately produce different residual code during a fresh compilation.
+
+## 7. Partial evaluation
+
+An optional partial evaluator may reduce a closed pure fragment when it proves
+that the replacement preserves:
+
+- demand;
+- source evaluation order;
+- specified traps and divergence;
+- generative identity allocation;
+- relationship and ownership certificate premises; and
+- source-origin information needed by diagnostics.
+
+An empty effect row alone is not enough. A computation can still trap or diverge,
+and moving it across a branch can change whether it is demanded.
+
+Partial evaluation cannot duplicate a generative declaration, merge two module
+instances, turn a one-shot demand into multiple demands, or use target layout as
+a source proof.
+
+## 8. Specialization
+
+Specialization consumes typed residual Core plus phase, safety, ownership, and
+representation facts. Before Runtime HIR it must:
+
+1. instantiate every residual quantified use;
+2. close record and variant representation choices;
+3. settle every residual effect and handler representation;
+4. insert or discharge representation-changing coercions;
+5. specialize known higher-order and deferred choices;
+6. erase compile-time and proof-only values;
+7. choose a concrete representation for every residual aggregate and closure;
+8. attach replayed ownership permission to destructive Store operations; and
+9. retain complete public metadata for ABI closure.
+
+Known deferred calls are normalized into ordinary residual control. Runtime HIR
+has no general thunk value merely because the source used a deferred parameter.
+An unresolved deferred closure that escapes known application is a stated target
+refusal, not an implicit new ABI object.
+
+## 9. Representation closure
+
+Write:
 
 ```text
-Rep({ generation : Int; frames : Top })
-  = Rep({ generation : Top; frames : Top })
+closedRep(hir)
 ```
 
-only when that structural key has one observed call-site representation. Two
-different layouts for the same key erase the fact rather than selecting the
-first. Exact type-variable substitutions remain stronger than structural facts.
-This is representation erasure under checked shape equality, not structural type
-inference in the backend.
+when every Runtime-HIR value, branch join, call argument, result, field,
+constructor payload, closure environment, Store element, and public boundary has
+one target-admissible representation.
 
-Recursive representation equations use their concrete union members as
-witnesses. Positive recursion takes the least fixed point, so `R = R | X` has
-representation `Rep(X)` when every concrete member agrees. A compiler-local
-control constructor is the runtime envelope of its inferred union; payload
-projection distributes over unions,
+Runtime-HIR construction succeeds only with `closedRep`. In particular Runtime
+HIR contains no:
+
+- live inference variable;
+- unresolved source `forall`;
+- open structural shape;
+- compile-time value or proof package;
+- representation choice selected by observation order; or
+- unchecked proof-required operation.
+
+A validation failure caused only by unresolved representation for a closed
+accepted internal program is an `InvariantFailure`. An explicitly unsupported
+public ABI type or experimental target feature may return `TargetRefusal` at its
+stated policy boundary.
+
+## 10. Artifact and cache coherence
+
+A staged or specialized cache entry includes every input observed by its phase:
 
 ```text
-payload(A | B) = payload(A) | payload(B),
+CacheKey = hash(
+  compiler and certificate schema,
+  source and dependency revisions,
+  complete module-instance identity,
+  included bytes,
+  primitive catalog,
+  language plan,
+  target and ABI policy
+)
 ```
 
-and removes the unspellable `{ .value = ... }` wrapper before choosing the
-runtime sum payload. The specializer may not infer a recursive result by looking
-at unrelated captured closures.
+A phase may omit an input only after proving it cannot observe it. Cached values
+containing generative effects preserve their owning occurrence identity. Cached
+seals reconstruct their canonical applicative inputs. Live inference variables,
+AST object addresses, mutable worklists, and process-local proof sinks never cross
+a serialized cache boundary.
 
-Ownership markers and branch hints are identities after their respective
-certificates have been consumed. Staged non-empty arrays residualize as Store
-construction with one checked element representation. A dynamic conditional
-residualizes each branch in order, including `else if` chains, and injects a
-singleton constructor into the already inferred sum when necessary.
+Decoding validates every reference and closed identity before exposing the
+artifact. A content hash proves transport integrity; it does not prove that a
+package-controlled claimed interface follows from its source.
 
-A nullary effect value is an ordinary closure during staging. Constructing it is
-pure and retains its lexical environment; component-shaped APIs build child
-arrays from these closures explicitly. At an effect-binding boundary, a checked
-`Unit -> A ~ E` value is applied to `()` exactly once; its `E` joins the
-surrounding row and the binding receives `A`. A residual effect value is
-therefore handled by ordinary closure conversion and direct calls rather than a
-second runtime representation.
+## 11. ABI handoff
 
-## 5. Imported compile-time dispatch
+Specialization supplies public-layout construction with:
 
-When a compile-time closure chooses a branch from a concrete argument, result
-typing follows the value produced by that evaluated branch. The imported module
-interface does not collapse differently shaped branch results into one
-Hindley--Milner arrow. Each call gets a fresh value-directed synthesis.
+- a closed source type;
+- a closed Runtime-HIR representation;
+- ownership policy;
+- versioned target policy; and
+- canonical lifting/lowering metadata.
 
-This rule supports an imported dispatcher whose selected descriptor contains a
-different `.pack` signature for each known arity. It remains predicative and
-does not add dependent runtime arrows: the dependency is discharged by
-compile-time evaluation before runtime typing is closed.
+Public-layout construction either produces a validated adapter and manifest entry
+or returns `TargetRefusal`. It cannot accept a type whose required malformed-input
+checks are unimplemented.
 
-## 6. Structural folds
+Exact ABI 1 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
+representation relation is owned by [`RUNTIME.md`](RUNTIME.md).
 
-For a static finite label vector, residualization unfolds a structural fold and
-turns each static lookup into a direct projection:
+## 12. Obligations
 
-```text
-PE(fold([], z, k)) = PE(z)
-PE(fold(l :: ls, z, k)) = PE(fold(ls, k(z, l), k))
-PE(shape.get(~r, l)) = ~(project_l r)
-```
+Staging and specialization owe:
 
-The dynamic accumulator may remain residual; it does not make the static label
-dynamic. The direct-projection and phase-preservation lemmas are detailed in
-[`TYPECHECKING.md`](TYPECHECKING.md).
+1. compile-time determinism for fixed explicit inputs;
+2. phase separation and absence of residual erased reads;
+3. correct generative effect and applicative seal identity;
+4. distinction between source failure and compiler-limit refusal;
+5. demand-, trap-, divergence-, and identity-preserving partial evaluation;
+6. complete residual instantiation;
+7. representation closure before Runtime HIR;
+8. independent replay of proof and ownership certificates;
+9. cache coherence under complete observed revisions; and
+10. operational adequacy between staged source, specialized Core, and validated
+    Runtime HIR.
 
-## 7. Representation-closure theorem obligation
-
-For a well-typed closed program admitted by the production target,
-specialization terminates or reports a compiler resource refusal, and successful
-specialization produces only closed representations. Evaluating the specialized
-program is observationally equivalent to evaluating the residual source program.
-
-A dynamic shape operation, unresolved structural function, or unexpected
-Hindley--Milner rejection after this point is an invariant failure. It is not a
-reason to widen or narrow the inferred source type.
+Tests and validation passes provide finite evidence for these obligations. A
+successful build does not by itself prove phase safety or the whole-compiler
+observation theorem.

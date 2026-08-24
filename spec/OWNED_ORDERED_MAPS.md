@@ -1,73 +1,68 @@
 # Owned ordered text maps
 
-Status: implementation contract. The source rules are normative in
-`LANGUAGE.md`; this document owns the representation invariant, proof
-refinement, and cost model for the first non-array collection API built over
-partitioned ownership.
+## Status and scope
 
-## 1. Scope
+This document is an implementation contract for the first map-shaped source API
+built over partitioned interval ownership. Source syntax and ordinary type rules
+remain in [`LANGUAGE.md`](../LANGUAGE.md), subject to
+[`COHERENCE.md`](COHERENCE.md).
 
-`OrderedTextMap` is a finite map from `Text` to one value type.
-`OrderedTextMap.entry V` is an attached structural product type whose storage is
-the ordinary two-slot tuple, so its persistent representation is:
+`OrderedTextMap` is a finite map from `Text` to one unrestricted value type. It
+uses the production array-interval capability family; it is not a separate
+compiler family.
 
-```text
-[(Text, V)]
-```
+## 1. Representation
 
-whose keys are strictly increasing under `Text.cmp`. Strict ordering implies
-uniqueness. The owned representation is a `Slice.of (OrderedTextMap.entry V)`,
-but its public operations expose keys and values rather than positional
-mutation.
-
-This is deliberately a source adapter, not a new primitive family. The trusted
-`@region.*` boundary already provides private Store acquisition, interval
-partition, exact witnesses, element replacement, and proof erasure. A sorted map
-refines those intervals into key ranges:
+`OrderedTextMap.entry V` is the ordinary two-slot product `(Text,V)`. The
+persistent representation is:
 
 ```text
-Store interval [lo, hi)
-        refines
-keys [entry(lo).key, entry(hi).key)
+[(Text,V)]
 ```
 
-The refinement is sound because no owned-map operation can change, insert,
-remove, or reorder a key.
-
-The first adapter fixes the key type to `Text`. A generic comparator is not
-accepted until the compiler can prove comparator identity and total-order laws
-across acquisition and every later operation. Treating two equal-looking
-closures as the same ordering would make binary search and range partition
-unsound.
-
-## 2. Representation invariant
-
-For an owned map over Store `S`, every entry in the full root satisfies:
+The owned representation is a `Slice` of the same entries:
 
 ```text
-entry(i) = (key_i, value_i)
-0 <= i < len(S)
-i < j  implies  Text.cmp key_i key_j = #Less
+OrderedTextMap.of V = Slice.of (OrderedTextMap.entry V)
 ```
 
-Consequences:
+For a root Store `S`, the abstract-map protocol invariant is:
 
-1. every key occurs at most once;
-2. binary search has a deterministic focus;
-3. every interval authority names one contiguous key range;
-4. two sibling interval authorities authorize disjoint key sets;
-5. joining siblings restores the parent's exact key range; and
-6. value replacement preserves every fact above.
+```text
+ordered(S) iff
+  for every 0 <= i < j < length(S),
+  Text.cmp key_i key_j = #Less
+```
 
-The invariant is checked before `Slice.copy`. `validate` provides a non-trapping
-preflight. `copy` traps before minting authority when validation fails; on
-success it returns the full root directly so the ordinary closure ownership
-contract preserves the full-root freeze proof.
+Strict ordering implies key uniqueness and permits binary search and contiguous
+key-range partition.
 
-## 3. Public authority and operations
+## 2. Type versus protocol invariant
 
-`OrderedTextMap.of V` is the linear region authority represented by
-`Slice.of (OrderedTextMap.entry V)`.
+The carrier is structural. The ordinary type `OrderedTextMap.of V` proves only
+that the value has the same authority representation as the corresponding
+`Slice`; it does not prove `ordered(S)`.
+
+`OrderedTextMap.copy` dynamically validates ordering before minting the abstract
+map result. Every exported map operation preserves it. Therefore lookup,
+key-range, and logarithmic-cost theorems in this document are conditional on the
+protocol premise:
+
+```text
+map descends from copy and exported OrderedTextMap operations
+```
+
+A caller can deliberately pass a structurally matching raw `Slice`. This cannot
+forge interval authority, enlarge a footprint, or cause memory unsafety. It is,
+however, outside the abstract ordered-map contract: binary search on an unordered
+carrier need not equal mathematical map lookup, and the map-level cost and result
+theorems do not apply.
+
+A total abstraction over every well-typed inhabitant would require a nominal
+seal or revalidation at each public operation. The current adapter deliberately
+chooses a source-level protocol instead.
+
+## 3. Public operations
 
 ```text
 validate
@@ -105,66 +100,28 @@ freeze
   : !OrderedTextMap.of V -> [(Text,V)]
 ```
 
-`get` borrows the authority. As with `Slice.get`, the ownership checker rejects
-a borrowed read that would copy an owned value. The first adapter therefore
-admits only values carrying no affine or linear obligation: acquisition
-validation and binary search inspect an entry pair in order to read its key, and
-the current source language has no field-borrow operation that can project the
-key without also producing the value.
+The signatures are explanatory ordinary types plus ownership modes; ownership
+remains outside the subtype lattice.
 
-`replace` still conserves both sides: success returns the displaced value and
-failure returns the uninstalled replacement. Extending it to owned values
-requires a checked key-only projection or a dedicated family adapter; weakening
-the borrowed-read rule would be unsound.
+## 4. Value-domain restriction
 
-`split_before map key` splits at the lower bound of `key`. The left result
-contains keys strictly less than `key`; the right contains keys greater than or
-equal to it. The lower bound is always in `[0,length]`, so the underlying
-interval split cannot fail in a checked implementation. The source wrapper
-retains `Slice.split`'s conservative failure branch so authority conservation
-remains explicit.
+`get` borrows the map authority. The current source language has no field borrow
+that can inspect an entry key without also producing or observing its value.
+Consequently the first adapter admits only `V` with no affine or linear
+obligation.
 
-`join` consumes the exact witness and exact siblings minted by the split.
-Reassociation delegates to the same witness operations as `Slice`. `freeze` is
-defined only for a complete root, as it delegates to `Slice.freeze`.
+This restriction applies to acquisition validation, binary search, borrowed
+lookup, and value replacement. Extending the adapter to owned values requires a
+checked key-only projection or a dedicated family operation. Weakening the
+generic borrowed-read rule would permit copying an owned payload and is unsound.
 
-## 4. Why keys are immutable
+## 5. Acquisition
 
-Replacing a key can invalidate:
+`validate` performs a non-trapping strict-order check over the persistent input.
+`copy` performs the same check and traps before authority acquisition when it
+fails.
 
-- strict ordering;
-- uniqueness;
-- the lower-bound result used to split;
-- the logical key range named by a live sibling; and
-- frame locality for operations on that sibling.
-
-Therefore the adapter exposes only value replacement. Insertion and removal
-change the footprint and need a different operation:
-
-```text
-resize : full-root authority -> full-root authority
-```
-
-or a stronger tree/page allocator proof capable of moving boundaries while
-updating every affected witness. Neither is part of this adapter.
-
-## 5. Refinement proof
-
-Let `I(S, lo, hi)` be the existing array-interval authority and let `ordered(S)`
-be the abstraction invariant established by `copy`. Define:
-
-```text
-MapRange(S, lo, hi) = I(S, lo, hi) + ordered(S)
-```
-
-The compiler proves only `I`; it does not add `ordered(S)` to its trusted fact
-domain. The invariant is preserved by the operations exported from
-`OrderedTextMap`, which expose no key mutation. Because Blot's public types are
-structural, a caller can deliberately bypass the constructor by passing a
-matching `Slice`; doing so violates the API precondition but cannot enlarge the
-underlying interval authority or create memory unsafety.
-
-### Acquisition
+On success:
 
 ```text
 strictly_ordered(entries)
@@ -172,108 +129,208 @@ strictly_ordered(entries)
 copy(entries) : MapRange(S,0,n)
 ```
 
-When the premise is false, `copy` traps and produces no result.
+where:
 
-The underlying `Slice.copy` retains its copy-safe semantics and may reuse the
-Store only with its existing provenance proof.
+```text
+MapRange(S,lo,hi) = IntervalAuthority(S,lo,hi) + ordered(S)
+```
 
-### Borrowed lookup
+The compiler proves and tracks only the interval authority. `ordered(S)` is the
+source adapter's protocol fact established by validation and preserved by its
+exports.
 
-Binary search inspects only entries in `[lo,hi)`. It changes neither Store nor
-authority:
+`Slice.copy` retains its ordinary acquisition behavior: it copies persistent
+storage unless a separate ownership/reuse proof permits Store reuse. The ordering
+check itself grants no reuse authority.
+
+## 6. Borrowed observation
+
+For a valid map protocol value:
 
 ```text
 MapRange(S,lo,hi) |- get(key) : Option V
 ```
 
-### Value replacement
+Binary search reads only entries in `[lo,hi)`. It changes neither Store contents
+nor ownership authority.
 
-For the copyable value domain admitted by this adapter, if binary search focuses
-position `i`, replacement writes `(key_i,replacement)`; it never writes the
-requested key spelling:
+Deterministic focus follows strict ordering. A present key has one position; an
+absent key has one lower-bound insertion point. The operation never treats an
+equal-looking Store root or sibling interval as the current map.
+
+## 7. Value replacement
+
+Keys are immutable. If binary search focuses position `i`, replacement writes:
+
+```text
+(key_i, replacement)
+```
+
+using the stored key, not the query spelling. This preserves strict ordering even
+for a future comparator whose equality relation admits multiple representations.
+The current adapter uses exact text comparison.
+
+Ownership conservation is path-sensitive:
 
 ```text
 MapRange(S,lo,hi) * replacement
------------------------------------------------
-old * MapRange(S[value_i := replacement],lo,hi)
+------------------------------------------------ success
+old_value * MapRange(S[value_i := replacement],lo,hi)
 ```
 
-Using the stored key rather than the query key is necessary even when comparison
-says they are equal; the current adapter uses exact text comparison, but this
-choice keeps the preservation argument explicit.
+```text
+MapRange(S,lo,hi) * replacement
+------------------------------------------------ missing
+replacement * MapRange(S,lo,hi)
+```
 
-### Partition
+Success returns the displaced value. Failure returns the uninstalled replacement
+and performs no write. No incoming obligation disappears merely because the key
+was absent.
 
-Let `mid = lower_bound(S, lo, hi, key)`. Existing interval partition proves:
+## 8. Why key mutation is absent
+
+Changing, inserting, deleting, or reordering a key can invalidate:
+
+- strict ordering and uniqueness;
+- a lower-bound result used by a live split;
+- the logical key range named by a sibling authority;
+- frame locality for a sibling operation; and
+- exact witness reconstruction.
+
+The first adapter therefore exposes value replacement only. An insertion or
+removal operation would require complete-root authority plus a footprint-changing
+proof and possibly a new allocator or tree/page representation. It is not hidden
+inside `replace`.
+
+## 9. Partition by key
+
+`split_before map key` computes:
+
+```text
+mid = lower_bound(S, lo, hi, key)
+```
+
+and delegates to interval partition:
 
 ```text
 [lo,hi) = [lo,mid) * [mid,hi)
 ```
 
-Strict ordering refines that equation into an exact disjoint key-range cover.
-The generic witness remains sufficient; no second runtime witness is created.
+Under `ordered(S)`, the left child contains keys strictly less than `key`, and the
+right child contains keys greater than or equal to `key`. The same generic
+partition witness remains sufficient; no second run-time map witness is minted.
 
-### Join and freeze
+The lower bound is always in `[lo,hi]`, so a checked implementation cannot fail
+because of an invalid midpoint. The source wrapper retains the conservative
+failure branch of `Slice.split` so authority conservation remains explicit if a
+lower layer reports failure.
 
-Join and full-root freeze are the existing array-interval rules. The adapter
-does not mint, inspect, or approximate witnesses in source.
+## 10. Join and reassociation
 
-## 6. Family status
+`join` consumes the exact witness and exact sibling authorities produced by the
+split. Equal bounds under another Store, another split event, or another
+produced-value lineage are rejected.
 
-At the public API layer, this is a second collection abstraction: users program
-against ordered map operations, and positional mutation is not exposed.
+The array-interval family admits the stronger adjacent-interval associativity
+law, so its witness reassociation operations can rotate valid adjacent segment
+trees without inspecting map keys. The generic capability algebra does not infer
+this law for every family.
 
-At the compiler proof layer, it remains the `array-interval` family with a
-checked source-level abstraction invariant. It does not claim to be the future
-`map-key-set` family described by `PARTITIONED_CAPABILITIES.md`.
+The ordering protocol is global to the Store and is unchanged by split, join, or
+witness reassociation because none mutates entries.
 
-A true key-set family would allow arbitrary disjoint key subsets independent of
-physical order. It would require family-tagged serialized ownership values and a
-runtime representation for non-contiguous membership. This adapter chooses
-ordered ranges because they reuse the current Store representation without
-copying or adding runtime capability objects.
+## 11. Freeze
 
-## 7. Cost model
+`freeze` is defined only for complete-root authority. It delegates to
+`Slice.freeze`, releasing exclusive Store authority and returning an immutable
+persistent array.
 
-For `n` entries:
+Freezing a partial map would expose one slice while complement authority remains
+live. It is therefore rejected by the underlying root proof.
 
-| Operation       |                                                     Work | Element Store copies after acquisition |
-| --------------- | -------------------------------------------------------: | -------------------------------------: |
-| invariant check |                                  `O(n)` text comparisons |                                      0 |
-| copy            | `O(n)` explicit acquisition; `O(1)` when reuse is proved |                   at most 1 full Store |
-| length          |                                                   `O(1)` |                                      0 |
-| get             |                                   `O(log n)` comparisons |                                      0 |
-| replace         |              `O(log n)` comparisons + `O(1)` owned write |                                      0 |
-| split_before    |                 `O(log n)` comparisons + `O(1)` metadata |                                      0 |
-| join            |                                          `O(1)` metadata |                                      0 |
-| freeze          |                      `O(1)` Store release in Runtime HIR |                                      0 |
+The resulting array remains strictly ordered when the protocol premise held, but
+ordinary array typing does not retain an abstract `OrderedTextMap` proof.
+Reacquiring the map API through `copy` validates again.
 
-The existing persistent `Map.with equal` is an association array. Its lookup is
-`O(n)`; `put` rebuilds an `O(n)` array. The benchmark must compare equal
-semantics over already ordered unique text keys, validate observations first,
-and separately report acquisition so an `O(n)` one-time cost is not hidden.
+## 12. Compiler trust boundary
 
-Wasm byte size, compile time, Store operation classification, and warm execution
-time are reported under `COST_MODEL.md`. Wall-clock speedup is evidence, not a
-language guarantee. The semantic performance contract is that successful owned
-replacement lowers to `store.write` with `owned-reuse` and performs no
-persistent element-Store write.
+The trusted compiler fact is only the registered `array-interval` capability:
 
-## 8. Production gates
+- root identity;
+- interval footprint;
+- exact split/join witness;
+- member focus and bounds; and
+- ownership conservation.
+
+The compiler does not add `ordered(S)` to `Phi`, infer it from the structural
+type, or recognize an `OrderedTextMap` source binding name. The source prelude
+establishes and preserves the protocol through its implementation.
+
+A map operation may use a trusted interval primitive internally, but it receives
+no special syntax, type-lattice node, Runtime-HIR operation, ABI type, or
+primitive registry entry merely for convenience.
+
+## 13. Family status
+
+At the public source layer, ordered maps are a distinct collection abstraction.
+At the compiler proof layer, they remain array intervals with a checked
+source-level protocol invariant.
+
+A true key-set family would authorize arbitrary disjoint subsets independently
+of physical order. It would require:
+
+- stable comparator and key identity;
+- family-tagged serialized ownership values;
+- a run-time representation for non-contiguous membership; and
+- its own focus, frame, split, join, and cost validation.
+
+This adapter chooses ordered contiguous ranges to reuse the current Store
+representation.
+
+## 14. Cost model
+
+For a valid `ordered(S)` protocol value with `n` entries:
+
+| Operation | Work | Element Store copies after acquisition |
+| --- | ---: | ---: |
+| validation | `O(n)` text comparisons | 0 |
+| copy | `O(n)` explicit acquisition; `O(1)` only under separate reuse proof | at most 1 full Store |
+| length | `O(1)` | 0 |
+| get | `O(log n)` comparisons | 0 |
+| replace | `O(log n)` comparisons plus `O(1)` owned write | 0 |
+| split_before | `O(log n)` comparisons plus `O(1)` metadata | 0 |
+| join | `O(1)` metadata | 0 |
+| freeze | `O(1)` Store release in Runtime HIR | 0 |
+
+These complexity claims are conditional on strict ordering. They do not apply to
+a raw structurally matching unordered Slice.
+
+The existing persistent `Map.with equal` is an association array with linear
+lookup and rebuilding update. A benchmark compares equal abstract semantics over
+already ordered unique text keys and reports acquisition separately so the
+one-time validation/copy cost is visible.
+
+Wall-clock speedup is evidence, not a language guarantee. The semantic
+performance contract is that successful owned replacement lowers to one
+ownership-authorized Store write and performs no persistent element-Store copy.
+
+## 15. Production gates
 
 The adapter is production-complete only when Node and Rust/Wasm agree on:
 
-1. validation, successful acquisition, and trapping invalid acquisition;
-2. empty, singleton, boundary, present, and absent lower bounds;
-3. borrowed lookup and rejection of acquisition with owned values;
-4. success and failure replacement conservation;
-5. split/join/reassociation witness exactness;
-6. partial-freeze and stale/foreign-witness rejection inherited from `Slice`;
-7. example observations;
+1. non-trapping validation;
+2. successful acquisition and trapping invalid acquisition;
+3. empty, singleton, boundary, present, and absent lower bounds;
+4. rejection of value domains with owned obligations;
+5. success and failure replacement conservation;
+6. split/join/reassociation witness exactness;
+7. partial-freeze and stale/foreign-witness rejection inherited from `Slice`;
 8. proof erasure and ABI behavior;
-9. deterministic generated prelude output; and
-10. the benchmark's Store-write classification.
+9. deterministic generated-prelude output;
+10. Store-write classification and cost evidence; and
+11. an adversarial raw-Slice case demonstrating memory safety without claiming
+    ordered-map result correctness.
 
-Because the adapter is ordinary prelude source, no syntax, parser, type-lattice,
-Runtime-HIR, ABI, or primitive-registry change is permitted merely to make its
-implementation convenient.
+No production test may turn the protocol premise into an unstated structural-type
+fact.

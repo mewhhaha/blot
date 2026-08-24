@@ -1,5 +1,13 @@
 # Core WebAssembly ABI
 
+## Status
+
+This document is the normative byte-level and caller-ownership contract for Blot
+Core Wasm ABI 1. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
+source-to-caller representation relation and public-type admissibility. The
+section **Runtime target status** below records current implementation coverage;
+it cannot weaken an ABI rule for an artifact the compiler accepts.
+
 `blot build` publishes a stable Core WebAssembly interface. It does not expose
 Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
 caller values into that private representation and lower results back out.
@@ -70,9 +78,14 @@ The flat core types are:
 operation that mentions either is refused with `BLOT_VECTOR_AT_BOUNDARY`.
 
 Variant payload slots join `i32` and `f32` as `i32`; other mismatched core types
-join as `i64`. Missing payload slots are zero. A seal is nominal inside Blot but
-transparent at the caller boundary; its manifest name still prevents callers
-from confusing two source contracts.
+join as `i64`. Missing payload slots are zero.
+
+A seal is nominal inside Blot but transparent at the caller byte boundary. Its
+manifest type records the public name and carrier, so conforming tooling and the
+representation relation distinguish source contracts. Equal raw Core Wasm
+carrier values do not dynamically contain that name. ABI nominal safety
+therefore depends on the declared manifest and the conforming-caller premise; the
+byte layout alone cannot prevent a hostile caller from confusing equal carriers.
 
 ## Memory layouts
 
@@ -127,6 +140,11 @@ enclosing synchronous export call completes.
 nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
 boolean, variant discriminant, or array length traps.
 
+Every artifact the compiler accepts must perform the required validation for its
+admitted public types before constructing a Blot value. If the production target
+cannot validate one required input class, public-layout construction must refuse
+that signature rather than emit an unchecked adapter.
+
 ## Manifest
 
 The exact pretty-printed JSON sidecar is also stored in the `blot:abi` custom
@@ -145,10 +163,12 @@ The manifest records:
 
 The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
-seal names, so compatibility is structural rather than dependent on private
-constructor numbers.
+seal names, so compatibility is structural under the declared contract rather
+than dependent on private constructor numbers.
 
 ## Runtime target status
+
+This section is operational status, not a relaxation of ABI 1.
 
 The production Rust/Wasm path runs the validated CI-built compiler. One
 `ClosedProgram` owns the checked and staged Runtime HIR and one `PublicLayout`
@@ -185,11 +205,15 @@ reported for that path and excluded before emission. An emitter failure discards
 completed sibling misses and returns no admitted miss artifact. Batching changes
 compiler scheduling only and never executes a declared host effect.
 
-The target does not yet implement dynamic composite export parameters or
-results, indirect host results other than `Text`, malformed caller-memory
-validation, boolean input validation, multiple outstanding results, or
-asynchronous host calls. These are target restrictions, not changes to ABI 1;
-unsupported Runtime HIR is refused.
+The production target currently refuses signatures requiring dynamic composite
+export parameters, general dynamic composite export results outside the admitted
+closed-result cases, indirect host results other than `Text`, boolean inputs,
+general caller-memory composite inputs, multiple outstanding results, or
+asynchronous host calls. These are target restrictions, not changes to ABI 1.
+The compiler must refuse such a boundary before emission. For every boundary it
+does accept, all ABI-required range, representation, UTF-8, discriminant,
+boolean, pointer, extent, and ownership checks applicable to that signature must
+be present. Accepting an unchecked boundary is an invariant failure.
 
 ## JavaScript example
 
