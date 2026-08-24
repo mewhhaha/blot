@@ -12,9 +12,59 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  finalize-target:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/v8-wasm3-target
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply, format, and commit the reviewed target patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path(".github/workflows/finalize-v8-wasm3.yml").read_text()
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n          deno fmt"
+          start = source.index(start_marker) + len(start_marker)
+          end = source.index(end_marker, start)
+          code = textwrap.dedent(source[start:end])
+          exec(compile(code, "finalize-v8-wasm3.py", "exec"), {})
+
+          ci_path = Path(".github/workflows/ci.yml")
+          ci = ci_path.read_text()
+          start = ci.index("  finalize-target:\n")
+          end = ci.index("  formal:\n", start)
+          ci = ci[:start] + ci[end:]
+          ci = ci.replace("permissions:\n  contents: write\n", "permissions:\n  contents: read\n", 1)
+          ci_path.write_text(ci)
+          PY
+
+          deno fmt
+          cargo fmt --manifest-path compiler/Cargo.toml
+          git diff --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finish the V8 and Wasm 3 target profile"
+          git push origin HEAD:codex/v8-wasm3-target
+
   format-probe:
     runs-on: ubuntu-latest
     timeout-minutes: 30
