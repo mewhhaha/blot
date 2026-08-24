@@ -1,0 +1,184 @@
+name: Finalize V8 and Wasm 3 target
+
+on:
+  push:
+    branches:
+      - codex/v8-wasm3-target
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/v8-wasm3-target
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply the reviewed corrections
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one occurrence, found {count}: {old[:100]!r}"
+                  )
+              file.write_text(text.replace(old, new))
+
+          ci_path = Path(".github/workflows/ci.yml")
+          ci = ci_path.read_text()
+          start = ci.index("  format-probe:\n")
+          end = ci.index("  formal:\n", start)
+          ci_path.write_text(ci[:start] + ci[end:])
+
+          direct_tail_call = '''fn direct_tail_call(block: &RuntimeBlock) -> Option<&RuntimeOperation> {
+              let RuntimeTerminator::Return { value, .. } = &block.terminator else {
+                  return None;
+              };
+              let operation = block.operations.last()?;
+              (operation.kind == "call.direct" && operation.result == *value).then_some(operation)
+          }
+          '''
+          replace_once(
+              "compiler/src/backend.rs",
+              direct_tail_call,
+              direct_tail_call
+              + '''
+          fn runtime_type_uses_simd(
+              module: &RuntimeModule,
+              type_id: usize,
+          ) -> Result<bool, String> {
+              Ok(flattened_runtime_type(module, type_id)?.contains(&ValType::V128))
+          }
+          ''',
+          )
+
+          old_simd = '''    let uses_simd = module.functions.iter().any(|function| {
+              function.blocks.iter().any(|block| {
+                  block.parameters.iter().any(|parameter| {
+                      matches!(
+                          module.types.get(parameter.type_id),
+                          Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
+                      )
+                  }) || block.operations.iter().any(|operation| {
+                      operation.kind == "vector"
+                          || matches!(
+                              module.types.get(operation.type_id),
+                              Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
+                          )
+                  })
+              })
+          });
+          if uses_simd {
+              features.insert("simd");
+          }
+          '''
+          new_simd = '''    let mut uses_simd = false;
+              for function in &module.functions {
+                  let signature = module.signatures.get(function.signature).ok_or_else(|| {
+                      format!(
+                          "{}: runtime function {} references unknown signature {}",
+                          module.source, function.id, function.signature
+                      )
+                  })?;
+                  for type_id in signature
+                      .parameters
+                      .iter()
+                      .copied()
+                      .chain(std::iter::once(signature.result))
+                  {
+                      uses_simd |= runtime_type_uses_simd(module, type_id)?;
+                  }
+                  for block in &function.blocks {
+                      for parameter in &block.parameters {
+                          uses_simd |= runtime_type_uses_simd(module, parameter.type_id)?;
+                      }
+                      for operation in &block.operations {
+                          uses_simd |= runtime_type_uses_simd(module, operation.type_id)?;
+                      }
+                  }
+              }
+              if uses_simd {
+                  features.insert("simd");
+              }
+          '''
+          replace_once("compiler/src/backend.rs", old_simd, new_simd)
+
+          replace_once(
+              "docs/wasm-target-profile.md",
+              '''CI performs the dedicated target test without experimental flags on:
+
+          - Node 24.19.0, using V8 13.6; and
+          - Node 26.7.0, using V8 14.6.
+          ''',
+              '''CI performs the dedicated target test without experimental flags on:
+
+          - Node 24.19.0 LTS; and
+          - Node 26.7.0 Current.
+          ''',
+          )
+          replace_once(
+              "docs/wasm-target-profile.md",
+              '''V8 already optimizes direct, indirect, reference, and tail-call forms. Blot
+          still prefers direct calls after specialization because they are the strongest
+          and cheapest representation of a known target.
+          ''',
+              '''These runs establish unflagged validation and execution for the emitted
+          profile. Blot still prefers direct calls after specialization because they are
+          the strongest and cheapest representation of a known target.
+          ''',
+          )
+          replace_once(
+              "docs/wasm-target-profile.md",
+              '''The wasm3 interpreter currently reports bulk memory, multi-value, typed function
+          references in part, and tail-call optimization as ready. It reports multiple
+          memories, exception handling, and memory64 as work in progress, and fixed-width
+          SIMD and GC as unavailable.
+          ''',
+              '''The wasm3 interpreter currently reports bulk memory, multi-value, typed function
+          references in part, and tail-call optimization as ready. Its current implementation
+          accepts `return_call` but routes it through ordinary call machinery, so that support
+          is decoding compatibility rather than V8-equivalent frame elimination. It reports
+          multiple memories, exception handling, and memory64 as work in progress, and
+          fixed-width SIMD and GC as unavailable.
+          ''',
+          )
+          replace_once(
+              "docs/wasm-target-profile.md",
+              '''- scalar Blot artifacts that require only bulk memory, multi-value, and tail
+            calls are intended to remain within wasm3's reported feature subset;
+          ''',
+              '''- scalar Blot artifacts that require only bulk memory, multi-value, and tail
+            calls are intended to remain within wasm3's reported decoding subset, without a
+            constant-stack recursion guarantee;
+          ''',
+          )
+
+          Path(".github/workflows/finalize-v8-wasm3.yml").unlink()
+          PY
+
+          deno fmt
+          cargo fmt --manifest-path compiler/Cargo.toml
+          git diff --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finish the V8 and Wasm 3 target profile"
+          git push origin HEAD:codex/v8-wasm3-target
