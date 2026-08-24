@@ -78,8 +78,8 @@ return case (duplicate_valid, descending_valid) of
       `open import "blot:prelude"
 let entries = OrderedTextMap.copy [("b", 1), ("a", 2)]
 let found = OrderedTextMap.get ((&entries), "a")
-let _ = OrderedTextMap.freeze (!entries)
-return found
+let frozen = OrderedTextMap.freeze (!entries)
+return (found, frozen)
 `,
     );
     throw new Error("expected OrderedTextMap.copy to trap");

@@ -8,7 +8,7 @@ use crate::ast::{
     AstArena, Declaration, DeclarationId, Expression, ExpressionId, Module, Pattern, PatternId,
 };
 use crate::backend::{ClosedProgram, CompiledModule};
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
     Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run,
 };
@@ -231,7 +231,7 @@ impl CompilerSession {
         self.checker.begin_request();
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
-            Err(diagnostic) => return diagnostic_json(diagnostic),
+            Err(diagnostic) => return compiler_failure_json(diagnostic, "evaluation"),
         };
         let argument = if checked.parameter.is_some() {
             tool_grants()
@@ -251,7 +251,7 @@ impl CompilerSession {
                 "display": show(&value),
                 "writes": writes,
             }),
-            Err(diagnostic) => diagnostic_json(diagnostic),
+            Err(diagnostic) => compiler_failure_json(diagnostic, "evaluation"),
         }
     }
 
@@ -269,7 +269,7 @@ impl CompilerSession {
         self.checker.begin_request();
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
-            Err(diagnostic) => return diagnostic_json(diagnostic),
+            Err(diagnostic) => return compiler_failure_json(diagnostic, "test execution"),
         };
         let loaded = match self.context.modules.borrow().get(path).cloned() {
             Some(loaded) => loaded,
@@ -411,6 +411,9 @@ impl CompilerSession {
                 })),
                 Err(mut diagnostic) => {
                     diagnostic.origin = Some(path.to_owned());
+                    if diagnostic.failure_class() != FailureClass::Source {
+                        return compiler_failure_json(diagnostic, "test execution");
+                    }
                     outcomes.push(serde_json::json!({
                         "status": "failed",
                         "path": path,
@@ -698,26 +701,7 @@ pub fn compiler_failure_json(
     diagnostic: crate::diagnostic::Diagnostic,
     phase: &str,
 ) -> serde_json::Value {
-    if diagnostic.code == "BLOT_TARGET_REFUSAL" {
-        return serde_json::json!({
-            "ok": false,
-            "targetRefusal": {
-                "code": diagnostic.code,
-                "message": diagnostic.message,
-            },
-        });
-    }
-    if diagnostic.code == "BLOT_BACKEND_ERROR" {
-        return serde_json::json!({
-            "ok": false,
-            "invariantFailure": {
-                "code": "BLOT_COMPILER_INVARIANT",
-                "phase": phase,
-                "message": diagnostic.message,
-            },
-        });
-    }
-    diagnostic_json(diagnostic)
+    diagnostic.failure_json(phase)
 }
 
 fn json_value(value: &Value) -> serde_json::Value {
@@ -1600,8 +1584,11 @@ mod tests {
             .expect("source should configure");
         let prepared = session.prepare_runtime_hir("main.blot");
         assert_eq!(prepared["ok"], false);
-        assert_eq!(prepared["diagnostic"]["code"], "BLOT_UNSUPPORTED_LOWERING");
-        let message = prepared["diagnostic"]["message"]
+        assert_eq!(
+            prepared["targetRefusal"]["code"],
+            "BLOT_UNSUPPORTED_LOWERING"
+        );
+        let message = prepared["targetRefusal"]["message"]
             .as_str()
             .expect("a diagnostic message");
         assert!(
@@ -1690,6 +1677,26 @@ mod tests {
             .expect("source should configure");
         let checked = session.check_module("main.blot");
         assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+    }
+
+    #[test]
+    fn a_consumer_in_a_dead_declaration_does_not_spend_a_linear_binding() {
+        let text = "const consume = fn !value => @int.add value 1\n\
+                    \u{e000}let !token = 41\n\
+                    \u{e000}let erased = consume (!token)\n\
+                    \u{e000}return consume (!token)\u{e000}";
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(text))
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let checked = session.check_module("main.blot");
+
+        assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+        assert_eq!(checked["type"], "Int");
     }
 
     #[test]

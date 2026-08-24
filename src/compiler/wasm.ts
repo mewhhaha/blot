@@ -100,7 +100,12 @@ export interface CompilerSourceDiagnostic {
 }
 
 export interface CompilerTransportTargetRefusal {
-  readonly code: "BLOT_TARGET_REFUSAL";
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface CompilerTransportLimitDiagnostic {
+  readonly code: string;
   readonly message: string;
 }
 
@@ -115,6 +120,7 @@ export interface CompilerTransportFailure {
   readonly message?: string;
   readonly diagnostic?: CompilerSourceDiagnostic;
   readonly diagnostics?: readonly CompilerSourceDiagnostic[];
+  readonly limitDiagnostic?: CompilerTransportLimitDiagnostic;
   readonly targetRefusal?: CompilerTransportTargetRefusal;
   readonly invariantFailure?: CompilerTransportInvariantFailure;
 }

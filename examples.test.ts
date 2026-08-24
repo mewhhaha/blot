@@ -23,6 +23,7 @@ import { BlotError } from "./src/diagnostic.ts";
 import { LoadError } from "./src/load.ts";
 import { checkFile } from "./src/check.ts";
 import { Compiler } from "./src/compiler/session.ts";
+import { CompilerTargetRefusal } from "./src/compiler/policy.ts";
 
 /**
  * The diagnostic each semantic rejection must produce, and which stage catches
@@ -215,6 +216,7 @@ const REJECTIONS: Record<
     code: "BLOT_TYPE_ERROR",
     stage: "check",
   },
+  "seal_carrier_mismatch": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "effect_not_discharged": { code: "BLOT_UNHANDLED_EFFECT", stage: "check" },
   "for_type_drift": { code: "BLOT_TYPE_ERROR", stage: "check" },
   "refutable_for_pattern": {
@@ -462,10 +464,13 @@ for (const name of await blotFiles("examples/rejected/semantics")) {
       try {
         await run();
       } catch (error) {
-        if (!(error instanceof BlotError) && !(error instanceof LoadError)) {
+        if (error instanceof CompilerTargetRefusal) {
+          message = `${error.code}: ${error.message}`;
+        } else if (error instanceof BlotError || error instanceof LoadError) {
+          message = error.message;
+        } else {
           throw error;
         }
-        message = error.message;
       }
       if (message === null) {
         throw new Error(

@@ -1290,38 +1290,14 @@ impl Checker {
                     "effects": show_effects(&effects),
                 })
             }
-            Err(diagnostic) => serde_json::json!({
-                "ok": false,
-                "diagnostic": {
-                    "code": diagnostic.code,
-                    "message": diagnostic.message,
-                    "origin": diagnostic.origin,
-                    "span": {
-                        "start": diagnostic.span.start,
-                        "end": diagnostic.span.end,
-                    },
-                },
-            }),
+            Err(diagnostic) => diagnostic.failure_json("type checking"),
         }
     }
 
     pub fn analysis_json(&self, path: &str) -> serde_json::Value {
         let checked = match self.check(path) {
             Ok(checked) => checked,
-            Err(diagnostic) => {
-                return serde_json::json!({
-                    "ok": false,
-                    "diagnostic": {
-                        "code": diagnostic.code,
-                        "message": diagnostic.message,
-                        "origin": diagnostic.origin,
-                        "span": {
-                            "start": diagnostic.span.start,
-                            "end": diagnostic.span.end,
-                        },
-                    },
-                });
-            }
+            Err(diagnostic) => return diagnostic.failure_json("analysis"),
         };
         let module = self
             .context
@@ -1696,6 +1672,7 @@ impl Checker {
             .map(|((_, expression), type_)| (*expression, self.settle(type_.clone(), true)))
             .collect::<HashMap<_, _>>();
         let ownership = crate::ownership::check(
+            path,
             module,
             &self.context,
             values,
@@ -5922,7 +5899,7 @@ impl Checker {
             }),
             Value::Effect { id, name, .. } => Some(Type::Opaque(format!("Effect:{id}:{name}"))),
             Value::Extended { inner, .. } => self.bridge(inner),
-            Value::Sealed { name, .. } => Some(Type::Opaque(format!("Sealed:{name}"))),
+            Value::Sealed { name, inner } => sealed_type(name, &self.bridge(inner)?),
             Value::OpaqueType(name) => Some(Type::Opaque(name.clone())),
             Value::Vector(_) => Some(Type::Opaque("F32x4".to_owned())),
             Value::VectorMask(_) => Some(Type::Opaque("F32x4Mask".to_owned())),
@@ -6072,7 +6049,10 @@ impl Checker {
                     .map(|member| self.show_settled(member))
                     .collect::<Vec<_>>(),
             ),
-            Type::Opaque(name) => name.clone(),
+            Type::Opaque(name) => match sealed_type_name(name) {
+                Some(public_name) => format!("Sealed:{public_name}"),
+                None => name.clone(),
+            },
             Type::Top => "⊤".to_owned(),
             Type::Bottom => "⊥".to_owned(),
         }
@@ -6109,6 +6089,118 @@ fn type_variable_name(index: usize) -> String {
     } else {
         format!("'t{index}")
     }
+}
+
+const SEALED_TYPE_PREFIX: &str = "Sealed:";
+
+pub(crate) fn sealed_type(name: &str, carrier: &Type) -> Option<Type> {
+    let carrier_key = closed_type_key(carrier)?;
+    Some(Type::Opaque(format!(
+        "{SEALED_TYPE_PREFIX}{}:{name}:{carrier_key}",
+        name.len()
+    )))
+}
+
+pub(crate) fn sealed_type_name(identity: &str) -> Option<&str> {
+    let encoded = identity.strip_prefix(SEALED_TYPE_PREFIX)?;
+    let (length, remainder) = encoded.split_once(':')?;
+    let length = length.parse::<usize>().ok()?;
+    let name = remainder.get(..length)?;
+    remainder.get(length..)?.starts_with(':').then_some(name)
+}
+
+fn closed_type_key(type_: &Type) -> Option<String> {
+    fn scalar(value: Option<&Scalar>) -> String {
+        match value {
+            None => "*".to_owned(),
+            Some(Scalar::Int(value)) => format!("i{value}"),
+            Some(Scalar::Text(value)) => format!("s{value:?}"),
+        }
+    }
+
+    fn fields(
+        name: &str,
+        values: &[(String, Type)],
+        binders: &mut HashMap<VariableId, usize>,
+    ) -> Option<String> {
+        let mut keyed = values
+            .iter()
+            .map(|(field, type_)| Some(format!("{field:?}:{}", visit(type_, binders)?)))
+            .collect::<Option<Vec<_>>>()?;
+        keyed.sort();
+        Some(format!("{name}{{{}}}", keyed.join(",")))
+    }
+
+    fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> Option<String> {
+        match type_ {
+            Type::Variable(_) => None,
+            Type::Rigid(id) => binders.get(id).map(|index| format!("^{index}")),
+            Type::Forall { variables, body } => {
+                let previous = binders.clone();
+                let depth = binders.len();
+                for (index, variable) in variables.iter().enumerate() {
+                    binders.insert(*variable, depth + index);
+                }
+                let body = visit(body, binders);
+                *binders = previous;
+                Some(format!("all{}({})", variables.len(), body?))
+            }
+            Type::Range { domain, low, high } => Some(format!(
+                "range({domain:?},{},{})",
+                scalar(low.as_ref()),
+                scalar(high.as_ref())
+            )),
+            Type::Unit => Some("unit".to_owned()),
+            Type::Function {
+                deferred,
+                parameter,
+                effects,
+                result,
+            } => Some(format!(
+                "fun({deferred},{},{},{})",
+                visit(parameter, binders)?,
+                visit(effects, binders)?,
+                visit(result, binders)?
+            )),
+            Type::Record(values) => fields("record", values, binders),
+            Type::Array(element) => Some(format!("array({})", visit(element, binders)?)),
+            Type::Region(element) => Some(format!("region({})", visit(element, binders)?)),
+            Type::Scratch(element) => Some(format!("scratch({})", visit(element, binders)?)),
+            Type::Variant { cases, open } => {
+                Some(format!("variant({open}){}", fields("", cases, binders)?))
+            }
+            Type::Effects(labels) => Some(format!(
+                "effects{{{}}}",
+                labels
+                    .iter()
+                    .map(|label| format!("{label:?}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
+            Type::OpenEffects { labels, tail } => Some(format!(
+                "open-effects{{{};{}}}",
+                labels
+                    .iter()
+                    .map(|label| format!("{label:?}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                visit(tail, binders)?
+            )),
+            Type::Union(members) => {
+                let mut keys = members
+                    .iter()
+                    .map(|member| visit(member, binders))
+                    .collect::<Option<Vec<_>>>()?;
+                keys.sort();
+                Some(format!("union{{{}}}", keys.join(",")))
+            }
+            Type::Opaque(name) => Some(format!("opaque({name:?})")),
+            Type::Top => Some("top".to_owned()),
+            Type::Bottom => Some("bottom".to_owned()),
+        }
+    }
+
+    visit(type_, &mut HashMap::new())
 }
 
 fn free_rigid_variables(
@@ -9196,6 +9288,56 @@ fn flatten_interface_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seal_identity_is_canonical_and_carrier_sensitive() {
+        let integer = Type::Range {
+            domain: Domain::Int,
+            low: None,
+            high: None,
+        };
+        let text = Type::Range {
+            domain: Domain::Text,
+            low: None,
+            high: None,
+        };
+        let left_record = Type::Record(
+            vec![
+                ("number".to_owned(), integer.clone()),
+                ("label".to_owned(), text.clone()),
+            ]
+            .into(),
+        );
+        let right_record = Type::Record(
+            vec![
+                ("label".to_owned(), text.clone()),
+                ("number".to_owned(), integer.clone()),
+            ]
+            .into(),
+        );
+
+        assert!(same_type(
+            &sealed_type("Box", &left_record).expect("closed carrier"),
+            &sealed_type("Box", &right_record).expect("closed carrier"),
+        ));
+        assert!(!same_type(
+            &sealed_type("Box", &integer).expect("closed carrier"),
+            &sealed_type("Box", &text).expect("closed carrier"),
+        ));
+
+        let left_identity = Type::Forall {
+            variables: vec![7],
+            body: Rc::new(Type::Rigid(7)),
+        };
+        let right_identity = Type::Forall {
+            variables: vec![19],
+            body: Rc::new(Type::Rigid(19)),
+        };
+        assert!(same_type(
+            &sealed_type("Identity", &left_identity).expect("closed carrier"),
+            &sealed_type("Identity", &right_identity).expect("closed carrier"),
+        ));
+    }
 
     /// A union carries one member per contributing bound. A residualized
     /// accumulator contributes the initial literal's singleton beside the

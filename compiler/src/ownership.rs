@@ -9,7 +9,7 @@ use crate::ast::{
     Pattern, PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
-use crate::eval::Context;
+use crate::eval::{Context, live_declarations_for};
 use crate::partition::{
     Direction as PartitionDirection, PartitionError, PartitionWitness, combine_partition,
     reassociate_partition,
@@ -363,6 +363,7 @@ enum Obligation {
 }
 
 struct Analysis<'a> {
+    module_path: &'a str,
     module: &'a Module,
     context: &'a Context,
     values: &'a ValueEnvironment,
@@ -376,6 +377,7 @@ struct Analysis<'a> {
 }
 
 pub(crate) fn check(
+    path: &str,
     module: &Module,
     context: &Context,
     values: &ValueEnvironment,
@@ -383,6 +385,7 @@ pub(crate) fn check(
     expression_types: &HashMap<ExpressionId, Type>,
 ) -> OwnershipCheck {
     let mut analysis = Analysis {
+        module_path: path,
         module,
         context,
         values,
@@ -398,7 +401,15 @@ pub(crate) fn check(
     if let Some(parameter) = module.parameter {
         declare(parameter, Produced::None, &scope, &mut analysis);
     }
-    walk_declarations(&module.declarations, &scope, &mut analysis);
+    let declarations = live_declarations_for(
+        context,
+        path,
+        module,
+        None,
+        &module.declarations,
+        module.result,
+    );
+    walk_declarations(&declarations, &scope, &mut analysis);
     let result = walk(module.result, &scope, &mut analysis, Use::Move);
     if contains_borrow(&result) {
         analysis.report(
@@ -1407,6 +1418,14 @@ fn walk(
             ..
         } => {
             let inner = child_scope(Some(scope.clone()), false);
+            let declarations = live_declarations_for(
+                analysis.context,
+                analysis.module_path,
+                analysis.module,
+                Some(expression),
+                &declarations,
+                result,
+            );
             walk_declarations(&declarations, &inner, analysis);
             let result = walk(result, &inner, analysis, kind);
             close_scope(&inner, analysis);

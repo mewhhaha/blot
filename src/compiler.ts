@@ -9,6 +9,7 @@ export {
 } from "./compiler/session.ts";
 export {
   CompilerInvariantFailure,
+  CompilerLimitDiagnostic,
   type CompilerTargetPolicy,
   CompilerTargetRefusal,
   defaultCompilerTargetPolicy,

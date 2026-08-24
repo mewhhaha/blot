@@ -65,9 +65,9 @@ try {
 ```
 
 The host resolves and configures the complete source graph in one Rust session.
-Rust source diagnostics become located `BlotError`s, target refusals remain
-`CompilerTargetRefusal`, and post-check failures remain
-`CompilerInvariantFailure`.
+Rust source diagnostics become located `BlotError`s, resource bounds become
+`CompilerLimitDiagnostic`, target refusals remain `CompilerTargetRefusal`, and
+post-check invariant failures remain `CompilerInvariantFailure`.
 
 ## Compiler distribution
 

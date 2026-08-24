@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runtimeHirSchema } from "./protocol.ts";
+import { CompilerTargetRefusal } from "./policy.ts";
 import { Compiler } from "./session.ts";
 
 test("Rust compiler host exposes check, prepare, compile", async () => {
@@ -19,6 +20,23 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     const wasm = Uint8Array.from(artifact.wasm).buffer;
     assert.equal(WebAssembly.validate(wasm), true);
     assert.equal(artifact.artifactSource, "compiled");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("unsupported lowering remains a target refusal after checking", async () => {
+  const compiler = await Compiler.create();
+  try {
+    await compiler.check("examples/lib/region_vault.blot");
+    await assert.rejects(
+      compiler.compile("examples/lib/region_vault.blot"),
+      (error: unknown) => {
+        assert(error instanceof CompilerTargetRefusal);
+        assert.equal(error.code, "BLOT_UNSUPPORTED_LOWERING");
+        return true;
+      },
+    );
   } finally {
     compiler.destroy();
   }

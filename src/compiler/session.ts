@@ -12,6 +12,7 @@ import {
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 import {
   CompilerInvariantFailure,
+  CompilerLimitDiagnostic,
   type CompilerTargetPolicy,
   CompilerTargetRefusal,
   resolveTargetPolicy,
@@ -457,8 +458,17 @@ export class Compiler implements CompilerHost {
     fallbackPath: string,
     phase: string,
   ): never {
+    if (failure.limitDiagnostic !== undefined) {
+      throw new CompilerLimitDiagnostic(
+        failure.limitDiagnostic.code,
+        failure.limitDiagnostic.message,
+      );
+    }
     if (failure.targetRefusal !== undefined) {
-      throw new CompilerTargetRefusal(failure.targetRefusal.message);
+      throw new CompilerTargetRefusal(
+        failure.targetRefusal.message,
+        failure.targetRefusal.code,
+      );
     }
     if (failure.invariantFailure !== undefined) {
       throw new CompilerInvariantFailure(

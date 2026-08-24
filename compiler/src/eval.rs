@@ -2935,7 +2935,7 @@ fn declaration_span(declaration: &Declaration) -> Span {
     }
 }
 
-fn live_declarations_for(
+pub(crate) fn live_declarations_for(
     context: &Context,
     module_path: &str,
     module: &Module,

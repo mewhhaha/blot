@@ -9,7 +9,7 @@ use crate::eval::{
 };
 use crate::ownership::Produced;
 use crate::protocol::RUNTIME_HIR_SCHEMA;
-use crate::typecheck::{CheckedModule, Domain, Scalar, Type};
+use crate::typecheck::{CheckedModule, Domain, Scalar, Type, sealed_type, sealed_type_name};
 use crate::value::{
     ChoiceSource, ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue,
     Value, as_tuple, child_env, lookup,
@@ -8131,12 +8131,14 @@ impl HirBuilder {
                     RuntimeType::Mask { element, lanes },
                 ))
             }
-            Type::Opaque(name) if name.starts_with("Sealed:") => {
+            Type::Opaque(name) if sealed_type_name(name).is_some() => {
                 let (seal_name, inner) = if let Value::Sealed { name, inner } = value {
                     (name.clone(), inner.as_ref())
                 } else {
                     (
-                        name.strip_prefix("Sealed:").unwrap_or(name).to_owned(),
+                        sealed_type_name(name)
+                            .expect("matched sealed type")
+                            .to_owned(),
                         value,
                     )
                 };
@@ -8393,7 +8395,7 @@ impl HirBuilder {
                 let inner = self.value(inner, &inner_type, operations)?;
                 Ok(self.operation("seal.wrap", type_id, vec![inner], "owned", operations))
             }
-            value if matches!(type_, Type::Opaque(name) if name.starts_with("Sealed:")) => {
+            value if matches!(type_, Type::Opaque(name) if sealed_type_name(name).is_some()) => {
                 let inner_type = type_from_value(value);
                 let inner = self.value(value, &inner_type, operations)?;
                 Ok(self.operation("seal.wrap", type_id, vec![inner], "owned", operations))
@@ -8593,7 +8595,8 @@ fn type_from_value(value: &Value) -> Type {
             .into(),
             open: false,
         },
-        Value::Sealed { name, .. } => Type::Opaque(format!("Sealed:{name}")),
+        Value::Sealed { name, inner } => sealed_type(name, &type_from_value(inner))
+            .expect("a runtime sealed value has a closed carrier type"),
         Value::Vector(_) => Type::Opaque("F32x4".to_owned()),
         Value::VectorMask(_) => Type::Opaque("F32x4Mask".to_owned()),
         Value::IntegerVector { bits, lanes } => Type::Opaque(format!("I{bits}x{}", lanes.len())),

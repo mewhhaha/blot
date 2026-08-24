@@ -1,0 +1,10 @@
+// Pure declarations absent from the demanded result do not participate in
+// ownership accounting. Only the returned consumer spends `token`.
+
+open import "blot:prelude"
+
+let consume = fn !value => value + 1
+let !token = 41
+let erased = consume (!token)
+
+return consume (!token)

@@ -18,11 +18,23 @@ export const defaultCompilerTargetPolicy: CompilerTargetPolicy = Object.freeze({
 
 /** A requested compiler target is not supported by this compiler build. */
 export class CompilerTargetRefusal extends Error {
-  readonly code = "BLOT_TARGET_REFUSAL";
+  readonly code: string;
 
-  constructor(message: string) {
+  constructor(message: string, code = "BLOT_TARGET_REFUSAL") {
     super(message);
     this.name = "CompilerTargetRefusal";
+    this.code = code;
+  }
+}
+
+/** Compile-time evaluation stopped at its configured resource boundary. */
+export class CompilerLimitDiagnostic extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "CompilerLimitDiagnostic";
+    this.code = code;
   }
 }
 

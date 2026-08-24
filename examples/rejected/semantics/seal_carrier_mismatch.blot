@@ -1,0 +1,11 @@
+// Equal public names do not make different invariant carriers the same seal.
+
+open import "blot:prelude"
+
+const IntegerBox =
+  seal ("Box", I32) <+ { .of = fn inner => seal ("Box", inner); }
+
+sig value = IntegerBox
+let value = IntegerBox.of "text"
+
+return value
