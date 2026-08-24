@@ -37,14 +37,14 @@ let normalize = fn input => do:
   return F32x4.div centered (F32x4.splat (F32.of_int 2))
 
 normalized <- normalize (do:
-    <- Console.write "sampling"
-    return F32x4.of (
-      F32.of_int 1,
-      F32.of_int 2,
-      F32.of_int 3,
-      F32.of_int 4
+  <- Console.write "sampling"
+  return F32x4.of (
+    F32.of_int 1,
+    F32.of_int 2,
+    F32.of_int 3,
+    F32.of_int 4
     )
-  )
+)
 
 let gain :: F32x4
 let gain = F32x4.splat (F32.of_int 10)
@@ -76,4 +76,4 @@ return {
   .total = F32.truncate (F32x4.sum normalized);
   .energy = F32.truncate (F32x4.dot normalized gain);
   .shuffled = F32.truncate (F32x4.sum shuffled);
-}
+  }

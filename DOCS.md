@@ -900,7 +900,9 @@ store <- fold (
 )
 ```
 
-The closing delimiter belongs to the construct that opened it. Nested vertical
+The closing delimiter returns to the indentation of the expression that opened
+it, and the contents sit one level deeper. Sequencing with `<-` does not shift
+the delimiter; it remains part of that expression's line. Nested vertical
 delimiters should not collapse into an ambiguous wall of equally indented `)`.
 
 Do not hand-align code or preserve a personal wrapping style. Run:
@@ -910,7 +912,9 @@ deno task blot fmt path/to/file.blot
 ```
 
 The formatter owns the 80-column bias, redundant parentheses, vertical arrays
-and arguments, scope indentation, and blank lines after suites.
+and arguments, scope indentation, attached signature-and-binding pairs,
+recursive-group boundaries, and blank lines after suites and multiline case
+arms.
 
 ## Use tooling as part of the writing loop
 

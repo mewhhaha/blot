@@ -9,6 +9,7 @@ const owned_fold = fn (&values, ?state, step) => do:
       #Some value => do:
         ?next <- step (?current, value)
         return go (index + 1, ?next)
+
       #None => current
 
   return go (0, ?state)
@@ -18,4 +19,4 @@ return owned_fold (
   (&[2, 3, 4]),
   ?initial,
   fn (?state, value) => @array.push state value
-)
+  )

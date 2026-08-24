@@ -5,4 +5,4 @@ return {
   .quick = prelude.Array.quicksort;
   .merge = prelude.Array.merge_sort;
   .radix = prelude.Array.radix_sort;
-}
+  }

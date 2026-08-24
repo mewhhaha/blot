@@ -117,6 +117,7 @@ let render = fn (transforms, models) => do:
               #True => draw.mesh (
                   transform.position, transform.angle, transform.scale, model.colour
                 )
+
               #False => draw.sprite (
                   transform.position,
                   transform.scale,

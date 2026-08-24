@@ -21,16 +21,18 @@ let apply = fn (config, override) => case override of
     .verbose = config.verbose;
     .environment = config.environment;
   }
+
   #Verbose verbose => {
     .workers = config.workers;
     .verbose = verbose;
     .environment = config.environment;
   }
+
   #Environment environment => {
     .workers = config.workers;
     .verbose = config.verbose;
     .environment = environment;
-  }
+}
 
 let defaults :: Config
 let defaults =

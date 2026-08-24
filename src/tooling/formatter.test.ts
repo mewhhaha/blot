@@ -21,6 +21,7 @@ Deno.test("formatting indents nested conditionals within calls", async () => {
         #True => case burning_count > 0 of
           #True => burning_count - 1
           #False => 0
+
         #False => burning_count
     )
     <- Residences.remove tile
@@ -41,19 +42,20 @@ return remove_residence
     population <- Population.get_or (editor_entity, 0)
     burning_count <- BurningCount.get_or (editor_entity, 0)
     <- Population.set (
-        editor_entity,
-        case population > 0 of
-          #True => population - 1
-          #False => 0
-      )
+      editor_entity,
+      case population > 0 of
+        #True => population - 1
+        #False => 0
+    )
     <- BurningCount.set (
-        editor_entity,
-        case burning > 0 of
-          #True => case burning_count > 0 of
-            #True => burning_count - 1
-            #False => 0
-          #False => burning_count
-      )
+      editor_entity,
+      case burning > 0 of
+        #True => case burning_count > 0 of
+          #True => burning_count - 1
+          #False => 0
+
+        #False => burning_count
+    )
     <- Residences.remove tile
 
   return ()
@@ -206,7 +208,121 @@ return factorial
 `,
     `let rec factorial :: Int -> Int
 let rec factorial = fn value => value
+
 return factorial
+`,
+  );
+});
+
+Deno.test("formatting moves a multiline signature into its value scope", async () => {
+  await assertStableFormatting(
+    `const fold :: @forall (fn T => @forall (fn S => do:
+    return ([T], S, (S, T) -> S) -> S
+  ))
+const fold = fn values => values
+return fold
+`,
+    `const fold ::
+  @forall (fn T => @forall (fn S => do:
+    return ([T], S, (S, T) -> S) -> S
+  ))
+const fold = fn values => values
+return fold
+`,
+  );
+});
+
+Deno.test("formatting normalizes a signature's nested scope", async () => {
+  await assertStableFormatting(
+    `const fold ::
+  @forall (fn T => @forall (fn S => do:
+      return ([T], S, (S, T) -> S) -> S
+    ))
+const fold = fn values => values
+return fold
+`,
+    `const fold ::
+  @forall (fn T => @forall (fn S => do:
+    return ([T], S, (S, T) -> S) -> S
+  ))
+const fold = fn values => values
+return fold
+`,
+  );
+});
+
+Deno.test("formatting indents a signature's expression continuation", async () => {
+  await assertStableFormatting(
+    `const replace ::
+  @forall (fn T => do:
+      return T ->
+          (#Replaced T |
+           #Missing)
+    )
+const replace = fn value => value
+return replace
+`,
+    `const replace ::
+  @forall (fn T => do:
+    return T ->
+      (#Replaced T |
+        #Missing)
+  )
+const replace = fn value => value
+return replace
+`,
+  );
+});
+
+Deno.test("formatting aligns a closing delimiter before an expression suffix", async () => {
+  await assertStableFormatting(
+    `const consume :: ({
+    .value = Int;
+    } -> Unit)
+const consume = fn value => ()
+return consume
+`,
+    `const consume ::
+  ({
+    .value = Int;
+  } -> Unit)
+const consume = fn value => ()
+return consume
+`,
+  );
+});
+
+Deno.test("formatting keeps a signature attached to its binding", async () => {
+  await assertStableFormatting(
+    `let value :: Int
+
+let value = 1
+return value
+`,
+    `let value :: Int
+let value = 1
+return value
+`,
+  );
+});
+
+Deno.test("formatting separates a recursive group from its following declaration", async () => {
+  await assertStableFormatting(
+    `let rec even :: Int -> Bool
+let rec even = fn value => odd value
+
+let rec odd :: Int -> Bool
+let rec odd = fn value => even value
+let answer = even 0
+return answer
+`,
+    `let rec even :: Int -> Bool
+let rec even = fn value => odd value
+let rec odd :: Int -> Bool
+let rec odd = fn value => even value
+
+let answer = even 0
+return answer
 `,
   );
 });
@@ -302,18 +418,18 @@ return load
     source,
     `let load = fn count => do:
   store <- fold (
-      upto (0, count),
-      @array.empty,
-      fn (store, id) => do:
-        return append (store, id)
-    )
+    upto (0, count),
+    @array.empty,
+    fn (store, id) => do:
+      return append (store, id)
+  )
   return store
 return load
 `,
   );
 });
 
-Deno.test("formatting staggers adjacent vertical delimiters", async () => {
+Deno.test("formatting aligns a vertical call delimiter with its expression", async () => {
   const source = `let draw = fn values => do:
   <- each (
   values,
@@ -328,11 +444,31 @@ return draw
     source,
     `let draw = fn values => do:
   <- each (
-      values,
-      fn value => do:
-        <- visit value
-    )
+    values,
+    fn value => do:
+      <- visit value
+  )
 return draw
+`,
+  );
+});
+
+Deno.test("formatting separates a multiline case arm from the next arm", async () => {
+  await assertStableFormatting(
+    `let unwrap = fn candidate => case candidate of
+  #Some value => do:
+    let selected = value
+    return selected
+  #None => 0
+return unwrap
+`,
+    `let unwrap = fn candidate => case candidate of
+  #Some value => do:
+    let selected = value
+    return selected
+
+  #None => 0
+return unwrap
 `,
   );
 });
@@ -492,6 +628,7 @@ return factorial
   assertEquals(
     formatted.source,
     `let rec factorial = fn n => factorial n
+
 return factorial
 `,
   );

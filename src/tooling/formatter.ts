@@ -27,7 +27,6 @@ interface IndentRegion {
   readonly startsAtLine: number;
   readonly endsAtLine: number;
   readonly includesLastLine: boolean;
-  readonly extraInteriorIndent: boolean;
 }
 
 const maximumLineWidth = 80;
@@ -65,6 +64,7 @@ const INDENTED_RULES = new Set([
   "array_pattern",
   "block",
   "case_expression",
+  "continued_expression",
   "effect_row",
   "lambda",
   "operator_section",
@@ -122,7 +122,11 @@ export async function formatSource(source: string): Promise<FormatResult> {
   while (true) {
     const current = await parseConcrete(laidOut);
     if (!current.ok) break;
-    const statementValue = formatOneStatementValue(laidOut, current.cst);
+    const statementValue = await formatOneStatementValue(
+      laidOut,
+      current.cst,
+      current.module,
+    );
     if (statementValue !== laidOut) {
       laidOut = statementValue;
       continue;
@@ -161,29 +165,9 @@ export async function formatSource(source: string): Promise<FormatResult> {
   }
   const concrete = laidOutParse.cst;
   const lineStarts = sourceLineStarts(laidOut);
-  const regions: IndentRegion[] = [];
-  collectIndentRegions(concrete, laidOut, lineStarts, regions);
   const lines = laidOut.split("\n");
-  const formatted = lines.map((line, index) => {
-    const content = line.trim();
-    if (content === "") return "";
-    const openingLines = new Set<number>();
-    let extraInteriorIndent = 0;
-    for (const region of regions) {
-      if (index <= region.startsAtLine) continue;
-      if (index < region.endsAtLine) {
-        openingLines.add(region.startsAtLine);
-        if (region.extraInteriorIndent) extraInteriorIndent += 1;
-      }
-      if (
-        index === region.endsAtLine && region.includesLastLine
-      ) {
-        openingLines.add(region.startsAtLine);
-      }
-    }
-    return `${"  ".repeat(openingLines.size + extraInteriorIndent)}${content}`;
-  });
-  const formattedSource = separateStatementSuites(
+  const formatted = structurallyIndentedLines(laidOut, concrete, lineStarts);
+  const formattedSource = formatStructuralSpacing(
     `${formatted.join("\n").trimEnd()}\n`,
     concrete,
     lineStarts,
@@ -220,7 +204,7 @@ export async function formatSource(source: string): Promise<FormatResult> {
   ) {
     throw new Error("formatter could not preserve the parsed module");
   }
-  const separatedLayout = separateStatementSuites(
+  const separatedLayout = formatStructuralSpacing(
     normalizedClosingLayout,
     preserved.cst,
     sourceLineStarts(normalizedClosingLayout),
@@ -235,10 +219,11 @@ export async function formatSource(source: string): Promise<FormatResult> {
   return { ok: true, source: separatedLayout };
 }
 
-function formatOneStatementValue(
+async function formatOneStatementValue(
   source: string,
   root: ConcreteRule,
-): string {
+  expectedModule: Module,
+): Promise<string> {
   const statements: ConcreteRule[] = [];
   collectRules(root, "signature", statements);
   collectRules(root, "binding", statements);
@@ -295,10 +280,45 @@ function formatOneStatementValue(
         }
       }
     }
-    const bindingOwnsDelimitedValue = statement.name === "binding" &&
+    const declarationOwnsDelimitedValue =
+      (statement.name === "binding" || statement.name === "signature") &&
       valueIsMultiline && valueUsesDelimiters;
     const needsSeparateLine = inlineWidth > maximumLineWidth ||
-      bindingOwnsDelimitedValue;
+      declarationOwnsDelimitedValue;
+    if (
+      statement.name === "signature" && !valueStartsOnIntroducerLine &&
+      valueIsMultiline
+    ) {
+      const lineStarts = sourceLineStarts(source);
+      const sourceLines = source.split("\n");
+      const indentedLines = structurallyIndentedLines(source, root, lineStarts);
+      const startsAtLine = lineAtOffset(lineStarts, statement.span.start);
+      const endsAtLine = lineAtOffset(
+        lineStarts,
+        Math.max(statement.span.start, ruleContentSpan(statement).end - 1),
+      );
+      let changed = false;
+      for (let line = startsAtLine; line <= endsAtLine; line += 1) {
+        const indented = indentedLines[line];
+        if (indented === undefined) {
+          throw new Error("signature line is missing");
+        }
+        if (sourceLines[line] === indented) continue;
+        sourceLines[line] = indented;
+        changed = true;
+      }
+      if (changed) {
+        const candidate = sourceLines.join("\n");
+        const reparsed = await parseConcrete(candidate);
+        if (
+          reparsed.ok &&
+          moduleWithoutSpans(reparsed.module) ===
+            moduleWithoutSpans(expectedModule)
+        ) {
+          return candidate;
+        }
+      }
+    }
     if (!needsSeparateLine) {
       if (valueStartsOnIntroducerLine && separator === " ") continue;
       if (statement.name === "binding") continue;
@@ -337,17 +357,24 @@ function indentedBindingValue(
   return null;
 }
 
-function separateStatementSuites(
+function formatStructuralSpacing(
   source: string,
   root: ConcreteRule,
   lineStarts: readonly number[],
 ): string {
   const lines = source.split("\n");
   const separators = new Set<number>();
-  collectSeparators(root);
+  const blankLinesToRemove = new Set<number>();
+  collectSpacing(root);
+  for (const separator of separators) {
+    for (let line = separator - 1; lines[line]?.trim() === ""; line -= 1) {
+      blankLinesToRemove.add(line);
+    }
+  }
 
   const separated: string[] = [];
   for (let line = 0; line < lines.length; line += 1) {
+    if (blankLinesToRemove.has(line) && lines[line]?.trim() === "") continue;
     if (
       separators.has(line) && separated.at(-1)?.trim() !== ""
     ) {
@@ -358,7 +385,7 @@ function separateStatementSuites(
   }
   return separated.join("\n");
 
-  function collectSeparators(node: ConcreteNode): void {
+  function collectSpacing(node: ConcreteNode): void {
     if (node.type !== "rule") return;
     const siblingName = node.name === "program"
       ? "declaration"
@@ -378,26 +405,103 @@ function separateStatementSuites(
         ) {
           continue;
         }
-        let nextLine = lineAtOffset(lineStarts, next.span.start);
-        const nextIndent = lines[nextLine]?.match(/^[ ]*/)?.[0];
-        if (nextIndent === undefined) {
-          throw new Error("following statement has no indentation");
+        separateBefore(next);
+      }
+
+      for (let index = 0; index + 1 < siblings.length; index += 1) {
+        const current = siblings[index];
+        const next = siblings[index + 1];
+        if (current === undefined || next === undefined) continue;
+        const signature = directRule(current, "signature");
+        if (signature !== null && directRule(next, "binding") !== null) {
+          joinDeclarations(current, next);
         }
-        while (
-          nextLine > 0 && lines[nextLine - 1]?.trimStart().startsWith("//")
-        ) {
-          const comment = lines[nextLine - 1];
-          if (comment === undefined) {
-            throw new Error("leading comment is missing");
-          }
-          lines[nextLine - 1] = `${nextIndent}${comment.trimStart()}`;
-          nextLine -= 1;
+
+        const currentKind = recursiveBindingKind(current);
+        if (currentKind === null) continue;
+        const nextKind = recursiveDeclarationKind(next);
+        if (nextKind === currentKind) {
+          joinDeclarations(current, next);
+          continue;
         }
-        separators.add(nextLine);
+        separateBefore(next);
       }
     }
-    for (const child of node.children()) collectSeparators(child);
+
+    if (node.name === "case_expression") {
+      const arms = directRules(node, "case_arm");
+      for (let index = 0; index + 1 < arms.length; index += 1) {
+        const current = arms[index];
+        const next = arms[index + 1];
+        if (current === undefined || next === undefined) continue;
+        const body = directRule(current, "value");
+        if (body === null) continue;
+        const bodyStart = lineAtOffset(lineStarts, body.span.start);
+        const bodyEnd = lineAtOffset(
+          lineStarts,
+          Math.max(body.span.start, ruleContentSpan(body).end - 1),
+        );
+        if (bodyStart < bodyEnd) separateBefore(next);
+      }
+    }
+
+    for (const child of node.children()) collectSpacing(child);
   }
+
+  function separateBefore(rule: ConcreteRule): void {
+    let nextLine = lineAtOffset(lineStarts, rule.span.start);
+    const nextIndent = lines[nextLine]?.match(/^[ ]*/)?.[0];
+    if (nextIndent === undefined) {
+      throw new Error("following statement has no indentation");
+    }
+    while (
+      nextLine > 0 && lines[nextLine - 1]?.trimStart().startsWith("//")
+    ) {
+      const comment = lines[nextLine - 1];
+      if (comment === undefined) throw new Error("leading comment is missing");
+      lines[nextLine - 1] = `${nextIndent}${comment.trimStart()}`;
+      nextLine -= 1;
+    }
+    separators.add(nextLine);
+  }
+
+  function joinDeclarations(
+    current: ConcreteRule,
+    next: ConcreteRule,
+  ): void {
+    const currentEnd = lineAtOffset(
+      lineStarts,
+      Math.max(current.span.start, ruleContentSpan(current).end - 1),
+    );
+    const nextStart = lineAtOffset(lineStarts, next.span.start);
+    for (let line = currentEnd + 1; line < nextStart; line += 1) {
+      if (lines[line]?.trim() === "") blankLinesToRemove.add(line);
+    }
+  }
+}
+
+function recursiveBindingKind(rule: ConcreteRule): "let" | "const" | null {
+  const binding = directRule(rule, "binding");
+  if (binding === null || directToken(binding, "rec") === null) return null;
+  return declarationKind(binding);
+}
+
+function recursiveDeclarationKind(
+  rule: ConcreteRule,
+): "let" | "const" | null {
+  const bindingKind = recursiveBindingKind(rule);
+  if (bindingKind !== null) return bindingKind;
+  const signature = directRule(rule, "signature");
+  if (signature === null || directToken(signature, "rec") === null) {
+    return null;
+  }
+  return declarationKind(signature);
+}
+
+function declarationKind(rule: ConcreteRule): "let" | "const" {
+  if (directToken(rule, "let") !== null) return "let";
+  if (directToken(rule, "const") !== null) return "const";
+  throw new Error(`${rule.name} has no declaration kind`);
 }
 
 function formatOneArray(source: string, root: ConcreteRule): string {
@@ -967,17 +1071,40 @@ function lastCodeLine(
   return current;
 }
 
+function structurallyIndentedLines(
+  source: string,
+  root: ConcreteRule,
+  lineStarts: readonly number[],
+): readonly string[] {
+  const regions: IndentRegion[] = [];
+  collectIndentRegions(root, source, lineStarts, regions);
+  return source.split("\n").map((line, index) => {
+    const content = line.trim();
+    if (content === "") return "";
+    const openingLines = new Set<number>();
+    for (const region of regions) {
+      if (index <= region.startsAtLine) continue;
+      if (index < region.endsAtLine) {
+        openingLines.add(region.startsAtLine);
+      }
+      if (index === region.endsAtLine && region.includesLastLine) {
+        openingLines.add(region.startsAtLine);
+      }
+    }
+    return `${"  ".repeat(openingLines.size)}${content}`;
+  });
+}
+
 function collectIndentRegions(
   node: ConcreteNode,
   source: string,
   lineStarts: readonly number[],
   regions: IndentRegion[],
-  ancestors: readonly ConcreteRule[] = [],
 ): void {
   if (node.type !== "rule") return;
   if (node.name === "binding" || node.name === "signature") {
     const indentedValue = directRule(node, "indented_value");
-    let value: ConcreteRule | null = null;
+    let value = directRule(node, "value");
     if (indentedValue !== null) value = indentedBindingValue(indentedValue);
     if (value !== null) {
       const introducer = node.name === "signature"
@@ -987,24 +1114,6 @@ function collectIndentRegions(
         throw new Error(`${node.name} has no value introducer`);
       }
       const startsAtLine = lineAtOffset(lineStarts, introducer.span.start);
-      const endsAtLine = lineAtOffset(
-        lineStarts,
-        Math.max(value.span.start, ruleContentSpan(value).end - 1),
-      );
-      if (startsAtLine < endsAtLine) {
-        regions.push({
-          startsAtLine,
-          endsAtLine,
-          includesLastLine: true,
-          extraInteriorIndent: false,
-        });
-      }
-    }
-  }
-  if (node.name === "result") {
-    const value = directRule(node, "value");
-    if (value !== null) {
-      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
       const valueStartsAtLine = lineAtOffset(lineStarts, value.span.start);
       const endsAtLine = lineAtOffset(
         lineStarts,
@@ -1015,7 +1124,23 @@ function collectIndentRegions(
           startsAtLine,
           endsAtLine,
           includesLastLine: true,
-          extraInteriorIndent: false,
+        });
+      }
+    }
+  }
+  if (node.name === "result") {
+    const value = directRule(node, "value");
+    if (value !== null) {
+      const startsAtLine = lineAtOffset(lineStarts, node.span.start);
+      const endsAtLine = lineAtOffset(
+        lineStarts,
+        Math.max(value.span.start, ruleContentSpan(value).end - 1),
+      );
+      if (startsAtLine < endsAtLine) {
+        regions.push({
+          startsAtLine,
+          endsAtLine,
+          includesLastLine: true,
         });
       }
     }
@@ -1031,11 +1156,17 @@ function collectIndentRegions(
         startsAtLine,
         endsAtLine,
         includesLastLine: true,
-        extraInteriorIndent: false,
       });
     }
   }
-  if (INDENTED_RULES.has(node.name)) {
+  let indentsFollowingLines = INDENTED_RULES.has(node.name);
+  if (node.name === "lambda") {
+    const body = directRule(node, "expression");
+    if (body === null) throw new Error("lambda has no body");
+    indentsFollowingLines = lineAtOffset(lineStarts, node.span.start) <
+      lineAtOffset(lineStarts, body.span.start);
+  }
+  if (indentsFollowingLines) {
     let startsAtLine = lineAtOffset(lineStarts, node.span.start);
     if (
       (node.name === "block" || node.name === "statement_suite") &&
@@ -1059,41 +1190,27 @@ function collectIndentRegions(
       lineAtOffset(lineStarts, node.span.start),
     );
     if (startsAtLine < endsAtLine) {
-      let closesEffectValue = false;
-      if (node.name === "parenthesized_or_tuple") {
-        for (const ancestor of ancestors.toReversed()) {
-          if (
-            ancestor.name === "rebinding" || ancestor.name === "sequencing"
-          ) {
-            closesEffectValue = directToken(ancestor, "<-") !== null;
-            break;
-          }
-          if (
-            delimitedLayoutRules.has(ancestor.name) ||
-            blockRule.has(ancestor.name) || ancestor.name === "lambda"
-          ) {
-            break;
-          }
+      let includesLastLine = node.name === "block" || node.name === "lambda";
+      if (delimitedLayoutRules.has(node.name)) {
+        const closingLineStart = lineStarts[endsAtLine];
+        if (closingLineStart === undefined) {
+          throw new Error(`${node.name} closing line is missing`);
         }
+        const closingLine = source.slice(
+          closingLineStart,
+          ruleContentSpan(node).end,
+        ).trim();
+        includesLastLine = !/^[)\]}]+/.test(closingLine);
       }
-      const opensInsideSameLineScope = delimitedLayoutRules.has(node.name) &&
-        ancestors.some((ancestor) =>
-          INDENTED_RULES.has(ancestor.name) &&
-          ancestor.name !== "block" && ancestor.name !== "statement_suite" &&
-          lineAtOffset(lineStarts, ancestor.span.start) === startsAtLine
-        );
       regions.push({
         startsAtLine,
         endsAtLine,
-        includesLastLine: node.name === "block" || node.name === "lambda" ||
-          closesEffectValue,
-        extraInteriorIndent: closesEffectValue || opensInsideSameLineScope,
+        includesLastLine,
       });
     }
   }
-  const nestedAncestors = [...ancestors, node];
   for (const child of node.children()) {
-    collectIndentRegions(child, source, lineStarts, regions, nestedAncestors);
+    collectIndentRegions(child, source, lineStarts, regions);
   }
 }
 

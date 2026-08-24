@@ -5,4 +5,4 @@ return {
   .Slice = prelude.Slice;
   .Arena = prelude.Arena;
   .freeze = prelude.freeze;
-}
+  }

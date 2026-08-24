@@ -18,10 +18,12 @@ let replaced = case Slice.split ((!owned), 1) of
         let joined = Slice.join ((!rejoin), (!updated), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return old () + current () + tail ()
+
       #ReplaceOutOfBounds (!replacement, !original) => do:
         let joined = Slice.join ((!rejoin), (!original), (!right))
         let [current, tail] = Slice.freeze (!joined)
         return replacement () + current () + tail ()
+
   #SplitOutOfBounds !original => do:
     let [first, second] = Slice.freeze (!original)
     return first () + second () + consume (!new_token)
@@ -37,8 +39,10 @@ let rotated = case Slice.split ((!whole), 1) of
           Slice.reassociate_right ((!outer_left), (!inner_left))
         let bc = Slice.join ((!inner_right), (!b), (!c))
         return Slice.join ((!outer_right), (!a), (!bc))
+
       #SplitOutOfBounds !bc_original => do:
         return Slice.join ((!outer), (!a), (!bc_original))
+
   #SplitOutOfBounds !original => original
 
 let values = Slice.freeze (!rotated)

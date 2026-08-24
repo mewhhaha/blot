@@ -25,6 +25,7 @@ let entries = case OrderedTextMap.split_before ((!entries), "gamma") of
     let (right, previous_gamma) = replace_keep ((!right), "gamma", 30)
     let joined = OrderedTextMap.join ((!rejoin), (!left), (!right))
     return (joined, previous_alpha + previous_gamma)
+
   #SplitOutOfBounds !original => (original, 0)
 
 let (entries, replaced_edges) = entries

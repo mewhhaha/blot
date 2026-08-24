@@ -6,4 +6,4 @@ return {
   .Set = prelude.Set;
   .Dict = prelude.Dict;
   .OrderedTextMap = prelude.OrderedTextMap;
-}
+  }

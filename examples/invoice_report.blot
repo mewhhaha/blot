@@ -33,7 +33,7 @@ let add_line = fn (totals, line) => do:
     .subtotal = totals.subtotal + amount;
     .tax = totals.tax + tax;
     .items = totals.items + line.quantity;
-  }
+    }
 
 let lines :: [Line]
 let lines =
@@ -74,4 +74,4 @@ return {
   .tax = totals.tax;
   .grand_total = totals.subtotal + totals.tax;
   .items = totals.items;
-}
+  }

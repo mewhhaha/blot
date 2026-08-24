@@ -16,7 +16,6 @@ let rec build =
         #False => value + 1
       let (nodes, _) = Arena.insert (?nodes, node (value, value - 1, next))
       return build (value + 1, nodes)
-
 let rec total_forward =
   fn (&nodes, address, sum) => do:
     if address == 0:
@@ -28,8 +27,8 @@ let rec total_forward =
           current.next,
           sum + current.value
         )
-        #None => sum
 
+        #None => sum
 let rec total_backward =
   fn (&nodes, address, sum) => do:
     if address == 0:
@@ -41,6 +40,7 @@ let rec total_backward =
           current.previous,
           sum + current.value
         )
+
         #None => sum
 
 let nodes = Arena.singleton (node (0, 0, 0))

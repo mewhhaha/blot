@@ -10,7 +10,6 @@ let rec build = fn count => do:
     return #Nil
   else:
     return #Cons (count, build (count - 1))
-
 let rec total = fn values => case values of
   #Nil => 0
   #Cons node => node.0 + total node.1
@@ -28,7 +27,6 @@ let rec build_odd = fn count => do:
     return #OddDone
   else:
     return #Odd (count, build_even (count - 1))
-
 let rec total_even = fn values => case values of
   #EvenDone => 0
   #Even node => node.0 + total_odd node.1

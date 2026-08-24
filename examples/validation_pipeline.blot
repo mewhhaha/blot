@@ -28,6 +28,7 @@ let summarize = fn (state, result) => case result of
     .accepted = [...state.accepted, value];
     .errors = state.errors;
   }
+
   #Rejected reason => {
     .accepted = state.accepted;
     .errors = [...state.errors, reason];

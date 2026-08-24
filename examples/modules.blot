@@ -19,4 +19,4 @@ return {
   .run = application.run;
   .scaled = application.scaled;
   .explicit = explicit;
-}
+  }

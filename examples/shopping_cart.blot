@@ -26,4 +26,4 @@ return {
   .featured = featured_names;
   .featured_total = featured_total;
   .checkout = checkout total;
-}
+  }

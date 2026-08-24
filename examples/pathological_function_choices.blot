@@ -16,6 +16,7 @@ let run = fn (flag, value) => do:
         #True => fn n => n + flag + bias
         #False => fn n => n + flag
       return inner
+
     #False => do:
       let offset = value - flag
       return fn n => n - offset
@@ -26,4 +27,4 @@ let run = fn (flag, value) => do:
 return {
   .positive = run (20, 3);
   .negative = run (2, 3);
-}
+  }

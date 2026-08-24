@@ -20,13 +20,14 @@ let apply = fn (state, event) => case event of
     .accepted = state.accepted + 1;
     .rejected = state.rejected;
   }
+
   #Withdraw amount => do:
     if amount <= state.balance:
       return {
         .balance = state.balance - amount;
         .accepted = state.accepted + 1;
         .rejected = state.rejected;
-      }
+        }
     else:
       return {
         .balance = state.balance;

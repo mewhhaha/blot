@@ -67,6 +67,7 @@ const counting = fn T => do:
         return 0
       else:
         return 1 + down (n - 1)
+
   if refines (T, Int):
     return down
   else:

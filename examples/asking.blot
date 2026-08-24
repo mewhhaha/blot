@@ -45,4 +45,4 @@ return {
   .value = checked.value;
   .label = counted.label;
   .both = exact.value;
-}
+  }

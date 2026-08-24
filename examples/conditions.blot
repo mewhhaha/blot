@@ -22,6 +22,7 @@ let name :: 1 | 2 | 3 -> Text
 let name = fn n => case n == 1 of
   #True => case n of
     1 => "one"
+
   #False => case n of
     2 => "two"
     3 => "three"

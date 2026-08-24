@@ -77,7 +77,7 @@ let thirds :: Int
 let thirds =
   F32.truncate (F32x4.dot
     (F32x4.splat (F32.of_float (F64.div 1.0 3.0)))
-  (F32x4.splat (lane 3)))
+    (F32x4.splat (lane 3)))
 
 return {
   .first = first;
@@ -88,4 +88,4 @@ return {
   .total = total;
   .thirds = thirds;
   .shuffled = F32.truncate (F32x4.sum shuffled);
-}
+  }

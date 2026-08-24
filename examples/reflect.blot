@@ -50,9 +50,9 @@ const Message = Ok | Failed | #Timeout | 0
 
 const List = fn element => seal ("List", element)
 const Pair = fn element => seal (
-    "Pair",
-    { .first = element; .second = element; }
-  )
+  "Pair",
+  { .first = element; .second = element; }
+)
 
 const element_of = fn t => unwrap_or (opened ("List", t), Unit)
 

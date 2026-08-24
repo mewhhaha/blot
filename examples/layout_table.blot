@@ -30,7 +30,6 @@ let rec layout =
         }
       return layout (index + 1, @array.push frames frame)
 
-
 let frames = layout (0, [])
 return case Array.get (frames, 2) of
   #Some frame => frame.x + frame.width

@@ -15,7 +15,7 @@ let total_lengths = fn implementation => fn values => do:
     values,
     0,
     fn (total, value) => total + Text.length value
-  )
+    )
 
 let retain_long ::
   Filterable (List.of Text, Text) -> List.of Text -> List.of Text
@@ -31,7 +31,8 @@ let collect_words = fn implementation => fn values => do:
 
   return collected
 
-let map_name_lengths :: Mappable (
+let map_name_lengths ::
+  Mappable (
     Map.of (Int, Text),
     Map.of (Int, Int),
     Text,
@@ -40,7 +41,8 @@ let map_name_lengths :: Mappable (
 let map_name_lengths = fn implementation => fn names => do:
   return implementation.map (names, Text.length)
 
-let increment_members :: Mappable (
+let increment_members ::
+  Mappable (
     Set.of Int,
     Set.of Int,
     Int,
@@ -84,4 +86,4 @@ return {
   .set_values = colours;
   .set_lengths = colour_lengths;
   .incremented_lengths = incremented_lengths;
-}
+  }

@@ -30,9 +30,11 @@ const partition_last = fn (!values, before) => do:
             !outer,
             !inner
           )
+
           #SplitOutOfBounds !original => #Done (
             Slice.join (!outer, !left, !original)
           )
+
       #SplitOutOfBounds !original => #Done (!original)
 
 const rec quicksort_region = fn (!values, before) => do:

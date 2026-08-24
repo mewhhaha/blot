@@ -73,4 +73,4 @@ return {
   .applied = applied;
   .bounded = bounded;
   .negated = negated;
-}
+  }

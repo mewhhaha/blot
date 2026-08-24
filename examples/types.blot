@@ -60,7 +60,7 @@ const describe = fn names => do:
     names,
     "",
     fn (state, name) => @text.concat state (@text.concat name " ")
-  )
+    )
 
 return {
   .one = One;
@@ -87,4 +87,4 @@ return {
   // runs at compile time because everything here does.
   .in_range = @satisfies 7 Digit;
   .typed = @type.of { .x = 1; .y = "two"; };
-}
+  }

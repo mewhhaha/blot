@@ -33,4 +33,4 @@ return {
   .union = IntSet.union evens small;
   .intersect = IntSet.intersect evens small;
   .diff = IntSet.diff small evens;
-}
+  }

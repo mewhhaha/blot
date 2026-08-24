@@ -10,4 +10,4 @@ open import "blot:prelude"
 return {
   .zoom_of = fn camera => camera.zoom;
   .doubled = fn camera => camera.zoom * 2;
-}
+  }

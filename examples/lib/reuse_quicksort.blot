@@ -15,7 +15,7 @@ const quicksort = fn (?values, direction) => do:
         return left >= right
       else:
         return left <= right
-  )
+    )
 
 dynamic <- Source.value 0
 direction <- Source.value 1

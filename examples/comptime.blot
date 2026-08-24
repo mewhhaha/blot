@@ -30,13 +30,13 @@ const aligned_layout = layout (Header.shape, word_width)
 // namespace is compile-time and does not appear in its type, so a parameter
 // that wanted `.fields` would have no type to ask for.
 const derive_show = fn names => fn value => fold (
-    names,
-    "",
-    fn (state, name) => do:
-      let rendered = @text.of_int (@shape.get value name)
-      return
-        @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
-  )
+  names,
+  "",
+  fn (state, name) => do:
+    let rendered = @text.of_int (@shape.get value name)
+    return
+      @text.concat state (@text.concat name (@text.concat "=" (@text.concat rendered " ")))
+)
 
 const show_header = derive_show Header.fields
 
@@ -45,7 +45,7 @@ const derive_sum = fn names => fn value => do:
     names,
     0,
     fn (state, name) => @int.add state (@shape.get value name)
-  )
+    )
 
 const sum_header = derive_sum Header.fields
 
@@ -73,4 +73,4 @@ return {
   .evens = evens;
   .squares = squares;
   .total = sum squares;
-}
+  }

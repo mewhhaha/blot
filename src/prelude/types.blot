@@ -11,4 +11,4 @@ return {
   .I32x4 = prelude.I32x4;
   .I16x8 = prelude.I16x8;
   .I8x16 = prelude.I8x16;
-}
+  }

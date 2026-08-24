@@ -372,19 +372,23 @@ width. Other indentation is expression continuation and does not silently create
 a scope. A closing delimiter does not select a suite width, so its indentation
 is ignored and canonicalized by the formatter. The formatter writes the accepted
 structure with two-space indentation and expands lines toward an 80-column
-limit. When a binding or `return` line is too wide, its value moves to the
-following line at one additional indentation level. A delimited value that is
-already multiline likewise moves as a whole, so its opening and closing
-delimiters share the value's indentation scope rather than the declaration's
-prefix. A vertical delimiter indents its contents one level and closes one level
-outside them. The formatter writes a conditional vertically, giving each branch
-a block whose explicit `return` supplies the value that branch contributes. When
-the conditional is itself the terminal result of a scope, the formatter omits
-the redundant outer `return` and lets those branch returns target the scope
-directly. Arrays use one line when they fit within their value scope and
-otherwise place one element on each line. After a standalone `if` or `for` suite
-closes before another statement, the formatter writes one empty line to make the
-dedent visible.
+limit. When a binding, signature, or `return` line is too wide, its value moves
+as a whole to the following line at one additional indentation level. That
+continuation does not introduce a scope. A delimited value that is already
+multiline likewise moves as a whole. A vertical delimiter indents its contents
+one level and closes at the indentation of the expression that opened it; `<-`
+does not add another delimiter level. The formatter writes a conditional
+vertically, giving each branch a block whose explicit `return` supplies the
+value that branch contributes. When the conditional is itself the terminal
+result of a scope, the formatter omits the redundant outer `return` and lets
+those branch returns target the scope directly. Arrays use one line when they
+fit within their value scope and otherwise place one element on each line. A
+signature and its binding have no empty line between them. Recursive-group
+members are likewise contiguous, followed by one empty line when another
+declaration follows. After a standalone `if` or `for` suite, or a multiline
+`case` arm, closes before another statement or arm, the formatter writes one
+empty line to make the dedent visible. It never separates an `else` from its
+`if`.
 
 ### 4.1 Runtime and compile-time bindings
 

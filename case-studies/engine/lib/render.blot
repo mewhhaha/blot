@@ -181,6 +181,7 @@ const to_screen = fn (view, camera) => case camera.lens == 0 of
   #True => F32x4.add
       SCREEN_CENTRE
       (F32x4.div (F32x4.mul view FOCAL_AXES) (F32x4.splat (F32x4.z view)))
+
   #False => F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
 
 // Where the camera sits, and the three rows that take a world point to it.
@@ -349,10 +350,11 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
-let frame :: ({
+let frame ::
+  ({
     .mesh = (F32x4, Int, F32, Text) -> Unit ~ { Canvas };
     .sprite = (F32x4, F32, Text) -> Unit ~ { Canvas };
-    } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
+  } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint => do:
   <- Canvas.clear ()
   yaw <- View.yaw ()

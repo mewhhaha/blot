@@ -37,7 +37,6 @@ let rec walk =
       return combine ((&source), at + 1, head)
     else:
       return (head - 2, at + 1)
-
 let rec combine :: ([Int], Int, Int) -> (Int, Int)
 let rec combine =
   fn (&source, at, operator) => do:

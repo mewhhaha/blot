@@ -16,7 +16,7 @@ const sort_signed = fn dynamic => do:
     values,
     fn value => value,
     Radix.unstable
-  )
+    )
 
 const first :: Int -> Int
 const first = fn dynamic => do:
@@ -54,4 +54,4 @@ return {
   .first = first;
   .last = last;
   .stable_ids = stable_ids;
-}
+  }

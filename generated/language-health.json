@@ -720,7 +720,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 2895
+      "lines": 2954
     },
     {
       "path": "src/syntax/lower.ts",
@@ -748,7 +748,7 @@
     },
     {
       "path": "src/tooling/formatter.ts",
-      "lines": 1121
+      "lines": 1238
     }
   ]
 }

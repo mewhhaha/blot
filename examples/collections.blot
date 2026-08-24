@@ -39,4 +39,4 @@ return {
   .answer = total + doubled + counted * 8 + sum small - 36;
   .empty_length = count_values Array Array.empty;
   .joined = joined;
-}
+  }

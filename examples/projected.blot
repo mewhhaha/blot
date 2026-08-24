@@ -42,4 +42,4 @@ return {
   // A second call site is free as long as it agrees: one shape reaches the
   // projection, so one Core record answers for both.
   .agreeing = get_x { .x = 8; .y = 9; };
-}
+  }
