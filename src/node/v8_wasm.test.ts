@@ -14,7 +14,9 @@ test("V8 executes the Wasm 3 tail-call profile without stack growth", async () =
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(
-      resolve("experiments/generated-code/programs/tail_recursion.blot"),
+      resolve(
+        "experiments/generated-code/programs/mutual_tail_recursion.blot",
+      ),
     );
     const bytes = Uint8Array.from(artifact.wasm);
     assert.equal(WebAssembly.validate(bytes), true);
@@ -27,14 +29,15 @@ test("V8 executes the Wasm 3 tail-call profile without stack growth", async () =
     assert.ok(manifest.abi.requiredFeatures.includes("tail-call"));
 
     const instantiated = await WebAssembly.instantiate(bytes);
-    const sumTo = instantiated.instance.exports["blot:sum_to"] as
-      | ((count: bigint) => bigint)
+    const isEven = instantiated.instance.exports["blot:is_even"] as
+      | ((remaining: bigint) => number)
       | undefined;
-    assert.equal(typeof sumTo, "function");
-    if (sumTo === undefined) {
-      throw new Error("tail-recursion artifact omitted blot:sum_to");
+    assert.equal(typeof isEven, "function");
+    if (isEven === undefined) {
+      throw new Error("mutual-tail-recursion artifact omitted blot:is_even");
     }
-    assert.equal(sumTo(250_000n), 31_250_125_000n);
+    assert.equal(isEven(250_000n), 1);
+    assert.equal(isEven(250_001n), 0);
   } finally {
     compiler.destroy();
   }
