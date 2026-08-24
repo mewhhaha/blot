@@ -781,7 +781,6 @@ function moduleBindings(module: Module): readonly BindingInfo[] {
   const bindings: BindingInfo[] = [];
   for (const declaration of module.declarations) {
     if (declaration.tag === "binding") {
-      if (declaration.kind === "sig") continue;
       for (const binding of patternBindings(declaration.pattern)) {
         bindings.push({
           name: binding.name,
@@ -1042,7 +1041,7 @@ function fieldIdentifierSpan(
 function importedBindingSpecifier(module: Module, name: string): string | null {
   for (const declaration of module.declarations.toReversed()) {
     if (
-      declaration.tag !== "binding" || declaration.kind === "sig" ||
+      declaration.tag !== "binding" ||
       declaration.pattern.tag !== "name" || declaration.pattern.name !== name
     ) {
       continue;

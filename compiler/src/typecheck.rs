@@ -174,6 +174,15 @@ enum Requirement {
     Predicate(Value),
 }
 
+struct EvaluatedClosure<'a> {
+    module_path: &'a str,
+    parameter: PatternId,
+    body: ExpressionId,
+    captures: &'a ValueEnvironment,
+    self_name: Option<&'a str>,
+    deferred: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
 pub enum Scalar {
     Int(BigInt),
@@ -2811,12 +2820,14 @@ impl Checker {
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         types,
                         dependencies,
                         None,
@@ -3204,12 +3215,14 @@ impl Checker {
                     let mut function_type = self.infer_evaluated_closure(
                         path,
                         module,
-                        &closure_module,
-                        parameter,
-                        body,
-                        &closure_values,
-                        self_name.as_deref(),
-                        deferred,
+                        EvaluatedClosure {
+                            module_path: &closure_module,
+                            parameter,
+                            body,
+                            captures: &closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred,
+                        },
                         environment,
                         dependencies,
                         None,
@@ -3265,12 +3278,14 @@ impl Checker {
                     let function_type = self.infer_evaluated_closure(
                         path,
                         module,
-                        &closure_module,
-                        parameter,
-                        body,
-                        &closure_values,
-                        self_name.as_deref(),
-                        deferred,
+                        EvaluatedClosure {
+                            module_path: &closure_module,
+                            parameter,
+                            body,
+                            captures: &closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred,
+                        },
                         environment,
                         dependencies,
                         None,
@@ -3472,12 +3487,14 @@ impl Checker {
                     let function = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         environment,
                         dependencies,
                         Some(argument.type_.clone()),
@@ -3555,12 +3572,14 @@ impl Checker {
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
-                        closure_module,
-                        *parameter,
-                        *body,
-                        closure_values,
-                        self_name.as_deref(),
-                        *deferred,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: self_name.as_deref(),
+                            deferred: *deferred,
+                        },
                         environment,
                         dependencies,
                         Some(argument_type.clone()),
@@ -4196,16 +4215,19 @@ impl Checker {
         &self,
         path: &str,
         module: &Module,
-        closure_module: &str,
-        parameter: PatternId,
-        body: ExpressionId,
-        closure_values: &ValueEnvironment,
-        self_name: Option<&str>,
-        deferred: bool,
+        closure: EvaluatedClosure<'_>,
         environment: &TypeEnvironment,
         dependencies: &BTreeMap<String, Type>,
         parameter_type: Option<Type>,
     ) -> Result<Type, Diagnostic> {
+        let EvaluatedClosure {
+            module_path: closure_module,
+            parameter,
+            body,
+            captures: closure_values,
+            self_name,
+            deferred,
+        } = closure;
         let closure_loaded = self
             .context
             .modules

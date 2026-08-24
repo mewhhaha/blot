@@ -11,4 +11,4 @@ return (
   Text.replace (cleaned, "beta", "B"),
   Text.starts_with (cleaned, "α"),
   Text.ends_with (cleaned, "γ")
-)
+  )

@@ -886,7 +886,7 @@ impl CompilerSession {
         self.module_analyses
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
-        self.checker.invalidate(&invalidated);
+        self.checker.invalidate(invalidated);
         self.context
             .module_results
             .borrow_mut()
@@ -2243,7 +2243,7 @@ mod tests {
             .add_source(
                 path.to_owned(),
                 source(
-                    "sig replacement = @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => @shape.update record { .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
+                    "const replacement :: @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => @shape.update record { .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
                 ),
             )
             .expect("shape update source should load");

@@ -26,4 +26,4 @@ return (
   Array.length (&numbers),
   maps.get (entries, 1),
   maps.get (entries, 2)
-)
+  )

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-sig probe = Text -> Int
+let probe :: Text -> Int
 let probe = fn text => @text.len text + @text.find_from text "β" 1
 
 return probe

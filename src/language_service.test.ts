@@ -72,7 +72,7 @@ Deno.test("language diagnostics report compiler target preflight refusals", asyn
   const path = join(directory, "target-refusal.blot");
   const source = `open import "blot:prelude"
 
-sig vector = F32 -> F32x4
+let vector :: F32 -> F32x4
 let vector = fn value => F32x4.splat value
 return vector
 `;
@@ -117,7 +117,7 @@ Deno.test("inference-centered editor features share one resident revision", asyn
   const service = new LanguageService();
   const uri = "untitled:inference-features.blot";
   const source = `open import "blot:prelude"
-sig add = Int -> Int -> Int
+let add :: Int -> Int -> Int
 let add = fn left => fn right => left
 let answer = add 20 22
 return answer
