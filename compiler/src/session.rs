@@ -107,6 +107,23 @@ pub struct AddedModule {
 pub(crate) use crate::source::SourceError as AddSourceError;
 
 impl CompilerSession {
+    pub fn remove_module(&mut self, path: &str) -> bool {
+        let existed = self.context.modules.borrow().contains_key(path);
+        if !existed {
+            return false;
+        }
+        self.invalidate_exact(&HashSet::from([path.to_owned()]));
+        self.context.remove_module_state(path);
+        self.frontends.remove(path);
+        self.published_boundaries.borrow_mut().remove(path);
+        self.dirty_modules.borrow_mut().remove(path);
+        self.invalidation
+            .borrow_mut()
+            .invalidation_reasons
+            .remove(path);
+        true
+    }
+
     pub fn install_module_snapshot(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let snapshot: ModuleSnapshot = rmp_serde::from_slice(bytes)
             .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
@@ -1789,6 +1806,35 @@ mod tests {
     }
 
     #[test]
+    fn removed_module_reclaims_private_revision_state() {
+        const PATH: &str = "removed:module";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(PATH.to_owned(), source("let value = 1\n\u{e000}return value\u{e000}"))
+            .expect("module source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("module should configure");
+        assert_eq!(session.analyze_module(PATH)["ok"], true);
+        assert!(session.module_interfaces.borrow().contains_key(PATH));
+
+        assert!(session.remove_module(PATH));
+        assert!(!session.context.modules.borrow().contains_key(PATH));
+        assert!(!session.module_interfaces.borrow().contains_key(PATH));
+        assert!(!session.module_analyses.borrow().contains_key(PATH));
+        assert!(!session.published_boundaries.borrow().contains_key(PATH));
+        assert!(!session.remove_module(PATH));
+
+        session
+            .add_source(PATH.to_owned(), source("return 2\u{e000}"))
+            .expect("replacement source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("replacement should configure");
+        assert_eq!(session.evaluate_module(PATH)["display"], "2");
+    }
+
+    #[test]
     fn comment_only_edit_preserves_resident_module() {
         let mut session = CompilerSession::default();
         session
@@ -1823,7 +1869,13 @@ mod tests {
         let analysis = session.analyze_module("main.blot");
         assert_eq!(analysis["ok"], true);
         assert_eq!(analysis["targetPreflight"]["supported"], true, "{analysis}");
-        assert_eq!(analysis["work"]["schema"], 1);
+        assert_eq!(analysis["work"]["schema"], 2);
+        assert!(
+            analysis["work"]["solverWorklistPeak"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
         assert!(analysis["work"]["typeNodes"].as_u64().unwrap_or_default() > 0);
         assert!(analysis["work"]["constraints"].as_u64().unwrap_or_default() > 0);
         assert!(

@@ -12,6 +12,11 @@ interface CompilerWasmExports {
   lower_result_pointer(): number;
   create_compiler_session(): number;
   destroy_compiler_session(handle: number): number;
+  remove_compiler_session_module(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+  ): number;
   add_compiler_session_source(
     handle: number,
     pathPointer: number,
@@ -186,7 +191,7 @@ export interface CompilerOwnershipFact {
 }
 
 export interface CompilerWork {
-  readonly schema: 1;
+  readonly schema: 2;
   readonly typeNodes: number;
   readonly typeInterns: number;
   readonly constraints: number;
@@ -196,6 +201,7 @@ export interface CompilerWork {
   readonly boundaryMaterializations: number;
   readonly captureCandidates: number;
   readonly capturesBridged: number;
+  readonly solverWorklistPeak: number;
 }
 
 export interface CompilerInvalidationTelemetry {
@@ -303,6 +309,24 @@ export class CompilerWasm {
     const status = this.#exports.destroy_compiler_session(handle);
     if (status !== 0) {
       throw new Error(`unknown Rust compiler session ${handle}`);
+    }
+  }
+
+  removeCompilerSessionModule(handle: number, path: string): boolean {
+    const pathAllocation = this.#allocate(textWords(path));
+    try {
+      const length = this.#exports.remove_compiler_session_module(
+        handle,
+        pathAllocation.pointer,
+        pathAllocation.wordCount,
+      );
+      const result = this.#readResult(length) as
+        | { readonly ok: true; readonly removed: boolean }
+        | { readonly ok: false; readonly message: string };
+      if (!result.ok) throw new Error(result.message);
+      return result.removed;
+    } finally {
+      this.#free(pathAllocation);
     }
   }
 

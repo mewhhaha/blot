@@ -265,6 +265,14 @@ unchanged transport. It does not prove that a claimed interface follows from its
 AST unless a separately checked certificate establishes that judgment more
 cheaply than ordinary checking.
 
+An active workspace graph owns the resident module set. Removing a node from
+that set removes its frontend snapshot, mutable inference generation,
+compile-time evaluation caches, effect-identity entries, closed programs, and
+request-local analyses. A later module with the same path is a new revision and
+must install and validate its payload again. Stable sealed boundaries and
+checked snapshots are self-contained; none retains a live variable or another
+private generation merely because a removed module once published it.
+
 ## 10. Diagnostic and limit reuse
 
 A cached `SourceDiagnostic` is reusable only under the exact source and semantic

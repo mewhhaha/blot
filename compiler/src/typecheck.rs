@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -597,6 +597,13 @@ struct BoundInsertion {
     direction: BoundDirection,
 }
 
+#[derive(Clone, Copy)]
+struct WorkItem {
+    left: ConstraintTypeId,
+    right: ConstraintTypeId,
+    span: Span,
+}
+
 #[derive(Clone)]
 struct ResidualVariable {
     type_: Type,
@@ -616,6 +623,7 @@ struct CompilerWork {
     boundary_materializations: u64,
     capture_candidates: u64,
     captures_bridged: u64,
+    solver_worklist_peak: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1326,6 +1334,7 @@ pub struct Checker {
     boundary_materializations: Cell<u64>,
     capture_candidates: Cell<u64>,
     captures_bridged: Cell<u64>,
+    solver_worklist_peak: Cell<u64>,
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     next_skolem: Cell<VariableId>,
@@ -1375,6 +1384,7 @@ impl Checker {
             boundary_materializations: Cell::new(0),
             capture_candidates: Cell::new(0),
             captures_bridged: Cell::new(0),
+            solver_worklist_peak: Cell::new(0),
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             next_skolem: Cell::new(0x8000_0000),
@@ -1416,7 +1426,7 @@ impl Checker {
     fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
         let after = self.work_snapshot();
         CompilerWork {
-            schema: 1,
+            schema: 2,
             type_nodes: after.type_nodes - before.type_nodes,
             type_interns: after.type_interns - before.type_interns,
             constraints: after.constraints - before.constraints,
@@ -1427,6 +1437,7 @@ impl Checker {
                 - before.boundary_materializations,
             capture_candidates: after.capture_candidates - before.capture_candidates,
             captures_bridged: after.captures_bridged - before.captures_bridged,
+            solver_worklist_peak: self.solver_worklist_peak.get(),
         }
     }
 
@@ -1448,11 +1459,11 @@ impl Checker {
                 Span { start: 0, end: 0 },
             ));
         }
-        let work_before = self
-            .active
-            .borrow()
-            .is_empty()
-            .then(|| self.work_snapshot());
+        let root_request = self.active.borrow().is_empty();
+        if root_request {
+            self.solver_worklist_peak.set(0);
+        }
+        let work_before = root_request.then(|| self.work_snapshot());
         self.active.borrow_mut().push(path.to_owned());
         let result = self
             .check_uncached(path)
@@ -4758,9 +4769,9 @@ impl Checker {
         &self,
         variable: VariableId,
         bound: ConstraintTypeId,
+        work: &mut VecDeque<WorkItem>,
         span: Span,
-        seen: &mut HashSet<(VariableId, VariableId)>,
-    ) -> Result<(), Diagnostic> {
+    ) {
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -4784,20 +4795,23 @@ impl Checker {
                 if let Some(predecessor) = self.constraint_variable(lower) {
                     pending.push(predecessor);
                 } else {
-                    self.constrain_ids(lower, bound, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: lower,
+                        right: bound,
+                        span,
+                    });
                 }
             }
         }
-        Ok(())
     }
 
     fn add_lower_bound(
         &self,
         variable: VariableId,
         bound: ConstraintTypeId,
+        work: &mut VecDeque<WorkItem>,
         span: Span,
-        seen: &mut HashSet<(VariableId, VariableId)>,
-    ) -> Result<(), Diagnostic> {
+    ) {
         let mut pending = vec![variable];
         let mut visited = HashSet::new();
         while let Some(variable) = pending.pop() {
@@ -4821,11 +4835,14 @@ impl Checker {
                 if let Some(successor) = self.constraint_variable(upper) {
                     pending.push(successor);
                 } else {
-                    self.constrain_ids(bound, upper, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: bound,
+                        right: upper,
+                        span,
+                    });
                 }
             }
         }
-        Ok(())
     }
 
     fn constrain_ids(
@@ -4835,6 +4852,22 @@ impl Checker {
         span: Span,
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
+        let mut work = VecDeque::from([WorkItem { left, right, span }]);
+        while let Some(item) = work.pop_front() {
+            self.constrain_work_item(item, seen, &mut work)?;
+            self.solver_worklist_peak
+                .set(self.solver_worklist_peak.get().max(work.len() as u64));
+        }
+        Ok(())
+    }
+
+    fn constrain_work_item(
+        &self,
+        item: WorkItem,
+        seen: &mut HashSet<(VariableId, VariableId)>,
+        work: &mut VecDeque<WorkItem>,
+    ) -> Result<(), Diagnostic> {
+        let WorkItem { left, right, span } = item;
         self.constraints.set(self.constraints.get() + 1);
         if self.constraint_types.borrow().same(left, right) {
             return Ok(());
@@ -4852,14 +4885,22 @@ impl Checker {
                 let body = self.expand_constraint(body);
                 let instantiated = self.instantiate_forall(variables, body);
                 let instantiated = self.constraint_type(&instantiated);
-                self.constrain_ids(instantiated, right, span, seen)?;
+                work.push_back(WorkItem {
+                    left: instantiated,
+                    right,
+                    span,
+                });
                 true
             }
             (_, ConstraintTypeNode::Forall { variables, body }) => {
                 let body = self.expand_constraint(body);
                 let rigid = self.skolemize(variables, body);
                 let rigid = self.constraint_type(&rigid);
-                self.constrain_ids(left, rigid, span, seen)?;
+                work.push_back(WorkItem {
+                    left,
+                    right: rigid,
+                    span,
+                });
                 true
             }
             (ConstraintTypeNode::Unit, ConstraintTypeNode::Unit) => true,
@@ -4900,9 +4941,23 @@ impl Checker {
                         span,
                     );
                 }
-                self.constrain_ids(right_parameter, left_parameter, span, seen)?;
-                self.constrain_ids(left_effects, right_effects, span, seen)?;
-                self.constrain_ids(left_result, right_result, span, seen)?;
+                work.extend([
+                    WorkItem {
+                        left: right_parameter,
+                        right: left_parameter,
+                        span,
+                    },
+                    WorkItem {
+                        left: left_effects,
+                        right: right_effects,
+                        span,
+                    },
+                    WorkItem {
+                        left: left_result,
+                        right: right_result,
+                        span,
+                    },
+                ]);
                 true
             }
             (ConstraintTypeNode::Record(left_fields), ConstraintTypeNode::Record(right_fields)) => {
@@ -4920,7 +4975,11 @@ impl Checker {
                             span,
                         );
                     };
-                    self.constrain_ids(*left_field, right_field, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: *left_field,
+                        right: right_field,
+                        span,
+                    });
                 }
                 true
             }
@@ -4932,13 +4991,21 @@ impl Checker {
                     if let Some((_, updated)) =
                         fields.iter().find(|(candidate, _)| candidate == &name)
                     {
-                        self.constrain_ids(*updated, right_field, span, seen)?;
+                        work.push_back(WorkItem {
+                            left: *updated,
+                            right: right_field,
+                            span,
+                        });
                         continue;
                     }
                     let required = self.constraint_type(&Type::Record(
                         vec![(name, self.expand_constraint(right_field))].into(),
                     ));
-                    self.constrain_ids(base, required, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: base,
+                        right: required,
+                        span,
+                    });
                 }
                 true
             }
@@ -4955,7 +5022,11 @@ impl Checker {
                 if left_fields.len() != right_fields.len() {
                     false
                 } else {
-                    self.constrain_ids(left_base, right_base, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: left_base,
+                        right: right_base,
+                        span,
+                    });
                     for (name, left_field) in left_fields {
                         let Some((_, right_field)) = right_fields
                             .iter()
@@ -4967,29 +5038,49 @@ impl Checker {
                                 span,
                             );
                         };
-                        self.constrain_ids(left_field, *right_field, span, seen)?;
+                        work.push_back(WorkItem {
+                            left: left_field,
+                            right: *right_field,
+                            span,
+                        });
                     }
                     true
                 }
             }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
+                work.push_back(WorkItem { left, right, span });
                 let empty = self
                     .constraint_variable(left)
                     .is_some_and(|variable| self.empty_array_elements.borrow().contains(&variable));
                 if empty {
-                    self.constrain_ids(right, left, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    });
                 }
                 true
             }
             (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
-                self.constrain_ids(right, left, span, seen)?;
+                work.extend([
+                    WorkItem { left, right, span },
+                    WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    },
+                ]);
                 true
             }
             (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
-                self.constrain_ids(left, right, span, seen)?;
-                self.constrain_ids(right, left, span, seen)?;
+                work.extend([
+                    WorkItem { left, right, span },
+                    WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    },
+                ]);
                 true
             }
             (
@@ -5014,7 +5105,11 @@ impl Checker {
                         if let Some((_, right)) =
                             right.iter().find(|(candidate, _)| candidate == &name)
                         {
-                            self.constrain_ids(left, *right, span, seen)?;
+                            work.push_back(WorkItem {
+                                left,
+                                right: *right,
+                                span,
+                            });
                         }
                     }
                     true
@@ -5036,7 +5131,11 @@ impl Checker {
                     .collect::<BTreeSet<_>>();
                 if !missing.is_empty() {
                     let missing = self.constraint_type(&Type::Effects(missing));
-                    self.constrain_ids(missing, right_tail, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: missing,
+                        right: right_tail,
+                        span,
+                    });
                 }
                 true
             }
@@ -5051,7 +5150,11 @@ impl Checker {
                     false
                 } else {
                     let right = self.constraint_type(&Type::Effects(right));
-                    self.constrain_ids(left_tail, right, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: left_tail,
+                        right,
+                        span,
+                    });
                     true
                 }
             }
@@ -5071,7 +5174,11 @@ impl Checker {
                     .collect::<BTreeSet<_>>();
                 if !missing.is_empty() {
                     let missing = self.constraint_type(&Type::Effects(missing));
-                    self.constrain_ids(missing, right_tail, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: missing,
+                        right: right_tail,
+                        span,
+                    });
                 }
                 let same_tail = self.constraint_types.borrow().same(left_tail, right_tail);
                 if !same_tail {
@@ -5079,7 +5186,11 @@ impl Checker {
                         labels: right_labels,
                         tail: Rc::new(self.expand_constraint(right_tail)),
                     });
-                    self.constrain_ids(left_tail, right_row, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: left_tail,
+                        right: right_row,
+                        span,
+                    });
                 }
                 true
             }
@@ -5121,10 +5232,10 @@ impl Checker {
                 self.record_bound_insertion(left_variable, BoundDirection::Upper);
                 self.record_bound_insertion(right_variable, BoundDirection::Lower);
                 for lower in lowers {
-                    self.add_lower_bound(right_variable, lower, span, seen)?;
+                    self.add_lower_bound(right_variable, lower, work, span);
                 }
                 for upper in uppers {
-                    self.add_upper_bound(left_variable, upper, span, seen)?;
+                    self.add_upper_bound(left_variable, upper, work, span);
                 }
                 true
             }
@@ -5135,12 +5246,16 @@ impl Checker {
                 };
                 let variable_level = self.variables.borrow()[variable as usize].level;
                 if bound_level <= variable_level {
-                    self.add_upper_bound(variable, right, span, seen)?;
+                    self.add_upper_bound(variable, right, work, span);
                 } else {
                     let bound = self.expand_constraint(right);
                     let extruded = self.extrude(bound, false, variable_level, &mut HashMap::new());
                     let extruded = self.constraint_type(&extruded);
-                    self.constrain_ids(left, extruded, span, seen)?;
+                    work.push_back(WorkItem {
+                        left,
+                        right: extruded,
+                        span,
+                    });
                 }
                 true
             }
@@ -5151,12 +5266,16 @@ impl Checker {
                 };
                 let variable_level = self.variables.borrow()[variable as usize].level;
                 if bound_level <= variable_level {
-                    self.add_lower_bound(variable, left, span, seen)?;
+                    self.add_lower_bound(variable, left, work, span);
                 } else {
                     let bound = self.expand_constraint(left);
                     let extruded = self.extrude(bound, true, variable_level, &mut HashMap::new());
                     let extruded = self.constraint_type(&extruded);
-                    self.constrain_ids(extruded, right, span, seen)?;
+                    work.push_back(WorkItem {
+                        left: extruded,
+                        right,
+                        span,
+                    });
                 }
                 true
             }

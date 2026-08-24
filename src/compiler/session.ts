@@ -351,8 +351,15 @@ export class Compiler implements CompilerHost {
 
     const modules = collectGraph(root);
     const activePaths = new Set(modules.keys());
-    for (const path of this.#installedModules.keys()) {
-      if (!activePaths.has(path)) this.#installedModules.delete(path);
+    const removedPaths = [...this.#installedModules.keys()].filter((path) =>
+      !activePaths.has(path)
+    );
+    for (const path of removedPaths) {
+      this.#compiler.removeCompilerSessionModule(this.#handle, path);
+      this.#installedModules.delete(path);
+      this.#inspectedSources.delete(path);
+      this.#sources.delete(path);
+      this.#revisions.delete(path);
     }
     for (const loaded of modules.values()) {
       this.#sources.set(loaded.path, loaded.source);
