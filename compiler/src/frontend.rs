@@ -191,9 +191,76 @@ fn lex_incremental(
         .map_or(previous.source.len(), |token| token.start)
         .min(source.len());
     let mut tokens = previous.tokens[..prefix_count].to_vec();
-    let (suffix, diagnostics) = lex_from(source, relex_start, prefix_count, plan);
-    tokens.extend(suffix);
+    let mut common_suffix = 0;
+    let suffix_limit = (source.len() - edit_start).min(previous.source.len() - edit_start);
+    while common_suffix < suffix_limit
+        && source[source.len() - common_suffix - 1]
+            == previous.source[previous.source.len() - common_suffix - 1]
+    {
+        common_suffix += 1;
+    }
+    let new_suffix_start = source.len() - common_suffix;
+    let old_suffix_start = previous.source.len() - common_suffix;
+    let shift = source.len() as isize - previous.source.len() as isize;
+    let mut diagnostics = Vec::new();
+    let mut position = relex_start;
+    while position < source.len() {
+        match lex_at(source, position, tokens.len(), plan) {
+            Ok(token) => {
+                if token.start >= new_suffix_start
+                    && let Some(old_start) = token.start.checked_add_signed(-shift)
+                    && old_start >= old_suffix_start
+                    && let Some(old_index) = previous
+                        .tokens
+                        .iter()
+                        .enumerate()
+                        .skip(prefix_count)
+                        .find_map(|(index, old)| (old.start == old_start).then_some(index))
+                    && token_matches_shifted(&token, &previous.tokens[old_index], shift)
+                {
+                    for old in &previous.tokens[old_index..] {
+                        tokens.push(shift_token(old, shift, tokens.len()));
+                    }
+                    return (tokens, diagnostics);
+                }
+                position = token.end;
+                tokens.push(token);
+            }
+            Err((diagnostic, next)) => {
+                diagnostics.push(diagnostic);
+                position = next;
+            }
+        }
+    }
     (tokens, diagnostics)
+}
+
+fn token_matches_shifted(current: &Token, previous: &Token, shift: isize) -> bool {
+    previous.start.checked_add_signed(shift) == Some(current.start)
+        && previous.end.checked_add_signed(shift) == Some(current.end)
+        && previous.dependency_end.checked_add_signed(shift) == Some(current.dependency_end)
+        && previous.terminal == current.terminal
+        && previous.lexical_identity == current.lexical_identity
+}
+
+fn shift_token(token: &Token, shift: isize, output_index: usize) -> Token {
+    Token {
+        terminal: token.terminal,
+        start: token
+            .start
+            .checked_add_signed(shift)
+            .expect("incremental token start shift underflowed"),
+        end: token
+            .end
+            .checked_add_signed(shift)
+            .expect("incremental token end shift underflowed"),
+        lexical_identity: token.lexical_identity,
+        output_index,
+        dependency_end: token
+            .dependency_end
+            .checked_add_signed(shift)
+            .expect("incremental token dependency shift underflowed"),
+    }
 }
 
 fn lex_from(
@@ -206,32 +273,53 @@ fn lex_from(
     let mut diagnostics = Vec::new();
     let mut position = start;
     while position < source.len() {
-        let mut state = plan.lexer.start_state;
-        let mut cursor = position;
-        let mut accepted_end = None;
-        let mut accepted_spec = None;
-        let mut dependency_end = position;
-        while cursor < source.len() {
-            let (code_point, width) = source_code_point(source, cursor);
-            dependency_end = cursor + width;
-            let Some(target) = lexer_transition(&plan.lexer, state, code_point) else {
-                break;
-            };
-            cursor += width;
-            state = target;
-            let spec = *plan
-                .lexer
-                .accept_spec_by_state
-                .get(state)
-                .expect("generated lexer reached an unknown state");
-            if spec >= 0 {
-                accepted_end = Some(cursor);
-                accepted_spec = Some(spec as usize);
+        match lex_at(source, position, output_index + tokens.len(), plan) {
+            Ok(token) => {
+                position = token.end;
+                tokens.push(token);
+            }
+            Err((diagnostic, next)) => {
+                diagnostics.push(diagnostic);
+                position = next;
             }
         }
-        let (Some(end), Some(spec)) = (accepted_end, accepted_spec) else {
-            let (_, width) = source_code_point(source, position);
-            diagnostics.push(Diagnostic::new(
+    }
+    (tokens, diagnostics)
+}
+
+fn lex_at(
+    source: &[u16],
+    position: usize,
+    output_index: usize,
+    plan: &FrontendPlan,
+) -> Result<Token, (Diagnostic, usize)> {
+    let mut state = plan.lexer.start_state;
+    let mut cursor = position;
+    let mut accepted_end = None;
+    let mut accepted_spec = None;
+    let mut dependency_end = position;
+    while cursor < source.len() {
+        let (code_point, width) = source_code_point(source, cursor);
+        dependency_end = cursor + width;
+        let Some(target) = lexer_transition(&plan.lexer, state, code_point) else {
+            break;
+        };
+        cursor += width;
+        state = target;
+        let spec = *plan
+            .lexer
+            .accept_spec_by_state
+            .get(state)
+            .expect("generated lexer reached an unknown state");
+        if spec >= 0 {
+            accepted_end = Some(cursor);
+            accepted_spec = Some(spec as usize);
+        }
+    }
+    let (Some(end), Some(spec)) = (accepted_end, accepted_spec) else {
+        let (_, width) = source_code_point(source, position);
+        return Err((
+            Diagnostic::new(
                 "GPU_FRONTEND_LEXICAL_ERROR",
                 format!(
                     "No token matches source span [{position}, {}); first UTF-16 unit is {}.",
@@ -239,25 +327,22 @@ fn lex_from(
                     source[position]
                 ),
                 source_span(position, position + width),
-            ));
-            position += width;
-            continue;
-        };
-        let terminal = *plan
-            .terminal_classification
-            .get(spec)
-            .expect("generated lexer accepted an unknown specification");
-        tokens.push(Token {
-            terminal,
-            start: position,
-            end,
-            lexical_identity: spec as i32,
-            output_index: output_index + tokens.len(),
-            dependency_end,
-        });
-        position = end;
-    }
-    (tokens, diagnostics)
+            ),
+            position + width,
+        ));
+    };
+    let terminal = *plan
+        .terminal_classification
+        .get(spec)
+        .expect("generated lexer accepted an unknown specification");
+    Ok(Token {
+        terminal,
+        start: position,
+        end,
+        lexical_identity: spec as i32,
+        output_index,
+        dependency_end,
+    })
 }
 
 include!("frontend_plan.rs");
@@ -755,6 +840,26 @@ mod tests {
     #[test]
     fn incremental_frontend_matches_fresh_frontend_when_tokens_merge() {
         assert_incremental_matches_fresh("return x\u{e000}", "return xy\u{e000}");
+    }
+
+    #[test]
+    fn incremental_frontend_reuses_shifted_middle_suffix() {
+        assert_incremental_matches_fresh(
+            "let first = 1\u{e000}let second = 2\u{e000}return first\u{e000}",
+            "let first = 100\u{e000}let second = 2\u{e000}return first\u{e000}",
+        );
+        assert_incremental_matches_fresh(
+            "let first = 100\u{e000}let second = 2\u{e000}return first\u{e000}",
+            "let first = 1\u{e000}let second = 2\u{e000}return first\u{e000}",
+        );
+    }
+
+    #[test]
+    fn incremental_frontend_matches_fresh_around_surrogate_pairs() {
+        assert_incremental_matches_fresh(
+            "let text = \"a😀b\"\u{e000}return text\u{e000}",
+            "let text = \"a😀 changed b\"\u{e000}return text\u{e000}",
+        );
     }
 
     fn assert_incremental_matches_fresh(previous: &str, current: &str) {

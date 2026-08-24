@@ -2807,6 +2807,12 @@ fn type_may_carry_ownership(type_: &Type) -> bool {
         Type::Record(fields) => fields
             .iter()
             .any(|(_, type_)| type_may_carry_ownership(type_)),
+        Type::RecordUpdate { base, fields } => {
+            type_may_carry_ownership(base)
+                || fields
+                    .iter()
+                    .any(|(_, type_)| type_may_carry_ownership(type_))
+        }
         Type::Variant { cases, .. } => cases
             .iter()
             .any(|(_, type_)| type_may_carry_ownership(type_)),

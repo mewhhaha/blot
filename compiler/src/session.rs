@@ -33,6 +33,32 @@ pub struct CompilerSession {
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
     closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
+    published_boundaries: RefCell<HashMap<String, Rc<[u8]>>>,
+    dirty_modules: RefCell<HashSet<String>>,
+    invalidation: RefCell<InvalidationTelemetry>,
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InvalidationTelemetry {
+    dirty_modules: Vec<String>,
+    invalidation_reasons: BTreeMap<String, String>,
+    checked_modules: Vec<String>,
+    boundary_changed: Vec<String>,
+    boundary_unchanged: Vec<String>,
+    invalidated_importers: Vec<String>,
+    reused_artifacts: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetPreflight {
+    supported: bool,
+    code: Option<&'static str>,
+    export: Option<String>,
+    inferred_type: String,
+    unsupported_component: Option<String>,
+    alternatives: Vec<&'static str>,
 }
 
 impl Default for CompilerSession {
@@ -52,14 +78,30 @@ impl Default for CompilerSession {
             module_analyses,
             checker,
             closed_programs: RefCell::new(HashMap::new()),
+            published_boundaries: RefCell::new(HashMap::new()),
+            dirty_modules: RefCell::new(HashSet::new()),
+            invalidation: RefCell::new(InvalidationTelemetry::default()),
         }
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencySite {
+    pub specifier: String,
+    pub span: crate::ast::Span,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AddedModule {
     pub imports: Vec<String>,
     pub includes: Vec<String>,
+    pub import_sites: Vec<DependencySite>,
+    pub include_sites: Vec<DependencySite>,
+    pub module_handle: String,
+    pub portable_ast_digest: String,
+    pub syntax_diagnostics: Vec<Diagnostic>,
 }
 
 pub(crate) use crate::source::SourceError as AddSourceError;
@@ -115,6 +157,9 @@ impl CompilerSession {
             .module_results
             .borrow_mut()
             .insert(path.to_owned(), value);
+        self.publish_boundary(path)
+            .map_err(|error| format!("module snapshot boundary for {path} is invalid: {error}"))?;
+        self.dirty_modules.borrow_mut().remove(path);
         Ok(())
     }
 
@@ -124,6 +169,14 @@ impl CompilerSession {
         source: Vec<u16>,
     ) -> Result<AddedModule, AddSourceError> {
         let lowered = crate::source::lower_incremental(&source, self.frontends.get(&path))?;
+        let dependencies = module_dependencies(&lowered.module);
+        if let Some(span) = dependencies.invalid_include_paths.first() {
+            return Err(AddSourceError::Diagnostics(vec![Diagnostic::new(
+                "BLOT_INCLUDE_PATH",
+                "`@include` requires a literal text path.",
+                *span,
+            )]));
+        }
         self.frontends.insert(path.clone(), lowered.frontend);
         self.install_module(path, lowered.module)
             .map_err(AddSourceError::Lowering)
@@ -131,20 +184,24 @@ impl CompilerSession {
 
     pub fn add_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
         module.validate()?;
+        if !module_dependencies(&module)
+            .invalid_include_paths
+            .is_empty()
+        {
+            return Err("`@include` requires a literal text path".to_owned());
+        }
         self.install_module(path, module)
     }
 
     fn install_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
         let dependencies = module_dependencies(&module);
+        let added = added_module(&path, &module, &dependencies)?;
         let previous = self.context.modules.borrow().get(&path).cloned();
         let unchanged = previous
             .as_ref()
             .is_some_and(|loaded| loaded.module.as_ref() == &module);
         if unchanged {
-            return Ok(AddedModule {
-                imports: dependencies.imports,
-                includes: dependencies.includes,
-            });
+            return Ok(added);
         }
 
         let retained_bindings = previous.as_ref().and_then(|loaded| {
@@ -187,7 +244,7 @@ impl CompilerSession {
         let includes = previous
             .as_ref()
             .map_or_else(BTreeMap::new, |loaded| loaded.includes.clone());
-        self.invalidate(&path);
+        self.mark_dirty(&path, "payload changed");
         self.context.modules.borrow_mut().insert(
             path.clone(),
             LoadedModule {
@@ -204,10 +261,7 @@ impl CompilerSession {
                 .borrow_mut()
                 .insert(path, bindings);
         }
-        Ok(AddedModule {
-            imports: dependencies.imports,
-            includes: dependencies.includes,
-        })
+        Ok(added)
     }
 
     pub fn configure_module(
@@ -224,13 +278,15 @@ impl CompilerSession {
             module.imports = imports;
             module.includes = includes;
             drop(modules);
-            self.invalidate(path);
+            self.mark_dirty(path, "configuration changed");
         }
         Ok(())
     }
 
     pub fn evaluate_module(&self, path: &str) -> serde_json::Value {
-        self.checker.begin_request();
+        if let Err(diagnostic) = self.begin_semantic_request(path) {
+            return diagnostic_json(diagnostic);
+        }
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
             Err(diagnostic) => return compiler_failure_json(diagnostic, "evaluation"),
@@ -258,17 +314,62 @@ impl CompilerSession {
     }
 
     pub fn check_module(&self, path: &str) -> serde_json::Value {
-        self.checker.begin_request();
+        if let Err(diagnostic) = self.begin_semantic_request(path) {
+            return diagnostic_json(diagnostic);
+        }
         self.checker.check_json(path)
     }
 
     pub fn analyze_module(&self, path: &str) -> serde_json::Value {
-        self.checker.begin_request();
-        self.checker.analysis_json(path)
+        if let Err(diagnostic) = self.begin_semantic_request(path) {
+            return diagnostic_json(diagnostic);
+        }
+        let mut analysis = self.checker.analysis_json(path);
+        if let Some(object) = analysis.as_object_mut() {
+            let inferred_type = object
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>")
+                .to_owned();
+            let invalidation = serde_json::to_value(&*self.invalidation.borrow())
+                .expect("invalidation telemetry serialization failed");
+            let target_preflight = match self.close_program(path) {
+                Ok(_) => TargetPreflight {
+                    supported: true,
+                    code: None,
+                    export: None,
+                    inferred_type,
+                    unsupported_component: None,
+                    alternatives: Vec::new(),
+                },
+                Err(diagnostic) => TargetPreflight {
+                    supported: false,
+                    code: Some("BLOT_TARGET_REFUSAL"),
+                    export: target_refusal_export(&diagnostic.message),
+                    inferred_type,
+                    unsupported_component: Some(diagnostic.message),
+                    alternatives: vec![
+                        "publish a first-order scalar, Text, Array, record, variant, or seal",
+                        "finish Scratch or Region values before exporting them",
+                        "extract SIMD lanes before the public boundary",
+                        "keep compiler-private function choices behind one concrete wrapper",
+                    ],
+                },
+            };
+            object.insert("invalidation".to_owned(), invalidation);
+            object.insert(
+                "targetPreflight".to_owned(),
+                serde_json::to_value(target_preflight)
+                    .expect("target preflight serialization failed"),
+            );
+        }
+        analysis
     }
 
     pub fn test_module(&mut self, path: &str) -> serde_json::Value {
-        self.checker.begin_request();
+        if let Err(diagnostic) = self.begin_semantic_request(path) {
+            return diagnostic_json(diagnostic);
+        }
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
             Err(diagnostic) => return compiler_failure_json(diagnostic, "test execution"),
@@ -442,11 +543,11 @@ impl CompilerSession {
             .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
         self.configure_module(&temporary, loaded.imports.clone(), loaded.includes.clone())
             .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
-        self.checker.begin_request();
-        self.checker.check(&temporary).map_err(|mut diagnostic| {
-            diagnostic.origin = Some(path.to_owned());
-            diagnostic
-        })?;
+        self.begin_semantic_request(&temporary)
+            .map_err(|mut diagnostic| {
+                diagnostic.origin = Some(path.to_owned());
+                diagnostic
+            })?;
         let computation = evaluate_module(
             self.context.clone(),
             temporary,
@@ -469,6 +570,12 @@ impl CompilerSession {
     }
 
     pub fn module_snapshot(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.begin_semantic_request(path).map_err(|diagnostic| {
+            format!(
+                "cannot snapshot module {path}: {} ({})",
+                diagnostic.message, diagnostic.code
+            )
+        })?;
         let ast = self
             .context
             .modules
@@ -517,10 +624,10 @@ impl CompilerSession {
     }
 
     fn close_program(&self, path: &str) -> Result<Rc<ClosedProgram>, Diagnostic> {
+        self.begin_semantic_request(path)?;
         if let Some(program) = self.closed_programs.borrow().get(path) {
             return Ok(program.clone());
         }
-        self.checker.begin_request();
         let checked = self
             .checker
             .check(path)
@@ -541,26 +648,161 @@ impl CompilerSession {
         Ok(program)
     }
 
-    fn invalidate(&self, changed: &str) {
-        self.context.module_cache.borrow_mut().take();
-        let modules = self.context.modules.borrow();
-        let mut invalidated = HashSet::from([changed.to_owned()]);
-        loop {
-            let previous = invalidated.len();
-            for (path, loaded) in modules.iter() {
-                if loaded
-                    .imports
-                    .values()
-                    .any(|dependency| invalidated.contains(dependency))
-                {
-                    invalidated.insert(path.clone());
-                }
+    fn begin_semantic_request(&self, path: &str) -> Result<(), Diagnostic> {
+        let pending_reasons = self.invalidation.borrow().invalidation_reasons.clone();
+        let mut invalidation = InvalidationTelemetry::default();
+        for dirty in self.dirty_modules.borrow().iter() {
+            invalidation.dirty_modules.push(dirty.clone());
+            invalidation.invalidation_reasons.insert(
+                dirty.clone(),
+                pending_reasons
+                    .get(dirty)
+                    .cloned()
+                    .unwrap_or_else(|| "dependency boundary changed".to_owned()),
+            );
+        }
+        invalidation.dirty_modules.sort();
+        *self.invalidation.borrow_mut() = invalidation;
+        self.checker.begin_request();
+        self.ensure_current(path, &mut HashSet::new())
+    }
+
+    fn ensure_current(&self, path: &str, visiting: &mut HashSet<String>) -> Result<(), Diagnostic> {
+        if !visiting.insert(path.to_owned()) {
+            return Ok(());
+        }
+        let dependencies = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.imports.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for dependency in dependencies {
+            self.ensure_current(&dependency, visiting)?;
+        }
+        visiting.remove(path);
+        if !self.dirty_modules.borrow().contains(path) {
+            if self.published_boundaries.borrow().contains_key(path) {
+                self.invalidation
+                    .borrow_mut()
+                    .reused_artifacts
+                    .push(format!("module-interface:{path}"));
             }
-            if invalidated.len() == previous {
-                break;
+            return Ok(());
+        }
+        self.invalidation
+            .borrow_mut()
+            .checked_modules
+            .push(path.to_owned());
+        let checked = self.checker.check(path);
+        match checked {
+            Ok(_) => {
+                let changed = self.publish_boundary(path).map_err(|message| {
+                    Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        message,
+                        crate::ast::Span { start: 0, end: 0 },
+                    )
+                    .at(path)
+                })?;
+                self.dirty_modules.borrow_mut().remove(path);
+                if changed {
+                    self.invalidation
+                        .borrow_mut()
+                        .boundary_changed
+                        .push(path.to_owned());
+                    self.invalidate_direct_importers(path);
+                } else {
+                    self.invalidation
+                        .borrow_mut()
+                        .boundary_unchanged
+                        .push(path.to_owned());
+                }
+                Ok(())
+            }
+            Err(diagnostic) => {
+                self.published_boundaries.borrow_mut().remove(path);
+                self.dirty_modules.borrow_mut().remove(path);
+                self.invalidate_direct_importers(path);
+                Err(diagnostic)
             }
         }
-        drop(modules);
+    }
+
+    fn publish_boundary(&self, path: &str) -> Result<bool, String> {
+        let mut boundary = self.checker.sealed_boundary_bytes(path)?;
+        let dependencies = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.imports.clone())
+            .unwrap_or_default();
+        for (specifier, dependency) in dependencies {
+            append_boundary_string(&mut boundary, &specifier);
+            let dependency_boundary = self
+                .published_boundaries
+                .borrow()
+                .get(&dependency)
+                .cloned()
+                .ok_or_else(|| {
+                    format!("module {path} reached unpublished dependency boundary {dependency}")
+                })?;
+            append_boundary_bytes(&mut boundary, &dependency_boundary);
+        }
+        if let Some(value) = self.context.module_results.borrow().get(path) {
+            boundary.push(1);
+            encode_boundary_value(value, &mut boundary)?;
+        } else {
+            boundary.push(0);
+        }
+        let bytes = Rc::<[u8]>::from(boundary);
+        let previous = self
+            .published_boundaries
+            .borrow_mut()
+            .insert(path.to_owned(), bytes.clone());
+        Ok(previous.as_deref() != Some(bytes.as_ref()))
+    }
+
+    fn invalidate_direct_importers(&self, changed: &str) {
+        let importers = self
+            .context
+            .modules
+            .borrow()
+            .iter()
+            .filter_map(|(path, loaded)| {
+                loaded
+                    .imports
+                    .values()
+                    .any(|dependency| dependency == changed)
+                    .then_some(path.clone())
+            })
+            .collect::<HashSet<_>>();
+        if importers.is_empty() {
+            return;
+        }
+        for importer in &importers {
+            self.invalidation
+                .borrow_mut()
+                .invalidated_importers
+                .push(importer.clone());
+            self.dirty_modules.borrow_mut().insert(importer.clone());
+        }
+        self.invalidate_exact(&importers);
+    }
+
+    fn mark_dirty(&self, changed: &str, reason: &str) {
+        self.dirty_modules.borrow_mut().insert(changed.to_owned());
+        self.invalidation
+            .borrow_mut()
+            .invalidation_reasons
+            .insert(changed.to_owned(), reason.to_owned());
+        self.invalidate_exact(&HashSet::from([changed.to_owned()]));
+    }
+
+    fn invalidate_exact(&self, invalidated: &HashSet<String>) {
+        self.context.module_cache.borrow_mut().take();
         self.context
             .live_declarations
             .borrow_mut()
@@ -624,6 +866,290 @@ fn tool_grants() -> Value {
     )]))
 }
 
+fn append_boundary_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
+    target.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    target.extend_from_slice(bytes);
+}
+
+fn append_boundary_string(target: &mut Vec<u8>, value: &str) {
+    append_boundary_bytes(target, value.as_bytes());
+}
+
+fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), String> {
+    match value {
+        Value::Int(value) => {
+            target.push(0);
+            append_boundary_bytes(target, &value.to_signed_bytes_be());
+        }
+        Value::Float(value) => {
+            target.push(1);
+            target.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+        Value::Float32(value) => {
+            target.push(2);
+            target.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+        Value::Vector(values) => {
+            target.push(3);
+            for value in values {
+                target.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+        }
+        Value::VectorMask(values) => {
+            target.push(4);
+            for value in values {
+                target.push(u8::from(*value));
+            }
+        }
+        Value::IntegerVector { bits, lanes } => {
+            target.extend([5, *bits]);
+            target.extend_from_slice(&(lanes.len() as u64).to_le_bytes());
+            for lane in lanes {
+                target.extend_from_slice(&lane.to_le_bytes());
+            }
+        }
+        Value::IntegerVectorMask { bits, lanes } => {
+            target.extend([6, *bits]);
+            target.extend_from_slice(&(lanes.len() as u64).to_le_bytes());
+            for lane in lanes {
+                target.push(u8::from(*lane));
+            }
+        }
+        Value::Text(value) => {
+            target.push(7);
+            append_boundary_string(target, value);
+        }
+        Value::Unit => target.push(8),
+        Value::Shape(fields) => {
+            target.push(9);
+            target.extend_from_slice(&(fields.len() as u64).to_le_bytes());
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            fields.sort_by(|left, right| left.0.cmp(right.0));
+            for (name, value) in fields {
+                append_boundary_string(target, name);
+                encode_boundary_value(value, target)?;
+            }
+        }
+        Value::Array(values) => {
+            target.push(10);
+            target.extend_from_slice(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                encode_boundary_value(value, target)?;
+            }
+        }
+        Value::RegionType(element) => {
+            target.push(11);
+            encode_boundary_value(element, target)?;
+        }
+        Value::ScratchType(element) => {
+            target.push(12);
+            encode_boundary_value(element, target)?;
+        }
+        Value::Scratch { values, capacity } => {
+            target.push(13);
+            target.extend_from_slice(&(*capacity as u64).to_le_bytes());
+            target.extend_from_slice(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                encode_boundary_value(value, target)?;
+            }
+        }
+        Value::DeferredScratch { capacity } => {
+            target.push(14);
+            encode_boundary_value(capacity, target)?;
+        }
+        Value::Region { start, end, .. } => {
+            target.push(15);
+            target.extend_from_slice(&(*start as u64).to_le_bytes());
+            target.extend_from_slice(&(*end as u64).to_le_bytes());
+        }
+        Value::RegionRejoin {
+            start, middle, end, ..
+        } => {
+            target.push(16);
+            target.extend_from_slice(&(*start as u64).to_le_bytes());
+            target.extend_from_slice(&(*middle as u64).to_le_bytes());
+            target.extend_from_slice(&(*end as u64).to_le_bytes());
+        }
+        Value::EmptyArray { element } => {
+            target.push(17);
+            encode_boundary_value(element, target)?;
+        }
+        Value::Tag { name, payload } => {
+            target.push(18);
+            append_boundary_string(target, name);
+            if let Some(payload) = payload {
+                target.push(1);
+                encode_boundary_value(payload, target)?;
+            } else {
+                target.push(0);
+            }
+        }
+        Value::Closure {
+            module,
+            body,
+            self_name,
+            signature,
+            deferred,
+            ..
+        } => {
+            target.push(19);
+            append_boundary_string(target, module);
+            target.extend_from_slice(&body.0.to_le_bytes());
+            target.push(u8::from(*deferred));
+            if let Some(self_name) = self_name {
+                target.push(1);
+                append_boundary_string(target, self_name);
+            } else {
+                target.push(0);
+            }
+            if let Some(signature) = signature {
+                target.push(1);
+                encode_boundary_value(signature, target)?;
+            } else {
+                target.push(0);
+            }
+        }
+        Value::Deferred {
+            module, expression, ..
+        } => {
+            target.push(20);
+            append_boundary_string(target, module);
+            target.extend_from_slice(&expression.0.to_le_bytes());
+        }
+        Value::ClosureChoice { selector, .. } => {
+            target.push(21);
+            target.extend_from_slice(&(selector.id as u64).to_le_bytes());
+            target.extend_from_slice(&(selector.type_id as u64).to_le_bytes());
+        }
+        Value::ModuleClosure { module } => {
+            target.push(22);
+            append_boundary_string(target, module);
+        }
+        Value::IndexedStep { elements } => {
+            target.push(23);
+            target.extend_from_slice(&(elements.len() as u64).to_le_bytes());
+            for element in elements {
+                encode_boundary_value(element, target)?;
+            }
+        }
+        Value::Primitive {
+            name,
+            arity,
+            applied,
+        } => {
+            target.push(24);
+            append_boundary_string(target, name);
+            target.extend_from_slice(&(*arity as u64).to_le_bytes());
+            target.extend_from_slice(&(applied.len() as u64).to_le_bytes());
+            for value in applied {
+                encode_boundary_value(value, target)?;
+            }
+        }
+        Value::Range { low, high, domain } => {
+            target.push(25);
+            target.push(match domain {
+                Some(crate::value::Domain::Int) => 1,
+                Some(crate::value::Domain::Text) => 2,
+                Some(crate::value::Domain::Float) => 3,
+                Some(crate::value::Domain::Float32) => 4,
+                None => 0,
+            });
+            encode_boundary_value(low, target)?;
+            encode_boundary_value(high, target)?;
+        }
+        Value::Union(values) => {
+            target.push(26);
+            target.extend_from_slice(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                encode_boundary_value(value, target)?;
+            }
+        }
+        Value::Unbounded => target.push(27),
+        Value::Arrow {
+            deferred,
+            domain,
+            codomain,
+            effects,
+            effect_tail,
+        } => {
+            target.push(28);
+            target.push(u8::from(*deferred));
+            encode_boundary_value(domain, target)?;
+            encode_boundary_value(codomain, target)?;
+            target.extend_from_slice(&(effects.len() as u64).to_le_bytes());
+            for effect in effects {
+                encode_boundary_value(effect, target)?;
+            }
+            target.extend_from_slice(&effect_tail.unwrap_or(u32::MAX).to_le_bytes());
+        }
+        Value::TypeVariable(variable) => {
+            target.push(29);
+            target.extend_from_slice(&variable.to_le_bytes());
+        }
+        Value::Forall { variable, body } => {
+            target.push(30);
+            target.extend_from_slice(&variable.to_le_bytes());
+            encode_boundary_value(body, target)?;
+        }
+        Value::Effect {
+            id,
+            name,
+            operations,
+            host,
+        } => {
+            target.push(31);
+            target.extend_from_slice(&id.to_le_bytes());
+            append_boundary_string(target, name);
+            target.push(u8::from(*host));
+            encode_boundary_value(&Value::Shape(operations.clone()), target)?;
+        }
+        Value::Operation { effect, name } => {
+            target.push(32);
+            encode_boundary_value(effect, target)?;
+            append_boundary_string(target, name);
+        }
+        Value::Extended { inner, members } => {
+            target.push(33);
+            encode_boundary_value(inner, target)?;
+            encode_boundary_value(&Value::Shape(members.clone()), target)?;
+        }
+        Value::Sealed { name, inner } => {
+            target.push(34);
+            append_boundary_string(target, name);
+            encode_boundary_value(inner, target)?;
+        }
+        Value::OpaqueType(name) => {
+            target.push(35);
+            append_boundary_string(target, name);
+        }
+        Value::Runtime(runtime) => {
+            target.push(36);
+            target.extend_from_slice(&(runtime.id as u64).to_le_bytes());
+            target.extend_from_slice(&(runtime.type_id as u64).to_le_bytes());
+            match &runtime.meaning {
+                crate::value::RuntimeMeaning::Plain => target.push(0),
+                crate::value::RuntimeMeaning::ReusableStore => target.push(1),
+                crate::value::RuntimeMeaning::Ordering => target.push(2),
+                crate::value::RuntimeMeaning::ScalarOrdering { right } => {
+                    target.push(3);
+                    target.extend_from_slice(&(*right as u64).to_le_bytes());
+                }
+                crate::value::RuntimeMeaning::Sum { cases } => {
+                    target.push(4);
+                    target.extend_from_slice(&(cases.len() as u64).to_le_bytes());
+                    for case in cases {
+                        append_boundary_string(target, case);
+                    }
+                }
+            }
+        }
+        Value::Continuation { .. } => {
+            return Err("a live continuation cannot enter a sealed module boundary".to_owned());
+        }
+    }
+    Ok(())
+}
+
 fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagnostic> {
     let mut writes = Vec::new();
     loop {
@@ -682,6 +1208,17 @@ fn diagnostic_json(diagnostic: crate::diagnostic::Diagnostic) -> serde_json::Val
             },
         },
     })
+}
+
+fn target_refusal_export(message: &str) -> Option<String> {
+    let marker = "export '";
+    if let Some(start) = message.find(marker) {
+        let remainder = &message[start + marker.len()..];
+        if let Some(end) = remainder.find('\'') {
+            return Some(remainder[..end].to_owned());
+        }
+    }
+    Some("default".to_owned())
 }
 
 pub fn compiler_failure_json(
@@ -999,8 +1536,34 @@ impl<'a> UnchangedDeclarations<'a> {
 struct ModuleDependencies {
     imports: Vec<String>,
     includes: Vec<String>,
+    import_sites: Vec<DependencySite>,
+    include_sites: Vec<DependencySite>,
+    invalid_include_paths: Vec<crate::ast::Span>,
     seen_imports: HashSet<String>,
     seen_includes: HashSet<String>,
+}
+
+fn added_module(
+    path: &str,
+    module: &Module,
+    dependencies: &ModuleDependencies,
+) -> Result<AddedModule, String> {
+    let encoded = serde_json::to_vec(module)
+        .map_err(|error| format!("portable AST digest encoding failed: {error}"))?;
+    let mut digest = 0xcbf29ce484222325_u64;
+    for byte in encoded {
+        digest ^= u64::from(byte);
+        digest = digest.wrapping_mul(0x100000001b3);
+    }
+    Ok(AddedModule {
+        imports: dependencies.imports.clone(),
+        includes: dependencies.includes.clone(),
+        import_sites: dependencies.import_sites.clone(),
+        include_sites: dependencies.include_sites.clone(),
+        module_handle: path.to_owned(),
+        portable_ast_digest: format!("fnv1a64:{digest:016x}"),
+        syntax_diagnostics: Vec::new(),
+    })
 }
 
 fn module_dependencies(module: &Module) -> ModuleDependencies {
@@ -1040,14 +1603,34 @@ fn collect_expression_dependencies(
         Expression::Apply {
             function, argument, ..
         } => {
-            if let Expression::Intrinsic { name, .. } = &arena.expressions[function.0 as usize]
-                && let Expression::Text { value, .. } = &arena.expressions[argument.0 as usize]
-            {
-                if name == "@import" && dependencies.seen_imports.insert(value.clone()) {
-                    dependencies.imports.push(value.clone());
+            if let Expression::Intrinsic { name, .. } = &arena.expressions[function.0 as usize] {
+                if let Expression::Text { value, span } = &arena.expressions[argument.0 as usize] {
+                    if name == "@import" && dependencies.seen_imports.insert(value.clone()) {
+                        dependencies.imports.push(value.clone());
+                        dependencies.import_sites.push(DependencySite {
+                            specifier: value.clone(),
+                            span: *span,
+                        });
+                    }
+                    if name == "@include" && dependencies.seen_includes.insert(value.clone()) {
+                        dependencies.includes.push(value.clone());
+                        dependencies.include_sites.push(DependencySite {
+                            specifier: value.clone(),
+                            span: *span,
+                        });
+                    }
                 }
-                if name == "@include" && dependencies.seen_includes.insert(value.clone()) {
-                    dependencies.includes.push(value.clone());
+                if name == "@include"
+                    && !matches!(
+                        arena.expressions[argument.0 as usize],
+                        Expression::Text { .. }
+                    )
+                {
+                    dependencies
+                        .invalid_include_paths
+                        .push(source_expression_span(
+                            &arena.expressions[argument.0 as usize],
+                        ));
                 }
             }
             collect_expression_dependencies(*function, arena, dependencies);
@@ -1119,6 +1702,29 @@ fn collect_expression_dependencies(
         | Expression::Unit { .. }
         | Expression::Intrinsic { .. }
         | Expression::Tag { .. } => {}
+    }
+}
+
+fn source_expression_span(expression: &Expression) -> crate::ast::Span {
+    match expression {
+        Expression::Var { span, .. }
+        | Expression::Int { span, .. }
+        | Expression::Float { span, .. }
+        | Expression::Text { span, .. }
+        | Expression::Unit { span }
+        | Expression::Intrinsic { span, .. }
+        | Expression::Tag { span, .. }
+        | Expression::Apply { span, .. }
+        | Expression::Field { span, .. }
+        | Expression::Lambda { span, .. }
+        | Expression::Array { span, .. }
+        | Expression::Tuple { span, .. }
+        | Expression::Shape { span, .. }
+        | Expression::If { span, .. }
+        | Expression::Case { span, .. }
+        | Expression::Block { span, .. }
+        | Expression::Rec { span, .. }
+        | Expression::Comptime { span, .. } => *span,
     }
 }
 
@@ -1216,6 +1822,7 @@ mod tests {
 
         let analysis = session.analyze_module("main.blot");
         assert_eq!(analysis["ok"], true);
+        assert_eq!(analysis["targetPreflight"]["supported"], true, "{analysis}");
         assert_eq!(analysis["work"]["schema"], 1);
         assert!(analysis["work"]["typeNodes"].as_u64().unwrap_or_default() > 0);
         assert!(analysis["work"]["constraints"].as_u64().unwrap_or_default() > 0);
@@ -1278,6 +1885,14 @@ mod tests {
         session
             .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
             .expect("source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(
+            analysis["targetPreflight"]["code"], "BLOT_TARGET_REFUSAL",
+            "{analysis}"
+        );
+        assert_eq!(analysis["targetPreflight"]["export"], "default");
 
         let prepared = session.prepare_runtime_hir("main.blot");
         assert_eq!(prepared["ok"], false, "{}", prepared);
@@ -1358,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_changes_discard_cached_declaration_evaluations() {
+    fn dependency_changes_invalidate_importers_after_boundary_publication() {
         let dependency_path = "dependency.blot";
         let root_path = "main.blot";
         let mut session = CompilerSession::default();
@@ -1394,12 +2009,139 @@ mod tests {
             .add_source(dependency_path.to_owned(), source("return 2\u{e000}"))
             .expect("changed dependency should load");
         assert!(
-            !session
+            session
                 .context
                 .evaluated_bindings
                 .borrow()
                 .contains_key(root_path)
         );
+        let analysis = session.analyze_module(root_path);
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(
+            analysis["invalidation"]["checkedModules"],
+            serde_json::json!([dependency_path, root_path]),
+        );
+        assert_eq!(
+            analysis["invalidation"]["invalidatedImporters"],
+            serde_json::json!([root_path]),
+        );
+    }
+
+    #[test]
+    fn unchanged_dependency_boundary_stops_reverse_invalidation() {
+        let dependency_path = "dependency.blot";
+        let root_path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source(
+                    "let private = fn value => @int.add value 1\n\u{e000}return { .answer = 42; }\u{e000}",
+                ),
+            )
+            .expect("dependency source should load");
+        session
+            .configure_module(dependency_path, BTreeMap::new(), BTreeMap::new())
+            .expect("dependency source should configure");
+        session
+            .add_source(
+                root_path.to_owned(),
+                source(
+                    "const dependency = import \"dep\"\n\u{e000}return dependency.answer\u{e000}",
+                ),
+            )
+            .expect("root source should load");
+        session
+            .configure_module(
+                root_path,
+                BTreeMap::from([("dep".to_owned(), dependency_path.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("root source should configure");
+        assert_eq!(session.check_module(root_path)["ok"], true);
+
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source(
+                    "let private = fn value => @int.add value 2\n\u{e000}return { .answer = 42; }\u{e000}",
+                ),
+            )
+            .expect("private edit should load");
+        let analysis = session.analyze_module(root_path);
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(
+            analysis["invalidation"]["checkedModules"],
+            serde_json::json!([dependency_path]),
+        );
+        assert_eq!(
+            analysis["invalidation"]["boundaryUnchanged"],
+            serde_json::json!([dependency_path]),
+        );
+        assert_eq!(
+            analysis["invalidation"]["invalidatedImporters"],
+            serde_json::json!([]),
+        );
+    }
+
+    #[test]
+    fn shape_update_preserves_unknown_record_width() {
+        let path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                path.to_owned(),
+                source(
+                    "sig replacement = @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => @shape.update record { .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
+                ),
+            )
+            .expect("shape update source should load");
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .expect("shape update source should configure");
+
+        let evaluated = session.evaluate_module(path);
+        assert_eq!(evaluated["ok"], true, "{evaluated}");
+        assert_eq!(evaluated["display"], "\"kept\"");
+    }
+
+    #[test]
+    fn source_inspection_returns_dependency_sites_and_a_stable_ast_digest() {
+        let path = "main.blot";
+        let text = "const dependency = import \"dep\"\n\u{e000}const included = @include \"data.txt\" (fn text => text)\n\u{e000}return dependency\u{e000}";
+        let mut session = CompilerSession::default();
+        let first = session
+            .add_source(path.to_owned(), source(text))
+            .expect("inspected source should load");
+        let second = session
+            .add_source(path.to_owned(), source(text))
+            .expect("unchanged inspected source should load");
+
+        assert_eq!(first.imports, vec!["dep"]);
+        assert_eq!(first.includes, vec!["data.txt"]);
+        assert_eq!(first.import_sites[0].specifier, "dep");
+        assert_eq!(first.include_sites[0].specifier, "data.txt");
+        assert!(first.import_sites[0].span.end > first.import_sites[0].span.start);
+        assert_eq!(first.module_handle, path);
+        assert_eq!(first.portable_ast_digest, second.portable_ast_digest);
+        assert!(first.portable_ast_digest.starts_with("fnv1a64:"));
+    }
+
+    #[test]
+    fn source_inspection_rejects_a_nonliteral_include_path() {
+        let mut session = CompilerSession::default();
+        let result = session.add_source(
+            "main.blot".to_owned(),
+            source(
+                "const path = \"data.txt\"\n\u{e000}return @include path (fn text => text)\u{e000}",
+            ),
+        );
+        let AddSourceError::Diagnostics(diagnostics) =
+            result.expect_err("dynamic include should fail inspection")
+        else {
+            panic!("dynamic include failed without a source diagnostic");
+        };
+        assert_eq!(diagnostics[0].code, "BLOT_INCLUDE_PATH");
     }
 
     #[test]

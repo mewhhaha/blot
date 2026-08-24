@@ -206,6 +206,138 @@ const Filterable = fn (collection, value) => {
   .filter = (collection, (value -> Bool)) -> collection;
 }
 
+const text_scalar_at = fn (text, index) => do:
+  if index >= 0:
+    if index < @text.len text:
+      return #Some (@text.scalar_at text index)
+    else:
+      return #None
+  else:
+    return #None
+
+const text_slice = fn (text, start, end) => do:
+  if start >= 0:
+    if end >= start:
+      if end <= @text.len text:
+        return #Some (@text.slice text start end)
+      else:
+        return #None
+    else:
+      return #None
+  else:
+    return #None
+
+const text_find_from = fn (text, query, start) => do:
+  if start >= 0:
+    if start <= @text.len text:
+      let found = @text.find_from text query start
+      if found >= 0:
+        return #Some found
+      else:
+        return #None
+    else:
+      return #None
+  else:
+    return #None
+
+const text_find = fn (text, query) => text_find_from (text, query, 0)
+
+const text_starts_with = fn (text, beginning) => do:
+  let width = @text.len beginning
+  return case text_slice (text, 0, width) of
+    #Some candidate => is_equal (@text.cmp candidate beginning)
+    #None => False
+
+const text_ends_with = fn (text, suffix) => do:
+  let width = @text.len suffix
+  let length = @text.len text
+  return case text_slice (text, length - width, length) of
+    #Some candidate => is_equal (@text.cmp candidate suffix)
+    #None => False
+
+const text_scalars = fn text => {
+  .state = (text, 0);
+  .step = fn (value, index) => case text_scalar_at (value, index) of
+    #Some scalar => #Some (scalar, (value, index + 1))
+    #None => #None
+  ;
+}
+
+const rec text_split_from = fn (text, separator, start, parts) => do:
+  result <- case text_find_from (text, separator, start) of
+    #Some found => do:
+      let piece = case text_slice (text, start, found) of
+        #Some value => value
+        #None => @panic "Text.split produced invalid scalar bounds"
+      continued <- text_split_from (
+        text,
+        separator,
+        found + @text.len separator,
+        @array.push (@array.copy (&parts)) piece
+      )
+      return continued
+
+    #None => do:
+      let piece = case text_slice (text, start, @text.len text) of
+        #Some value => value
+        #None => @panic "Text.split produced invalid final bounds"
+      return @array.push (@array.copy (&parts)) piece
+  return result
+
+const text_split = fn (text, separator) => do:
+  if is_equal (@int.cmp (@text.len separator) 0):
+    return [text]
+  else:
+    return text_split_from (text, separator, 0, @array.empty)
+
+const text_lines = fn text => text_split (text, "\n")
+
+const text_whitespace = fn scalar => @text.contains " \t\r\n" scalar
+
+const rec text_trim_start = fn (text, index, length) => do:
+  if index < length:
+    if text_whitespace (@text.scalar_at text index):
+      return text_trim_start (text, index + 1, length)
+    else:
+      return index
+  else:
+    return length
+const rec text_trim_end = fn (text, start, end) => do:
+  if end > start:
+    if text_whitespace (@text.scalar_at text (end - 1)):
+      return text_trim_end (text, start, end - 1)
+    else:
+      return end
+  else:
+    return start
+
+const text_trim = fn text => do:
+  let length = @text.len text
+  let start = text_trim_start (text, 0, length)
+  let end = text_trim_end (text, start, length)
+  return @text.slice text start end
+
+const rec text_replace_from =
+  fn (text, query, replacement, start, result) => do:
+    return case text_find_from (text, query, start) of
+      #Some found => do:
+        let segment = @text.slice text start found
+        return text_replace_from (
+          text,
+          query,
+          replacement,
+          found + @text.len query,
+          @text.concat (@text.concat result segment) replacement
+        )
+
+      #None => @text.concat result (@text.slice text start (@text.len text))
+
+const text_replace = fn (text, query, replacement) => do:
+  if is_equal (@int.cmp (@text.len query) 0):
+    return text
+  else:
+    return text_replace_from (text, query, replacement, 0, "")
+
 const TextOperations =
   {
     .empty = "";
@@ -214,6 +346,17 @@ const TextOperations =
     .cmp = @text.cmp;
     .contains = @text.contains;
     .of_int = @text.of_int;
+    .scalar_at = text_scalar_at;
+    .slice = text_slice;
+    .find = text_find;
+    .find_from = text_find_from;
+    .split = text_split;
+    .lines = text_lines;
+    .trim = text_trim;
+    .scalars = text_scalars;
+    .starts_with = text_starts_with;
+    .ends_with = text_ends_with;
+    .replace = text_replace;
   }
 
 const Text = TextOperations
@@ -578,6 +721,24 @@ const Scratch =
     .push = scratch_push;
     .finish = scratch_finish;
     .recycle = scratch_recycle;
+  }
+
+const array_build ::
+  @forall (fn T => do:
+    return (
+      @type.int,
+      (@scratch.type T -> @scratch.type T)
+      ) -> [T]
+  )
+const array_build = fn (capacity, fill) => do:
+  let builder = Scratch.with_capacity capacity
+  let builder = fill builder
+  return Scratch.finish builder
+
+const ArrayBuilder =
+  {
+    .of = @scratch.type;
+    .push = scratch_push;
   }
 
 const array_merge_run ::
@@ -1214,6 +1375,8 @@ const array_quicksort = fn (values, before_or_equal) => do:
 
 const Array =
   {
+    .Builder = ArrayBuilder;
+    .build = array_build;
     .empty = @array.empty;
     .append = array_append;
     .fold = fold;
@@ -1956,8 +2119,31 @@ const map_remove = fn (equal, entries, key) => do:
     )
   return (removed.1, removed.0)
 
+const map_alter = fn (equal, entries, key, transform) => do:
+  let previous = map_get (equal, entries, key)
+  let replacement = transform previous
+  return case replacement of
+    #Some value => (previous, (map_put (equal, entries, key, value)).1)
+    #None => case previous of
+      #Some _ => map_remove (equal, entries, key)
+      #None => (None, entries)
+
+const map_update = fn (equal, entries, key, transform) => do:
+  return map_alter (
+    equal,
+    entries,
+    key,
+    fn current => case current of
+      #Some value => transform value
+      #None => None
+  )
+
 const map_with = fn equal => do:
   let put = fn (entries, key, value) => map_put (equal, entries, key, value)
+  let alter =
+    fn (entries, key, transform) => map_alter (equal, entries, key, transform)
+  let update =
+    fn (entries, key, transform) => map_update (equal, entries, key, transform)
   let append = fn left => fn right => do:
     return fold (
       right,
@@ -1975,6 +2161,8 @@ const map_with = fn equal => do:
     ;
     .put = put;
     .remove = fn (entries, key) => map_remove (equal, entries, key);
+    .alter = alter;
+    .update = update;
     .append = append;
     .fold = fold;
     .map = fn (entries, transform) => do:
@@ -1991,6 +2179,11 @@ const map_with = fn equal => do:
   }
 
 const Map = { .of = map_type; .with = map_with; }
+
+const Shape =
+  {
+    .update = @shape.update;
+  }
 
 const set_type = fn value => [value]
 
@@ -2885,6 +3078,7 @@ return {
   .collect = collect;
   .List = List;
   .Map = Map;
+  .Shape = Shape;
   .Set = Set;
   .Dict = Dict;
   .OrderedTextMap = OrderedTextMap;

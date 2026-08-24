@@ -1,5 +1,9 @@
 # The Rust Backend
 
+The generated
+[current implementation report](../generated/CURRENT_IMPLEMENTATION.md) is the
+concise, CI-checked inventory of this production path.
+
 ```bash
 pnpm compiler:build
 pnpm conformance

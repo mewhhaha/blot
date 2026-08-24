@@ -1,5 +1,8 @@
 # Remaining work
 
+Current protocol, backend, ABI, editor, and benchmark status is generated in
+[`generated/CURRENT_IMPLEMENTATION.md`](generated/CURRENT_IMPLEMENTATION.md).
+
 There are no remaining items in this roadmap. The five compiler tasks that were
 listed here are complete; new language features and capacity-bearing Stores
 remain outside its scope.

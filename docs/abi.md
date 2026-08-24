@@ -8,6 +8,10 @@ source-to-caller representation relation and public-type admissibility. The
 section **Runtime target status** below records current implementation coverage;
 it cannot weaken an ABI rule for an artifact the compiler accepts.
 
+The generated
+[current implementation report](../generated/CURRENT_IMPLEMENTATION.md) records
+the current ABI version and public capability inventory.
+
 `blot build` publishes a stable Core WebAssembly interface. It does not expose
 Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
 caller values into that private representation and lower results back out.
@@ -175,6 +179,13 @@ than dependent on private constructor numbers.
 ## Runtime target status
 
 This section is operational status, not a relaxation of ABI 1.
+
+Ordinary semantic analysis also runs public-layout preflight without emitting a
+Wasm binary. Its `targetPreflight` fact records whether the inferred boundary is
+supported and, on refusal, the export name, inferred type, unsupported
+component, stable `BLOT_TARGET_REFUSAL` code, and concrete alternatives. Editor
+diagnostics and `blot build` therefore consult the same Rust layout planner.
+Target refusal remains distinct from a source type error.
 
 The production Rust/Wasm path runs the validated CI-built compiler. One
 `ClosedProgram` owns the checked and staged Runtime HIR and one `PublicLayout`

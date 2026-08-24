@@ -858,10 +858,13 @@ premise as the flat cache.
 
 The in-memory cache key is the resident module path under the session's current
 source graph. Replacing a source module or changing its resolved imports or
-included contents invalidates that module and the transitive reverse-import
-closure. This is equivalent to the dependency fingerprint required by capsule
-coherence above: a cache hit implies that the source, include inputs, and every
-transitive dependency are unchanged.
+included contents first invalidates only that module's private facts. A
+successful recheck closes and alpha-canonicalizes the public parameter, result,
+and effect types into a versioned binary boundary, then appends the canonical
+compile-time result and ordered direct-dependency boundaries. Equal bytes retain
+importer interfaces; different bytes dirty direct importers. Repeating this rule
+is equivalent to the dependency fingerprint required by capsule coherence above
+while allowing propagation to stop at an observationally equal boundary.
 
 Ownership and safety results are cached at the same revision boundary only for
 nullary modules. Ownership is a function of the AST. Safety additionally reads

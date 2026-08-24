@@ -969,6 +969,7 @@ impl ResidualTrace {
                 | "@type.attach"
                 | "@shape.get"
                 | "@shape.set"
+                | "@shape.update"
                 | "@shape.remove"
                 | "@shape.names"
                 | "@shape.has"
@@ -1233,6 +1234,34 @@ impl ResidualTrace {
                 let left = self.lower_as(arguments.first(), "text", span)?;
                 let right = self.lower_as(arguments.get(1), "text", span)?;
                 self.operation("text.append", 3, vec![left.id, right.id], span, None)
+            }
+            "@text.len" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+                self.operation("text.length", integer, vec![text.id], span, None)
+            }
+            "@text.scalar_at" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                self.operation("text.scalar-at", 3, vec![text.id, index.id], span, None)
+            }
+            "@text.slice" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let start = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                let end = self.lower_as(arguments.get(2), "signed-integer-64", span)?;
+                self.operation("text.slice", 3, vec![text.id, start.id, end.id], span, None)
+            }
+            "@text.find_from" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let query = self.lower_as(arguments.get(1), "text", span)?;
+                let start = self.lower_as(arguments.get(2), "signed-integer-64", span)?;
+                self.operation(
+                    "text.find-from",
+                    start.type_id,
+                    vec![text.id, query.id, start.id],
+                    span,
+                    None,
+                )
             }
             "@text.cmp" => {
                 let left = self.lower_as(arguments.first(), "text", span)?;
@@ -7704,6 +7733,15 @@ fn type_value(type_: &Type) -> Value {
                 .map(|(name, type_)| (name.clone(), type_value(type_)))
                 .collect(),
         ),
+        Type::RecordUpdate { base, fields } => {
+            let updated =
+                crate::typecheck::record_update_type(base.as_ref().clone(), fields.clone());
+            if matches!(updated, Type::RecordUpdate { .. }) {
+                Value::Unbounded
+            } else {
+                type_value(&updated)
+            }
+        }
         Type::Array(element) => Value::Array(vec![type_value(element)]),
         Type::Region(element) => Value::RegionType(Box::new(type_value(element))),
         Type::Scratch(element) => Value::ScratchType(Box::new(type_value(element))),
@@ -8019,6 +8057,16 @@ impl HirBuilder {
                         fields: runtime_fields,
                     },
                 ))
+            }
+            Type::RecordUpdate { base, fields } => {
+                let updated =
+                    crate::typecheck::record_update_type(base.as_ref().clone(), fields.clone());
+                if matches!(updated, Type::RecordUpdate { .. }) {
+                    return Err(hir_error(
+                        "A record update type must be resolved before it reaches the runtime boundary.",
+                    ));
+                }
+                self.runtime_type(&updated, value)
             }
             Type::Region(_) => Err(hir_error(
                 "A live Region is compiler-private and cannot cross the runtime export boundary.",

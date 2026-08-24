@@ -27,6 +27,9 @@ struct DynamicHelpers {
     realloc: u32,
     text_compare: Option<u32>,
     text_contains: Option<u32>,
+    text_scalar_count: Option<u32>,
+    text_scalar_offset: Option<u32>,
+    text_find_from: Option<u32>,
     utf8_validator: Option<u32>,
     i64_to_text: Option<u32>,
 }
@@ -256,9 +259,24 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
                     parameters: signature
                         .parameters
                         .iter()
-                        .map(|type_id| canonical_type(module, *type_id, &mut Vec::new()))
+                        .enumerate()
+                        .map(|(index, type_id)| {
+                            canonical_type(module, *type_id, &mut Vec::new()).map_err(
+                                |error| {
+                                    format!(
+                                        "export '{source_name}' parameter {index} is unsupported: {error}"
+                                    )
+                                },
+                            )
+                        })
                         .collect::<Result<_, _>>()?,
-                    result: canonical_type(module, signature.result, &mut Vec::new())?,
+                    result: canonical_type(module, signature.result, &mut Vec::new()).map_err(
+                        |error| {
+                            format!(
+                                "export '{source_name}' result is unsupported: {error}"
+                            )
+                        },
+                    )?,
                 };
                 let post_return = if flattened_type(&function.result).len() > 1 {
                     Some(format!("cabi_post_{wasm_name}"))
@@ -297,9 +315,24 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
                     parameters: signature
                         .parameters
                         .iter()
-                        .map(|type_id| canonical_type(module, *type_id, &mut Vec::new()))
+                        .enumerate()
+                        .map(|(index, type_id)| {
+                            canonical_type(module, *type_id, &mut Vec::new()).map_err(|error| {
+                                format!(
+                                    "host import '{}.{}' parameter {index} is unsupported: {error}",
+                                    capability.name, operation.name
+                                )
+                            })
+                        })
                         .collect::<Result<_, _>>()?,
-                    result: canonical_type(module, signature.result, &mut Vec::new())?,
+                    result: canonical_type(module, signature.result, &mut Vec::new()).map_err(
+                        |error| {
+                            format!(
+                                "host import '{}.{}' result is unsupported: {error}",
+                                capability.name, operation.name
+                            )
+                        },
+                    )?,
                 },
             });
         }
@@ -831,6 +864,55 @@ fn emit_dynamic_module(
     } else {
         None
     };
+    let text_scalar_count_index = if has_operation("text.length") || has_operation("text.find-from")
+    {
+        let type_index = add_function_type(
+            &mut types,
+            vec![ValType::I32, ValType::I32],
+            vec![ValType::I64],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_scalar_count_function());
+        Some(function_index)
+    } else {
+        None
+    };
+    let text_scalar_offset_index = if has_operation("text.scalar-at")
+        || has_operation("text.slice")
+        || has_operation("text.find-from")
+    {
+        let type_index = add_function_type(
+            &mut types,
+            vec![ValType::I32, ValType::I32, ValType::I64],
+            vec![ValType::I32],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_scalar_offset_function());
+        Some(function_index)
+    } else {
+        None
+    };
+    let text_find_from_index = if has_operation("text.find-from") {
+        let type_index = add_function_type(
+            &mut types,
+            vec![
+                ValType::I32,
+                ValType::I32,
+                ValType::I32,
+                ValType::I32,
+                ValType::I32,
+            ],
+            vec![ValType::I32],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_find_from_function());
+        Some(function_index)
+    } else {
+        None
+    };
     let utf8_validator_index = if has_operation("host.call") {
         let type_index =
             add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
@@ -868,6 +950,9 @@ fn emit_dynamic_module(
         realloc: realloc_index,
         text_compare: text_compare_index,
         text_contains: text_contains_index,
+        text_scalar_count: text_scalar_count_index,
+        text_scalar_offset: text_scalar_offset_index,
+        text_find_from: text_find_from_index,
         utf8_validator: utf8_validator_index,
         i64_to_text: i64_to_text_index,
     };
@@ -1541,6 +1626,112 @@ fn emit_dynamic_operation(
             emit_local_values(instructions, text);
             emit_local_values(instructions, query);
             instructions.call(text_contains).local_set(result[0]);
+        }
+        "text.length" => {
+            let scalar_count = helpers.text_scalar_count.ok_or_else(|| {
+                format!("{}: text.length omitted its runtime helper", module.source)
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            emit_local_values(instructions, text);
+            instructions.call(scalar_count).local_set(result[0]);
+        }
+        "text.scalar-at" => {
+            let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
+                format!(
+                    "{}: text.scalar-at omitted its runtime helper",
+                    module.source
+                )
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let index = locals_for(module, value_locals, operation.operands[1])?;
+            instructions
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(index[0])
+                .call(scalar_offset)
+                .local_tee(scratch_pointer)
+                .local_get(text[0])
+                .i32_add()
+                .local_set(result[0])
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(index[0])
+                .i64_const(1)
+                .i64_add()
+                .call(scalar_offset)
+                .local_get(scratch_pointer)
+                .i32_sub()
+                .local_set(result[1]);
+        }
+        "text.slice" => {
+            let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
+                format!("{}: text.slice omitted its runtime helper", module.source)
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let start = locals_for(module, value_locals, operation.operands[1])?;
+            let end = locals_for(module, value_locals, operation.operands[2])?;
+            instructions
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(start[0])
+                .call(scalar_offset)
+                .local_tee(scratch_pointer)
+                .local_get(text[0])
+                .i32_add()
+                .local_set(result[0])
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(end[0])
+                .call(scalar_offset)
+                .local_get(scratch_pointer)
+                .i32_sub()
+                .local_set(result[1]);
+        }
+        "text.find-from" => {
+            let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
+                format!(
+                    "{}: text.find-from omitted its scalar-offset helper",
+                    module.source
+                )
+            })?;
+            let find_from = helpers.text_find_from.ok_or_else(|| {
+                format!(
+                    "{}: text.find-from omitted its search helper",
+                    module.source
+                )
+            })?;
+            let scalar_count = helpers.text_scalar_count.ok_or_else(|| {
+                format!(
+                    "{}: text.find-from omitted its scalar-count helper",
+                    module.source
+                )
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let query = locals_for(module, value_locals, operation.operands[1])?;
+            let start = locals_for(module, value_locals, operation.operands[2])?;
+            instructions
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(start[0])
+                .call(scalar_offset)
+                .local_set(scratch_index)
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(query[0])
+                .local_get(query[1])
+                .local_get(scratch_index)
+                .call(find_from)
+                .local_tee(scratch_pointer)
+                .i32_const(-1)
+                .i32_eq()
+                .if_(BlockType::Result(ValType::I64))
+                .i64_const(-1)
+                .else_()
+                .local_get(text[0])
+                .local_get(scratch_pointer)
+                .call(scalar_count)
+                .end()
+                .local_set(result[0]);
         }
         "text.append" => {
             let left = locals_for(module, value_locals, operation.operands[0])?;
@@ -4026,6 +4217,205 @@ fn emit_text_bounds_check(
         .unreachable()
         .end()
         .end();
+}
+
+fn text_scalar_count_function() -> Function {
+    let mut function = Function::new([(1, ValType::I32), (1, ValType::I64)]);
+    let index = 2;
+    let count = 3;
+    let mut instructions = function.instructions();
+    instructions
+        .i32_const(0)
+        .local_set(index)
+        .i64_const(0)
+        .local_set(count)
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(index)
+        .local_get(1)
+        .i32_ge_u()
+        .br_if(1)
+        .local_get(0)
+        .local_get(index)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .i32_const(0xc0)
+        .i32_and()
+        .i32_const(0x80)
+        .i32_ne()
+        .if_(BlockType::Empty)
+        .local_get(count)
+        .i64_const(1)
+        .i64_add()
+        .local_set(count)
+        .end()
+        .local_get(index)
+        .i32_const(1)
+        .i32_add()
+        .local_set(index)
+        .br(0)
+        .end()
+        .end()
+        .local_get(count)
+        .end();
+    function
+}
+
+fn text_scalar_offset_function() -> Function {
+    let mut function = Function::new([(1, ValType::I32), (1, ValType::I64)]);
+    let byte = 3;
+    let scalar = 4;
+    let mut instructions = function.instructions();
+    instructions
+        .local_get(2)
+        .i64_const(0)
+        .i64_lt_s()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .i32_const(0)
+        .local_set(byte)
+        .i64_const(0)
+        .local_set(scalar)
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(byte)
+        .local_get(1)
+        .i32_ge_u()
+        .br_if(1)
+        .local_get(0)
+        .local_get(byte)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .i32_const(0xc0)
+        .i32_and()
+        .i32_const(0x80)
+        .i32_ne()
+        .if_(BlockType::Empty)
+        .local_get(scalar)
+        .local_get(2)
+        .i64_eq()
+        .if_(BlockType::Empty)
+        .local_get(byte)
+        .return_()
+        .end()
+        .local_get(scalar)
+        .i64_const(1)
+        .i64_add()
+        .local_set(scalar)
+        .end()
+        .local_get(byte)
+        .i32_const(1)
+        .i32_add()
+        .local_set(byte)
+        .br(0)
+        .end()
+        .end()
+        .local_get(scalar)
+        .local_get(2)
+        .i64_eq()
+        .if_(BlockType::Result(ValType::I32))
+        .local_get(byte)
+        .else_()
+        .unreachable()
+        .end()
+        .end();
+    function
+}
+
+fn text_find_from_function() -> Function {
+    let mut function = Function::new([(5, ValType::I32)]);
+    let start = 5;
+    let index = 6;
+    let text_byte = 7;
+    let query_byte = 8;
+    let mut instructions = function.instructions();
+    instructions
+        .local_get(4)
+        .local_set(start)
+        .local_get(3)
+        .i32_eqz()
+        .if_(BlockType::Empty)
+        .local_get(start)
+        .return_()
+        .end()
+        .local_get(3)
+        .local_get(1)
+        .local_get(start)
+        .i32_sub()
+        .i32_gt_u()
+        .if_(BlockType::Empty)
+        .i32_const(-1)
+        .return_()
+        .end()
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(start)
+        .local_get(1)
+        .local_get(3)
+        .i32_sub()
+        .i32_gt_u()
+        .br_if(1)
+        .i32_const(0)
+        .local_set(index)
+        .block(BlockType::Empty)
+        .loop_(BlockType::Empty)
+        .local_get(index)
+        .local_get(3)
+        .i32_ge_u()
+        .if_(BlockType::Empty)
+        .local_get(start)
+        .return_()
+        .end()
+        .local_get(0)
+        .local_get(start)
+        .i32_add()
+        .local_get(index)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .local_set(text_byte)
+        .local_get(2)
+        .local_get(index)
+        .i32_add()
+        .i32_load8_u(wasm_encoder::MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .local_set(query_byte)
+        .local_get(text_byte)
+        .local_get(query_byte)
+        .i32_ne()
+        .br_if(1)
+        .local_get(index)
+        .i32_const(1)
+        .i32_add()
+        .local_set(index)
+        .br(0)
+        .end()
+        .end()
+        .local_get(start)
+        .i32_const(1)
+        .i32_add()
+        .local_set(start)
+        .br(0)
+        .end()
+        .end()
+        .i32_const(-1)
+        .end();
+    function
 }
 
 fn text_compare_function() -> Function {

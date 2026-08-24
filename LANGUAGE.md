@@ -889,6 +889,18 @@ result needs, or construct an exact record before spreading. Exact spreads and
 explicit fields still apply from left to right, so override order remains
 visible in source.
 
+`Shape.update record patch` is the width-preserving alternative for generic
+record updates. `patch` must be a statically known shape. Its fields replace
+same-named fields in `record`, while every other field and its type are
+retained, including fields not mentioned by the updater's inferred parameter
+type. Unlike a spread, this operation does not reconstruct an open record from
+only its visible fields.
+
+```blot
+const rename = fn value => Shape.update value { .name = "new"; }
+return (rename { .name = "old"; .count = 3; }).count
+```
+
 Braces with no leading `.` on their members are an effect row rather than a
 shape:
 
@@ -2707,6 +2719,9 @@ Everything not listed here belongs in source, normally the prelude.
 | `@int.of_float`                             | truncate a float toward zero                         |
 | `@text.concat`                              | concatenate text                                     |
 | `@text.len`                                 | count Unicode code points                            |
+| `@text.scalar_at`                           | read one validated Unicode scalar                    |
+| `@text.slice`                               | slice at validated Unicode scalar bounds             |
+| `@text.find_from`                           | find a substring from a Unicode scalar offset        |
 | `@text.cmp`                                 | compare text and return an ordering constructor      |
 | `@text.contains`                            | test whether text contains a query                   |
 | `@text.of_int`                              | render an integer as decimal text                    |
@@ -2777,18 +2792,24 @@ prelude source:
 - `get (entries, key)` and `has (entries, key)` observe a map;
 - `put (entries, key, value)` returns `(previous, updated)`;
 - `remove (entries, key)` returns `(removed, updated)`;
+- `alter (entries, key, transform)` transforms `#Some previous` or `#None`;
+- `update (entries, key, transform)` invokes its transform only when present;
 - `append left right` inserts the right map's entries into the left map; and
 - `fold`, `map`, `filter`, `length`, `keys`, `values`, and `items` provide the
   collection operations.
 
 The previous or removed value is an `Option`. Returning it is significant for
 ownership: replacing or removing an owned value does not silently discard it.
-Starting from `empty`, these operations keep keys unique. A manually built
-association array with duplicate keys has defined first-match behavior; `put` or
-`remove` affects only that visible entry. `Dict` is `Map.with` text equality, so
-`Dict.of V` remains the concise type constructor for `(Text, V)` maps.
-`OrderedTextMap` is the distinct owned, strictly ordered API described in §11.4;
-it does not change `Map` or `Dict` representation or iteration order.
+`alter` and `update` also return `(previous, updated)`. An alter callback
+removes the visible key by returning `#None` and inserts or replaces by
+returning `#Some value`; an update callback returns the same `Option` result but
+is not called for a missing key. Starting from `empty`, these operations keep
+keys unique. A manually built association array with duplicate keys has defined
+first-match behavior; `put` or `remove` affects only that visible entry. `Dict`
+is `Map.with` text equality, so `Dict.of V` remains the concise type constructor
+for `(Text, V)` maps. `OrderedTextMap` is the distinct owned, strictly ordered
+API described in §11.4; it does not change `Map` or `Dict` representation or
+iteration order.
 
 #### Safe indexed access
 
@@ -2877,6 +2898,13 @@ elements, and retains its allocation as an empty builder. Recycling an Array
 whose element ownership tree contains an exact linear obligation is rejected.
 Scratch values cannot be shared or cross a host boundary. Capacity and the
 uninitialized suffix are never source values.
+
+`Array.build (capacity, fill)` is the ordinary source-level builder path. `fill`
+receives an `Array.Builder.of T`, advances it with
+`Array.Builder.push (builder, value)`, and returns the resulting builder.
+`Array.build` consumes it and returns an immutable `[T]`. The abstraction erases
+to the same Scratch allocation and owned writes; an unfinished builder cannot
+cross the public ABI.
 
 `Array.merge_sort (values, before_or_equal)` is stable and consumes the input
 Store. It performs bottom-up merging between one Array and one Scratch builder,
@@ -3443,10 +3471,18 @@ metadata for the consequent or alternate respectively. Engines that ignore the
 custom section observe identical semantics. The prelude exports them as `likely`
 and `unlikely`.
 
-`@text.len`, `@text.of_int`, `@text.cmp`, and `@text.contains` are module-local
-Wasm intrinsics, not host imports. Length counts Unicode scalar values,
-comparison is lexicographic by Unicode scalar value, and containment searches
-the UTF-8 representation, which preserves substring boundaries for valid text.
+Text primitives are module-local Wasm operations, not host imports. Public
+indices are Unicode scalar positions. `Text.scalar_at`, `Text.slice`, and
+`Text.find_from` return `Option` for invalid bounds or a missing substring;
+their checked prelude paths guard the lower-level scalar-at, slice, and search
+operations. Runtime and compile-time evaluation use the same scalar semantics.
+`Text.split`, `Text.lines`, `Text.trim`, `Text.scalars`, starts/ends-with, and
+`Text.replace` are ordinary prelude functions over those operations.
+
+The backend retains UTF-8 internally: scalar count and offset helpers scan lead
+bytes, while substring matching scans bytes only after both input texts and the
+starting scalar boundary are validated. Consequently a match cannot begin in a
+continuation byte and returned indices remain scalar positions.
 
 The JSON sidecar and the `blot:abi` custom section contain identical bytes. The
 manifest is the authoritative structural contract for exports, imports,

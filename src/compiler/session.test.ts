@@ -42,6 +42,89 @@ test("unsupported lowering remains a target refusal after checking", async () =>
   }
 });
 
+test("Array builders and Map update helpers evaluate through the prelude", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const evaluated = await compiler.evaluate(
+      "examples/lib/array_builder_and_map_updates.blot",
+    );
+    assert.equal(evaluated.display, "(3, #Some 11, #Some 20)");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("Shape.update preserves fields outside the updater's visible row", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const evaluated = await compiler.evaluate(
+      "examples/lib/shape_update.blot",
+    );
+    assert.equal(evaluated.display, "3");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("Unicode-scalar Text operations agree in evaluation and emitted Wasm", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const evaluated = await compiler.evaluate(
+      "examples/lib/text_processing_eval.blot",
+    );
+    assert.equal(
+      evaluated.display,
+      '("α,beta,γ", 3, #Some "α", #Some 2, "α,B,γ", #True, #True)',
+    );
+
+    const runtime = await compiler.prepare(
+      "examples/lib/text_processing.blot",
+    );
+    const operations = runtime.functions.flatMap((function_) =>
+      function_.blocks.flatMap((block) => block.operations)
+    );
+    assert.ok(
+      operations.some((operation) => operation.kind === "text.length"),
+    );
+    assert.ok(
+      operations.some((operation) => operation.kind === "text.find-from"),
+    );
+    assert.ok(operations.some((operation) => operation.kind === "text.slice"));
+
+    const artifact = await compiler.compile(
+      "examples/lib/text_processing.blot",
+    );
+    assert.equal(
+      WebAssembly.validate(Uint8Array.from(artifact.wasm).buffer),
+      true,
+    );
+
+    const scalarArtifact = await compiler.compile(
+      "examples/lib/text_scalar_runtime.blot",
+    );
+    const instance = await WebAssembly.instantiate(
+      Uint8Array.from(scalarArtifact.wasm) as BufferSource,
+    );
+    const memory = instance.instance.exports.memory as WebAssembly.Memory;
+    const realloc = instance.instance.exports.cabi_realloc as (
+      oldPointer: number,
+      oldSize: number,
+      alignment: number,
+      newSize: number,
+    ) => number;
+    const run = instance.instance.exports["blot:default"] as (
+      pointer: number,
+      length: number,
+    ) => bigint;
+    const input = new TextEncoder().encode("🙂αβ");
+    const pointer = realloc(0, 0, 1, input.byteLength);
+    new Uint8Array(memory.buffer, pointer, input.byteLength).set(input);
+    assert.equal(run(pointer, input.byteLength), 5n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("reuse assertion tags publish only discharged Store updates", async () => {
   const compiler = await Compiler.create();
   try {

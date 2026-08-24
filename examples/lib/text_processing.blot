@@ -1,0 +1,16 @@
+open import "blot:prelude"
+
+sig inspect = Text -> {
+  .length = Int;
+  .first = Text;
+  .position = Int;
+  .middle = Text;
+}
+let inspect = fn text => {
+  .length = @text.len text;
+  .first = @text.scalar_at text 0;
+  .position = @text.find_from text "needle" 0;
+  .middle = @text.slice text 1 4;
+}
+
+return inspect

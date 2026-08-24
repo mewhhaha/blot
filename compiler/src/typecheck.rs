@@ -108,6 +108,10 @@ pub enum Type {
         result: Rc<Type>,
     },
     Record(TypeList<(String, Type)>),
+    RecordUpdate {
+        base: Rc<Type>,
+        fields: TypeList<(String, Type)>,
+    },
     Array(Rc<Type>),
     Region(Rc<Type>),
     Scratch(Rc<Type>),
@@ -124,6 +128,45 @@ pub enum Type {
     Opaque(String),
     Top,
     Bottom,
+}
+
+pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) -> Type {
+    match base {
+        Type::Record(fields) => {
+            let mut fields = fields.into_iter().collect::<Vec<_>>();
+            for (name, type_) in updates {
+                if let Some((_, current)) =
+                    fields.iter_mut().find(|(candidate, _)| candidate == &name)
+                {
+                    *current = type_;
+                } else {
+                    fields.push((name, type_));
+                }
+            }
+            Type::Record(fields.into())
+        }
+        Type::RecordUpdate { base, fields } => {
+            let mut combined = fields.into_iter().collect::<Vec<_>>();
+            for (name, type_) in updates {
+                if let Some((_, current)) = combined
+                    .iter_mut()
+                    .find(|(candidate, _)| candidate == &name)
+                {
+                    *current = type_;
+                } else {
+                    combined.push((name, type_));
+                }
+            }
+            Type::RecordUpdate {
+                base,
+                fields: combined.into(),
+            }
+        }
+        base => Type::RecordUpdate {
+            base: Rc::new(base),
+            fields: updates,
+        },
+    }
 }
 
 enum Requirement {
@@ -168,6 +211,10 @@ enum ConstraintTypeNode {
         result: ConstraintTypeId,
     },
     Record(Vec<(String, ConstraintTypeId)>),
+    RecordUpdate {
+        base: ConstraintTypeId,
+        fields: Vec<(String, ConstraintTypeId)>,
+    },
     Array(ConstraintTypeId),
     Region(ConstraintTypeId),
     Scratch(ConstraintTypeId),
@@ -226,6 +273,13 @@ impl ConstraintTypeArena {
                     .map(|(name, type_)| (name.clone(), self.intern(type_)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => ConstraintTypeNode::RecordUpdate {
+                base: self.intern(base),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| (name.clone(), self.intern(type_)))
+                    .collect(),
+            },
             Type::Array(element) => ConstraintTypeNode::Array(self.intern(element)),
             Type::Region(element) => ConstraintTypeNode::Region(self.intern(element)),
             Type::Scratch(element) => ConstraintTypeNode::Scratch(self.intern(element)),
@@ -288,6 +342,13 @@ impl ConstraintTypeArena {
                     .map(|(name, type_)| (name.clone(), self.expand(*type_)))
                     .collect(),
             ),
+            ConstraintTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.expand(*base)),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| (name.clone(), self.expand(*type_)))
+                    .collect(),
+            },
             ConstraintTypeNode::Array(element) => Type::Array(Rc::new(self.expand(*element))),
             ConstraintTypeNode::Region(element) => Type::Region(Rc::new(self.expand(*element))),
             ConstraintTypeNode::Scratch(element) => Type::Scratch(Rc::new(self.expand(*element))),
@@ -336,6 +397,12 @@ impl ConstraintTypeArena {
             | ConstraintTypeNode::Variant { cases: fields, .. } => fields
                 .iter()
                 .map(|(_, field)| self.level_of(*field, variables))
+                .max()
+                .unwrap_or(0),
+            ConstraintTypeNode::RecordUpdate { base, fields } => fields
+                .iter()
+                .map(|(_, field)| self.level_of(*field, variables))
+                .chain(std::iter::once(self.level_of(*base, variables)))
                 .max()
                 .unwrap_or(0),
             ConstraintTypeNode::Array(element)
@@ -461,6 +528,19 @@ impl ConstraintTypeArena {
             }
             (ConstraintTypeNode::Record(left), ConstraintTypeNode::Record(right)) => {
                 self.same_fields(left, right, rigids)
+            }
+            (
+                ConstraintTypeNode::RecordUpdate {
+                    base: left_base,
+                    fields: left_fields,
+                },
+                ConstraintTypeNode::RecordUpdate {
+                    base: right_base,
+                    fields: right_fields,
+                },
+            ) => {
+                self.same_with_rigids(*left_base, *right_base, rigids)
+                    && self.same_fields(left_fields, right_fields, rigids)
             }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right))
             | (ConstraintTypeNode::Region(left), ConstraintTypeNode::Region(right))
@@ -717,6 +797,10 @@ enum FlatTypeNode {
         result: FlatTypeId,
     },
     Record(Vec<(String, FlatTypeId)>),
+    RecordUpdate {
+        base: FlatTypeId,
+        fields: Vec<(String, FlatTypeId)>,
+    },
     Array(FlatTypeId),
     Region(FlatTypeId),
     Scratch(FlatTypeId),
@@ -737,6 +821,68 @@ enum FlatTypeNode {
 
 struct FlatTypeArena {
     nodes: Vec<FlatTypeNode>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SealedModuleBoundary {
+    schema: u32,
+    compiler_semantic_version: String,
+    certificate_schema: u32,
+    types: Vec<FlatTypeNode>,
+    result: FlatTypeId,
+    effects: FlatTypeId,
+    parameter: Option<FlatTypeId>,
+}
+
+impl SealedModuleBoundary {
+    const SCHEMA: u32 = 1;
+
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != Self::SCHEMA {
+            return Err(format!(
+                "sealed module boundary schema is {}, expected {}",
+                self.schema,
+                Self::SCHEMA,
+            ));
+        }
+        if self.compiler_semantic_version != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "sealed module boundary compiler version is {}, expected {}",
+                self.compiler_semantic_version,
+                env!("CARGO_PKG_VERSION"),
+            ));
+        }
+        if self.certificate_schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
+            return Err(format!(
+                "sealed module boundary certificate schema is {}, expected {}",
+                self.certificate_schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            ));
+        }
+        let arena = FlatTypeArena {
+            nodes: self.types.clone(),
+        };
+        validate_certificate_type(&arena, self.result, &mut HashSet::new())?;
+        validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
+        if let Some(parameter) = self.parameter {
+            validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+        }
+        Ok(())
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        rmp_serde::to_vec(self)
+            .map_err(|error| format!("could not encode sealed module boundary: {error}"))
+    }
+
+    #[cfg(test)]
+    fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let boundary: Self = rmp_serde::from_slice(bytes)
+            .map_err(|error| format!("could not decode sealed module boundary: {error}"))?;
+        boundary.validate()?;
+        Ok(boundary)
+    }
 }
 
 #[derive(Default)]
@@ -836,6 +982,173 @@ impl CachedModuleInterface {
             ownership_contracts: certificate.ownership_contracts,
         })
     }
+
+    fn sealed_boundary_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut builder = FlatTypeBuilder::default();
+        let mut rigids = Vec::new();
+        let mut next_rigid = 0;
+        let result = copy_boundary_type(
+            &self.types,
+            self.result,
+            &mut rigids,
+            &mut next_rigid,
+            &mut builder,
+        )?;
+        let effects = copy_boundary_type(
+            &self.types,
+            self.effects,
+            &mut rigids,
+            &mut next_rigid,
+            &mut builder,
+        )?;
+        let parameter = self
+            .parameter
+            .map(|parameter| {
+                copy_boundary_type(
+                    &self.types,
+                    parameter,
+                    &mut rigids,
+                    &mut next_rigid,
+                    &mut builder,
+                )
+            })
+            .transpose()?;
+        SealedModuleBoundary {
+            schema: SealedModuleBoundary::SCHEMA,
+            compiler_semantic_version: env!("CARGO_PKG_VERSION").to_owned(),
+            certificate_schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            types: builder.nodes,
+            result,
+            effects,
+            parameter,
+        }
+        .to_bytes()
+    }
+}
+
+fn copy_boundary_type(
+    source: &FlatTypeArena,
+    type_: FlatTypeId,
+    rigids: &mut Vec<(VariableId, VariableId)>,
+    next_rigid: &mut VariableId,
+    target: &mut FlatTypeBuilder,
+) -> Result<FlatTypeId, String> {
+    let node = source
+        .nodes
+        .get(type_.0 as usize)
+        .ok_or_else(|| format!("sealed boundary references missing type {}", type_.0))?;
+    let copied = match node {
+        FlatTypeNode::Rigid(variable) => {
+            let canonical = rigids
+                .iter()
+                .rev()
+                .find_map(|(source, target)| (source == variable).then_some(*target))
+                .ok_or_else(|| {
+                    format!("sealed boundary contains free rigid variable {variable}")
+                })?;
+            FlatTypeNode::Rigid(canonical)
+        }
+        FlatTypeNode::Forall { variables, body } => {
+            let checkpoint = rigids.len();
+            let mut canonical_variables = Vec::with_capacity(variables.len());
+            for variable in variables {
+                let canonical = *next_rigid;
+                *next_rigid = next_rigid
+                    .checked_add(1)
+                    .ok_or_else(|| "sealed boundary rigid identity overflow".to_owned())?;
+                rigids.push((*variable, canonical));
+                canonical_variables.push(canonical);
+            }
+            let body = copy_boundary_type(source, *body, rigids, next_rigid, target)?;
+            rigids.truncate(checkpoint);
+            FlatTypeNode::Forall {
+                variables: canonical_variables,
+                body,
+            }
+        }
+        FlatTypeNode::Range { domain, low, high } => FlatTypeNode::Range {
+            domain: *domain,
+            low: low.clone(),
+            high: high.clone(),
+        },
+        FlatTypeNode::Unit => FlatTypeNode::Unit,
+        FlatTypeNode::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => FlatTypeNode::Function {
+            deferred: *deferred,
+            parameter: copy_boundary_type(source, *parameter, rigids, next_rigid, target)?,
+            effects: copy_boundary_type(source, *effects, rigids, next_rigid, target)?,
+            result: copy_boundary_type(source, *result, rigids, next_rigid, target)?,
+        },
+        FlatTypeNode::Record(fields) => {
+            let mut fields = fields.clone();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        }
+        FlatTypeNode::RecordUpdate { base, fields } => {
+            let mut fields = fields.clone();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::RecordUpdate {
+                base: copy_boundary_type(source, *base, rigids, next_rigid, target)?,
+                fields: fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            }
+        }
+        FlatTypeNode::Array(element) => FlatTypeNode::Array(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Region(element) => FlatTypeNode::Region(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Scratch(element) => FlatTypeNode::Scratch(copy_boundary_type(
+            source, *element, rigids, next_rigid, target,
+        )?),
+        FlatTypeNode::Variant { cases, open } => {
+            let mut cases = cases.clone();
+            cases.sort_by(|left, right| left.0.cmp(&right.0));
+            FlatTypeNode::Variant {
+                cases: cases
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        copy_boundary_type(source, type_, rigids, next_rigid, target)
+                            .map(|type_| (name, type_))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                open: *open,
+            }
+        }
+        FlatTypeNode::Effects(labels) => FlatTypeNode::Effects(labels.clone()),
+        FlatTypeNode::OpenEffects { labels, tail } => FlatTypeNode::OpenEffects {
+            labels: labels.clone(),
+            tail: copy_boundary_type(source, *tail, rigids, next_rigid, target)?,
+        },
+        FlatTypeNode::Union(members) => FlatTypeNode::Union(
+            members
+                .iter()
+                .map(|member| copy_boundary_type(source, *member, rigids, next_rigid, target))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        FlatTypeNode::Opaque(name) => FlatTypeNode::Opaque(name.clone()),
+        FlatTypeNode::Top => FlatTypeNode::Top,
+        FlatTypeNode::Bottom => FlatTypeNode::Bottom,
+    };
+    Ok(target.intern(copied))
 }
 
 impl CheckedModuleCertificate {
@@ -960,6 +1273,12 @@ fn validate_certificate_type(
             validate_child(*result, bound)?;
         }
         FlatTypeNode::Record(fields) | FlatTypeNode::Variant { cases: fields, .. } => {
+            for (_, field) in fields {
+                validate_child(*field, bound)?;
+            }
+        }
+        FlatTypeNode::RecordUpdate { base, fields } => {
+            validate_child(*base, bound)?;
             for (_, field) in fields {
                 validate_child(*field, bound)?;
             }
@@ -1241,6 +1560,14 @@ impl Checker {
         self.modules
             .borrow_mut()
             .retain(|path, result| result.is_ok() && interfaces.contains_key(path));
+    }
+
+    pub fn sealed_boundary_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.module_interfaces
+            .borrow()
+            .get(path)
+            .ok_or_else(|| format!("module {path} has no closed checked interface"))?
+            .sealed_boundary_bytes()
     }
 
     pub fn invalidate(&self, paths: &HashSet<String>) {
@@ -1836,6 +2163,18 @@ impl Checker {
                     })
                     .collect(),
             ),
+            FlatTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.inflate_interface_type(arena, *base, rigids)),
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| {
+                        (
+                            name.clone(),
+                            self.inflate_interface_type(arena, *type_, rigids),
+                        )
+                    })
+                    .collect(),
+            },
             FlatTypeNode::Array(element) => Type::Array(Rc::new(
                 self.inflate_interface_type(arena, *element, rigids),
             )),
@@ -2698,6 +3037,42 @@ impl Checker {
                             span,
                         ));
                     }
+                }
+                if member_arguments.len() == 2
+                    && let Ok(Value::Primitive { name, .. }) =
+                        self.evaluate(path, member_callee, values, Phase::Comptime)
+                    && name == "@shape.update"
+                {
+                    let target = self.infer(
+                        path,
+                        module,
+                        member_arguments[0],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let patch = self.infer(
+                        path,
+                        module,
+                        member_arguments[1],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let Type::Record(fields) = patch.type_ else {
+                        return Err(Diagnostic::new(
+                            "BLOT_SHAPE_UPDATE_FIELDS",
+                            "Shape.update requires a statically known record of fields.",
+                            span,
+                        ));
+                    };
+                    return Ok(Inferred {
+                        type_: Type::RecordUpdate {
+                            base: Rc::new(target.type_),
+                            fields,
+                        },
+                        effects: self.join_effects(target.effects, patch.effects)?,
+                    });
                 }
                 if member_arguments.len() > 1
                     && let Expression::Field { target, name, .. } =
@@ -4104,6 +4479,13 @@ impl Checker {
                     .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.freshen(Rc::unwrap_or_clone(base), level, fresh)),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
+                    .collect(),
+            },
             Type::Array(element) => Type::Array(Rc::new(self.freshen(
                 Rc::unwrap_or_clone(element),
                 level,
@@ -4281,6 +4663,13 @@ impl Checker {
                     .map(|(name, field)| (name, self.extrude(field, polarity, level, copies)))
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+                base: Rc::new(self.extrude(Rc::unwrap_or_clone(base), polarity, level, copies)),
+                fields: fields
+                    .into_iter()
+                    .map(|(name, field)| (name, self.extrude(field, polarity, level, copies)))
+                    .collect(),
+            },
             Type::Array(element) => Type::Array(Rc::new(self.extrude(
                 Rc::unwrap_or_clone(element),
                 polarity,
@@ -4534,6 +4923,54 @@ impl Checker {
                     self.constrain_ids(*left_field, right_field, span, seen)?;
                 }
                 true
+            }
+            (
+                ConstraintTypeNode::RecordUpdate { base, fields },
+                ConstraintTypeNode::Record(right_fields),
+            ) => {
+                for (name, right_field) in right_fields {
+                    if let Some((_, updated)) =
+                        fields.iter().find(|(candidate, _)| candidate == &name)
+                    {
+                        self.constrain_ids(*updated, right_field, span, seen)?;
+                        continue;
+                    }
+                    let required = self.constraint_type(&Type::Record(
+                        vec![(name, self.expand_constraint(right_field))].into(),
+                    ));
+                    self.constrain_ids(base, required, span, seen)?;
+                }
+                true
+            }
+            (
+                ConstraintTypeNode::RecordUpdate {
+                    base: left_base,
+                    fields: left_fields,
+                },
+                ConstraintTypeNode::RecordUpdate {
+                    base: right_base,
+                    fields: right_fields,
+                },
+            ) => {
+                if left_fields.len() != right_fields.len() {
+                    false
+                } else {
+                    self.constrain_ids(left_base, right_base, span, seen)?;
+                    for (name, left_field) in left_fields {
+                        let Some((_, right_field)) = right_fields
+                            .iter()
+                            .find(|(candidate, _)| candidate == &name)
+                        else {
+                            return self.type_error(
+                                self.expand_constraint(left),
+                                self.expand_constraint(right),
+                                span,
+                            );
+                        };
+                        self.constrain_ids(left_field, *right_field, span, seen)?;
+                    }
+                    true
+                }
             }
             (ConstraintTypeNode::Array(left), ConstraintTypeNode::Array(right)) => {
                 self.constrain_ids(left, right, span, seen)?;
@@ -4830,6 +5267,12 @@ impl Checker {
                         pending.push((field, bound.clone()));
                     }
                 }
+                Type::RecordUpdate { base, fields } => {
+                    pending.push((base, bound.clone()));
+                    for (_, field) in fields {
+                        pending.push((field, bound.clone()));
+                    }
+                }
                 Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
                     pending.push((element, bound));
                 }
@@ -5012,6 +5455,26 @@ impl Checker {
                     })
                     .collect(),
             ),
+            Type::RecordUpdate { base, fields } => record_update_type(
+                self.residual_signature_type(
+                    Rc::unwrap_or_clone(base),
+                    seen,
+                    resolved,
+                    unresolved,
+                    recursive,
+                ),
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| {
+                        (
+                            name,
+                            self.residual_signature_type(
+                                type_, seen, resolved, unresolved, recursive,
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
             Type::Array(element) => Type::Array(Rc::new(self.residual_signature_type(
                 Rc::unwrap_or_clone(element),
                 seen,
@@ -5182,6 +5645,13 @@ impl Checker {
                 )),
             },
             Type::Record(fields) => Type::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
+                    .collect(),
+            ),
+            Type::RecordUpdate { base, fields } => record_update_type(
+                self.settle_seen(Rc::unwrap_or_clone(base), positive, seen, cacheable),
                 fields
                     .into_iter()
                     .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
@@ -6003,6 +6473,15 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
+            Type::RecordUpdate { base, fields } => format!(
+                "update {} with {{ {} }}",
+                self.show_settled(base),
+                fields
+                    .iter()
+                    .map(|(name, type_)| format!(".{name} = {}", self.show_settled(type_)))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
             Type::Array(element) => {
                 let shown = self.show_settled(element);
                 if matches!(element.as_ref(), Type::Union(_)) && shown.contains(" | ") {
@@ -6226,6 +6705,12 @@ fn free_rigid_variables(
             free_rigid_variables(result, bound, free);
         }
         Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+            for (_, field) in fields {
+                free_rigid_variables(field, bound, free);
+            }
+        }
+        Type::RecordUpdate { base, fields } => {
+            free_rigid_variables(base, bound, free);
             for (_, field) in fields {
                 free_rigid_variables(field, bound, free);
             }
@@ -6537,6 +7022,9 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@text.concat" => curried(vec![text.clone(), text.clone()], text),
         "@text.len" => curried(vec![text], int),
+        "@text.scalar_at" => curried(vec![text.clone(), int], text),
+        "@text.slice" => curried(vec![text.clone(), int.clone(), int], text),
+        "@text.find_from" => curried(vec![text.clone(), text, int.clone()], int),
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
         "@text.contains" => curried(vec![text.clone(), text], bool_),
         "@text.of_int" => curried(vec![int], text),
@@ -6718,6 +7206,10 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@shape.names" => curried(vec![checker.fresh()], Type::Array(Rc::new(text))),
         "@shape.has" => curried(vec![checker.fresh(), text], bool_),
         "@shape.get" | "@shape.remove" => curried(vec![checker.fresh(), text], checker.fresh()),
+        "@shape.update" => {
+            let target = checker.fresh();
+            curried(vec![target.clone(), checker.fresh()], target)
+        }
         "@shape.set" => curried(
             vec![checker.fresh(), text, checker.fresh()],
             checker.fresh(),
@@ -7337,6 +7829,13 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
                 .map(|(name, field)| (name, substitute_rigid(field, replacements)))
                 .collect(),
         ),
+        Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+            base: Rc::new(substitute_rigid(Rc::unwrap_or_clone(base), replacements)),
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| (name, substitute_rigid(field, replacements)))
+                .collect(),
+        },
         Type::Array(element) => Type::Array(Rc::new(substitute_rigid(
             Rc::unwrap_or_clone(element),
             replacements,
@@ -9275,6 +9774,12 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
         Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
             .iter()
             .all(|(_, field)| closed_checked_type(field, bound)),
+        Type::RecordUpdate { base, fields } => {
+            closed_checked_type(base, bound)
+                && fields
+                    .iter()
+                    .all(|(_, field)| closed_checked_type(field, bound))
+        }
         Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
             closed_checked_type(element, bound)
         }
@@ -9339,6 +9844,15 @@ fn flatten_interface_type(
                 })
                 .collect::<Option<Vec<_>>>()?,
         ),
+        Type::RecordUpdate { base, fields } => FlatTypeNode::RecordUpdate {
+            base: flatten_interface_type(base, bound, types)?,
+            fields: fields
+                .iter()
+                .map(|(name, type_)| {
+                    Some((name.clone(), flatten_interface_type(type_, bound, types)?))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        },
         Type::Array(element) => FlatTypeNode::Array(flatten_interface_type(element, bound, types)?),
         Type::Region(element) => {
             FlatTypeNode::Region(flatten_interface_type(element, bound, types)?)
@@ -9666,6 +10180,63 @@ mod tests {
         assert_ne!(first_variables, second_variables);
         assert!(matches!(*first_body, Type::Rigid(id) if id == first_variables[0]));
         assert!(matches!(*second_body, Type::Rigid(id) if id == second_variables[0]));
+    }
+
+    #[test]
+    fn sealed_boundaries_are_alpha_canonical_and_ignore_private_facts() {
+        let interface = |variable, private_type| CheckedModule {
+            result: Type::Forall {
+                variables: vec![variable],
+                body: Rc::new(Type::Record(
+                    vec![("value".to_owned(), Type::Rigid(variable))].into(),
+                )),
+            },
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: vec![(ExpressionId(99), private_type)],
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+        };
+        let first = CachedModuleInterface::from_checked(&interface(7, Type::Unit))
+            .expect("first interface should close")
+            .sealed_boundary_bytes()
+            .expect("first boundary should serialize");
+        let second = CachedModuleInterface::from_checked(&interface(42, int_type()))
+            .expect("second interface should close")
+            .sealed_boundary_bytes()
+            .expect("second boundary should serialize");
+
+        assert_eq!(first, second);
+        let decoded =
+            SealedModuleBoundary::from_bytes(&first).expect("canonical boundary should round-trip");
+        assert_eq!(decoded.schema, SealedModuleBoundary::SCHEMA);
+        assert_eq!(decoded.compiler_semantic_version, env!("CARGO_PKG_VERSION"),);
+    }
+
+    #[test]
+    fn sealed_boundaries_change_with_public_types() {
+        let interface = |result| CheckedModule {
+            result,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+        };
+        let first = CachedModuleInterface::from_checked(&interface(Type::Unit))
+            .expect("first interface should close")
+            .sealed_boundary_bytes()
+            .expect("first boundary should serialize");
+        let second = CachedModuleInterface::from_checked(&interface(int_type()))
+            .expect("second interface should close")
+            .sealed_boundary_bytes()
+            .expect("second boundary should serialize");
+
+        assert_ne!(first, second);
     }
 
     #[test]

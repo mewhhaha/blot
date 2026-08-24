@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "@std/path";
 import { BlotError, type Diagnostic, diagnosticCode } from "../diagnostic.ts";
-import { type Loaded, LoadError, loadSource, PRELUDE } from "../load.ts";
+import {
+  type Loaded,
+  LoadError,
+  PRELUDE,
+  type SourceInspection,
+} from "../load.ts";
+import { WorkspaceGraph } from "../workspace_graph.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import {
@@ -17,12 +23,19 @@ import {
   CompilerTargetRefusal,
   resolveTargetPolicy,
 } from "./policy.ts";
-import { refreshProgram } from "./frontend.ts";
-import { loadedRevisionKey } from "./revision.ts";
 import {
+  type InstalledModuleRevision,
+  loadedConfigurationDigest,
+  loadedPayloadDigest,
+  loadedRevisionKey,
+} from "./revision.ts";
+import {
+  type AddedCompilerModuleResult,
+  type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
   type CompilerSourceDiagnostic,
   type CompilerTagFact,
+  type CompilerTargetPreflight,
   type CompilerTestOutcome,
   type CompilerTransportFailure,
   type CompilerTypeFact,
@@ -66,6 +79,8 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly tags: readonly CompilerTagFact[];
   readonly ownership: readonly CompilerOwnershipFact[];
   readonly work: CompilerWork | null;
+  readonly invalidation: CompilerInvalidationTelemetry;
+  readonly targetPreflight: CompilerTargetPreflight;
 }
 
 export interface CompilerOptions {
@@ -94,6 +109,16 @@ interface ResidentRevision {
   artifact?: CompilerArtifact;
 }
 
+type AddedCompilerModule = Extract<
+  AddedCompilerModuleResult,
+  { readonly ok: true }
+>["module"];
+
+interface InspectedSource {
+  readonly source: string;
+  readonly module: AddedCompilerModule;
+}
+
 /** The sole high-level host for Blot's Rust/Wasm semantic compiler. */
 export class Compiler implements CompilerHost {
   readonly #compiler: CompilerWasm;
@@ -101,6 +126,10 @@ export class Compiler implements CompilerHost {
   readonly #handle: number;
   readonly #revisions = new Map<string, ResidentRevision>();
   readonly #sources = new Map<string, string>();
+  readonly #installedModules = new Map<string, InstalledModuleRevision>();
+  readonly #inspectedSources = new Map<string, InspectedSource>();
+  readonly #workspace: WorkspaceGraph;
+  #preludeInstalled = false;
   #requests: Promise<void> = Promise.resolve();
   #destroyed = false;
 
@@ -108,6 +137,9 @@ export class Compiler implements CompilerHost {
     this.#compiler = compiler;
     this.#preludeSnapshot = preludeSnapshot.slice();
     this.#handle = compiler.createCompilerSession();
+    this.#workspace = new WorkspaceGraph((path, source) =>
+      this.#inspectSource(path, source)
+    );
   }
 
   static async create(options: CompilerOptions = {}): Promise<Compiler> {
@@ -166,7 +198,7 @@ export class Compiler implements CompilerHost {
 
   async checkSource(path: string, source: string): Promise<CheckedModule> {
     return await this.#request(async () => {
-      const root = await loadSource(resolve(path), source);
+      const root = await this.#workspace.updateOverlay(resolve(path), source);
       await this.#syncLoaded(root);
       return this.#checkResident(root.path);
     });
@@ -182,7 +214,7 @@ export class Compiler implements CompilerHost {
 
   async analyzeSource(path: string, source: string): Promise<CompilerAnalysis> {
     return await this.#request(async () => {
-      const root = await loadSource(resolve(path), source);
+      const root = await this.#workspace.updateOverlay(resolve(path), source);
       await this.#syncLoaded(root);
       return this.#analyzeResident(root.path);
     });
@@ -222,7 +254,7 @@ export class Compiler implements CompilerHost {
 
   async portableGraph(path: string): Promise<ReadonlyMap<string, string>> {
     return await this.#request(async () => {
-      const root = await refreshProgram(resolve(path));
+      const root = await this.#workspace.refresh(resolve(path));
       await this.#syncLoaded(root);
       const modules = new Map<string, string>();
       for (const modulePath of collectGraph(root).keys()) {
@@ -309,7 +341,7 @@ export class Compiler implements CompilerHost {
   }
 
   async #sync(path: string): Promise<ResidentRevision> {
-    return await this.#syncLoaded(await refreshProgram(path));
+    return await this.#syncLoaded(await this.#workspace.refresh(path));
   }
 
   #syncLoaded(root: Loaded): ResidentRevision {
@@ -318,6 +350,10 @@ export class Compiler implements CompilerHost {
     if (resident !== undefined && resident.key === key) return resident;
 
     const modules = collectGraph(root);
+    const activePaths = new Set(modules.keys());
+    for (const path of this.#installedModules.keys()) {
+      if (!activePaths.has(path)) this.#installedModules.delete(path);
+    }
     for (const loaded of modules.values()) {
       this.#sources.set(loaded.path, loaded.source);
       if (loaded.path === PRELUDE) {
@@ -329,27 +365,49 @@ export class Compiler implements CompilerHost {
             new Error("the distributed prelude must remain dependency-free"),
           );
         }
-        try {
-          this.#compiler.installCompilerSessionModuleSnapshot(
-            this.#handle,
-            loaded.path,
-            this.#preludeSnapshot,
-          );
-        } catch (error) {
-          throw new CompilerInvariantFailure(
-            "prelude snapshot installation",
-            error,
-          );
+        if (!this.#preludeInstalled) {
+          try {
+            this.#compiler.installCompilerSessionModuleSnapshot(
+              this.#handle,
+              loaded.path,
+              this.#preludeSnapshot,
+            );
+          } catch (error) {
+            throw new CompilerInvariantFailure(
+              "prelude snapshot installation",
+              error,
+            );
+          }
+          this.#preludeInstalled = true;
         }
+        continue;
+      }
+      const payloadDigest = loadedPayloadDigest(loaded);
+      let storage: "source" | "ast";
+      if (loaded.storage.tag === "source") {
+        storage = "source";
+      } else {
+        storage = "ast";
+      }
+      const installed = this.#installedModules.get(loaded.path);
+      if (
+        installed !== undefined && installed.payloadDigest === payloadDigest &&
+        installed.storage === storage
+      ) {
         continue;
       }
       let added;
       if (loaded.storage.tag === "source") {
-        added = this.#compiler.addCompilerSessionModule(
-          this.#handle,
-          loaded.path,
-          loaded.source,
-        );
+        const inspected = this.#inspectedSources.get(loaded.path);
+        if (inspected !== undefined && inspected.source === loaded.source) {
+          added = { ok: true as const, module: inspected.module };
+        } else {
+          added = this.#compiler.addCompilerSessionModule(
+            this.#handle,
+            loaded.path,
+            loaded.source,
+          );
+        }
       } else {
         added = this.#compiler.addCompilerSessionAst(
           this.#handle,
@@ -370,8 +428,27 @@ export class Compiler implements CompilerHost {
         added.module.includes,
         loaded.includedFiles.keys(),
       );
+      let previousConfigurationDigest = "";
+      if (installed !== undefined) {
+        previousConfigurationDigest = installed.configurationDigest;
+      }
+      this.#installedModules.set(loaded.path, {
+        payloadDigest,
+        configurationDigest: previousConfigurationDigest,
+        storage,
+      });
     }
     for (const loaded of modules.values()) {
+      if (loaded.path === PRELUDE) continue;
+      const installed = this.#installedModules.get(loaded.path);
+      if (installed === undefined) {
+        throw new CompilerInvariantFailure(
+          "compiler source-graph configuration",
+          new Error(`module ${loaded.path} was not installed`),
+        );
+      }
+      const configurationDigest = loadedConfigurationDigest(loaded);
+      if (installed.configurationDigest === configurationDigest) continue;
       try {
         this.#compiler.configureCompilerSessionModule(
           this.#handle,
@@ -400,6 +477,10 @@ export class Compiler implements CompilerHost {
           error,
         );
       }
+      this.#installedModules.set(loaded.path, {
+        ...installed,
+        configurationDigest,
+      });
     }
 
     const revision: ResidentRevision = { key };
@@ -429,6 +510,8 @@ export class Compiler implements CompilerHost {
       tags: result.tags.slice(),
       ownership: result.ownership.slice(),
       work: result.work,
+      invalidation: result.invalidation,
+      targetPreflight: result.targetPreflight,
     };
   }
 
@@ -436,21 +519,47 @@ export class Compiler implements CompilerHost {
     failure: CompilerTransportFailure,
     loaded: Loaded,
   ): never {
+    this.#throwSourceLoadFailure(failure, loaded.path, loaded.source);
+  }
+
+  #throwSourceLoadFailure(
+    failure: CompilerTransportFailure,
+    path: string,
+    source: string,
+  ): never {
     if (failure.diagnostics !== undefined) {
       throw new LoadError(
-        loaded.path,
-        loaded.source,
+        path,
+        source,
         failure.diagnostics.map(sourceDiagnostic),
       );
     }
     if (failure.diagnostic !== undefined) {
       throw new LoadError(
-        loaded.path,
-        loaded.source,
+        path,
+        source,
         [sourceDiagnostic(failure.diagnostic)],
       );
     }
-    this.#throwFailure(failure, loaded.path, "source-graph loading");
+    this.#throwFailure(failure, path, "source-graph loading");
+  }
+
+  #inspectSource(path: string, source: string): SourceInspection | undefined {
+    if (path === PRELUDE) return undefined;
+    this.#sources.set(path, source);
+    const added = this.#compiler.addCompilerSessionModule(
+      this.#handle,
+      path,
+      source,
+    );
+    if (!added.ok) this.#throwSourceLoadFailure(added, path, source);
+    this.#inspectedSources.set(path, { source, module: added.module });
+    return {
+      imports: added.module.importSites,
+      includes: added.module.includeSites,
+      moduleHandle: added.module.moduleHandle,
+      portableAstDigest: added.module.portableAstDigest,
+    };
   }
 
   #throwFailure(

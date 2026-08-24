@@ -110,6 +110,9 @@ export type BlotRuntimeOperation =
       readonly kind:
         | "text.append"
         | "text.length"
+        | "text.scalar-at"
+        | "text.slice"
+        | "text.find-from"
         | "text.from-i64"
         | "text.compare"
         | "text.contains";

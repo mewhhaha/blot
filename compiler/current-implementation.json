@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "publicAbi": {
+    "major": 1,
+    "minor": 0
+  },
+  "semanticCompiler": "rust-wasm",
+  "emitter": "rust-wasm-encoder",
+  "frontend": "baba-general-cpu-hosted-by-rust-wasm",
+  "productionBackend": "direct-rust",
+  "supportedPublicValues": [
+    "Unit",
+    "Bool",
+    "Int",
+    "Float32",
+    "Float64",
+    "Text",
+    "closed records",
+    "closed variants",
+    "arrays of supported values",
+    "first-order functions"
+  ],
+  "targetRestrictions": [
+    "open function choices cannot cross the public ABI",
+    "Scratch and private Region values cannot cross the public ABI",
+    "deferred functions must be eliminated before the public ABI",
+    "public values must have closed first-order layouts",
+    "ABI 1 host effects are synchronous"
+  ],
+  "editorFeatures": [
+    "diagnostics",
+    "document symbols",
+    "definition",
+    "hover",
+    "semantic tokens"
+  ],
+  "latestBenchmarks": [
+    "experiments/resident-leaf-check-performance.md",
+    "experiments/revision-key-performance.md",
+    "experiments/generated-code/latest.json"
+  ]
+}

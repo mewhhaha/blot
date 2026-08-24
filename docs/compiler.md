@@ -1,5 +1,10 @@
 # Compiler host and distribution
 
+Protocol versions and the concise capability inventory are generated from
+[`compiler/current-implementation.json`](../compiler/current-implementation.json)
+and [`compiler/protocol.json`](../compiler/protocol.json); see the
+[current implementation report](../generated/CURRENT_IMPLEMENTATION.md).
+
 Blot has one semantic compiler. It is implemented in Rust, built as Wasm, and
 hosted by Node for ordinary commands and library use.
 

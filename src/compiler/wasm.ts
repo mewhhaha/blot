@@ -133,9 +133,19 @@ export type AddedCompilerModuleResult =
     readonly module: {
       readonly imports: string[];
       readonly includes: string[];
+      readonly importSites: readonly CompilerDependencySite[];
+      readonly includeSites: readonly CompilerDependencySite[];
+      readonly moduleHandle: string;
+      readonly portableAstDigest: string;
+      readonly syntaxDiagnostics: readonly CompilerSourceDiagnostic[];
     };
   }
   | CompilerSourceFailure;
+
+export interface CompilerDependencySite {
+  readonly specifier: string;
+  readonly span: { readonly start: number; readonly end: number };
+}
 
 export interface CompilerModuleConfiguration {
   readonly imports: Readonly<Record<string, string>>;
@@ -188,6 +198,25 @@ export interface CompilerWork {
   readonly capturesBridged: number;
 }
 
+export interface CompilerInvalidationTelemetry {
+  readonly dirtyModules: readonly string[];
+  readonly invalidationReasons: Readonly<Record<string, string>>;
+  readonly checkedModules: readonly string[];
+  readonly boundaryChanged: readonly string[];
+  readonly boundaryUnchanged: readonly string[];
+  readonly invalidatedImporters: readonly string[];
+  readonly reusedArtifacts: readonly string[];
+}
+
+export interface CompilerTargetPreflight {
+  readonly supported: boolean;
+  readonly code: "BLOT_TARGET_REFUSAL" | null;
+  readonly export: string | null;
+  readonly inferredType: string;
+  readonly unsupportedComponent: string | null;
+  readonly alternatives: readonly string[];
+}
+
 export type CompilerAnalysisResult =
   | {
     readonly ok: true;
@@ -197,6 +226,8 @@ export type CompilerAnalysisResult =
     readonly tags: readonly CompilerTagFact[];
     readonly ownership: readonly CompilerOwnershipFact[];
     readonly work: CompilerWork | null;
+    readonly invalidation: CompilerInvalidationTelemetry;
+    readonly targetPreflight: CompilerTargetPreflight;
   }
   | CompilerTransportFailure;
 

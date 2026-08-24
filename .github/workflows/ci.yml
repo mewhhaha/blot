@@ -85,8 +85,18 @@ jobs:
           -- -D warnings
       - name: Test Rust compiler
         run: cargo test --manifest-path compiler/Cargo.toml
+      - name: Deterministic compiler performance gates
+        run: >-
+          node
+          --import ./src/node/polyfills.mjs
+          --import ./src/node/deno_test_compat.mjs
+          --import tsx
+          --test
+          src/compiler/performance_gate.test.ts
       - name: Check TypeScript
         run: deno check .
+      - name: Check current implementation manifest
+        run: pnpm current:check
       - name: Check formatting
         run: deno fmt --check
       - name: Check lint

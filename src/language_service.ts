@@ -48,6 +48,12 @@ export interface TextEdit {
   readonly newText: string;
 }
 
+export interface ContentChange {
+  readonly range?: Range;
+  readonly rangeLength?: number;
+  readonly text: string;
+}
+
 export interface CodeAction {
   readonly title: string;
   readonly kind: "quickfix";
@@ -89,8 +95,41 @@ export class LanguageService {
   }
 
   change(uri: string, source: string, version: number): void {
-    if (!this.#documents.has(uri)) {
-      throw new Error(`cannot change unopened document ${uri}`);
+    const current = this.#requiredDocument(uri);
+    this.#requireNextVersion(uri, current.version, version);
+    this.#documents.set(uri, { source, version });
+    this.#hoverChecks.delete(uri);
+  }
+
+  changeRanges(
+    uri: string,
+    changes: readonly ContentChange[],
+    version: number,
+  ): void {
+    const current = this.#requiredDocument(uri);
+    this.#requireNextVersion(uri, current.version, version);
+    let source = current.source;
+    for (const change of changes) {
+      if (change.range === undefined) {
+        source = change.text;
+        continue;
+      }
+      const start = offsetAtPosition(source, change.range.start);
+      const end = offsetAtPosition(source, change.range.end);
+      if (end < start) {
+        throw new Error(`document ${uri} change range ends before it starts`);
+      }
+      if (
+        change.rangeLength !== undefined &&
+        change.rangeLength !== end - start
+      ) {
+        throw new Error(
+          `document ${uri} change range length ${change.rangeLength} does not match ${
+            end - start
+          }`,
+        );
+      }
+      source = source.slice(0, start) + change.text + source.slice(end);
     }
     this.#documents.set(uri, { source, version });
     this.#hoverChecks.delete(uri);
@@ -120,7 +159,22 @@ export class LanguageService {
     const path = filePath(uri);
     if (path !== null) {
       try {
-        await (await this.#compiler).checkSource(path, document.source);
+        const analysis = await (await this.#compiler).analyzeSource(
+          path,
+          document.source,
+        );
+        if (!analysis.targetPreflight.supported) {
+          let message = analysis.targetPreflight.unsupportedComponent;
+          if (message === null) {
+            message =
+              "The inferred export is not supported by the selected Wasm target.";
+          }
+          diagnostics.push(languageDiagnostic(document.source, {
+            code: "BLOT_TARGET_REFUSAL",
+            message,
+            span: { start: 0, end: 0 },
+          }, 1));
+        }
       } catch (error) {
         const semantic = diagnosticFromError(path, error);
         if (semantic !== null) {
@@ -327,6 +381,14 @@ export class LanguageService {
     const document = this.#documents.get(uri);
     if (document === undefined) throw new Error(`document ${uri} is not open`);
     return document;
+  }
+
+  #requireNextVersion(uri: string, current: number, next: number): void {
+    if (next <= current) {
+      throw new Error(
+        `document ${uri} version ${next} does not follow ${current}`,
+      );
+    }
   }
 }
 

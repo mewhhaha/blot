@@ -1,5 +1,5 @@
 import { LanguageService } from "./language_service.ts";
-import type { Position, Range } from "./language_service.ts";
+import type { ContentChange, Position, Range } from "./language_service.ts";
 
 type RequestId = number | string | null;
 
@@ -31,7 +31,7 @@ interface OpenParams {
 
 interface ChangeParams {
   readonly textDocument: VersionedTextDocument;
-  readonly contentChanges: readonly { readonly text: string }[];
+  readonly contentChanges: readonly ContentChange[];
 }
 
 interface PositionParams extends TextDocumentParams {
@@ -59,7 +59,11 @@ export async function runLanguageServer(
         if (message.method === "initialize") {
           await respond(writer, message.id, {
             capabilities: {
-              textDocumentSync: 1,
+              textDocumentSync: {
+                openClose: true,
+                change: 2,
+                save: { includeText: false },
+              },
               definitionProvider: true,
               hoverProvider: true,
               documentFormattingProvider: true,
@@ -96,15 +100,14 @@ export async function runLanguageServer(
         }
         if (message.method === "textDocument/didChange") {
           const params = message.params as ChangeParams;
-          const change = params.contentChanges.at(-1);
-          if (change === undefined) {
+          if (params.contentChanges.length === 0) {
             throw new Error(
-              `document ${params.textDocument.uri} changed without replacement text`,
+              `document ${params.textDocument.uri} changed without content changes`,
             );
           }
-          service.change(
+          service.changeRanges(
             params.textDocument.uri,
-            change.text,
+            params.contentChanges,
             params.textDocument.version,
           );
           await publishDiagnostics(service, writer, params.textDocument.uri);
@@ -189,10 +192,12 @@ async function publishDiagnostics(
   writer: WritableStreamDefaultWriter<Uint8Array>,
   uri: string,
 ): Promise<void> {
+  const version = service.version(uri);
   const diagnostics = await service.diagnostics(uri);
+  if (service.version(uri) !== version) return;
   await notify(writer, "textDocument/publishDiagnostics", {
     uri,
-    version: service.version(uri),
+    version,
     diagnostics,
   });
 }

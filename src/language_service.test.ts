@@ -2,6 +2,45 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join, toFileUrl } from "@std/path";
 import { LanguageService } from "./language_service.ts";
 
+Deno.test("ordered range changes update one editor revision", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:range-sync.blot";
+  try {
+    service.open(uri, "return 10\n", 1);
+    service.changeRanges(uri, [{
+      range: {
+        start: { line: 0, character: 8 },
+        end: { line: 0, character: 9 },
+      },
+      rangeLength: 1,
+      text: "2",
+    }, {
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 8 },
+      },
+      rangeLength: 1,
+      text: "4",
+    }], 2);
+    assertEquals(service.version(uri), 2);
+    const formatting = await service.formatting(uri);
+    assertEquals(formatting, []);
+    assertThrowsVersion(service, uri);
+  } finally {
+    await service.destroy();
+  }
+});
+
+function assertThrowsVersion(service: LanguageService, uri: string): void {
+  let thrown = false;
+  try {
+    service.change(uri, "return 1\n", 2);
+  } catch {
+    thrown = true;
+  }
+  assert(thrown);
+}
+
 Deno.test("language diagnostics check the open editor revision", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "revision.blot");
@@ -23,6 +62,30 @@ Deno.test("language diagnostics check the open editor revision", async () => {
     assert(
       diagnostics.some((diagnostic) => diagnostic.code === "BLOT_UNBOUND"),
     );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("language diagnostics report compiler target preflight refusals", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "target-refusal.blot");
+  const source = `open import "blot:prelude"
+
+sig vector = F32 -> F32x4
+let vector = fn value => F32x4.splat value
+return vector
+`;
+  const uri = toFileUrl(path).href;
+  const service = new LanguageService();
+  try {
+    service.open(uri, source, 1);
+    const diagnostics = await service.diagnostics(uri);
+    const refusal = diagnostics.find((diagnostic) =>
+      diagnostic.code === "BLOT_TARGET_REFUSAL"
+    );
+    assert(refusal !== undefined);
+    assertStringIncludes(refusal.message, "SIMD");
   } finally {
     await service.destroy();
   }
