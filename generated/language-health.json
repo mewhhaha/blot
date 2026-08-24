@@ -705,7 +705,7 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 4582
+      "lines": 4835
     },
     {
       "path": "compiler/src/eval.rs",
