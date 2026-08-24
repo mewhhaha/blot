@@ -7,10 +7,11 @@ interface TargetManifest {
   readonly abi: {
     readonly coreSpecification: string;
     readonly requiredFeatures: readonly string[];
+    readonly optimizationFeatures: readonly string[];
   };
 }
 
-test("V8 executes the Wasm 3 tail-call profile without stack growth", async () => {
+test("V8 executes the Wasm 3 target and consumes branch metadata", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(
@@ -27,9 +28,20 @@ test("V8 executes the Wasm 3 tail-call profile without stack growth", async () =
     assert.equal(manifest.abi.coreSpecification, "3.0");
     assert.ok(manifest.abi.requiredFeatures.includes("bulk-memory"));
     assert.ok(manifest.abi.requiredFeatures.includes("tail-call"));
+    assert.ok(
+      manifest.abi.optimizationFeatures.includes("branch-hinting"),
+    );
 
-    const instantiated = await WebAssembly.instantiate(bytes);
-    const isEven = instantiated.instance.exports["blot:is_even"] as
+    const module = await WebAssembly.compile(bytes);
+    const branchHints = WebAssembly.Module.customSections(
+      module,
+      "metadata.code.branch_hint",
+    );
+    assert.equal(branchHints.length, 1);
+    assert.ok(branchHints[0].byteLength > 0);
+
+    const instance = await WebAssembly.instantiate(module);
+    const isEven = instance.exports["blot:is_even"] as
       | ((remaining: bigint) => bigint)
       | undefined;
     assert.equal(typeof isEven, "function");

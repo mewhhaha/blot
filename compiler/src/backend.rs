@@ -4,10 +4,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, CustomSection, DataSection, EntityType, ExportKind,
-    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, Ieee32, Ieee64,
-    ImportSection, InstructionSink, MemorySection, MemoryType, Module, TypeSection, ValType,
+    BlockType, BranchHint, BranchHints, CodeSection, ConstExpr, CustomSection, DataSection,
+    EntityType, ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType,
+    Ieee32, Ieee64, ImportSection, InstructionSink, MemorySection, MemoryType, Module, TypeSection,
+    ValType,
 };
+use wasmparser::{BinaryReader, FunctionBody, Operator};
 
 use crate::hir::{
     RuntimeBlock, RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation,
@@ -127,6 +129,8 @@ struct AbiPolicy {
     core_specification: &'static str,
     #[serde(rename = "requiredFeatures")]
     required_features: Vec<&'static str>,
+    #[serde(rename = "optimizationFeatures")]
+    optimization_features: Vec<&'static str>,
     memory: &'static str,
     #[serde(rename = "stringEncoding")]
     string_encoding: &'static str,
@@ -308,6 +312,7 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
             minor: 0,
             core_specification: "3.0",
             required_features,
+            optimization_features: vec!["branch-hinting"],
             memory: "memory32",
             string_encoding: "utf-8",
             maximum_flat_parameters: 16,
@@ -676,6 +681,43 @@ fn join_flat_types(left: Option<&ValType>, right: Option<&ValType>) -> ValType {
     }
 }
 
+fn cold_trap_branch_hints(function: &Function) -> Result<Vec<BranchHint>, String> {
+    let body = function.clone().into_raw_body();
+    let operators = FunctionBody::new(BinaryReader::new(&body, 0))
+        .get_operators_reader()
+        .map_err(|error| format!("could not inspect emitted Wasm function: {error}"))?
+        .into_iter_with_offsets()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("could not inspect emitted Wasm operator: {error}"))?;
+    let mut hints = Vec::new();
+    for pair in operators.windows(2) {
+        if matches!(&pair[0].0, Operator::If { .. }) && matches!(&pair[1].0, Operator::Unreachable)
+        {
+            let offset = u32::try_from(pair[0].1)
+                .map_err(|_| "emitted Wasm function exceeds branch-hint offset space")?;
+            hints.push(BranchHint {
+                branch_func_offset: offset,
+                branch_hint_value: 0,
+            });
+        }
+    }
+    Ok(hints)
+}
+
+fn append_code_function(
+    code: &mut CodeSection,
+    branch_hints: &mut BranchHints,
+    function_index: u32,
+    function: Function,
+) -> Result<(), String> {
+    let hints = cold_trap_branch_hints(&function)?;
+    if !hints.is_empty() {
+        branch_hints.function_hints(function_index, hints);
+    }
+    code.function(&function);
+    Ok(())
+}
+
 fn emit_dynamic_module(
     module: &RuntimeModule,
     manifest: &AbiManifest,
@@ -727,6 +769,7 @@ fn emit_dynamic_module(
 
     let mut functions = FunctionSection::new();
     let mut code = CodeSection::new();
+    let mut branch_hints = BranchHints::new();
     let imported_function_count = manifest.imports.len() as u32;
     let realloc_type = add_function_type(
         &mut types,
@@ -735,7 +778,12 @@ fn emit_dynamic_module(
     );
     let realloc_index = imported_function_count;
     functions.function(realloc_type);
-    code.function(&realloc_function());
+    append_code_function(
+        &mut code,
+        &mut branch_hints,
+        realloc_index,
+        realloc_function(),
+    )?;
 
     let has_operation = |kind: &str| {
         module.functions.iter().any(|function| {
@@ -755,7 +803,12 @@ fn emit_dynamic_module(
         );
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
-        code.function(&text_compare_function());
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            text_compare_function(),
+        )?;
         Some(function_index)
     } else {
         None
@@ -768,7 +821,12 @@ fn emit_dynamic_module(
         );
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
-        code.function(&text_contains_function());
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            text_contains_function(),
+        )?;
         Some(function_index)
     } else {
         None
@@ -778,7 +836,12 @@ fn emit_dynamic_module(
             add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
-        code.function(&utf8_validator_function());
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            utf8_validator_function(),
+        )?;
         Some(function_index)
     } else {
         None
@@ -791,7 +854,12 @@ fn emit_dynamic_module(
         );
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
-        code.function(&i64_to_text_function(realloc_index));
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            i64_to_text_function(realloc_index),
+        )?;
         Some(function_index)
     } else {
         None
@@ -829,14 +897,25 @@ fn emit_dynamic_module(
         runtime_function_indices.insert(function.id, function_index);
     }
     for function in internal_functions {
-        code.function(&dynamic_internal_function(
-            module,
-            function,
-            manifest,
-            dynamic_helpers,
-            &text_offsets,
-            &runtime_function_indices,
-        )?);
+        let function_index = *runtime_function_indices.get(&function.id).ok_or_else(|| {
+            format!(
+                "{}: runtime function {} has no emitted function index",
+                module.source, function.id
+            )
+        })?;
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            dynamic_internal_function(
+                module,
+                function,
+                manifest,
+                dynamic_helpers,
+                &text_offsets,
+                &runtime_function_indices,
+            )?,
+        )?;
     }
 
     let mut function_exports = Vec::new();
@@ -886,27 +965,37 @@ fn emit_dynamic_module(
         let type_index = add_function_type(&mut types, wasm_parameters, wasm_results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
-        code.function(&dynamic_export_function(
-            module,
-            runtime_function,
-            manifest,
-            PublicExport {
-                parameter_types: &public_function.parameters,
-                parameter_runtime_types: &signature.parameters,
-                result_type: result,
-                result_runtime_type: signature.result,
-                call_id: export_ordinal as u32 + 1,
-            },
-            dynamic_helpers,
-            &text_offsets,
-            &runtime_function_indices,
-        )?);
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            dynamic_export_function(
+                module,
+                runtime_function,
+                manifest,
+                PublicExport {
+                    parameter_types: &public_function.parameters,
+                    parameter_runtime_types: &signature.parameters,
+                    result_type: result,
+                    result_runtime_type: signature.result,
+                    call_id: export_ordinal as u32 + 1,
+                },
+                dynamic_helpers,
+                &text_offsets,
+                &runtime_function_indices,
+            )?,
+        )?;
         function_exports.push((wasm_name.clone(), function_index));
         if let Some(post_return) = &manifest_export.post_return {
             let post_type = add_function_type(&mut types, vec![ValType::I32], Vec::new());
             let post_index = imported_function_count + functions.len();
             functions.function(post_type);
-            code.function(&post_return_function(export_ordinal as u32 + 1));
+            append_code_function(
+                &mut code,
+                &mut branch_hints,
+                post_index,
+                post_return_function(export_ordinal as u32 + 1),
+            )?;
             function_exports.push((post_return.clone(), post_index));
         }
     }
@@ -949,8 +1038,11 @@ fn emit_dynamic_module(
     wasm.section(&functions)
         .section(&memories)
         .section(&globals)
-        .section(&exports)
-        .section(&code);
+        .section(&exports);
+    if !branch_hints.is_empty() {
+        wasm.section(&branch_hints);
+    }
+    wasm.section(&code);
     if !data.is_empty() {
         wasm.section(&data);
     }
@@ -4685,6 +4777,38 @@ fn align_to(value: u32, alignment: u32) -> u32 {
 mod tests {
     use super::*;
     use crate::hir::{RuntimeBlock, RuntimeBlockParameter, RuntimeSpan};
+
+    #[test]
+    fn immediate_trap_branches_receive_false_hints() {
+        let mut function = Function::new(Vec::new());
+        function
+            .instructions()
+            .i32_const(0)
+            .if_(BlockType::Empty)
+            .unreachable()
+            .end()
+            .end();
+
+        let hints = cold_trap_branch_hints(&function).expect("trap branch should parse");
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].branch_hint_value, 0);
+        assert!(hints[0].branch_func_offset > 0);
+    }
+
+    #[test]
+    fn ordinary_branches_do_not_receive_speculative_hints() {
+        let mut function = Function::new(Vec::new());
+        function
+            .instructions()
+            .i32_const(0)
+            .if_(BlockType::Empty)
+            .nop()
+            .end()
+            .end();
+
+        let hints = cold_trap_branch_hints(&function).expect("ordinary branch should parse");
+        assert!(hints.is_empty());
+    }
 
     #[test]
     fn entry_cycle_with_acyclic_body_is_a_structured_loop() {

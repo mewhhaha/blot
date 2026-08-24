@@ -27,14 +27,17 @@ caller ownership.
 Every manifest declares:
 
 ```text
-coreSpecification = "3.0"
-requiredFeatures   = sorted exact feature names used by this artifact
+coreSpecification    = "3.0"
+requiredFeatures     = sorted exact validation features used by this artifact
+optimizationFeatures = sorted semantically ignorable metadata emitted
 ```
 
 The current emitter may require `bulk-memory`, `multi-value`, fixed-width
-`simd`, and `tail-call`. A host must validate the complete module and may use
-the feature list for an earlier compatibility diagnostic. The feature list is
-descriptive; it never substitutes for WebAssembly validation.
+`simd`, and `tail-call`. It may additionally emit standardized `branch-hinting`
+metadata. A host must validate the complete module and may use the
+required-feature list for an earlier compatibility diagnostic. An optimization
+feature can be ignored without changing source or ABI behavior; neither list
+substitutes for WebAssembly validation.
 
 An internal direct call in exact tail position lowers to `return_call` when the
 callee and caller have the same flattened result layout. Exact tail position may
@@ -251,6 +254,12 @@ A target trap is permitted only when it corresponds to:
 A defensive internal check may remain only with proof that related validated
 states cannot reach it. Reaching one is an `InvariantFailure`, not a third class
 of permitted target trap.
+
+The emitter may mark an `if` as likely false when its taken arm immediately
+executes `unreachable`. This branch hint is target metadata, not a source fact
+or validator premise. Removing it or ignoring it preserves the module's
+observations. Ordinary conditionals and non-trapping branches receive no
+synthetic probability.
 
 Integer arithmetic, memory operations, and host calls use the source or ABI
 behavior selected by their validated Runtime-HIR operation. A convenient Wasm

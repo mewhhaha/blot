@@ -1,21 +1,52 @@
-name: Apply V8 branch-hint target patch
+name: Rust/Wasm compiler CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
-    if: github.actor != 'github-actions[bot]'
+  formal:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+      - name: Check stable Core metatheory
+        uses: leanprover/lean-action@v1
         with:
-          ref: codex/v8-wasm3-branch-hints
-          fetch-depth: 0
+          lake-package-directory: formal/lean
+          build: true
+          test: false
+          leanchecker: true
+      - name: Reject admitted formal declarations
+        shell: bash
+        run: |
+          if git grep -n -E '(^|[^[:alnum:]_])(sorry|admit|axiom)([^[:alnum:]_]|$)' \
+            -- formal/lean/Blot.lean 'formal/lean/Blot/*.lean'; then
+            echo 'Formal sources must not contain admitted declarations.' >&2
+            exit 1
+          fi
+
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -23,74 +54,110 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
-          components: rustfmt
-      - name: Apply and validate the target patch
+          components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Upload Rust compiler artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-rust-compiler
+          path: |
+            generated/compiler/compiler.wasm
+            generated/compiler/compiler-artifact.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Check generated-code Rust formatting
+        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
+      - name: Check Rust lint
+        run: >-
+          cargo clippy
+          --manifest-path compiler/Cargo.toml
+          --target wasm32-unknown-unknown
+          -- -D warnings
+      - name: Test Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml
+      - name: Check TypeScript
+        run: deno check .
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Check lint
+        run: deno lint
+      - name: Verify generated frontend artifacts
+        run: deno task check:generated
+      - name: Pack runnable Node workspace
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("docs/abi.md")
-          text = path.read_text()
-          current = (
-              "- ABI major and minor;\n"
-              "- `coreSpecification`, currently `3.0`;\n"
-              "- a sorted `requiredFeatures` list for every non-MVP instruction family present\n"
-              "  in the artifact;\n"
-              "- memory, encoding, flattening limits, and allocator export;\n"
-          )
-          script_anchor = (
-              "- ABI major and minor;\n"
-              "- memory, encoding, flattening limits, and allocator export;\n"
-          )
-          if text.count(current) != 1:
-              raise SystemExit("docs/abi.md: could not normalize the current manifest bullets")
-          path.write_text(text.replace(current, script_anchor))
-          PY
-          python3 scripts/apply_v8_branch_hints.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("docs/abi.md")
-          text = path.read_text()
-          generated = (
-              "- ABI major and minor;\n"
-              "- required validation features and optional optimization metadata;\n"
-              "- memory, encoding, flattening limits, and allocator export;\n"
-          )
-          final = (
-              "- ABI major and minor;\n"
-              "- `coreSpecification`, currently `3.0`;\n"
-              "- a sorted `requiredFeatures` list for every non-MVP instruction family present\n"
-              "  in the artifact;\n"
-              "- a sorted `optimizationFeatures` list for semantically ignorable target metadata;\n"
-              "- memory, encoding, flattening limits, and allocator export;\n"
-          )
-          if text.count(generated) != 1:
-              raise SystemExit("docs/abi.md: patch did not produce the expected manifest bullets")
-          path.write_text(text.replace(generated, final))
-          PY
-          cargo fmt --manifest-path compiler/Cargo.toml
-          deno fmt \
-            docs/abi.md \
-            docs/v8-wasm3-feature-audit.md \
-            docs/wasm-target-profile.md \
-            spec/RUNTIME.md \
-            src/node/v8_wasm.test.ts
-          cargo test --manifest-path compiler/Cargo.toml
-          cargo check \
-            --manifest-path compiler/Cargo.toml \
-            --target wasm32-unknown-unknown
-      - name: Publish the clean review branch
+          {
+            git ls-files -z
+            printf 'generated/compiler/compiler.wasm\0'
+            printf 'generated/compiler/compiler-artifact.json\0'
+            printf '.pnp.cjs\0'
+            printf 'node_modules\0'
+          } > "$RUNNER_TEMP/blot-node-workspace.files"
+          tar \
+            --create \
+            --gzip \
+            --file=blot-node-workspace.tar.gz \
+            --null \
+            --files-from="$RUNNER_TEMP/blot-node-workspace.files"
+      - name: Verify packed Node workspace
         shell: bash
         run: |
           set -euo pipefail
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm scripts/apply_v8_branch_hints.py
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Emit Wasm 3 branch hints for V8 cold paths"
-          git push origin HEAD:codex/v8-wasm3-branch-hints
+          workspace="$RUNNER_TEMP/blot-node-workspace"
+          mkdir "$workspace"
+          tar -xzf blot-node-workspace.tar.gz -C "$workspace"
+          cd "$workspace"
+          test -f AGENTS.md
+          test -f case-studies/agent/main.blot
+          test -f experiments/node-wasm-benchmark.ts
+          test -f generated/compiler/compiler.wasm
+          test -f generated/compiler/compiler-artifact.json
+          test -s .pnp.cjs
+          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
+          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
+          pnpm conformance
+      - name: Upload runnable Node workspace
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-node-workspace-${{ github.sha }}
+          path: blot-node-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+      - run: pnpm test
+      - run: pnpm run check
+      - run: pnpm run smoke
+      - run: pnpm blot run examples/node-runner-demo.blot
+      - run: pnpm test:compiler
+      - run: pnpm verify:compiler
+      - name: Verify the V8 / Wasm 3 target on Node 24 LTS
+        run: pnpm test:v8-wasm
+      - name: Select Node 26 Current
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.7.0
+      - name: Verify the V8 / Wasm 3 target on Node 26 Current
+        run: pnpm test:v8-wasm
+      - run: pnpm run benchmark -- examples/storage.blot
+      - name: Verify compiler artifact is derived output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s generated/compiler/compiler.wasm
+          test -s generated/compiler/compiler-artifact.json
+          git check-ignore --quiet generated/compiler/compiler.wasm
+          git check-ignore --quiet generated/compiler/compiler-artifact.json
+          if git ls-files --error-unmatch generated/compiler/compiler.wasm >/dev/null 2>&1; then
+            echo 'generated/compiler/compiler.wasm must not be tracked' >&2
+            exit 1
+          fi
