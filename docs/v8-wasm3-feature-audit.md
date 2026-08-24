@@ -32,6 +32,12 @@ published matrix, and Blot's Runtime HIR/backend.
 | JSPI / stack switching                 | simpler asynchronous host integration                   | requires a new async host protocol                    | separate profile    |
 | relaxed SIMD                           | possible fused/target-specific vector speedups          | changes rounding/NaN determinism                      | defer               |
 
+The audit found no additional representation-preserving feature with the same
+order-of-magnitude payoff as the already adopted tail calls, bulk memory, and
+multi-value lowering. Branch hints are an incremental V8 optimization. The next
+larger reductions require a separate Text/GC profile or a genuine residual
+dynamic-call representation.
+
 ## Adopted follow-up: cold trap hints
 
 Blot already emits defensive conditions whose taken branch immediately executes

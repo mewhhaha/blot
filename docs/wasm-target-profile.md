@@ -140,9 +140,11 @@ A modern Wasm feature is adopted when all of these hold:
 3. the ABI and ownership consequences are specified;
 4. the manifest distinguishes required behavior from optional metadata;
 5. V8 execution and a fallback or refusal path are tested; and
-6. benchmark evidence shows material work reduction or performance improvement.
+6. benchmark evidence shows material work reduction or performance improvement,
+   or the feature is standardized ignorable metadata derived conservatively and
+   tested for no semantic or required-feature compatibility cost.
 
-This rule admits branch hints because they are standardized, semantically
-ignorable, automatically derivable from cold traps, and supported by the V8
-matrix. It defers representation-changing features until their larger benefit
-justifies a separate target and ABI proof.
+This rule admits branch hints through the metadata arm: they are standardized,
+semantically ignorable, automatically derived from cold traps, and accepted by
+the V8 matrix. It defers representation-changing features until their larger
+benefit justifies a separate target and ABI proof.

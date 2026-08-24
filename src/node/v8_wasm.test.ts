@@ -11,7 +11,7 @@ interface TargetManifest {
   };
 }
 
-test("V8 executes the Wasm 3 target and consumes branch metadata", async () => {
+test("V8 executes the Wasm 3 target and accepts branch metadata", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(
