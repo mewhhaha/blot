@@ -45,14 +45,6 @@ jobs:
           end = source.index(end_marker, start)
           code = textwrap.dedent(source[start:end])
           exec(compile(code, "finalize-v8-wasm3.py", "exec"), {})
-
-          ci_path = Path(".github/workflows/ci.yml")
-          ci = ci_path.read_text()
-          start = ci.index("  finalize-target:\n")
-          end = ci.index("  formal:\n", start)
-          ci = ci[:start] + ci[end:]
-          ci = ci.replace("permissions:\n  contents: write\n", "permissions:\n  contents: read\n", 1)
-          ci_path.write_text(ci)
           PY
 
           deno fmt
