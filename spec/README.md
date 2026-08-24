@@ -1,43 +1,66 @@
 # Specification map
 
-Blot separates the language being compiled from the obligations of the compiler
-that implements it.
+Blot separates source-language meaning, focused static judgments, compiler pass
+contracts, target representation, and operational implementation notes. The
+separation is useful only when the precedence between them is explicit.
+
+## Authority order
+
+1. [`grammar.baba`](../grammar.baba) decides concrete parse acceptance.
+2. [`COHERENCE.md`](COHERENCE.md) owns cross-document invariants and explicit
+   corrections where previously published rules disagree.
+3. [`LANGUAGE.md`](../LANGUAGE.md) decides the remaining accepted-source
+   behavior.
+4. A focused specification owns the exact judgment in its domain, subject to the
+   cross-document coherence contract.
+5. [`PAPER.md`](PAPER.md) is the integrated semantic model and theorem map; it
+   does not define a second language.
+
+A subordinate document's broader authority claim is read subject to this order.
+When a conflict is repaired in its originating document, the corresponding
+entry in `COHERENCE.md` should be removed rather than preserved as permanent
+parallel semantics.
+
+## Documents
 
 | Document                                                     | Authority                                                              |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| [`LANGUAGE.md`](../LANGUAGE.md)                              | Normative accepted syntax and current language behavior                |
+| [`COHERENCE.md`](COHERENCE.md)                               | Cross-spec invariants, precedence, and adversarially found corrections |
+| [`LANGUAGE.md`](../LANGUAGE.md)                              | Normative source behavior not corrected by `COHERENCE.md`              |
 | [`PAPER.md`](PAPER.md)                                       | Integrated semantic model and theorem map                              |
-| [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md)                     | Demand, semantic identities, module instances, handlers, and progress  |
-| [`COMPILER.md`](COMPILER.md)                                 | Compiler-wide judgments, pass contracts, and theorem dependencies      |
+| [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md)                     | Demand, application, identities, modules, handlers, and progress       |
+| [`COMPILER.md`](COMPILER.md)                                 | Compiler-wide judgments, pass contracts, and fact ownership            |
 | [`TYPECHECKING.md`](TYPECHECKING.md)                         | Declarative subtyping, inference, staging facts, and solver invariants |
-| [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)       | Experimental pure predicates normalized into canonical types           |
+| [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)       | Implemented pure predicates normalized into canonical types            |
 | [`AFFINE_ITERATION.md`](AFFINE_ITERATION.md)                 | Affine iterator semantics, Store identity, and lowering acceptance     |
-| [`FRONTEND.md`](FRONTEND.md)                                 | Source, compact-CST, fixity, and surface-elaboration contracts         |
+| [`FRONTEND.md`](FRONTEND.md)                                 | Source, compact-CST, fixed-operator, and elaboration contracts         |
+| [`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md)             | Explicit statement-block and return-scope surface contract             |
 | [`STAGING.md`](STAGING.md)                                   | Compile-time evaluation, specialization, and representation closure    |
 | [`SAFETY.md`](SAFETY.md)                                     | Coverage, relational proofs, and ownership certificates                |
 | [`PARTITIONED_CAPABILITIES.md`](PARTITIONED_CAPABILITIES.md) | Generic partitioned-authority proof algebra                            |
 | [`OWNED_REGIONS.md`](OWNED_REGIONS.md)                       | Store-region provenance, split/join witnesses, and production gates    |
 | [`OWNED_VALUES.md`](OWNED_VALUES.md)                         | Owned-until-shared Stores, borrowing, freezing, and explicit copies    |
 | [`SCRATCH.md`](SCRATCH.md)                                   | Affine initialized-prefix builders and allocation recycling            |
-| [`OWNED_ORDERED_MAPS.md`](OWNED_ORDERED_MAPS.md)             | Ordered-map representation, refinements, and cost model                |
+| [`OWNED_ORDERED_MAPS.md`](OWNED_ORDERED_MAPS.md)             | Ordered-map representation, protocol invariant, and cost model         |
 | [`REUSE.md`](REUSE.md)                                       | Declaration-tag Store-reuse assertions and Runtime-HIR certificates    |
-| [`RUNTIME.md`](RUNTIME.md)                                   | Runtime HIR, canonical ABI lowering, and WebAssembly boundary          |
-| [`CORRECTNESS.md`](CORRECTNESS.md)                           | Pass simulations and the whole-compiler correctness obligation         |
+| [`RUNTIME.md`](RUNTIME.md)                                   | Runtime HIR, semantic ABI relation, and target validation               |
+| [`docs/abi.md`](../docs/abi.md)                              | Normative Core Wasm ABI 1 bytes and caller ownership                   |
+| [`CORRECTNESS.md`](CORRECTNESS.md)                           | Pass adequacy and the whole-compiler correctness obligation            |
 | [`INCREMENTAL.md`](INCREMENTAL.md)                           | Revision identity, invalidation, and certified cache reuse             |
 | [`PACKAGES.md`](PACKAGES.md)                                 | Package resolution, portable module capsules, and source fallback      |
 | [`COST_MODEL.md`](COST_MODEL.md)                             | Work model, benchmark boundaries, and optimization acceptance          |
 
-`PAPER.md` explains how the judgments compose. A focused specification owns the
-exact rules in its domain. When explanatory text in the paper conflicts with a
-focused rule, the conflict is a specification defect; the paper does not create
-a second semantics. Current implementation status and migration notes belong in
-`docs/`, not in the timeless rule set.
+`docs/abi.md` is the one normative document under `docs/`: its ABI 1 layout,
+lifting/lowering, and ownership rules are incorporated by reference from
+`RUNTIME.md`. Its section named **Runtime target status** remains operational and
+cannot weaken an ABI rule for an artifact the compiler accepts.
 
-The files in this directory are specifications, not claims of mechanized proof.
-Each unproved result is named as a lemma or theorem obligation. Tests provide
-evidence for finite cases but do not turn an obligation into a proof.
+Other files under [`docs/`](../docs/) describe current commands, implementation
+status, historical reviews, and measured limitations. A disagreement between
+such a note and the authority stack above is an implementation or documentation
+gap, not another semantic mode.
 
-Operational notes remain in [`docs/`](../docs/). They describe current commands,
-implementation status, and measured limitations. If an operational note and a
-specification disagree about meaning, the specification is the intended contract
-and the disagreement must be recorded as an implementation gap.
+The specification files name proof obligations; they do not claim mechanization
+merely by using theorem language. Tests, differential evaluation, certificate
+replay, Runtime-HIR validation, Wasm validation, and the current Lean model each
+provide evidence only for the boundary they actually encode.
