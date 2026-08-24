@@ -71,9 +71,20 @@ jobs:
         run: |
           set -euo pipefail
           git diff --check
-          test ! -e .github/workflows/apply-v8-wasm3-target.yml
+          git checkout HEAD -- \
+            .github/workflows/ci.yml \
+            .github/workflows/apply-v8-wasm3-target.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add \
+            compiler/src/backend.rs \
+            src/node/v8_wasm.test.ts \
+            package.json \
+            docs/abi.md \
+            docs/backend.md \
+            docs/wasm-target-profile.md \
+            spec/README.md \
+            spec/RUNTIME.md
+          git diff --cached --check
           git commit -m "Target V8 with the WebAssembly 3 profile"
           git push origin HEAD:codex/v8-wasm3-target
