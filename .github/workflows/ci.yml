@@ -15,6 +15,43 @@ permissions:
   contents: read
 
 jobs:
+  format-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Produce canonical formatter output
+        shell: bash
+        run: |
+          deno fmt \
+            .github/workflows/ci.yml \
+            docs/abi.md \
+            docs/backend.md \
+            docs/wasm-target-profile.md \
+            package.json \
+            spec/README.md \
+            spec/RUNTIME.md \
+            src/node/v8_wasm.test.ts
+          tar -czf formatted-v8-target.tar.gz \
+            .github/workflows/ci.yml \
+            docs/abi.md \
+            docs/backend.md \
+            docs/wasm-target-profile.md \
+            package.json \
+            spec/README.md \
+            spec/RUNTIME.md \
+            src/node/v8_wasm.test.ts
+      - name: Upload canonical formatter output
+        uses: actions/upload-artifact@v7
+        with:
+          name: formatted-v8-target
+          path: formatted-v8-target.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   formal:
     runs-on: ubuntu-latest
     timeout-minutes: 20
