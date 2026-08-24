@@ -5,8 +5,8 @@
 This document owns coverage, relational proof, ownership, and reusable safety
 certificate judgments. Ordinary type inference is owned by
 [`TYPECHECKING.md`](TYPECHECKING.md); source demand and Core observations are
-owned by [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md). Cross-document constraints are
-in [`COHERENCE.md`](COHERENCE.md).
+owned by [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md). Cross-document constraints
+are in [`COHERENCE.md`](COHERENCE.md).
 
 The analyses consume the demanded typed program. They do not add constructors to
 the ordinary type lattice.
@@ -28,8 +28,8 @@ where:
 - `Omega` tracks mode-indexed ownership paths; and
 - `C` is finite erasable evidence.
 
-Erasing `Phi`, `R`, `Omega`, and `C` leaves the same ordinary type and effect row.
-Relationships and ownership cannot be used as hidden subtype dimensions.
+Erasing `Phi`, `R`, `Omega`, and `C` leaves the same ordinary type and effect
+row. Relationships and ownership cannot be used as hidden subtype dimensions.
 
 The input is the live Core artifact. A proof, move, cancellation, or destructor
 inside an erased pure declaration is absent and cannot satisfy an obligation in
@@ -38,9 +38,9 @@ this judgment.
 ## 2. Coverage
 
 Coverage is set subtraction over the representable portion of the scrutinee
-domain. Constructor unions, booleans, finite integer ranges, products, and nested
-patterns contribute finite spaces. An open or unlistable domain requires an
-irrefutable arm.
+domain. Constructor unions, booleans, finite integer ranges, products, and
+nested patterns contribute finite spaces. An open or unlistable domain requires
+an irrefutable arm.
 
 For pattern rows `p_1 ... p_n`, acceptance establishes:
 
@@ -149,9 +149,10 @@ live root. Aggregates carry the joined obligations of their children, and
 closures carry captured paths.
 
 Branches begin with the same incoming ownership state. Continuing branch outputs
-must agree for linear paths; affine joins are conservative and may discard a path
-but cannot duplicate it. A borrow preserves the ownership tree but cannot recover
-or move the owning parent, escape its lexical region, or cross the host boundary.
+must agree for linear paths; affine joins are conservative and may discard a
+path but cannot duplicate it. A borrow preserves the ownership tree but cannot
+recover or move the owning parent, escape its lexical region, or cross the host
+boundary.
 
 A function publishes a type-independent ownership summary describing parameter,
 callback, and result-path use. Passing a linear closure once to a function that
@@ -185,8 +186,8 @@ reinterpret a use as consuming, or change the inferred function type.
 ## 7. Partitioned authority
 
 A split certificate records family, root, parent footprint, ordered children,
-factorization event, and produced-value lineage. Every child is accounted for.
-A join consumes the exact witness and exact child authorities.
+factorization event, and produced-value lineage. Every child is accounted for. A
+join consumes the exact witness and exact child authorities.
 
 Family validation establishes disjointness, exact cover, deterministic focus,
 frame locality, and mode-indexed ownership conservation.
@@ -195,9 +196,9 @@ Partial composition is not assumed to have universal proof-tree rotation.
 Reassociation succeeds only when the family validates the proposed intermediate
 composition; equality is required when both bracketings exist.
 
-Dynamic proof-refined extraction lineage names exactly its selected and remainder
-parts. Bounds failure is not an ownership path: if the relationship premise is
-unproved, the extraction is rejected before lineage is minted.
+Dynamic proof-refined extraction lineage names exactly its selected and
+remainder parts. Bounds failure is not an ownership path: if the relationship
+premise is unproved, the extraction is rejected before lineage is minted.
 
 ## 8. Certificate discipline
 
@@ -214,13 +215,14 @@ Certificate = (
 )
 ```
 
-The consumer reconstructs every premise. A certificate checker reduces trust only
-when it is smaller than the producer and refuses unknown rules, malformed paths,
-duplicate lineage, invalid partitions, foreign identities, and stale revisions.
+The consumer reconstructs every premise. A certificate checker reduces trust
+only when it is smaller than the producer and refuses unknown rules, malformed
+paths, duplicate lineage, invalid partitions, foreign identities, and stale
+revisions.
 
-Evidence erases from run-time values after authorizing lowering. Compact Runtime-
-HIR references may remain only to let validation connect a destructive or
-proof-required occurrence to its replayed result.
+Evidence erases from run-time values after authorizing lowering. Compact
+Runtime- HIR references may remain only to let validation connect a destructive
+or proof-required occurrence to its replayed result.
 
 Failure to construct evidence from source is a `SourceDiagnostic` at the
 operation requiring it. Producer success followed by validator failure is an

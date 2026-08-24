@@ -2,11 +2,10 @@
 
 ## Status and scope
 
-[`LANGUAGE.md`](../LANGUAGE.md), subject to
-[`COHERENCE.md`](COHERENCE.md), defines accepted-source behavior. This document
-owns the focused Core rules for demand, application, semantic identity, module
-instances, algebraic effects, handlers, one-shot continuations, progress, and
-divergence.
+[`LANGUAGE.md`](../LANGUAGE.md), subject to [`COHERENCE.md`](COHERENCE.md),
+defines accepted-source behavior. This document owns the focused Core rules for
+demand, application, semantic identity, module instances, algebraic effects,
+handlers, one-shot continuations, progress, and divergence.
 
 [`PAPER.md`](PAPER.md) supplies the integrated model;
 [`COMPILER.md`](COMPILER.md) supplies the pass graph; and
@@ -29,9 +28,9 @@ Internal allocation identities, administrative reductions, closure indices,
 Store headers, and private representation choices are hidden unless a source or
 ABI relation explicitly exposes a corresponding value.
 
-A request is compared as a protocol. Related executions agree on effect identity,
-operation, and related argument. Related host responses resume related one-shot
-continuations. Raw continuation addresses are not source observations.
+A request is compared as a protocol. Related executions agree on effect
+identity, operation, and related argument. Related host responses resume related
+one-shot continuations. Raw continuation addresses are not source observations.
 
 ## 2. Values and computations
 
@@ -79,10 +78,10 @@ exclude a return, specified trap, or divergence.
 
 A source pure position admits an application only after its final row settles to
 the empty row. Elaboration still schedules the call through this computation
-rule and binds the returned value. Surface `<-` admits a non-empty row and is also
-the explicit sequencing form for a suspended nullary effect value. Such a value
-is applied to unit exactly once; an already applied computation is not applied
-again.
+rule and binds the returned value. Surface `<-` admits a non-empty row and is
+also the explicit sequencing form for a suspended nullary effect value. Such a
+value is applied to unit exactly once; an already applied computation is not
+applied again.
 
 ## 3. Demand and pure declarations
 
@@ -100,8 +99,8 @@ live(block, result) = L
 ```
 
 A pure declaration outside `L` is absent from source evaluation. Every retained
-pure declaration evaluates exactly once in source order. This is not call-by-name
-or first-use forcing; no run-time thunk is introduced.
+pure declaration evaluates exactly once in source order. This is not
+call-by-name or first-use forcing; no run-time thunk is introduced.
 
 Operational declarations such as signatures, ordinary effect declarations,
 explicit shadowing, and `open` remain forced according to their source rules.
@@ -116,10 +115,10 @@ preserves every demanded return, request, specified trap, and divergence. An
 optimizer cannot first erase a behavior and then use that absence as evidence
 that the declaration was dead.
 
-Ownership is checked over the demanded program. A move, cancellation, destructor,
-or consuming call occurring only in an erased declaration is absent and cannot
-discharge a linear obligation. Intentional consuming discard must be sequenced or
-otherwise contribute to a demanded result.
+Ownership is checked over the demanded program. A move, cancellation,
+destructor, or consuming call occurring only in an erased declaration is absent
+and cannot discharge a linear obligation. Intentional consuming discard must be
+sequenced or otherwise contribute to a demanded result.
 
 A retained empty-row computation may still trap or diverge. Reordering requires
 an independent totality and dependency proof; effect emptiness is not enough.
@@ -128,18 +127,18 @@ an independent totality and dependency proof; effect emptiness is not enough.
 
 The compiler uses identities with different allocation and lifetime rules:
 
-| Identity | Allocated by | Equality means | Cache rule |
-| --- | --- | --- | --- |
-| expression | frontend AST | same expression in one source revision | serialize a stable expression ID |
-| binding | elaboration/checking | same lexical binding in one revision | only through a closed certificate |
-| immutable value | relationship analysis | same value origin for `Phi` | reconstruct or certify explicitly |
-| effect atom | compile-time evaluation | same generative effect occurrence | preserve complete module-instance identity |
-| seal | compile-time type construction | same public name and canonical carrier | reconstruct canonical inputs |
-| module definition | resolver | same resolved module artifact | ordinary revision rules |
-| import occurrence | resolved source graph | same written import site in one importer revision | retain importer revision |
-| module instance | module evaluation | same occurrence under same parent stack | retain complete instance stack |
-| Store/root | ownership/lowering | same physical authority root | retain ownership certificate |
-| revision | incremental compiler | same complete observed compiler input | cache namespace identity |
+| Identity          | Allocated by                   | Equality means                                    | Cache rule                                 |
+| ----------------- | ------------------------------ | ------------------------------------------------- | ------------------------------------------ |
+| expression        | frontend AST                   | same expression in one source revision            | serialize a stable expression ID           |
+| binding           | elaboration/checking           | same lexical binding in one revision              | only through a closed certificate          |
+| immutable value   | relationship analysis          | same value origin for `Phi`                       | reconstruct or certify explicitly          |
+| effect atom       | compile-time evaluation        | same generative effect occurrence                 | preserve complete module-instance identity |
+| seal              | compile-time type construction | same public name and canonical carrier            | reconstruct canonical inputs               |
+| module definition | resolver                       | same resolved module artifact                     | ordinary revision rules                    |
+| import occurrence | resolved source graph          | same written import site in one importer revision | retain importer revision                   |
+| module instance   | module evaluation              | same occurrence under same parent stack           | retain complete instance stack             |
+| Store/root        | ownership/lowering             | same physical authority root                      | retain ownership certificate               |
+| revision          | incremental compiler           | same complete observed compiler input             | cache namespace identity                   |
 
 No pass may replace one identity class with another because their printed data
 match. A module path is not a module instance, a source name is not an effect
@@ -147,8 +146,8 @@ atom, and a source value identity is not a Store root.
 
 ## 5. Module definitions, occurrences, and instances
 
-Let `m` be a resolved module definition and `o` a written import occurrence under
-parent instance `p`:
+Let `m` be a resolved module definition and `o` a written import occurrence
+under parent instance `p`:
 
 ```text
 ModuleDef(m)
@@ -229,8 +228,8 @@ operation clause itself is not recursively enclosed by the same handler. A
 clause that performs `ell` therefore emits a new request and reintroduces the
 label.
 
-Let all operation clauses and the optional return clause contribute
-`epsilon_h`. Handling has the row rule:
+Let all operation clauses and the optional return clause contribute `epsilon_h`.
+Handling has the row rule:
 
 ```text
 Gamma |- c : A ! epsilon_c
@@ -241,8 +240,8 @@ Gamma |- handle ell c with h
 ```
 
 Set subtraction is part of the rule. Factoring the premise as
-`epsilon union {ell}` without an absence condition is non-unique because union is
-idempotent.
+`epsilon union {ell}` without an absence condition is non-unique because union
+is idempotent.
 
 Handling an atom absent from `epsilon_c` is valid. Operation clauses are
 unreachable for that computation, while the return clause may still transform

@@ -2,10 +2,10 @@
 
 ## Status and scope
 
-[`LANGUAGE.md`](../LANGUAGE.md), subject to
-[`COHERENCE.md`](COHERENCE.md), defines which source expressions are required to
-resolve at compile time. This document owns compile-time evaluation,
-phase-erasure, specialization, and representation-closure obligations.
+[`LANGUAGE.md`](../LANGUAGE.md), subject to [`COHERENCE.md`](COHERENCE.md),
+defines which source expressions are required to resolve at compile time. This
+document owns compile-time evaluation, phase-erasure, specialization, and
+representation-closure obligations.
 
 Staging is not an optimizer that may guess whether an expression is convenient
 to evaluate. Required compile-time evaluation is part of checking; optional
@@ -40,17 +40,17 @@ Compile-time evaluation has no ambient host authority. It may observe only:
 - deterministic compiler primitives admitted by the staging contract; and
 - compiler-owned identity allocation under `I`.
 
-Source effects and public host capabilities are unavailable. An import or include
-is not an ambient filesystem read: dependency resolution supplies an explicit
-revisioned input before evaluation begins.
+Source effects and public host capabilities are unavailable. An import or
+include is not an ambient filesystem read: dependency resolution supplies an
+explicit revisioned input before evaluation begins.
 
 Operator spelling and precedence are not staged values. They are fixed by the
 generated language plan before elaboration.
 
 ## 3. Checked bridges
 
-A compile-time value acquires semantic authority only through the bridge owned by
-its use site:
+A compile-time value acquires semantic authority only through the bridge owned
+by its use site:
 
 ```text
 bridgeType   : CTValue -> Result<CoreType, SourceDiagnostic>
@@ -102,7 +102,8 @@ resolution.
 
 ### 5.1 Ordinary effects
 
-Ordinary source effects are generative. Evaluating a declaration allocates under:
+Ordinary source effects are generative. Evaluating a declaration allocates
+under:
 
 ```text
 (module instance, declaration node, compile-time scope, signature)
@@ -177,8 +178,8 @@ that the replacement preserves:
 - relationship and ownership certificate premises; and
 - source-origin information needed by diagnostics.
 
-An empty effect row alone is not enough. A computation can still trap or diverge,
-and moving it across a branch can change whether it is demanded.
+An empty effect row alone is not enough. A computation can still trap or
+diverge, and moving it across a branch can change whether it is demanded.
 
 Partial evaluation cannot duplicate a generative declaration, merge two module
 instances, turn a one-shot demand into multiple demands, or use target layout as
@@ -250,8 +251,8 @@ CacheKey = hash(
 A phase may omit an input only after proving it cannot observe it. Cached values
 containing generative effects preserve their owning occurrence identity. Cached
 seals reconstruct their canonical applicative inputs. Live inference variables,
-AST object addresses, mutable worklists, and process-local proof sinks never cross
-a serialized cache boundary.
+AST object addresses, mutable worklists, and process-local proof sinks never
+cross a serialized cache boundary.
 
 Decoding validates every reference and closed identity before exposing the
 artifact. A content hash proves transport integrity; it does not prove that a
@@ -267,9 +268,9 @@ Specialization supplies public-layout construction with:
 - versioned target policy; and
 - canonical lifting/lowering metadata.
 
-Public-layout construction either produces a validated adapter and manifest entry
-or returns `TargetRefusal`. It cannot accept a type whose required malformed-input
-checks are unimplemented.
+Public-layout construction either produces a validated adapter and manifest
+entry or returns `TargetRefusal`. It cannot accept a type whose required
+malformed-input checks are unimplemented.
 
 Exact ABI 1 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
 representation relation is owned by [`RUNTIME.md`](RUNTIME.md).

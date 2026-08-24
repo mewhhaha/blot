@@ -12,6 +12,7 @@
     "check": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot",
     "test": "pnpm test:node && pnpm test:regression",
     "test:node": "tsx --import ./src/node/polyfills.mjs --test src/node/*.test.ts",
+    "test:v8-wasm": "tsx --import ./src/node/polyfills.mjs --test src/node/v8_wasm.test.ts",
     "test:regression": "node scripts/node_regression_tests.mjs",
     "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
     "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",

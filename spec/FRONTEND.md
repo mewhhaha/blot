@@ -3,9 +3,9 @@
 ## Status and scope
 
 [`grammar.baba`](../grammar.baba) decides concrete parse acceptance.
-[`LANGUAGE.md`](../LANGUAGE.md) decides source behavior subject to the corrections
-in [`COHERENCE.md`](COHERENCE.md). This document owns the frontend judgments that
-connect UTF-8 source to hygienic Core elaboration.
+[`LANGUAGE.md`](../LANGUAGE.md) decides source behavior subject to the
+corrections in [`COHERENCE.md`](COHERENCE.md). This document owns the frontend
+judgments that connect UTF-8 source to hygienic Core elaboration.
 
 The frontend consists of four distinct boundaries:
 
@@ -63,8 +63,8 @@ source construct whose elaboration required them.
 ## 3. Fixed operator folding
 
 The grammar emits flat operator chains. Folding uses the generated table derived
-from `compiler/language.json`. Source modules cannot add a spelling or change its
-precedence or associativity.
+from `compiler/language.json`. Source modules cannot add a spelling or change
+its precedence or associativity.
 
 For a fixed language-plan revision:
 
@@ -162,8 +162,8 @@ Surface elaboration lowers rich control to the smaller Core owned by
 
 - a source value becomes a returned Core value;
 - every function application becomes a Core computation;
-- a pure source position admits an applied computation only after its row settles
-  empty;
+- a pure source position admits an applied computation only after its row
+  settles empty;
 - `x <- c` becomes a bind;
 - sequencing a suspended nullary effect value applies it to unit once;
 - loops become recursion and cases with explicit accumulator transfer;
@@ -176,9 +176,9 @@ An application with an empty row still uses the computation schedule. The
 frontend does not create a second pure-application AST based on the eventual
 row.
 
-The liveness graph is constructed after resolution and surface elaboration.
-Dead pure declarations are removed from source evaluation before safety and
-ownership judgments consume the demanded program.
+The liveness graph is constructed after resolution and surface elaboration. Dead
+pure declarations are removed from source evaluation before safety and ownership
+judgments consume the demanded program.
 
 ## 8. Module occurrences
 

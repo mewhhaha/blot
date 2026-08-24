@@ -54,9 +54,9 @@ map descends from copy and exported OrderedTextMap operations
 
 A caller can deliberately pass a structurally matching raw `Slice`. This cannot
 forge interval authority, enlarge a footprint, or cause memory unsafety. It is,
-however, outside the abstract ordered-map contract: binary search on an unordered
-carrier need not equal mathematical map lookup, and the map-level cost and result
-theorems do not apply.
+however, outside the abstract ordered-map contract: binary search on an
+unordered carrier need not equal mathematical map lookup, and the map-level cost
+and result theorems do not apply.
 
 A total abstraction over every well-typed inhabitant would require a nominal
 seal or revalidation at each public operation. The current adapter deliberately
@@ -140,8 +140,8 @@ source adapter's protocol fact established by validation and preserved by its
 exports.
 
 `Slice.copy` retains its ordinary acquisition behavior: it copies persistent
-storage unless a separate ownership/reuse proof permits Store reuse. The ordering
-check itself grants no reuse authority.
+storage unless a separate ownership/reuse proof permits Store reuse. The
+ordering check itself grants no reuse authority.
 
 ## 6. Borrowed observation
 
@@ -166,9 +166,9 @@ Keys are immutable. If binary search focuses position `i`, replacement writes:
 (key_i, replacement)
 ```
 
-using the stored key, not the query spelling. This preserves strict ordering even
-for a future comparator whose equality relation admits multiple representations.
-The current adapter uses exact text comparison.
+using the stored key, not the query spelling. This preserves strict ordering
+even for a future comparator whose equality relation admits multiple
+representations. The current adapter uses exact text comparison.
 
 Ownership conservation is path-sensitive:
 
@@ -199,9 +199,9 @@ Changing, inserting, deleting, or reordering a key can invalidate:
 - exact witness reconstruction.
 
 The first adapter therefore exposes value replacement only. An insertion or
-removal operation would require complete-root authority plus a footprint-changing
-proof and possibly a new allocator or tree/page representation. It is not hidden
-inside `replace`.
+removal operation would require complete-root authority plus a
+footprint-changing proof and possibly a new allocator or tree/page
+representation. It is not hidden inside `replace`.
 
 ## 9. Partition by key
 
@@ -217,8 +217,8 @@ and delegates to interval partition:
 [lo,hi) = [lo,mid) * [mid,hi)
 ```
 
-Under `ordered(S)`, the left child contains keys strictly less than `key`, and the
-right child contains keys greater than or equal to `key`. The same generic
+Under `ordered(S)`, the left child contains keys strictly less than `key`, and
+the right child contains keys greater than or equal to `key`. The same generic
 partition witness remains sufficient; no second run-time map witness is minted.
 
 The lower bound is always in `[lo,hi]`, so a checked implementation cannot fail
@@ -292,16 +292,16 @@ representation.
 
 For a valid `ordered(S)` protocol value with `n` entries:
 
-| Operation | Work | Element Store copies after acquisition |
-| --- | ---: | ---: |
-| validation | `O(n)` text comparisons | 0 |
-| copy | `O(n)` explicit acquisition; `O(1)` only under separate reuse proof | at most 1 full Store |
-| length | `O(1)` | 0 |
-| get | `O(log n)` comparisons | 0 |
-| replace | `O(log n)` comparisons plus `O(1)` owned write | 0 |
-| split_before | `O(log n)` comparisons plus `O(1)` metadata | 0 |
-| join | `O(1)` metadata | 0 |
-| freeze | `O(1)` Store release in Runtime HIR | 0 |
+| Operation    |                                                                Work | Element Store copies after acquisition |
+| ------------ | ------------------------------------------------------------------: | -------------------------------------: |
+| validation   |                                             `O(n)` text comparisons |                                      0 |
+| copy         | `O(n)` explicit acquisition; `O(1)` only under separate reuse proof |                   at most 1 full Store |
+| length       |                                                              `O(1)` |                                      0 |
+| get          |                                              `O(log n)` comparisons |                                      0 |
+| replace      |                      `O(log n)` comparisons plus `O(1)` owned write |                                      0 |
+| split_before |                         `O(log n)` comparisons plus `O(1)` metadata |                                      0 |
+| join         |                                                     `O(1)` metadata |                                      0 |
+| freeze       |                                 `O(1)` Store release in Runtime HIR |                                      0 |
 
 These complexity claims are conditional on strict ordering. They do not apply to
 a raw structurally matching unordered Slice.
@@ -332,5 +332,5 @@ The adapter is production-complete only when Node and Rust/Wasm agree on:
 11. an adversarial raw-Slice case demonstrating memory safety without claiming
     ordered-map result correctness.
 
-No production test may turn the protocol premise into an unstated structural-type
-fact.
+No production test may turn the protocol premise into an unstated
+structural-type fact.

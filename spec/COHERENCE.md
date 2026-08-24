@@ -13,8 +13,8 @@ Authority is applied in this order:
    below.
 3. [`LANGUAGE.md`](../LANGUAGE.md) decides the remaining accepted-source
    behavior.
-4. A focused specification owns the exact judgment in its domain, subject to
-   the cross-document invariants here.
+4. A focused specification owns the exact judgment in its domain, subject to the
+   cross-document invariants here.
 5. [`PAPER.md`](PAPER.md) explains how those judgments compose; it is not a
    second source semantics.
 6. Files under `docs/` are operational or historical, except that
@@ -30,8 +30,8 @@ corresponding correction here; it must not add another silent override.
 ### 1.1 Fixed operators
 
 Blot has one generated operator plan. Source modules cannot declare punctuation,
-precedence, or associativity. The removed `operators` header is accepted only far
-enough to produce `BLOT_REMOVED_OPERATOR_SECTION`.
+precedence, or associativity. The removed `operators` header is accepted only
+far enough to produce `BLOT_REMOVED_OPERATOR_SECTION`.
 
 The plan maps a spelling to precedence, associativity, and an ordinary qualified
 binding path. Lexical resolution may change the value reached by that path, but
@@ -45,8 +45,8 @@ A function body and a `case` arm are expressions. Layout may continue an
 expression after a newline, but indentation alone never creates a value that
 contains declarations or statements.
 
-The only expression forms that contain declarations, sequencing, statement
-`if`, loops, `break`, or `return` are:
+The only expression forms that contain declarations, sequencing, statement `if`,
+loops, `break`, or `return` are:
 
 ```blot
 do:
@@ -118,12 +118,13 @@ that the call issues no algebraic-effect request. It does not make the call a
 second pure reduction relation, and it does not imply termination or absence of
 a specified trap.
 
-A source pure position such as the right side of `let` may contain an application
-only after its final row settles to empty. Elaboration still schedules that call
-through the ordinary Core computation relation and binds its returned value.
-`<-` admits a non-empty row and is also the explicit sequencing form for a
-suspended nullary effect value. No pass may switch between a pure-call semantics
-and a computation-call semantics based on an optimization result.
+A source pure position such as the right side of `let` may contain an
+application only after its final row settles to empty. Elaboration still
+schedules that call through the ordinary Core computation relation and binds its
+returned value. `<-` admits a non-empty row and is also the explicit sequencing
+form for a suspended nullary effect value. No pass may switch between a
+pure-call semantics and a computation-call semantics based on an optimization
+result.
 
 ## 3. Demand precedes use accounting
 
@@ -197,11 +198,10 @@ strip that then composes with a bottom strip, while composing one top rectangle
 with the bottom strip would form a forbidden L shape.
 
 Proof-tree reassociation therefore consumes the exact old witnesses and asks the
-family adapter to validate the new intermediate composition. If that
-composition is undefined, reassociation is refused and the existing proof tree
-remains the only admissible bracketing. Registration tests must cover both
-coherence where two bracketings exist and refusal where the target intermediate
-does not.
+family adapter to validate the new intermediate composition. If that composition
+is undefined, reassociation is refused and the existing proof tree remains the
+only admissible bracketing. Registration tests must cover both coherence where
+two bracketings exist and refusal where the target intermediate does not.
 
 ## 6. Failure taxonomy
 
@@ -239,8 +239,8 @@ A seal remains nominal in Blot. Its ABI manifest records the public name, so
 conforming tooling and the representation relation distinguish source contracts.
 Raw Core Wasm values with equal carrier layouts do not dynamically contain that
 name. ABI nominal safety therefore depends on the declared manifest and the
-conforming-caller premise; the byte representation alone cannot prevent a hostile
-caller from confusing equal carriers.
+conforming-caller premise; the byte representation alone cannot prevent a
+hostile caller from confusing equal carriers.
 
 Every accepted public boundary performs all validation required for its admitted
 types before constructing a source value. An unimplemented boolean, pointer,
@@ -291,25 +291,26 @@ entry.
 The rules above supersede these recurring phrases wherever they remain in older
 material:
 
-| Stale wording | Correct reading |
-| --- | --- |
-| source fixity environment | generated fixed operator plan |
-| indentation opens a value block | only `do:` or `compdo:` opens a statement value |
-| element lowering or implicit children | ordinary functions, records, arrays, and nullary closures |
-| empty-row application is pure Core | every application is a computation; the row may be empty |
-| effects and seals are generative | effects generative; seals applicative |
-| either associative bracketing implies both | equality only when both partial compositions exist |
-| every diagnostic proves invalid source | only `SourceDiagnostic` has that meaning |
-| seal name is dynamically present in raw ABI bytes | name is a manifest/conformance fact |
-| unreachable defensive trap is an allowed target outcome | it is unreachable or an invariant failure |
-| structural ordered-map carrier proves ordering | ordering is a constructor-established protocol premise |
-| ownership never loses tracked obligations | affine discard is allowed; linear paths require exact terminating-exit accounting |
+| Stale wording                                           | Correct reading                                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| source fixity environment                               | generated fixed operator plan                                                     |
+| indentation opens a value block                         | only `do:` or `compdo:` opens a statement value                                   |
+| element lowering or implicit children                   | ordinary functions, records, arrays, and nullary closures                         |
+| empty-row application is pure Core                      | every application is a computation; the row may be empty                          |
+| effects and seals are generative                        | effects generative; seals applicative                                             |
+| either associative bracketing implies both              | equality only when both partial compositions exist                                |
+| every diagnostic proves invalid source                  | only `SourceDiagnostic` has that meaning                                          |
+| seal name is dynamically present in raw ABI bytes       | name is a manifest/conformance fact                                               |
+| unreachable defensive trap is an allowed target outcome | it is unreachable or an invariant failure                                         |
+| structural ordered-map carrier proves ordering          | ordering is a constructor-established protocol premise                            |
+| ownership never loses tracked obligations               | affine discard is allowed; linear paths require exact terminating-exit accounting |
 
 ## 11. Proof status
 
 This contract removes ambiguity; it does not claim the whole compiler has been
 mechanized. The remaining named obligations include surface-to-Core
-correspondence, liveness erasure, principality within the stated rank-1 fragment,
-certificate replay, phase safety, representation closure, capability-family law
-checks, progress-sensitive pass composition, canonical-adapter validation, and a
-checked correspondence between production artifacts and the Lean model.
+correspondence, liveness erasure, principality within the stated rank-1
+fragment, certificate replay, phase safety, representation closure,
+capability-family law checks, progress-sensitive pass composition,
+canonical-adapter validation, and a checked correspondence between production
+artifacts and the Lean model.

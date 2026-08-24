@@ -17,6 +17,43 @@ status** section is operational and cannot weaken a rule for an artifact the
 compiler accepts. Cross-document corrections are in
 [`COHERENCE.md`](COHERENCE.md).
 
+## WebAssembly target profile
+
+The production default emits standard WebAssembly 3.0 instructions and is
+continuously exercised on V8. The public ABI remains memory32; adopting the Wasm
+3.0 specification does not silently change pointer width, canonical layouts, or
+caller ownership.
+
+Every manifest declares:
+
+```text
+coreSpecification = "3.0"
+requiredFeatures   = sorted exact feature names used by this artifact
+```
+
+The current emitter may require `bulk-memory`, `multi-value`, fixed-width
+`simd`, and `tail-call`. A host must validate the complete module and may use
+the feature list for an earlier compatibility diagnostic. The feature list is
+descriptive; it never substitutes for WebAssembly validation.
+
+An internal direct call in exact tail position lowers to `return_call` when the
+callee and caller have the same flattened result layout. Exact tail position may
+include a cycle-free chain of empty blocks that only rename the result before
+the return; any operation or control decision ends the proof. This preserves
+source returns, requests, traps, and divergence while discarding a target-only
+caller frame. Public wrappers retain ordinary calls because canonical lifting,
+lowering, call checkpoints, and post-return ownership must still execute.
+
+A newer WebAssembly feature is enabled only when it either removes a compiler
+transformation or has measured benefit and its source semantics are explicit.
+Memory64, multiple memories, GC, typed function references, exception handling,
+and relaxed SIMD are not baseline assumptions merely because V8 implements them.
+Their admission requires a representation, determinism, ABI, ownership, and
+fallback account.
+
+The operational feature audit and engine matrix are recorded in
+[`docs/wasm-target-profile.md`](../docs/wasm-target-profile.md).
+
 ## 1. Runtime-HIR boundary
 
 Runtime HIR is the first artifact whose operations and representations are fully
@@ -62,10 +99,11 @@ Validation independently checks at least:
    metadata;
 5. proof-required operations name replayable certificates for the exact
    occurrence and premise identities;
-6. destructive Store operations name ownership permission for the exact
-   consumed path and source occurrence;
+6. destructive Store operations name ownership permission for the exact consumed
+   path and source occurrence;
 7. Store/root lineage is not duplicated, forged, or crossed between families;
-8. every public boundary has an admissible closed source type and adapter policy;
+8. every public boundary has an admissible closed source type and adapter
+   policy;
 9. no compile-time or proof-only value remains; and
 10. every target feature used is admitted by the selected production policy.
 
@@ -107,12 +145,12 @@ replayed ownership certificate proves:
 - the write preserves the operation's relationship and representation
   invariants.
 
-The target write is related to construction of a fresh source result. It does not
-retroactively make source aliases mutable.
+The target write is related to construction of a fresh source result. It does
+not retroactively make source aliases mutable.
 
-Borrowed reads never grant Store ownership. Splits and joins consume exact family,
-root, footprint, and produced-value lineage. Equal-looking intervals or roots are
-not interchangeable.
+Borrowed reads never grant Store ownership. Splits and joins consume exact
+family, root, footprint, and produced-value lineage. Equal-looking intervals or
+roots are not interchangeable.
 
 ## 5. Public layout judgment
 
@@ -235,9 +273,11 @@ exists y'. y ->* y' and R(x', y')
 This clause is necessary but not sufficient. Each relation also provides:
 
 1. **stuttering control:** an empty target match decreases a well-founded rank;
-2. **finite-outcome adequacy:** a related source return, request, or trap reaches
-   the matching target observation after finitely many administrative steps;
-3. **reflection:** every target return, request, or trap is matched by the source;
+2. **finite-outcome adequacy:** a related source return, request, or trap
+   reaches the matching target observation after finitely many administrative
+   steps;
+3. **reflection:** every target return, request, or trap is matched by the
+   source;
 4. **protocol correspondence:** related host responses resume related one-shot
    continuations; and
 5. **divergence adequacy:** demanded infinite execution is not replaced by a

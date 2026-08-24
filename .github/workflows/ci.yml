@@ -44,7 +44,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 22.16.0
+          node-version: 24.19.0
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
@@ -140,6 +140,14 @@ jobs:
       - run: pnpm blot run examples/node-runner-demo.blot
       - run: pnpm test:compiler
       - run: pnpm verify:compiler
+      - name: Verify the V8 / Wasm 3 target on Node 24 LTS
+        run: pnpm test:v8-wasm
+      - name: Select Node 26 Current
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.7.0
+      - name: Verify the V8 / Wasm 3 target on Node 26 Current
+        run: pnpm test:v8-wasm
       - run: pnpm run benchmark -- examples/storage.blot
       - name: Verify compiler artifact is derived output
         shell: bash

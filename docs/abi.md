@@ -84,8 +84,9 @@ A seal is nominal inside Blot but transparent at the caller byte boundary. Its
 manifest type records the public name and carrier, so conforming tooling and the
 representation relation distinguish source contracts. Equal raw Core Wasm
 carrier values do not dynamically contain that name. ABI nominal safety
-therefore depends on the declared manifest and the conforming-caller premise; the
-byte layout alone cannot prevent a hostile caller from confusing equal carriers.
+therefore depends on the declared manifest and the conforming-caller premise;
+the byte layout alone cannot prevent a hostile caller from confusing equal
+carriers.
 
 ## Memory layouts
 
@@ -155,6 +156,9 @@ The manifest records:
 
 - format `blot-core-wasm`;
 - ABI major and minor;
+- `coreSpecification`, currently `3.0`;
+- a sorted `requiredFeatures` list for every non-MVP instruction family present
+  in the artifact;
 - memory, encoding, flattening limits, and allocator export;
 - runtime and compile-time source exports;
 - canonical function types and post-return names;

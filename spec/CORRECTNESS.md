@@ -101,7 +101,8 @@ value observations.
 ## 5. Source type-and-effect safety
 
 Preservation is stated over a world that may extend with fresh immutable value
-identities, effect atoms, module instances, continuation states, and Store roots:
+identities, effect atoms, module instances, continuation states, and Store
+roots:
 
 ```text
 W ; Gamma ; Phi ; Omega |- c : A ! epsilon
@@ -134,8 +135,8 @@ contains infinitely many reductions.
 Every function application is a Core computation. Its effect row may be empty,
 but the computation may still return, trap, or diverge.
 
-Frontend elaboration, inference, staging, specialization, and target lowering all
-use the same application schedule. No pass may:
+Frontend elaboration, inference, staging, specialization, and target lowering
+all use the same application schedule. No pass may:
 
 - reinterpret an empty-row call through a second pure evaluator;
 - reorder it using effect emptiness as a totality proof;
@@ -168,8 +169,8 @@ operation premise holds at op_id
 A certificate copied to another operation, source revision, module instance, or
 identity-changing rebind is rejected.
 
-Removing a target check is sound only after this independent replay. The producer
-cannot make its own conclusion an axiom.
+Removing a target check is sound only after this independent replay. The
+producer cannot make its own conclusion an axiom.
 
 ## 8. Ownership safety
 
@@ -207,8 +208,8 @@ occurrence whose replayed ownership certificate proves unique consuming use and
 complete path accounting.
 
 The adequacy theorem relates that target mutation to the fresh persistent source
-result. Syntactic last occurrence, source immutability alone, or a matching Store
-shape is not sufficient evidence.
+result. Syntactic last occurrence, source immutability alone, or a matching
+Store shape is not sufficient evidence.
 
 ### 8.2 Partitioned authority
 
@@ -244,8 +245,8 @@ not as a source trap or invalid program.
 ### 9.3 Specialization and representation closure
 
 Specialization produces closed Runtime HIR. Every residual quantified use,
-structural shape, effect representation, closure environment, branch join,
-Store element, and public boundary has one target-admissible representation.
+structural shape, effect representation, closure environment, branch join, Store
+element, and public boundary has one target-admissible representation.
 
 Failure to close a production-supported internal representation after successful
 checking is an `InvariantFailure`. A type outside an explicitly documented
@@ -274,8 +275,9 @@ Each pass therefore supplies one of these equivalent packages:
 Required conditions are:
 
 1. **well-founded stuttering:** an empty target match strictly decreases a rank;
-2. **finite-outcome adequacy:** a related source return, request, or trap reaches
-   the matching target observation after finitely many administrative steps;
+2. **finite-outcome adequacy:** a related source return, request, or trap
+   reaches the matching target observation after finitely many administrative
+   steps;
 3. **reflection:** every target return, request, or trap is matched by a source
    execution;
 4. **protocol correspondence:** related requests and host responses resume
@@ -314,14 +316,15 @@ lift_A(lower_A(v)) ~= v
 for valid source values, with `~=` hiding private allocation identity and
 respecting canonical order.
 
-Lifting validates malformed UTF-8, booleans, discriminants, pointers, alignments,
-lengths, extents, and ownership state before constructing a source value. If a
-required validation is unimplemented, public-layout construction returns
-`TargetRefusal`; accepting an unchecked boundary is an invariant failure.
+Lifting validates malformed UTF-8, booleans, discriminants, pointers,
+alignments, lengths, extents, and ownership state before constructing a source
+value. If a required validation is unimplemented, public-layout construction
+returns `TargetRefusal`; accepting an unchecked boundary is an invariant
+failure.
 
-A seal name is a manifest and conformance fact. Equal raw Core Wasm carrier bytes
-do not dynamically enforce source nominality. The ABI theorem assumes a caller
-that follows the declared manifest and ownership protocol.
+A seal name is a manifest and conformance fact. Equal raw Core Wasm carrier
+bytes do not dynamically enforce source nominality. The ABI theorem assumes a
+caller that follows the declared manifest and ownership protocol.
 
 A private Runtime-HIR root or capability with no ABI 1 relation must be refused
 at public-layout construction. Reaching the emitter with such a boundary is an
@@ -387,9 +390,9 @@ resource bounds, compilation is deterministic, including ordered diagnostics and
 artifact bytes.
 
 Incremental compilation is memoization of this same judgment. A cached artifact
-may be reused only when every input observed by its phase is equal and its closed
-certificate validates against the current artifact identities. Reuse cannot
-merge distinct module instances, effect occurrences, Stores, or source
+may be reused only when every input observed by its phase is equal and its
+closed certificate validates against the current artifact identities. Reuse
+cannot merge distinct module instances, effect occurrences, Stores, or source
 revisions.
 
 A cache hit and a fresh run must produce equivalent diagnostics or artifacts;
