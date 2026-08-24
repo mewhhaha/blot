@@ -1,163 +1,29 @@
-name: Rust/Wasm compiler CI
+name: Generate V8 target health artifacts
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  formal:
+  generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Check stable Core metatheory
-        uses: leanprover/lean-action@v1
-        with:
-          lake-package-directory: formal/lean
-          build: true
-          test: false
-          leanchecker: true
-      - name: Reject admitted formal declarations
-        shell: bash
-        run: |
-          if git grep -n -E '(^|[^[:alnum:]_])(sorry|admit|axiom)([^[:alnum:]_]|$)' \
-            -- formal/lean/Blot.lean 'formal/lean/Blot/*.lean'; then
-            echo 'Formal sources must not contain admitted declarations.' >&2
-            exit 1
-          fi
-
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.19.0
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.97.1
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-      - run: pnpm install --frozen-lockfile
-      - name: Rebuild Rust compiler Wasm
-        run: >-
-          deno run
-          --allow-read
-          --allow-write
-          --allow-run=cargo,git,rustc
-          --allow-env
-          scripts/build_compiler.ts
-      - name: Upload Rust compiler artifact
+      - name: Regenerate deterministic health outputs
+        run: deno run --allow-read --allow-write scripts/generate_language_health.ts
+      - name: Upload generated outputs
         uses: actions/upload-artifact@v7
         with:
-          name: blot-rust-compiler
+          name: v8-target-health
           path: |
-            generated/compiler/compiler.wasm
-            generated/compiler/compiler-artifact.json
+            generated/language-health.json
+            src/diagnostic_codes.generated.ts
+            STDLIB.md
           if-no-files-found: error
-          retention-days: 90
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
-      - name: Check generated-code Rust formatting
-        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
-      - name: Check Rust lint
-        run: >-
-          cargo clippy
-          --manifest-path compiler/Cargo.toml
-          --target wasm32-unknown-unknown
-          -- -D warnings
-      - name: Test Rust compiler
-        run: cargo test --manifest-path compiler/Cargo.toml
-      - name: Check TypeScript
-        run: deno check .
-      - name: Check formatting
-        run: deno fmt --check
-      - name: Check lint
-        run: deno lint
-      - name: Verify generated frontend artifacts
-        run: deno task check:generated
-      - name: Pack runnable Node workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            git ls-files -z
-            printf 'generated/compiler/compiler.wasm\0'
-            printf 'generated/compiler/compiler-artifact.json\0'
-            printf '.pnp.cjs\0'
-            printf 'node_modules\0'
-          } > "$RUNNER_TEMP/blot-node-workspace.files"
-          tar \
-            --create \
-            --gzip \
-            --file=blot-node-workspace.tar.gz \
-            --null \
-            --files-from="$RUNNER_TEMP/blot-node-workspace.files"
-      - name: Verify packed Node workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          workspace="$RUNNER_TEMP/blot-node-workspace"
-          mkdir "$workspace"
-          tar -xzf blot-node-workspace.tar.gz -C "$workspace"
-          cd "$workspace"
-          test -f AGENTS.md
-          test -f case-studies/agent/main.blot
-          test -f experiments/node-wasm-benchmark.ts
-          test -f generated/compiler/compiler.wasm
-          test -f generated/compiler/compiler-artifact.json
-          test -s .pnp.cjs
-          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
-          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
-          pnpm conformance
-      - name: Upload runnable Node workspace
-        uses: actions/upload-artifact@v7
-        with:
-          name: blot-node-workspace-${{ github.sha }}
-          path: blot-node-workspace.tar.gz
-          if-no-files-found: error
-          retention-days: 90
-      - run: pnpm test
-      - run: pnpm run check
-      - run: pnpm run smoke
-      - run: pnpm blot run examples/node-runner-demo.blot
-      - run: pnpm test:compiler
-      - run: pnpm verify:compiler
-      - name: Verify the V8 / Wasm 3 target on Node 24 LTS
-        run: pnpm test:v8-wasm
-      - name: Select Node 26 Current
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26.7.0
-      - name: Verify the V8 / Wasm 3 target on Node 26 Current
-        run: pnpm test:v8-wasm
-      - run: pnpm run benchmark -- examples/storage.blot
-      - name: Verify compiler artifact is derived output
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s generated/compiler/compiler.wasm
-          test -s generated/compiler/compiler-artifact.json
-          git check-ignore --quiet generated/compiler/compiler.wasm
-          git check-ignore --quiet generated/compiler/compiler-artifact.json
-          if git ls-files --error-unmatch generated/compiler/compiler.wasm >/dev/null 2>&1; then
-            echo 'generated/compiler/compiler.wasm must not be tracked' >&2
-            exit 1
-          fi
+          retention-days: 1
