@@ -1,0 +1,1060 @@
+name: Apply adversarial theory audit
+
+on:
+  push:
+    branches:
+      - codex/adversarial-theory-audit
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/adversarial-theory-audit
+          fetch-depth: 0
+
+      - name: Reconcile the specification set
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(
+                      f"{path}: expected {expected} occurrence(s), found {count}: {old[:100]!r}"
+                  )
+              file.write_text(text.replace(old, new))
+
+          def insert_after(path: str, anchor: str, addition: str) -> None:
+              replace_exact(path, anchor, anchor + addition)
+
+          # LANGUAGE.md: make the normative surface agree with grammar.baba and
+          # EXPLICIT_DO_BLOCKS.md, and distinguish semantic rejection from fuel.
+          replace_exact(
+              "LANGUAGE.md",
+              "- modules represented as unary functions;\n",
+              "- modules evaluated as occurrence-scoped instances, with unary closures only\n"
+              "  as an internal implementation detail;\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "The indented continuation accepts a lambda or ordinary expression. An `if`\n"
+              "immediately after the newline begins the binding's existing block form, where it\n"
+              "is a statement conditional whose branches `return` the value the binding takes.\n"
+              "`case` is what selects a value in place (§8.1); there is no spelling that makes\n"
+              "the `if` itself the value. The continuation changes layout only and does not\n"
+              "introduce another scope.\n",
+              "The indented continuation accepts a lambda or ordinary expression. Layout alone\n"
+              "never constructs a statement block. A body containing declarations, sequencing,\n"
+              "statement `if`, loops, or `return` must be introduced by `do:` or `compdo:`.\n"
+              "`case` selects a value directly (§8.1). The continuation changes layout only and\n"
+              "does not introduce another scope.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "const measuring = fn T => if refines (T, Text):\n"
+              "  return fn x => Text.length x\n"
+              "else:\n"
+              "  return fn x => x + 0\n\n"
+              "const measure_text = measuring Text   // Text -> Int, not joined with the other arm\n"
+              "```\n",
+              "```blot\n"
+              "const measuring = fn T => do:\n"
+              "  if refines (T, Text):\n"
+              "    return fn x => Text.length x\n"
+              "  else:\n"
+              "    return fn x => x + 0\n\n"
+              "const measure_text = measuring Text   // Text -> Int, not joined with the other arm\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "let component = fn properties => fn children =>\n"
+              "  for child in Iter.items children:\n"
+              "    <- child\n\n"
+              "  return properties\n"
+              "```\n",
+              "```blot\n"
+              "let component = fn properties => fn children => do:\n"
+              "  for child in Iter.items children:\n"
+              "    <- child\n\n"
+              "  return properties\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "let label = fn () =>\n"
+              "  <- text \"Count: \"\n\n"
+              "let button = fn () =>\n"
+              "  <- Button { .label = \"Save\"; .disabled = (); } []\n\n"
+              "let view = fn () =>\n"
+              "  <- div { .class = \"counter\"; } [label, button]\n"
+              "```\n",
+              "```blot\n"
+              "let label = fn () => do:\n"
+              "  <- text \"Count: \"\n\n"
+              "let button = fn () => do:\n"
+              "  <- Button { .label = \"Save\"; .disabled = (); } []\n\n"
+              "let view = fn () => do:\n"
+              "  <- div { .class = \"counter\"; } [label, button]\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "A `case` expression is a separate result scope and does not inherit that\n"
+              "surrounding target. Its branches are values, so an indented branch may contain\n"
+              "statements; a return in that block supplies the branch, and therefore the\n"
+              "expression, rather than escaping farther.\n",
+              "A `case` expression is a separate result scope and does not inherit that\n"
+              "surrounding target. Its branches are expressions. An arm that needs declarations\n"
+              "or statements writes `=> do:`; a `return` then exits that explicit arm block and\n"
+              "supplies the case value rather than escaping farther.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "### 6.4 Blocks\n\n"
+              "```blot\n"
+              "let result =\n"
+              "  declarations\n"
+              "  return value\n"
+              "```\n\n"
+              "Indentation after `=`, `=>`, `<-`, `of`, or a colon opens a suite. `do:` is the\n"
+              "explicit value-producing statement scope. A block evaluates its statements in a\n"
+              "nested scope. Falling through returns `()`; `return value` exits that block with\n"
+              "`value`. It may leave from a nested statement conditional, guard, or loop. The\n"
+              "block is the nearest return scope.\n\n"
+              "A bare trailing expression is not permitted. The explicit `return` keeps a\n"
+              "result beginning with a name distinct from `name := value`, and it keeps every\n"
+              "value that leaves a scope spelled one way, so a branch boundary stays visible\n"
+              "where its result is short.\n",
+              "### 6.4 Blocks\n\n"
+              "```blot\n"
+              "let result = do:\n"
+              "  declarations\n"
+              "  return value\n"
+              "```\n\n"
+              "A newline and indentation may continue an expression after `=`, `=>`, `<-`,\n"
+              "`of`, or `return`, but layout alone never creates a statement value. `do:` is the\n"
+              "only run-time value form containing declarations, sequencing, statement\n"
+              "conditionals, loops, `break`, or `return`; `compdo:` is its compile-time\n"
+              "counterpart. Statement suites under `if` and `for` are internal constituents of\n"
+              "those statement forms, not independently usable expressions.\n\n"
+              "An explicit block evaluates its statements in a nested scope. Falling through\n"
+              "returns `()`; `return value` exits that block with `value`. It may leave from a\n"
+              "nested statement conditional, guard, or loop. The explicit block is the nearest\n"
+              "return scope.\n\n"
+              "A bare trailing expression is not permitted. The explicit `return` keeps a\n"
+              "result beginning with a name distinct from `name := value`, and it keeps every\n"
+              "value that leaves a scope spelled one way, so a branch boundary stays visible\n"
+              "where its result is short.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "const rec factorial = fn n => if n < 2:\n"
+              "  return 1\n"
+              "else:\n"
+              "  return n * factorial (n - 1)\n"
+              "```\n",
+              "```blot\n"
+              "const rec factorial = fn n => do:\n"
+              "  if n < 2:\n"
+              "    return 1\n"
+              "  else:\n"
+              "    return n * factorial (n - 1)\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "let rec is_even = fn n => if n == 0:\n"
+              "  return True\n"
+              "else:\n"
+              "  return is_odd (n - 1)\n"
+              "let rec is_odd = fn n => if n == 0:\n"
+              "  return False\n"
+              "else:\n"
+              "  return is_even (n - 1)\n"
+              "```\n",
+              "```blot\n"
+              "let rec is_even = fn n => do:\n"
+              "  if n == 0:\n"
+              "    return True\n"
+              "  else:\n"
+              "    return is_odd (n - 1)\n"
+              "let rec is_odd = fn n => do:\n"
+              "  if n == 0:\n"
+              "    return False\n"
+              "  else:\n"
+              "    return is_even (n - 1)\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "Compile-time and runtime evaluation otherwise use the same language semantics.\n"
+              "Evaluation has a deterministic fuel limit. Exceeding it is an error rather than\n"
+              "non-deterministically hanging the compiler.\n",
+              "Compile-time and runtime evaluation otherwise use the same language semantics.\n"
+              "The implementation applies a deterministic evaluation limit. Exhausting it\n"
+              "reports `BLOT_EVALUATION_LIMIT` as a compiler-limit diagnostic: it prevents this\n"
+              "compilation from establishing a result, but it does not establish that the source\n"
+              "program is ill-typed and it is not a source return, request, trap, or divergence.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "`case` is a separate result scope. An indented arm block's `return` supplies the\n"
+              "selected arm and therefore the case result; `break` cannot escape an arm to\n"
+              "reach an enclosing loop.\n",
+              "`case` is a separate result scope. An arm is one expression; an arm that needs\n"
+              "statements writes `=> do:`. A `return` in that explicit block supplies the\n"
+              "selected arm and therefore the case result. `break` cannot escape an arm to reach\n"
+              "an enclosing loop.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "The statement form writes the same guard before `=>` and an indented block; a\n"
+              "false guard falls through before any statement in that arm runs.\n",
+              "An arm that needs statements writes the same guard before `=> do:`. A false\n"
+              "guard falls through before any statement in that explicit block runs.\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "sig name = 1 | 2 | 3 -> Text\n"
+              "let name = fn n =>\n"
+              "  if n == 1:\n"
+              "    return case n of\n"
+              "      1 => \"one\"\n"
+              "  else:\n"
+              "    return case n of\n"
+              "      2 => \"two\"\n"
+              "      3 => \"three\"\n"
+              "```\n",
+              "```blot\n"
+              "sig name = 1 | 2 | 3 -> Text\n"
+              "let name = fn n => do:\n"
+              "  if n == 1:\n"
+              "    return case n of\n"
+              "      1 => \"one\"\n"
+              "  else:\n"
+              "    return case n of\n"
+              "      2 => \"two\"\n"
+              "      3 => \"three\"\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "`==` is an ordinary fixity entry naming the\n"
+              "binding `Int.eq` (§7), so `if n == 1` and `if Int.eq n 1` prove exactly the same\n",
+              "`==` is a fixed operator-table entry naming the\n"
+              "binding `Int.eq` (§7), so `if n == 1` and `if Int.eq n 1` prove exactly the same\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "sig at = [Int] -> Int -> Int\n"
+              "let at = fn xs => fn n =>\n"
+              "  if n >= 0:\n"
+              "    if n < @array.len xs:\n"
+              "      return @array.get xs n\n"
+              "    else:\n"
+              "      return 0\n"
+              "  else:\n"
+              "    return 0\n"
+              "```\n",
+              "```blot\n"
+              "sig at = [Int] -> Int -> Int\n"
+              "let at = fn xs => fn n => do:\n"
+              "  if n >= 0:\n"
+              "    if n < @array.len xs:\n"
+              "      return @array.get xs n\n"
+              "    else:\n"
+              "      return 0\n"
+              "  else:\n"
+              "    return 0\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "```blot\n"
+              "let rec go = fn n => if n < 1:\n"
+              "  return consume (!token)\n"
+              "else:\n"
+              "  return go (n - 1)\n"
+              "return go 3\n"
+              "```\n",
+              "```blot\n"
+              "let rec go = fn n => do:\n"
+              "  if n < 1:\n"
+              "    return consume (!token)\n"
+              "  else:\n"
+              "    return go (n - 1)\n"
+              "return go 3\n"
+              "```\n",
+          )
+
+          replace_exact(
+              "LANGUAGE.md",
+              "Pure `let` bindings may be reordered, inlined, or discarded when their\n"
+              "values are not demanded; sequencing an effect before the tail therefore requires\n"
+              "`<-` even when its result is ignored.\n",
+              "Pure `let` bindings may be reordered, inlined, or discarded when their\n"
+              "values are not demanded; sequencing an effect before the tail therefore requires\n"
+              "`<-` even when its result is ignored. A consuming operation that appears only in\n"
+              "a dead pure declaration is likewise absent and cannot discharge a linear\n"
+              "obligation. An intentional consuming discard must be sequenced or otherwise made\n"
+              "part of the demanded result.\n",
+          )
+
+          # Specification authority map.
+          replace_exact(
+              "spec/README.md",
+              "| [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)       | Experimental pure predicates normalized into canonical types           |\n",
+              "| [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)       | Implemented pure predicates normalized into canonical types            |\n",
+          )
+          insert_after(
+              "spec/README.md",
+              "| [`FRONTEND.md`](FRONTEND.md)                                 | Source, compact-CST, fixity, and surface-elaboration contracts         |\n",
+              "| [`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md)             | Explicit statement-block and return-scope surface contract             |\n",
+          )
+          insert_after(
+              "spec/README.md",
+              "| [`RUNTIME.md`](RUNTIME.md)                                   | Runtime HIR, canonical ABI lowering, and WebAssembly boundary          |\n",
+              "| [`docs/abi.md`](../docs/abi.md)                              | Normative Core Wasm ABI 1 byte and ownership contract                  |\n",
+          )
+          replace_exact(
+              "spec/README.md",
+              "Operational notes remain in [`docs/`](../docs/). They describe current commands,\n"
+              "implementation status, and measured limitations. If an operational note and a\n"
+              "specification disagree about meaning, the specification is the intended contract\n"
+              "and the disagreement must be recorded as an implementation gap.\n",
+              "Operational notes remain in [`docs/`](../docs/). They describe current commands,\n"
+              "implementation status, and measured limitations. The byte-level contract in\n"
+              "[`docs/abi.md`](../docs/abi.md) is the explicit exception: its ABI 1 layout,\n"
+              "lifting/lowering, and ownership rules are normative by reference from\n"
+              "`RUNTIME.md`, while its `Runtime target status` section is operational. For every\n"
+              "other note, a disagreement with a specification is an implementation gap.\n",
+          )
+
+          # FRONTEND.md: fixed operators, no element syntax, and explicit blocks.
+          replace_exact(
+              "spec/FRONTEND.md",
+              "## 3. Fixity\n\n"
+              "The grammar emits flat operator chains. A fixity environment maps operator\n"
+              "spellings to declarations that contain precedence, associativity, and a binding\n"
+              "path. Folding is deterministic for a fixed lexical environment:\n\n"
+              "```text\n"
+              "Gamma_f |- chain => e1    Gamma_f |- chain => e2\n"
+              "------------------------------------------------\n"
+              "e1 = e2\n"
+              "```\n\n"
+              "An undeclared operator or incompatible chain is diagnosed. Operator spelling has\n"
+              "no intrinsic semantic meaning; the path in the declaration resolves the ordinary\n"
+              "binding used by the folded application.\n",
+              "## 3. Fixed operator folding\n\n"
+              "The grammar emits flat operator chains. Folding uses the generated table derived\n"
+              "from `compiler/language.json`; source modules cannot add spellings or change\n"
+              "precedence or associativity. For a fixed compiler language-plan revision:\n\n"
+              "```text\n"
+              "LanguagePlan |- chain => e1    LanguagePlan |- chain => e2\n"
+              "----------------------------------------------------------\n"
+              "e1 = e2\n"
+              "```\n\n"
+              "An unknown operator, a non-associative chain, or an unavailable target binding is\n"
+              "diagnosed. Each table entry names an ordinary qualified binding used by the folded\n"
+              "application. Lexical shadowing can change which value that path resolves to, but it\n"
+              "cannot change punctuation or grouping. The removed `operators` header is accepted\n"
+              "only far enough to report `BLOT_REMOVED_OPERATOR_SECTION`; it never contributes a\n"
+              "fixity environment.\n",
+          )
+
+          replace_exact(
+              "spec/FRONTEND.md",
+              "Surface forms translate to the smaller AST described by\n"
+              "[`LANGUAGE.md`](../LANGUAGE.md). In particular, loops become recursion and\n"
+              "cases, statement control becomes compiler-local result constructors, element\n"
+              "syntax becomes a nullary effect value around an ordinary application, and\n"
+              "sequencing `x <- e` executes `e`. When `e` has the erased effect-value shape\n"
+              "`Unit -> A ~ E`, sequencing supplies `()` and binds the resulting `A`. Each\n"
+              "element child is an effect value in the array passed to the parent application.\n"
+              "A nested element and a braced existing effect value enter that array unchanged;\n"
+              "an ordinary bare child computation receives one nullary suspension. A binding\n"
+              "may place a lambda, element, or ordinary expression after an indented newline;\n"
+              "CST lowering removes that layout wrapper before lowering the value normally. A\n"
+              "top-level `if` after the newline remains the first statement of the existing\n"
+              "binding block form, avoiding a second interpretation of its branch suites. The\n"
+              "wrapper changes layout only and does not introduce an AST node or scope. A bare\n"
+              "element is a child only; ordinary statement regions require explicit sequencing.\n"
+              "A `for` head remains expression-shaped until the following `in` proves it is a\n"
+              "pattern. During that reclassification, `^name` becomes a pinned pattern before\n"
+              "ordinary operator fixity is folded; this contextual interpretation does not\n"
+              "change the token identity or introduce a second parser path.\n",
+              "Surface forms translate to the smaller AST described by\n"
+              "[`LANGUAGE.md`](../LANGUAGE.md). In particular, loops become recursion and cases,\n"
+              "statement control becomes compiler-local result constructors, and sequencing\n"
+              "`x <- e` executes `e`. When `e` has the erased effect-value shape\n"
+              "`Unit -> A ~ E`, sequencing supplies `()` and binds the resulting `A`. Blot has no\n"
+              "element syntax; components and suspended children are ordinary functions and\n"
+              "nullary closures.\n\n"
+              "A function body and a `case` arm are expressions. Layout may continue that\n"
+              "expression after an indented newline, but it creates no AST node, scope, or\n"
+              "statement value. The only value forms containing declarations, rebinding,\n"
+              "sequencing, statement conditionals, loops, `break`, or `return` are `do:` and\n"
+              "`compdo:`, as specified by [`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md).\n"
+              "Internal `statement_suite` nodes remain constituents of statement `if` and `for`;\n"
+              "they are not independently usable expressions.\n\n"
+              "A `for` head remains expression-shaped until the following `in` proves it is a\n"
+              "pattern. During that reclassification, `^name` becomes a pinned pattern before\n"
+              "the generated fixed operator table is folded; this contextual interpretation does\n"
+              "not change the token identity or introduce a second parser path.\n",
+          )
+
+          replace_exact(
+              "spec/FRONTEND.md",
+              "A control translation must preserve the nearest enclosing `for` and module-or-explicit-block return targets, while\n"
+              "isolating both at value-producing `if` and `case` result scopes.\n",
+              "A control translation must preserve the nearest enclosing `for` and\n"
+              "module-or-explicit-block return targets. Statement `if` and guards preserve those\n"
+              "targets. A `case` arm is an expression boundary: only an explicit `do:` inside the\n"
+              "arm establishes a return target, and `break` cannot cross the case boundary.\n",
+          )
+
+          # PAPER.md: fixed operator plan, all applications are computations,
+          # liveness/use interaction, and compiler-limit classification.
+          insert_after(
+              "spec/PAPER.md",
+              "- [`FRONTEND.md`](FRONTEND.md) owns parsing and elaboration;\n",
+              "- [`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md) owns statement-block syntax\n"
+              "  and return scopes;\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "- [`RUNTIME.md`](RUNTIME.md) owns Runtime HIR and the public ABI; and\n",
+              "- [`RUNTIME.md`](RUNTIME.md) owns Runtime HIR and the semantic public-ABI\n"
+              "  relation, while [`docs/abi.md`](../docs/abi.md) owns ABI 1 bytes; and\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "Types, effects, fixities, layouts, and reflection descriptors are ordinary\n"
+              "compile-time values interpreted through checked bridges. Ordinary inference uses\n",
+              "Types, effects, layouts, and reflection descriptors are ordinary compile-time\n"
+              "values interpreted through checked bridges. Operator spelling and fixity come\n"
+              "from the generated fixed language plan, not from source values. Ordinary inference uses\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "   a compile-time type, effect, fixity, layout, or reflection decision.\n",
+              "   a compile-time type, effect, layout, or reflection decision; operator grouping\n"
+              "   depends only on the fixed language plan.\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "A retained pure expression may still trap or diverge. Reordering therefore\n"
+              "requires an independent totality and dependency argument; an empty effect row is\n"
+              "not enough. Computations, handlers, and branches may not be crossed by a\n"
+              "reordering that changes whether an expression is demanded.\n",
+              "A retained pure expression may still trap or diverge. Reordering therefore\n"
+              "requires an independent totality and dependency argument; an empty effect row is\n"
+              "not enough. Computations, handlers, and branches may not be crossed by a\n"
+              "reordering that changes whether an expression is demanded. A consuming operation\n"
+              "inside an erased pure declaration is absent and cannot satisfy a linear use\n"
+              "obligation; intentional consumption must occur in demanded or sequenced code.\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "Application belongs to the pure fragment only when the final row is empty and\n"
+              "the application itself has no other computation boundary. Otherwise it is a\n"
+              "Core computation and must be sequenced or returned as one.\n",
+              "Every application is a Core computation: function position is evaluated before\n"
+              "the strict argument, and the result has the callee's row. An empty row means that\n"
+              "the call issues no effect request; it does not turn application into a second pure\n"
+              "reduction relation and it does not exclude traps or divergence. A surface `let`\n"
+              "may bind an application only after checking that this row is empty, elaborating it\n"
+              "through the ordinary Core computation schedule. `<-` admits a non-empty row and is\n"
+              "also the explicit sequencing form for an already suspended nullary effect value.\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "Every erased type representation, effect descriptor, fixity, reflection value,\n"
+              "layout, declaration tag, and included-data computation has already been consumed\n",
+              "Every erased type representation, effect descriptor, reflection value, layout,\n"
+              "declaration tag, and included-data computation has already been consumed\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "behavior. A compile-time computation that does not terminate is a build that\n"
+              "does not terminate unless the implementation applies a documented fuel policy;\n"
+              "fuel exhaustion is a compiler diagnostic, not a source value.\n",
+              "behavior. A compile-time computation may diverge in the source semantics. A\n"
+              "documented implementation limit may stop the compiler first; exhausting it is a\n"
+              "compiler-limit diagnostic that establishes no source rejection and is not a\n"
+              "source value or observation.\n",
+          )
+          replace_exact(
+              "spec/PAPER.md",
+              "- types, effects, fixities, and layouts are compile-time values interpreted by\n"
+              "  checked bridges;\n",
+              "- types, effects, layouts, and reflection descriptors are compile-time values\n"
+              "  interpreted by checked bridges, while operator fixity is fixed by the generated\n"
+              "  language plan;\n",
+          )
+
+          # CORE_SEMANTICS.md: one application schedule and liveness/use boundary.
+          replace_exact(
+              "spec/CORE_SEMANTICS.md",
+              "preserves every demanded return, effect request, specified trap, and divergence.\n"
+              "An optimization cannot justify its own liveness input by first erasing the\n"
+              "behavior whose absence it is trying to prove.\n\n"
+              "## 3. Module definitions, occurrences, and instances\n",
+              "preserves every demanded return, effect request, specified trap, and divergence.\n"
+              "An optimization cannot justify its own liveness input by first erasing the\n"
+              "behavior whose absence it is trying to prove. A use or destructor that occurs\n"
+              "only inside an erased pure declaration is absent from the ownership derivation for\n"
+              "the demanded program and cannot discharge a linear obligation.\n\n"
+              "### 2.1 Application and empty effect rows\n\n"
+              "Function application is always a Core computation. The function position is\n"
+              "evaluated before its strict argument, and the computation receives the callee's\n"
+              "effect row. An empty row proves only that no effect request is issued; the call may\n"
+              "still return, trap, or diverge. Surface `let` admits an applied right-hand side only\n"
+              "after this row settles empty and elaborates it through the same computation\n"
+              "schedule. `<-` admits non-empty rows and applies a suspended nullary effect value\n"
+              "to unit exactly once. No pass may introduce a separate pure-application semantics.\n\n"
+              "## 3. Module definitions, occurrences, and instances\n",
+          )
+
+          # STAGING.md: effects are generative; seals are applicative.
+          replace_exact(
+              "spec/STAGING.md",
+              "Failure to evaluate a pure runtime expression speculatively does not authorize\n"
+              "its erasure. It remains residual unless the language requires compile-time\n"
+              "evaluation and reports a diagnostic.\n",
+              "Failure to evaluate a pure runtime expression speculatively does not authorize\n"
+              "its erasure. It remains residual unless the language requires compile-time\n"
+              "evaluation. A semantic failure at that boundary is a source diagnostic; exhaustion\n"
+              "of a documented compiler resource bound is a limit diagnostic and establishes no\n"
+              "source rejection.\n",
+          )
+          replace_exact(
+              "spec/STAGING.md",
+              "Compile-time evaluation is deterministic for a fixed source graph. Fuel or\n"
+              "resource exhaustion is an implementation refusal, not a silently chosen value.\n",
+              "Compile-time evaluation is deterministic for a fixed source graph. Fuel or\n"
+              "resource exhaustion is a documented compiler-limit diagnostic/refusal, not a\n"
+              "silently chosen value and not evidence that the source judgment fails.\n",
+          )
+          replace_exact(
+              "spec/STAGING.md",
+              "Generative declarations, currently effects and seals, mint an identity per\n"
+              "evaluated declaration occurrence. Cache reuse preserves an identity only when\n"
+              "the complete declaration revision is unchanged; reevaluation after invalidation\n"
+              "mints another identity. Spelling is not identity.\n",
+              "Ordinary source effect declarations are generative. Evaluating one under a\n"
+              "different module-instance/declaration identity mints a fresh atom; administrative\n"
+              "re-evaluation of the same recorded occurrence recovers the same atom. Cache reuse\n"
+              "therefore requires the complete owning instance identity and revision.\n\n"
+              "Seals are applicative rather than generative. Their identity is the pair of public\n"
+              "name and canonical closed invariant carrier, so reconstructing equal inputs\n"
+              "reconstructs the same seal across evaluations and revisions. Cache keys must retain\n"
+              "those canonical inputs and must not substitute declaration occurrence or spelling.\n",
+          )
+
+          # The generic capability algebra has conditional, not total,
+          # associativity because composition is partial.
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "### 2.5 Associativity and coherence\n\n"
+              "Whenever either side is defined, both bracketings describe the same footprint:\n\n"
+              "```text\n"
+              "(p * q) * r = p * (q * r)\n"
+              "```\n\n"
+              "The proof objects are not definitionally equal: they are different trees.\n"
+              "Witness reassociation is the explicit coherence operation relating the trees. It\n"
+              "consumes the old witnesses and creates the rotated witnesses without touching\n"
+              "runtime state.\n",
+              "### 2.5 Partial associativity and coherence\n\n"
+              "Composition is partial. A family must prove result coherence whenever both\n"
+              "bracketings are admitted:\n\n"
+              "```text\n"
+              "(p * q) * r defined    p * (q * r) defined\n"
+              "------------------------------------------------\n"
+              "(p * q) * r = p * (q * r)\n"
+              "```\n\n"
+              "Definedness of one bracketing does not imply definedness of the other. For\n"
+              "example, two adjacent top rectangles may first compose to a full-width strip that\n"
+              "then composes with a bottom strip, while composing one top rectangle with the\n"
+              "bottom strip would form a forbidden L shape.\n\n"
+              "The proof objects are not definitionally equal: they are different trees. Witness\n"
+              "reassociation is an explicit coherence operation only when the family validates\n"
+              "the target intermediate composition. It consumes the old witnesses and creates the\n"
+              "rotated witnesses without touching runtime state.\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "where `ab = a * b`. Right reassociation is the inverse. The generic proof needs\n"
+              "only family equality, exact parent-child identity, and family composition. It\n"
+              "does not need to know whether footprints are intervals, key sets, list segments,\n"
+              "or tree contexts.\n",
+              "where `ab = a * b`, provided that composition is defined. Right reassociation is\n"
+              "the inverse when its target intermediate composition is defined. The generic proof\n"
+              "needs family equality and exact parent-child identity, while the family adapter\n"
+              "must validate the target composition. If it is undefined, reassociation is refused\n"
+              "and the existing proof tree remains the only admissible bracketing.\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "| witness reassociation                   | yes                       | supplies partial composition         |\n",
+              "| witness reassociation                   | consumes exact proof trees | validates target partial composition |\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "Rectangular tiles compose along one complete matching face. Root and both axis\n"
+              "ranges are part of the footprint, so equal numeric bounds in different tensors\n"
+              "never mix. General tilings require a partition tree because an L-shaped union is\n"
+              "not rectangular.\n",
+              "Rectangular tiles compose along one complete matching face. Root and both axis\n"
+              "ranges are part of the footprint, so equal numeric bounds in different tensors\n"
+              "never mix. General tilings require a partition tree because an L-shaped union is\n"
+              "not rectangular. Consequently not every proof-tree rotation is admissible; a\n"
+              "reassociation must validate its newly formed intermediate tile.\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "The law tests instantiate the same core with ordered intervals, disjoint map key\n"
+              "sets, and rectangular tensor tiles. The key-set and rectangle models are\n",
+              "The law tests instantiate the same core with ordered intervals, disjoint map key\n"
+              "sets, and rectangular tensor tiles. They test conditional associativity where both\n"
+              "bracketings exist and refusal where a target intermediate is undefined. The\n"
+              "key-set and rectangle models are\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "3. unit and associativity on admitted footprints;\n",
+              "3. unit and equal results whenever both associative bracketings are admitted;\n",
+          )
+          replace_exact(
+              "spec/PARTITIONED_CAPABILITIES.md",
+              "7. reassociation and inverse coherence;\n",
+              "7. admissible reassociation, inverse coherence, and refusal when the target\n"
+              "   intermediate composition is undefined;\n",
+          )
+
+          # Runtime/ABI: separate semantic and byte authority, require defensive
+          # checks to be unreachable, and state a two-way observation theorem.
+          replace_exact(
+              "spec/RUNTIME.md",
+              "lift_A(lower_A(v)) = v\n",
+              "lift_A(lower_A(v)) ~= v\n",
+          )
+          replace_exact(
+              "spec/RUNTIME.md",
+              "ownership. The exact layouts are\n"
+              "normative in [`docs/abi.md`](../docs/abi.md).\n",
+              "ownership. This document owns the semantic representation relation and type\n"
+              "admissibility. The exact versioned ABI 1 byte layouts and caller ownership rules\n"
+              "are normative in [`docs/abi.md`](../docs/abi.md); that file's runtime-status\n"
+              "section is operational rather than semantic.\n",
+          )
+          replace_exact(
+              "spec/RUNTIME.md",
+              "For each validated Runtime-HIR step, emitted WebAssembly takes zero or more\n"
+              "administrative steps and reaches a related state. A target trap is permitted\n"
+              "only when it corresponds to a specified language trap, malformed ABI input, or\n"
+              "an unreachable defensive check. Integer arithmetic uses the source trapping or\n",
+              "For each validated Runtime-HIR step, emitted WebAssembly takes zero or more\n"
+              "administrative steps and reaches a related state. A target trap is permitted only\n"
+              "when it corresponds to a specified language trap or malformed ABI input. A\n"
+              "defensive check may remain in emitted code only with a proof that related validated\n"
+              "states cannot reach it; reaching one is an `InvariantFailure`, not an additional\n"
+              "target observation. Integer arithmetic uses the source trapping or\n",
+          )
+          replace_exact(
+              "spec/RUNTIME.md",
+              "ABI 1 refuses it at any public boundary with a diagnostic\n"
+              "that names the private layout. A branch that joins a function with a value that\n",
+              "Public-layout construction returns `TargetRefusal` if it reaches any public\n"
+              "boundary, naming the private layout. A branch that joins a function with a value that\n",
+          )
+          replace_exact(
+              "spec/RUNTIME.md",
+              "Successful lowering and emission establish:\n\n"
+              "- Runtime HIR execution simulates specialized source execution;\n"
+              "- WebAssembly execution simulates Runtime HIR execution;\n"
+              "- public lifting rejects malformed representations before observation;\n"
+              "- public lowering and lifting round-trip valid values; and\n"
+              "- the sidecar and embedded manifest bytes are identical.\n",
+              "Successful lowering and emission establish:\n\n"
+              "- Runtime HIR and specialized source satisfy the progress-sensitive adequacy\n"
+              "  package from `CORRECTNESS.md`, preserving and reflecting returns, host requests,\n"
+              "  specified traps, and divergence;\n"
+              "- WebAssembly and Runtime HIR satisfy the same two-way observation condition rather\n"
+              "  than forward simulation alone;\n"
+              "- related host requests agree on capability, operation, and argument, while\n"
+              "  continuations are related by their one-shot response protocol rather than raw\n"
+              "  target identity;\n"
+              "- public lifting rejects malformed representations before constructing source\n"
+              "  values;\n"
+              "- public lowering and lifting round-trip valid values up to the representation\n"
+              "  relation; and\n"
+              "- the sidecar and embedded manifest bytes are identical.\n",
+          )
+
+          # Compiler failure taxonomy: Diagnostics has semantic and limit cases.
+          replace_exact(
+              "spec/COMPILER.md",
+              "The packaged compiler reserves an 8 MiB Rust/Wasm stack. This is compiler-host\n"
+              "memory for recursive inference, specialization, and ownership proofs; it does\n"
+              "not alter the memory or stack of emitted Blot programs. The artifact build owns\n"
+              "the linker setting so local and hosted compilers have the same proof limit.\n",
+              "The packaged compiler reserves an 8 MiB Rust/Wasm stack. This is compiler-host\n"
+              "memory for recursive inference, specialization, and ownership checking; it does\n"
+              "not alter the memory or stack of emitted Blot programs. The artifact build owns\n"
+              "the linker setting so local and hosted compilers have the same implementation\n"
+              "budget. Exhausting that budget establishes no negative source judgment.\n",
+          )
+          replace_exact(
+              "spec/COMPILER.md",
+              "`W` is a WebAssembly module, `M` is the canonical ABI manifest, and `D` is the\n"
+              "ordered diagnostic set. Success requires `D` to be empty. The bytes of `M` in\n",
+              "`W` is a WebAssembly module, `M` is the canonical ABI manifest, and `D` is the\n"
+              "ordered diagnostic set. `D` distinguishes semantic source diagnostics from\n"
+              "documented compiler-limit diagnostics such as `BLOT_EVALUATION_LIMIT`. The former\n"
+              "are failed language derivations; the latter mean this compiler run established no\n"
+              "result and do not imply source invalidity. Success requires `D` to be empty. The bytes of `M` in\n",
+          )
+          replace_exact(
+              "spec/COMPILER.md",
+              "## 5. Error classes\n\n"
+              "The result distinguishes three failures:\n\n"
+              "```text\n"
+              "Diagnostic       source does not satisfy the language judgment\n"
+              "TargetRefusal    requested ABI/Wasm target is unsupported\n"
+              "InvariantFailure an earlier compiler contract was violated\n"
+              "```\n\n"
+              "Diagnostics accumulate at the phase that has enough source evidence to explain\n"
+              "them. A missing inference or representation fact after successful checking is an\n"
+              "invariant failure, not a new diagnostic. A production target may not turn a\n"
+              "well-typed closed internal program into a target refusal because specialization\n"
+              "failed to close a structural type.\n",
+              "## 5. Error classes\n\n"
+              "The judgment has three top-level failure results, while `Diagnostics` contains two\n"
+              "disjoint classes:\n\n"
+              "```text\n"
+              "SourceDiagnostic source does not satisfy a language judgment\n"
+              "LimitDiagnostic  a documented deterministic compiler resource bound was reached\n"
+              "TargetRefusal    the selected ABI/Wasm policy does not admit a checked program\n"
+              "InvariantFailure an earlier compiler contract was violated\n"
+              "```\n\n"
+              "Source diagnostics accumulate at the phase that has enough source evidence to\n"
+              "explain them. A limit diagnostic may stop that phase but proves neither acceptance\n"
+              "nor rejection and is not a source return, request, trap, or divergence. A missing\n"
+              "inference or representation fact after successful checking is an invariant failure,\n"
+              "not a new diagnostic. A production target may not turn a well-typed closed internal\n"
+              "program into a target refusal because specialization failed to close a structural\n"
+              "type.\n",
+          )
+
+          # Correctness wording must allow affine discard and reject private roots
+          # before emission.
+          replace_exact(
+              "spec/CORRECTNESS.md",
+              "- **ownership safety:** reduction does not duplicate or lose tracked\n"
+              "  obligations.\n",
+              "- **ownership safety:** reduction respects each mode: tracked paths are not moved\n"
+              "  twice or through a borrow, affine paths may be discarded but not duplicated, and\n"
+              "  linear paths are accounted for on every terminating exit.\n",
+          )
+          replace_exact(
+              "spec/CORRECTNESS.md",
+              "The ABI relation has no case for this\n"
+              "root in ABI 1, so accepting it at a public boundary is an emitter error.\n",
+              "The ABI relation has no case for this\n"
+              "root in ABI 1, so public-layout construction must return `TargetRefusal`; reaching\n"
+              "the emitter with such a boundary is an `InvariantFailure`.\n",
+          )
+
+          # docs/abi.md is the byte-level normative exception, but its current
+          # target-status section remains operational.
+          insert_after(
+              "docs/abi.md",
+              "# Core WebAssembly ABI\n",
+              "\n## Status\n\n"
+              "This document is the normative byte-level and caller-ownership contract for Blot\n"
+              "Core Wasm ABI 1. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic\n"
+              "source-to-caller relation and admissibility judgment. The section `Runtime target\n"
+              "status` below records current implementation coverage only; it cannot weaken an\n"
+              "ABI rule for an artifact the compiler accepts.\n",
+          )
+          replace_exact(
+              "docs/abi.md",
+              "A seal is nominal inside Blot but\n"
+              "transparent at the caller boundary; its manifest name still prevents callers\n"
+              "from confusing two source contracts.\n",
+              "A seal is nominal inside Blot but transparent at the caller boundary. Its manifest\n"
+              "records the public name so conforming tooling and the representation relation can\n"
+              "distinguish source contracts. Raw Core Wasm values with equal carrier layouts are\n"
+              "not dynamically distinguishable by that name; ABI safety therefore relies on the\n"
+              "declared manifest and the caller-conformance premise.\n",
+          )
+          replace_exact(
+              "docs/abi.md",
+              "The target does not yet implement dynamic composite export parameters or\n"
+              "results, indirect host results other than `Text`, malformed caller-memory\n"
+              "validation, boolean input validation, multiple outstanding results, or\n"
+              "asynchronous host calls. These are target restrictions, not changes to ABI 1;\n"
+              "unsupported Runtime HIR is refused.\n",
+              "The target refuses a public signature whose required adapter checks are not\n"
+              "implemented. Current restrictions include dynamic composite export parameters or\n"
+              "results, indirect host results other than `Text`, boolean inputs, composite\n"
+              "caller-memory inputs, multiple outstanding results, and asynchronous host calls.\n"
+              "These are target restrictions, not changes to ABI 1. Every artifact the compiler\n"
+              "does accept must perform all malformed-input validation required for its admitted\n"
+              "types; accepting an unchecked boundary is an `InvariantFailure`, not a permitted\n"
+              "shortcut.\n",
+          )
+
+          # Predicate examples must use explicit statement blocks.
+          replace_exact(
+              "spec/PREDICATE_REFINEMENTS.md",
+              "let increment = fn value =>\n"
+              "  let value = @satisfies value Int\n"
+              "  return value + 1\n",
+              "let increment = fn value => do:\n"
+              "  let value = @satisfies value Int\n"
+              "  return value + 1\n",
+          )
+          replace_exact(
+              "spec/PREDICATE_REFINEMENTS.md",
+              "let render = fn value =>\n"
+              "  let renderable = @satisfies value Renderable\n"
+              "  return renderable.render ()\n",
+              "let render = fn value => do:\n"
+              "  let renderable = @satisfies value Renderable\n"
+              "  return renderable.render ()\n",
+          )
+          replace_exact(
+              "spec/PREDICATE_REFINEMENTS.md",
+              "let at = fn values => fn index =>\n"
+              "  if index >= 0 && index < Contracts.count values:\n"
+              "    return @array.get values index\n"
+              "  return 0\n",
+              "let at = fn values => fn index => do:\n"
+              "  if index >= 0 && index < Contracts.count values:\n"
+              "    return @array.get values index\n"
+              "  return 0\n",
+          )
+          replace_exact(
+              "spec/PREDICATE_REFINEMENTS.md",
+              "let checked = fn value =>\n"
+              "  if value >= 0:\n"
+              "    return consume value\n"
+              "  return 0\n",
+              "let checked = fn value => do:\n"
+              "  if value >= 0:\n"
+              "    return consume value\n"
+              "  return 0\n",
+          )
+
+          # Ordered-map correctness is conditional on a protocol invariant that
+          # the structural source type cannot itself enforce.
+          replace_exact(
+              "spec/OWNED_ORDERED_MAPS.md",
+              "The invariant is checked before `Slice.copy`. `validate` provides a non-trapping\n"
+              "preflight. `copy` traps before minting authority when validation fails; on\n"
+              "success it returns the full root directly so the ordinary closure ownership\n"
+              "contract preserves the full-root freeze proof.\n",
+              "The invariant is checked before `Slice.copy`. `validate` provides a non-trapping\n"
+              "preflight. `copy` traps before minting authority when validation fails; on\n"
+              "success it returns the full root directly so the ordinary closure ownership\n"
+              "contract preserves the full-root freeze proof.\n\n"
+              "`ordered(S)` is an API protocol invariant, not an inhabitant property encoded by\n"
+              "the structural type `OrderedTextMap.of V`. `copy` establishes it and every exported\n"
+              "map operation preserves it. All map lookup, partition, and cost theorems below are\n"
+              "therefore conditional on values descending from that constructor and those\n"
+              "operations. A structurally matching raw `Slice` remains memory-safe, but binary\n"
+              "search on an unordered one is outside the abstract map contract and need not equal\n"
+              "mathematical map lookup. A total abstraction over every well-typed inhabitant would\n"
+              "require a nominal seal or revalidation at each entry.\n",
+          )
+          replace_exact(
+              "spec/OWNED_ORDERED_MAPS.md",
+              "The compiler proves only `I`; it does not add `ordered(S)` to its trusted fact\n"
+              "domain. The invariant is preserved by the operations exported from\n"
+              "`OrderedTextMap`, which expose no key mutation. Because Blot's public types are\n"
+              "structural, a caller can deliberately bypass the constructor by passing a\n"
+              "matching `Slice`; doing so violates the API precondition but cannot enlarge the\n"
+              "underlying interval authority or create memory unsafety.\n",
+              "The compiler proves only `I`; it does not add `ordered(S)` to its trusted fact\n"
+              "domain. The invariant is established dynamically by `copy` and preserved by the\n"
+              "operations exported from `OrderedTextMap`, which expose no key mutation. Thus each\n"
+              "derivation in this section has `ordered(S)` as a protocol premise. Because Blot's\n"
+              "public types are structural, a caller can deliberately bypass the constructor by\n"
+              "passing a matching `Slice`; doing so violates that premise but cannot enlarge the\n"
+              "underlying interval authority or create memory unsafety. It invalidates abstract\n"
+              "map-result and complexity claims for that value rather than the ownership theorem.\n",
+          )
+
+          # Incremental identity refers to the fixed language plan, not source
+          # fixity declarations.
+          replace_exact(
+              "spec/INCREMENTAL.md",
+              "Equality includes the module\n"
+              "input pattern and fixities plus every reachable expression, pattern,\n",
+              "Equality includes the module\n"
+              "input pattern and generated language-plan revision plus every reachable expression, pattern,\n",
+          )
+
+          # Mark earlier review notes as historical rather than concurrent status.
+          insert_after(
+              "docs/theory-review.md",
+              "# Theory implementation after the core-semantics merge\n",
+              "\n> Historical review. Its findings are indexed by the revision named below and\n"
+              "> may have been superseded. See `adversarial-theory-audit.md` and the current\n"
+              "> specification map for present authority.\n",
+          )
+          insert_after(
+              "docs/theory-coherence-review.md",
+              "# Blot theory coherence review\n",
+              "\n> Historical review. Its findings are indexed by the revision named below and\n"
+              "> may have been superseded. See `adversarial-theory-audit.md` and the current\n"
+              "> specification map for present authority.\n",
+          )
+
+          Path("docs/adversarial-theory-audit.md").write_text(
+              """# Adversarial theory audit\n\n"
+              "## Status\n\n"
+              "Reviewed against `main` at `fc4febe5fe5615f957e514f57a8b312c1cd97c89` on\n"
+              "2026-08-24. This is a review record, not an independent semantic authority. The\n"
+              "current authority map is [`spec/README.md`](../spec/README.md).\n\n"
+              "## Method\n\n"
+              "The review treated every duplicated rule as hostile input. It compared the\n"
+              "normative language document, generated grammar and operator plan, focused\n"
+              "specifications, current Runtime-HIR/ABI policy, executable examples, and the Lean\n"
+              "Core boundary. The test was not whether two paragraphs sounded compatible, but\n"
+              "whether one closed program, proof object, cache key, or target trace could satisfy\n"
+              "one rule and violate another.\n\n"
+              "## Contradictions closed\n\n"
+              "1. **Surface blocks.** The grammar admits statement sequences as values only\n"
+              "   through `do:` or `compdo:`. Stale anonymous-block and element-syntax prose and\n"
+              "   examples were removed from `LANGUAGE.md`, `FRONTEND.md`, and the predicate\n"
+              "   specification.\n"
+              "2. **Operator authority.** Precedence and spelling come from the generated fixed\n"
+              "   language plan. Source modules resolve the target bindings but cannot create a\n"
+              "   fixity environment.\n"
+              "3. **Application schedule.** Every function application is a Core computation,\n"
+              "   including an empty-row call. An empty row excludes requests, not traps or\n"
+              "   divergence; surface `let` checks the row before binding the result.\n"
+              "4. **Staged identity.** Ordinary effects are generative under complete module\n"
+              "   instance identity. Seals are applicative pairs of public name and canonical\n"
+              "   invariant carrier.\n"
+              "5. **Partial capability composition.** Associativity is result coherence when\n"
+              "   both bracketings exist, not a false definedness equivalence. Rectangle families\n"
+              "   provide the counterexample; reassociation now validates the target intermediate.\n"
+              "6. **Compiler limits.** `BLOT_EVALUATION_LIMIT` is a deterministic compiler-limit\n"
+              "   diagnostic, not a proof that the source language judgment fails.\n"
+              "7. **ABI authority and nominality.** `RUNTIME.md` owns the semantic relation and\n"
+              "   `docs/abi.md` owns ABI 1 bytes. A seal name guides conforming tooling but cannot\n"
+              "   dynamically distinguish equal raw carrier layouts in Core Wasm.\n"
+              "8. **Target observations.** Defensive traps must be unreachable for related valid\n"
+              "   states; reaching one is an invariant failure. Runtime correctness now requires\n"
+              "   progress-sensitive preservation and reflection, including host protocols and\n"
+              "   divergence.\n"
+              "9. **Structural map abstraction.** Ordered-map semantic and complexity claims are\n"
+              "   conditional on the constructor-established ordering protocol. A raw matching\n"
+              "   Slice remains memory-safe but is not thereby a mathematical ordered map.\n"
+              "10. **Ownership wording.** Affine values may be discarded. Exact accounting is a\n"
+              "    linear-path property, and a consuming use erased by declaration liveness does\n"
+              "    not discharge it.\n\n"
+              "## Remaining proof obligations\n\n"
+              "The audit found no further rule-level contradiction in the reviewed authority\n"
+              "set after these changes. That is not a claim of whole-compiler proof. The named\n"
+              "obligations still include surface-to-Core correspondence, liveness erasure,\n"
+              "principal inference within its stated fragment, certificate replay, staging and\n"
+              "specialization adequacy, capability-family law checks, Runtime-HIR/Wasm\n"
+              "progress-sensitive correspondence, canonical-adapter validation, and artifact\n"
+              "correspondence for the Lean model.\n\n"
+              "A future change is incoherent when it silently broadens one of those conclusions,\n"
+              "uses a weaker identity as a cache key, treats a compiler resource refusal as a\n"
+              "source theorem, or relies on a target representation to manufacture a source fact.\n"
+              """
+          )
+
+          # The bootstrap workflow is not part of the requested change.
+          Path(".github/workflows/adversarial-theory-audit.yml").unlink()
+
+          # Adversarial stale-claim checks.
+          forbidden = {
+              "LANGUAGE.md": [
+                  "begins the binding's existing block form",
+                  "let result =\n  declarations",
+                  "An indented arm block's `return`",
+                  "ordinary fixity entry",
+              ],
+              "spec/FRONTEND.md": [
+                  "A fixity environment maps",
+                  "element syntax becomes",
+                  "value-producing `if`",
+              ],
+              "spec/STAGING.md": ["Generative declarations, currently effects and seals"],
+              "spec/PARTITIONED_CAPABILITIES.md": ["Whenever either side is defined"],
+              "docs/abi.md": ["manifest name still prevents callers"],
+              "spec/INCREMENTAL.md": ["module input pattern and fixities"],
+          }
+          for path, needles in forbidden.items():
+              text = Path(path).read_text()
+              for needle in needles:
+                  if needle in text:
+                      raise SystemExit(f"{path}: stale claim remains: {needle!r}")
+
+          required = {
+              "spec/PAPER.md": ["Every application is a Core computation"],
+              "spec/STAGING.md": ["Seals are applicative rather than generative"],
+              "spec/PARTITIONED_CAPABILITIES.md": ["Definedness of one bracketing does not imply"],
+              "spec/COMPILER.md": ["LimitDiagnostic"],
+              "docs/abi.md": ["Raw Core Wasm values with equal carrier layouts"],
+              "spec/README.md": ["EXPLICIT_DO_BLOCKS.md", "docs/abi.md"],
+          }
+          for path, needles in required.items():
+              text = Path(path).read_text()
+              for needle in needles:
+                  if needle not in text:
+                      raise SystemExit(f"{path}: required clarification missing: {needle!r}")
+          PY
+
+      - name: Validate and commit
+        shell: bash
+        run: |
+          git diff --check
+          test ! -e .github/workflows/adversarial-theory-audit.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Close cross-spec semantic contradictions"
+          git push origin HEAD:codex/adversarial-theory-audit
