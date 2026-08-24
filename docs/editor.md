@@ -26,10 +26,24 @@ Helix with:
 deno task lsp
 ```
 
-Go-to-definition intentionally stops at the current source module. Local
-bindings, lambda parameters, case patterns, rebindings, and their shadowing are
-resolved. Definitions introduced dynamically by `open`, imported module fields,
-and package sources do not yet have cross-file locations.
+Go-to-definition resolves local bindings, lambda parameters, case patterns,
+rebindings, and their shadowing. An explicit source import field and a name from
+an `open import` follow the compiler's resolved source path and canonical export
+shape to the exported binding. Package capsules, generated names, and dynamic
+record fields without a stable source location remain non-navigable.
+
+The LSP also publishes local references and safe local rename, workspace symbols
+for open documents, local-name/field/constructor completion, inferred signature
+help, and selective top-level type, specialization, and target-status inlay
+hints. Rename refuses invalid identifiers and does not claim that a generated or
+dynamic name has a stable source location. These features use the same resident
+analysis and syntax revision as diagnostics and hover.
+
+LSP requests run through an explicit host queue. `$/cancelRequest` removes work
+that has not reached the compiler; cancellation or a newer document revision
+marks an in-flight synchronous Wasm result stale and discards it. The compiler
+does not yet run in a terminable worker, so this is not preemptive interruption
+of a Wasm call.
 
 Hover is broader than definition lookup. A value hover shows its full inferred
 signature and, for a source-local binding, the declaration that introduced it.
@@ -94,8 +108,12 @@ The default correctness and readability rules report:
   proved direct accesses;
 - explicit calls with an active conventional infix or prefix operator spelling;
   and
-- functions called with several distinct record shapes, including the maximum
-  specialization count exposed by those direct calls.
+- functions whose Rust checker reports several runtime representations,
+  including the compiler-confirmed keys and call sites. This is not a syntax
+  estimate of direct calls.
+
+Hover appends a concise provenance explanation when the checker has a type,
+ownership, specialization, or target-preflight reason at the selected span.
 
 Warnings identify likely correctness or cost problems; hints describe clearer
 equivalent source or optimization information. Safe local rewrites appear in the

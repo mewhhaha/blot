@@ -113,6 +113,91 @@ Deno.test("language formatting returns one whole-document edit", async () => {
   }
 });
 
+Deno.test("inference-centered editor features share one resident revision", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:inference-features.blot";
+  const source = `open import "blot:prelude"
+sig add = Int -> Int -> Int
+let add = fn left => fn right => left
+let answer = add 20 22
+return answer
+`;
+  try {
+    service.open(uri, source, 1);
+    const completion = await service.completion(uri, {
+      line: 4,
+      character: 7,
+    });
+    assert(completion.some((item) => item.label === "add"));
+    assert(completion.some((item) => item.label === "answer"));
+
+    const signature = await service.signatureHelp(uri, {
+      line: 3,
+      character: 21,
+    });
+    assert(signature !== null);
+    assertStringIncludes(signature.signatures[0].label, "Int -> Int -> Int");
+
+    const hints = await service.inlayHints(uri);
+    assert(hints.some((hint) => hint.label.includes("Int")));
+
+    const symbols = await service.documentSymbols(uri);
+    assertEquals(symbols.map((symbol) => symbol.name), ["add", "answer"]);
+
+    const references = await service.references(uri, {
+      line: 2,
+      character: 5,
+    });
+    assert(references.length >= 2);
+    const rename = await service.rename(
+      uri,
+      { line: 2, character: 5 },
+      "sum",
+    );
+    assert(rename !== null);
+    assert(rename.changes[uri]?.every((edit) => edit.newText === "sum"));
+
+    const workspace = await service.workspaceSymbols("ans");
+    assertEquals(workspace.map((symbol) => symbol.name), ["answer"]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("definition follows an imported field to its exported source binding", async () => {
+  const directory = await Deno.makeTempDir();
+  const libraryPath = join(directory, "library.blot");
+  const mainPath = join(directory, "main.blot");
+  const librarySource = `let answer = 42
+return { .answer = answer; }
+`;
+  const mainSource = `const Library = import "./library.blot"
+return Library.answer
+`;
+  await Deno.writeTextFile(libraryPath, librarySource);
+  await Deno.writeTextFile(mainPath, mainSource);
+  const libraryUri = toFileUrl(libraryPath).href;
+  const mainUri = toFileUrl(mainPath).href;
+  const service = new LanguageService();
+  try {
+    service.open(libraryUri, librarySource, 1);
+    service.open(mainUri, mainSource, 1);
+    const definition = await service.definition(mainUri, {
+      line: 1,
+      character: 16,
+    });
+    assertEquals(definition, {
+      uri: libraryUri,
+      range: {
+        start: { line: 0, character: 4 },
+        end: { line: 0, character: 10 },
+      },
+    });
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("value hover shows its inferred signature, compact definition, and documentation", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-value.blot");
