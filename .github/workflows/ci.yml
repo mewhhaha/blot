@@ -28,7 +28,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/abi.md")
+          text = path.read_text()
+          current = (
+              "- ABI major and minor;\n"
+              "- `coreSpecification`, currently `3.0`;\n"
+              "- a sorted `requiredFeatures` list for every non-MVP instruction family present\n"
+              "  in the artifact;\n"
+              "- memory, encoding, flattening limits, and allocator export;\n"
+          )
+          script_anchor = (
+              "- ABI major and minor;\n"
+              "- memory, encoding, flattening limits, and allocator export;\n"
+          )
+          if text.count(current) != 1:
+              raise SystemExit("docs/abi.md: could not normalize the current manifest bullets")
+          path.write_text(text.replace(current, script_anchor))
+          PY
           python3 scripts/apply_v8_branch_hints.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/abi.md")
+          text = path.read_text()
+          generated = (
+              "- ABI major and minor;\n"
+              "- required validation features and optional optimization metadata;\n"
+              "- memory, encoding, flattening limits, and allocator export;\n"
+          )
+          final = (
+              "- ABI major and minor;\n"
+              "- `coreSpecification`, currently `3.0`;\n"
+              "- a sorted `requiredFeatures` list for every non-MVP instruction family present\n"
+              "  in the artifact;\n"
+              "- a sorted `optimizationFeatures` list for semantically ignorable target metadata;\n"
+              "- memory, encoding, flattening limits, and allocator export;\n"
+          )
+          if text.count(generated) != 1:
+              raise SystemExit("docs/abi.md: patch did not produce the expected manifest bullets")
+          path.write_text(text.replace(generated, final))
+          PY
           cargo fmt --manifest-path compiler/Cargo.toml
           deno fmt \
             docs/abi.md \
