@@ -1,188 +1,231 @@
-# Frontend and elaboration
+# Frontend contract
 
-## 1. Contract
+## Status and scope
 
-The logical frontend is the composition
+[`grammar.baba`](../grammar.baba) decides concrete parse acceptance.
+[`LANGUAGE.md`](../LANGUAGE.md) decides source behavior subject to the corrections
+in [`COHERENCE.md`](COHERENCE.md). This document owns the frontend judgments that
+connect UTF-8 source to hygienic Core elaboration.
 
-```text
-F = elaborate o fixityFold o materialize o parseGeneral o layout o lexBaba
-```
-
-from exact source text to Blot AST. Baba owns lexical identities and grammar
-recognition; Blot owns layout insertion, compact-CST materialization, fixity
-folding, and surface elaboration. The logical composition names semantic
-ownership, not the number of lexer executions in a host implementation. Compiler
-commands use Baba's CPU compact frontend for the general parser profile. The
-WebGPU executor is a conformance tool, not a fallback source of syntax.
-
-For source `s`, successful frontend execution produces
+The frontend consists of four distinct boundaries:
 
 ```text
-F(s) = (a, spans, imports, includes)
+UTF-8 bytes
+  -> tokens
+  -> Baba compact CST
+  -> resolved surface AST
+  -> demanded value/computation Core
 ```
 
-where every node in `a` has a source origin, and every external input that can
-affect later compile-time evaluation appears in `imports` or `includes`.
+No later pass reparses source spelling or invents another interpretation of
+layout, operator grouping, binding scope, or control targets.
 
-## 2. Lexing and parsing
+## 1. Source and token identity
 
-The generated Baba plan and its schema version are part of the compiler input.
-The grammar must satisfy the version-3 general profile and declare every rule as
-an island. No `metadata.parser.resolutions` entry may choose between ambiguous
-meanings.
-
-Layout elaboration inserts `LAYOUT_NEWLINE`, `LAYOUT_INDENT`, and
-`LAYOUT_DEDENT` only between Baba tokens. Delimiter nesting suspends layout, an
-indent opens a suite only after a grammar introducer, and a continuation indent
-after any other token remains ordinary whitespace. Every inserted offset maps
-back to the exact boundary in the original source, so diagnostics and editor
-locations never expose the private characters. Inconsistent dedents are source
-diagnostics before parsing.
-
-The current Node host has an explicit physical bridge because Baba's
-`CpuFrontend` accepts source text rather than an already-produced token tape:
+Source is UTF-8. Lexing is deterministic under maximal munch for a fixed Baba
+language plan:
 
 ```text
-lex_wasm(source) -> layout(source, tokens) -> layoutSource
-lex_wasm(layoutSource) -> authoritative lexical acceptance
-parse_cpu(layoutSource) -> compact CST
+lex(plan, source) = tokens
 ```
 
-`parse_cpu` internally replays the lexer tables from the same checked-in Baba
-plan before running the general-profile island executor. That replay is an API
-implementation detail, not a second lexical contract. Blot must not interpret
-characters or assign token identities itself. A future Baba token-tape parser
-API may fuse the replay away without changing `F`.
+A token records its kind, exact byte span, and source revision. Whitespace and
+comments influence layout and diagnostics even when they do not become semantic
+nodes. An incremental lexer may reuse a token only when every byte it examined
+to decide that token is unchanged; the dependency extent may exceed the token's
+accepted span.
 
-Required properties:
+Invalid UTF-8, invalid tokens, and indentation errors are source diagnostics.
+Fuel, memory, or stack exhaustion in the compiler is a limit diagnostic and does
+not establish that another implementation could not lex the same source.
+
+## 2. Compact CST
+
+Baba's generated parser plan is the only parser authority. For fixed plan and
+token stream, accepted compact-CST structure is deterministic:
 
 ```text
-lex_wasm(s) = t1 and lex_wasm(s) = t2      implies t1 = t2
-layout(s, t) = l1 and layout(s, t) = l2    implies l1 = l2
-parse_cpu(l) = c1 and parse_cpu(l) = c2    implies c1 = c2
-tokens_cpu(l) = tokens_wasm(l)
+parse(plan, tokens) = cst_1
+parse(plan, tokens) = cst_2
+--------------------------------
+cst_1 = cst_2
 ```
 
-Compact-CST materialization preserves rule identity, field identity, token
-identity, ordering, and source spans. Unknown schema identities are invariant
-failures. Rejected source receives a diagnostic at the furthest justified source
-span; the materializer does not invent a partial AST to continue.
+Equality includes rule identity, fields, child order, accepted spans, and error
+recovery decisions. A later elaborator may reject a syntactically accepted form
+for a semantic reason, but it may not reinterpret the token stream through a
+second parser.
 
-### Active-island lemma
+Every compact node retains enough source origin to produce stable diagnostics.
+Compiler-generated nodes created after parsing retain an origin pointing to the
+source construct whose elaboration required them.
 
-For fixed tokens and delimiter matches, an island call is identified by
-`(island, start, limit)`. Rejecting a call whose identity already occurs on the
-current derivation path prevents recursive cycles. Once that call returns, its
-identity cannot affect a sibling derivation and may be removed:
+## 3. Fixed operator folding
+
+The grammar emits flat operator chains. Folding uses the generated table derived
+from `compiler/language.json`. Source modules cannot add a spelling or change its
+precedence or associativity.
+
+For a fixed language-plan revision:
 
 ```text
-k notin active    parse(k, active union {k}) = r
-------------------------------------------------
-parse(k, active) = r and active is restored
+LanguagePlan |- chain => e_1
+LanguagePlan |- chain => e_2
+--------------------------------
+e_1 = e_2
 ```
 
-Therefore cycle detection needs one mutable stack, not a copy per recursive
-call. At recursion depth `D`, path storage is `O(D)` and each call performs one
-push and pop. Membership is a bounded linear scan of that path; replacing it
-with a hash table is justified only if measured syntax depth makes that scan
-dominant. The optimization changes neither candidate selection nor the
-furthest-progress diagnostic.
-
-## 3. Fixity
-
-The grammar emits flat operator chains. A fixity environment maps operator
-spellings to declarations that contain precedence, associativity, and a binding
-path. Folding is deterministic for a fixed lexical environment:
+Each table entry contains:
 
 ```text
-Gamma_f |- chain => e1    Gamma_f |- chain => e2
-------------------------------------------------
-e1 = e2
+(spelling, precedence, associativity, qualified binding path)
 ```
 
-An undeclared operator or incompatible chain is diagnosed. Operator spelling has
-no intrinsic semantic meaning; the path in the declaration resolves the ordinary
-binding used by the folded application.
+Folding determines grouping and inserts ordinary applications to the qualified
+binding path. Lexical resolution may change the value reached by that path when
+source deliberately shadows a component, but it cannot change punctuation or
+grouping.
 
-## 4. Surface elaboration
+An unknown operator, a forbidden non-associative chain, or an unavailable target
+binding is diagnosed. The removed `operators` header is recognized only far
+enough to report `BLOT_REMOVED_OPERATOR_SECTION`; it never contributes a source
+fixity environment.
 
-Surface forms translate to the smaller AST described by
-[`LANGUAGE.md`](../LANGUAGE.md). In particular, loops become recursion and
-cases, statement control becomes compiler-local result constructors, element
-syntax becomes a nullary effect value around an ordinary application, and
-sequencing `x <- e` executes `e`. When `e` has the erased effect-value shape
-`Unit -> A ~ E`, sequencing supplies `()` and binds the resulting `A`. Each
-element child is an effect value in the array passed to the parent application.
-A nested element and a braced existing effect value enter that array unchanged;
-an ordinary bare child computation receives one nullary suspension. A binding
-may place a lambda, element, or ordinary expression after an indented newline;
-CST lowering removes that layout wrapper before lowering the value normally. A
-top-level `if` after the newline remains the first statement of the existing
-binding block form, avoiding a second interpretation of its branch suites. The
-wrapper changes layout only and does not introduce an AST node or scope. A bare
-element is a child only; ordinary statement regions require explicit sequencing.
-A `for` head remains expression-shaped until the following `in` proves it is a
-pattern. During that reclassification, `^name` becomes a pinned pattern before
-ordinary operator fixity is folded; this contextual interpretation does not
-change the token identity or introduce a second parser path.
+The generated language-plan revision is part of frontend, incremental, package,
+and artifact identities.
 
-Recursion is declared in a binding header:
+## 4. Explicit statement values
+
+A function body and a `case` arm are expressions. A newline and indentation may
+continue an expression, but layout alone creates no statement-valued AST node or
+scope.
+
+The only expression forms that contain declarations, sequencing, statement
+conditionals, loops, `break`, or `return` are:
 
 ```text
-let rec f = fn p => body
-        |
-        +-- elaborates to Binding(f, Rec(Lambda(p, body)))
+do:     run-time statement value
+compdo: compile-time statement value
 ```
 
-The modifier is admitted only after `let` or `const`; `rec` is not an expression
-prefix. Consequently `f = rec (fn p => body)` fails parsing rather than reaching
-elaboration. The translation deliberately retains the existing `Rec` AST so
-scope construction, recursive-group typing, ownership transfer, evaluation,
-specialization, and Runtime HIR receive the same representation as before. A
-surface binding modifier therefore does not add a downstream declaration kind or
-runtime operation.
+Their exact source contract is in
+[`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md). A function with statements
+writes `fn x => do:`. A case arm with statements writes `pattern => do:`.
+Statement suites under `if` and `for` are internal constituents of those forms;
+they cannot be used as anonymous expressions.
 
-Adjacent recursive bindings of one declaration kind elaborate to adjacent
-bindings whose values have `Rec` roots. Group discovery remains an AST property
-and signatures neither join nor interrupt a group. A declaration tag wraps the
-already-recursive raw binding before applying its transforms, preserving the
-existing rule that the transformed outer binding is not itself a group member.
+A `return` targets the nearest module or explicit `do:`/`compdo:` block. A
+statement `if` and a loop preserve that target. A `case` arm is an expression
+boundary: only an explicit block inside the arm introduces a return target, and
+`break` cannot cross the case boundary to an enclosing loop.
 
-Write `surface(s) ⇓ a` for elaboration and `~` for observational equivalence in
-the source semantics. Every translation has the obligation
+Blot has no element syntax. Components, properties, children, and suspension are
+ordinary functions, records, arrays, and nullary closures. The frontend has no
+element-specific lowering path.
+
+## 5. Contextual pattern recognition
+
+Most pattern syntax is unambiguous in the CST. A `for` head remains
+expression-shaped until `in` establishes the pattern context. At that boundary,
+frontend elaboration reclassifies admitted pattern forms, including a pinned
+`^name`, before fixed operator folding.
+
+This contextual interpretation:
+
+- retains the original token and span identity;
+- does not invoke another parser;
+- does not grant pattern meaning outside the documented context; and
+- produces an ordinary resolved pattern consumed by later elaboration.
+
+Refutable iteration requires `for case`; ordinary `for pattern in iterator`
+requires an irrefutable pattern. This prevents a pattern edit from silently
+changing iteration cardinality.
+
+## 6. Name resolution and hygiene
+
+Resolution maps every source read, write, signature, control target, import, and
+operator target to a stable identity in one source revision.
+
+Compiler-generated binders inhabit an identity space disjoint from source names.
+Freshness is semantic, not a printed-name convention. Alpha-renaming generated
+binders cannot change observations, diagnostics attached to source origins, or
+serialized certificate references.
+
+An `open`, explicit shadow, recursive group, pattern binder, and `:=` rebind use
+the scope rules in `LANGUAGE.md`. A later pass consumes resolved identities and
+must not repeat lexical lookup from a printed name.
+
+## 7. Surface elaboration
+
+Surface elaboration lowers rich control to the smaller Core owned by
+[`CORE_SEMANTICS.md`](CORE_SEMANTICS.md):
+
+- a source value becomes a returned Core value;
+- every function application becomes a Core computation;
+- a pure source position admits an applied computation only after its row settles
+  empty;
+- `x <- c` becomes a bind;
+- sequencing a suspended nullary effect value applies it to unit once;
+- loops become recursion and cases with explicit accumulator transfer;
+- statement `return` and `break` become compiler-local control results before
+  ordinary Core control is reconstructed;
+- handler syntax becomes explicit handler Core; and
+- known deferred calls retain one affine demand fact for specialization.
+
+An application with an empty row still uses the computation schedule. The
+frontend does not create a second pure-application AST based on the eventual
+row.
+
+The liveness graph is constructed after resolution and surface elaboration.
+Dead pure declarations are removed from source evaluation before safety and
+ownership judgments consume the demanded program.
+
+## 8. Module occurrences
+
+Resolution distinguishes:
 
 ```text
-surfaceForm ~ desugaredAST
+resolved module definition
+written import occurrence
+module instance under a parent occurrence stack
 ```
 
-under the same lexical bindings and control targets. Unspellable compiler-local
-constructors must be fresh with respect to every source name. A surface feature
-that can be expressed by this translation does not receive a downstream AST
-node, typing rule, or backend operation.
+Every written import occurrence receives a stable source-site identity. Nested
+instance identity includes the complete enclosing occurrence stack. Reusing a
+resolved path, argument value, or printed import spelling cannot merge two
+occurrences.
 
-## 5. Scope and source order
+Bare import supplies unit; `import ... with value` supplies the explicit module
+argument. Elaboration yields the evaluated instance result, not an uninvoked
+module closure.
 
-Nothing is implicitly in scope. Imports, `open`, the fixed operator targets, and
-local bindings determine lexical lookup. The prelude is an ordinary imported
-module.
+## 9. Diagnostics and recovery
 
-Elaboration preserves the source order of live computation bindings. Pure
-bindings may later be erased when unused, but the frontend does not reorder a
-computation or turn `let` into sequencing. A control translation must preserve
-the nearest enclosing `for` and module-or-explicit-block return targets, while
-isolating both at value-producing `if` and `case` result scopes.
+Frontend recovery exists to report more source errors, not to broaden accepted
+syntax. Recovered nodes carry an explicit error identity and cannot enter a
+successful checked artifact.
 
-## 6. Frontend theorem obligation
+Diagnostic ordering is deterministic for fixed source, language plan, dependency
+revisions, and compiler schema. Source diagnostics are distinguished from
+compiler-limit diagnostics as specified in `COHERENCE.md` and `COMPILER.md`.
 
-If `F(s) = a`, then:
+## 10. Obligations
 
-1. `a` is well scoped or carries complete scope diagnostics;
-2. each AST node maps to an exact source origin;
-3. evaluating `s` by the surface rules is observationally equivalent to
-   evaluating `a`;
-4. every imported or included input is in the source graph; and
-5. rerunning `F` with the same source and parser plan produces equal AST and
-   diagnostics.
+The frontend owes:
 
-CPU/GPU token parity, compact-CST corpus tests, lowering goldens, and
-surface/core differential tests are executable evidence for this obligation.
+1. **lexing determinism** for a fixed plan and source revision;
+2. **parse determinism** for a fixed token stream;
+3. **incremental equivalence** with fresh lexing and parsing;
+4. **fixed-operator determinism** and rejection of removed custom fixities;
+5. **hygiene** for every generated binder;
+6. **scope preservation** for reads, rebinding, recursive groups, and imports;
+7. **control-target preservation** for explicit blocks, loops, cases, and
+   handlers;
+8. **typing preservation** from accepted surface constructs to Core;
+9. **operational correspondence** up to administrative Core steps; and
+10. **origin preservation** sufficient for stable source diagnostics and
+    certificate references.
+
+Executable parser, CST, and elaboration fixtures provide finite evidence for
+these obligations. They do not authorize a source form absent from
+`grammar.baba` or a second downstream semantics.
