@@ -30,14 +30,14 @@ test("V8 executes the Wasm 3 tail-call profile without stack growth", async () =
 
     const instantiated = await WebAssembly.instantiate(bytes);
     const isEven = instantiated.instance.exports["blot:is_even"] as
-      | ((remaining: bigint) => number)
+      | ((remaining: bigint) => bigint)
       | undefined;
     assert.equal(typeof isEven, "function");
     if (isEven === undefined) {
       throw new Error("mutual-tail-recursion artifact omitted blot:is_even");
     }
-    assert.equal(isEven(250_000n), 1);
-    assert.equal(isEven(250_001n), 0);
+    assert.equal(isEven(250_000n), 1n);
+    assert.equal(isEven(250_001n), 0n);
   } finally {
     compiler.destroy();
   }
