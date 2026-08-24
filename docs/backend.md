@@ -130,11 +130,12 @@ feature families used by each artifact. Current emission uses bulk-memory,
 internal multi-value results, fixed-width SIMD when the source requests vector
 operations, and direct tail calls.
 
-A `call.direct` whose result is returned immediately from an internal function
-lowers to `return_call`. The backend verifies parameter and result flattening
-before emission. This removes recursive Wasm frames without changing Blot's
-source observation model. Export wrappers are not tail-called because they must
-restore allocation checkpoints and perform canonical result lowering.
+A `call.direct` whose result is returned immediately, or forwarded through only
+empty join blocks to the return, lowers to `return_call`. The backend verifies
+parameter and result flattening before emission. This removes recursive Wasm
+frames without changing Blot's source observation model. Export wrappers are not
+tail-called because they must restore allocation checkpoints and perform
+canonical result lowering.
 
 CI validates and executes the target without feature flags on the current Node
 24 LTS and Node 26 Current V8 lines. The detailed adoption and deferral

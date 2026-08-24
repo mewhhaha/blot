@@ -27,18 +27,18 @@ The ABI manifest contains:
 `requiredFeatures` is sorted and artifact-specific. It is an early diagnostic
 aid; `WebAssembly.validate` remains authoritative for a concrete engine.
 
-| Feature                       | Current policy                                  | Reason                                                                                 |
-| ----------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------- |
-| bulk memory                   | always emitted                                  | `cabi_realloc` and persistent copies use `memory.copy`                                 |
-| multi-value                   | internal, when needed                           | removes tuple result records and reloads                                               |
-| fixed SIMD                    | emitted for supported vector source operations  | preserves the existing deterministic vector semantics                                  |
-| tail calls                    | emitted for exact internal direct tail position | removes recursive frames and call-result local traffic                                 |
-| typed references / `call_ref` | deferred                                        | residual known choices already become direct calls; open closures are refused          |
-| GC                            | deferred                                        | would replace the Store, ownership, reuse, and ABI representation proof                |
-| memory64                      | deferred                                        | ABI 1 is memory32 and current programs gain no offset-space benefit                    |
-| multiple memories             | deferred                                        | no measured benefit yet; it complicates canonical adapters and interpreter portability |
-| exception handling            | deferred                                        | Blot algebraic effects are resumable and source traps are not catchable exceptions     |
-| relaxed SIMD                  | deferred                                        | relaxed/FMA instructions can change deterministic floating-point results               |
+| Feature                       | Current policy                                                        | Reason                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| bulk memory                   | always emitted                                                        | `cabi_realloc` and persistent copies use `memory.copy`                                 |
+| multi-value                   | internal, when needed                                                 | removes tuple result records and reloads                                               |
+| fixed SIMD                    | emitted for supported vector source operations                        | preserves the existing deterministic vector semantics                                  |
+| tail calls                    | exact internal direct tail position, including empty forwarding joins | removes recursive frames and call-result local traffic                                 |
+| typed references / `call_ref` | deferred                                                              | residual known choices already become direct calls; open closures are refused          |
+| GC                            | deferred                                                              | would replace the Store, ownership, reuse, and ABI representation proof                |
+| memory64                      | deferred                                                              | ABI 1 is memory32 and current programs gain no offset-space benefit                    |
+| multiple memories             | deferred                                                              | no measured benefit yet; it complicates canonical adapters and interpreter portability |
+| exception handling            | deferred                                                              | Blot algebraic effects are resumable and source traps are not catchable exceptions     |
+| relaxed SIMD                  | deferred                                                              | relaxed/FMA instructions can change deterministic floating-point results               |
 
 ## Tail-call lowering
 
@@ -56,10 +56,11 @@ args
 return_call f
 ```
 
-only when the call is the final operation, the returned value is that exact
-operation result, the target is an internal function, and the caller, operation,
-and callee have equal flattened result layouts. Argument layouts are checked as
-well.
+only when the call is the final operation and its result reaches the function
+return either directly or through a cycle-free chain of empty forwarding blocks.
+The target must be internal, and the caller, operation, and callee must have
+equal flattened result layouts. Argument layouts are checked as well. Any
+intervening operation, condition, trap, or cycle disables the optimization.
 
 The optimization applies to self recursion and mutual recursion. It does not
 apply across a public export wrapper because that wrapper must execute

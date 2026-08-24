@@ -37,9 +37,11 @@ the feature list for an earlier compatibility diagnostic. The feature list is
 descriptive; it never substitutes for WebAssembly validation.
 
 An internal direct call in exact tail position lowers to `return_call` when the
-callee and caller have the same flattened result layout. This preserves source
-returns, requests, traps, and divergence while discarding a target-only caller
-frame. Public wrappers retain ordinary calls because canonical lifting,
+callee and caller have the same flattened result layout. Exact tail position may
+include a cycle-free chain of empty blocks that only rename the result before
+the return; any operation or control decision ends the proof. This preserves
+source returns, requests, traps, and divergence while discarding a target-only
+caller frame. Public wrappers retain ordinary calls because canonical lifting,
 lowering, call checkpoints, and post-return ownership must still execute.
 
 A newer WebAssembly feature is enabled only when it either removes a compiler

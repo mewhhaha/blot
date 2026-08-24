@@ -332,12 +332,57 @@ fn exported_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
         .collect()
 }
 
-fn direct_tail_call(block: &RuntimeBlock) -> Option<&RuntimeOperation> {
-    let RuntimeTerminator::Return { value, .. } = &block.terminator else {
-        return None;
-    };
+fn direct_tail_call<'a>(
+    function: &'a RuntimeFunction,
+    block: &'a RuntimeBlock,
+) -> Option<&'a RuntimeOperation> {
     let operation = block.operations.last()?;
-    (operation.kind == "call.direct" && operation.result == *value).then_some(operation)
+    if operation.kind != "call.direct" {
+        return None;
+    }
+    forwards_to_return(
+        function,
+        &block.terminator,
+        operation.result,
+        &mut HashSet::new(),
+    )
+    .then_some(operation)
+}
+
+fn forwards_to_return(
+    function: &RuntimeFunction,
+    terminator: &RuntimeTerminator,
+    value: usize,
+    visited: &mut HashSet<usize>,
+) -> bool {
+    match terminator {
+        RuntimeTerminator::Return {
+            value: returned, ..
+        } => *returned == value,
+        RuntimeTerminator::Branch {
+            target, arguments, ..
+        } => {
+            if !visited.insert(*target) {
+                return false;
+            }
+            let Some(block) = function.blocks.get(*target) else {
+                return false;
+            };
+            if block.id != *target || !block.operations.is_empty() {
+                return false;
+            }
+            block
+                .parameters
+                .iter()
+                .zip(arguments)
+                .filter(|(_, argument)| **argument == value)
+                .any(|(parameter, _)| {
+                    let mut path = visited.clone();
+                    forwards_to_return(function, &block.terminator, parameter.value, &mut path)
+                })
+        }
+        RuntimeTerminator::Conditional { .. } | RuntimeTerminator::Trap { .. } => false,
+    }
 }
 
 fn runtime_type_uses_simd(module: &RuntimeModule, type_id: usize) -> Result<bool, String> {
@@ -414,7 +459,7 @@ fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, S
 
     let uses_tail_calls = internal_functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
-            direct_tail_call(block)
+            direct_tail_call(function, block)
                 .and_then(|operation| operation.function)
                 .is_some_and(|target| internal_ids.contains(&target))
         })
@@ -1036,7 +1081,7 @@ fn dynamic_internal_function(
                 .i32_const(block.id as i32)
                 .i32_eq()
                 .if_(BlockType::Empty);
-            let tail_call = direct_tail_call(block);
+            let tail_call = direct_tail_call(function, block);
             let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
             for operation in &block.operations[..operation_count] {
                 emit_dynamic_operation(
@@ -2193,7 +2238,7 @@ fn emit_structured_loop_block(
         ));
     }
     let tail_call = if matches!(result, StructuredResult::Internal) {
-        direct_tail_call(block)
+        direct_tail_call(function, block)
     } else {
         None
     };
@@ -4721,9 +4766,63 @@ mod tests {
 
     #[test]
     fn direct_call_return_is_a_tail_call_candidate() {
-        let operation = RuntimeOperation {
+        let block = RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![direct_call_operation(7)],
+            terminator: RuntimeTerminator::Return {
+                value: 7,
+                span: span(),
+            },
+        };
+        let function = runtime_function(vec![block]);
+        assert_eq!(
+            direct_tail_call(&function, &function.blocks[0]).map(|candidate| candidate.result),
+            Some(7)
+        );
+
+        let mut not_tail = function.clone();
+        not_tail.blocks[0].terminator = RuntimeTerminator::Return {
+            value: 8,
+            span: span(),
+        };
+        assert!(direct_tail_call(&not_tail, &not_tail.blocks[0]).is_none());
+    }
+
+    #[test]
+    fn direct_call_forwarded_through_empty_join_is_a_tail_call_candidate() {
+        let function = runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: Vec::new(),
+                operations: vec![direct_call_operation(7)],
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: vec![7],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: vec![parameter(8)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Return {
+                    value: 8,
+                    span: span(),
+                },
+            },
+        ]);
+
+        assert_eq!(
+            direct_tail_call(&function, &function.blocks[0]).map(|candidate| candidate.result),
+            Some(7)
+        );
+    }
+
+    fn direct_call_operation(result: usize) -> RuntimeOperation {
+        RuntimeOperation {
             kind: "call.direct",
-            result: 7,
+            result,
             type_id: 1,
             operands: vec![0],
             ownership: "plain",
@@ -4739,27 +4838,7 @@ mod tests {
             field: None,
             function: Some(2),
             signature: None,
-        };
-        let block = RuntimeBlock {
-            id: 0,
-            parameters: Vec::new(),
-            operations: vec![operation],
-            terminator: RuntimeTerminator::Return {
-                value: 7,
-                span: span(),
-            },
-        };
-        assert_eq!(
-            direct_tail_call(&block).map(|candidate| candidate.result),
-            Some(7)
-        );
-
-        let mut not_tail = block.clone();
-        not_tail.terminator = RuntimeTerminator::Return {
-            value: 8,
-            span: span(),
-        };
-        assert!(direct_tail_call(&not_tail).is_none());
+        }
     }
 
     fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
