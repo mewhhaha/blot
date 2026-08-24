@@ -704,7 +704,7 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 4914
+      "lines": 5038
     },
     {
       "path": "compiler/src/frontend_plan.rs",

@@ -159,6 +159,8 @@ The manifest records:
 - `coreSpecification`, currently `3.0`;
 - a sorted `requiredFeatures` list for every non-MVP instruction family present
   in the artifact;
+- a sorted `optimizationFeatures` list for semantically ignorable target
+  metadata;
 - memory, encoding, flattening limits, and allocator export;
 - runtime and compile-time source exports;
 - canonical function types and post-return names;

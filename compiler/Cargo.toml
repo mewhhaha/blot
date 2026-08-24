@@ -14,6 +14,7 @@ rmp-serde = "=1.3.0"
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = { version = "=1.0.140", features = ["preserve_order"] }
 wasm-encoder = "=0.255.0"
+wasmparser = { version = "=0.255.0", default-features = false }
 
 [profile.release]
 codegen-units = 1
