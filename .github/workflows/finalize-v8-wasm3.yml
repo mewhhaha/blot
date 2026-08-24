@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_once(path: str, old: str, new: str) -> None:
               file = Path(path)
@@ -47,49 +48,27 @@ jobs:
           end = ci.index("  formal:\n", start)
           ci_path.write_text(ci[:start] + ci[end:])
 
-          direct_tail_call = '''fn direct_tail_call(block: &RuntimeBlock) -> Option<&RuntimeOperation> {
-              let RuntimeTerminator::Return { value, .. } = &block.terminator else {
-                  return None;
-              };
-              let operation = block.operations.last()?;
-              (operation.kind == "call.direct" && operation.result == *value).then_some(operation)
-          }
-          '''
-          replace_once(
-              "compiler/src/backend.rs",
-              direct_tail_call,
-              direct_tail_call
-              + '''
+          backend_path = Path("compiler/src/backend.rs")
+          backend = backend_path.read_text()
+          feature_marker = "\nfn required_wasm_features(module: &RuntimeModule)"
+          if "fn runtime_type_uses_simd(" not in backend:
+              helper = '''
           fn runtime_type_uses_simd(
               module: &RuntimeModule,
               type_id: usize,
           ) -> Result<bool, String> {
               Ok(flattened_runtime_type(module, type_id)?.contains(&ValType::V128))
           }
-          ''',
-          )
-
-          old_simd = '''    let uses_simd = module.functions.iter().any(|function| {
-              function.blocks.iter().any(|block| {
-                  block.parameters.iter().any(|parameter| {
-                      matches!(
-                          module.types.get(parameter.type_id),
-                          Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
-                      )
-                  }) || block.operations.iter().any(|operation| {
-                      operation.kind == "vector"
-                          || matches!(
-                              module.types.get(operation.type_id),
-                              Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
-                          )
-                  })
-              })
-          });
-          if uses_simd {
-              features.insert("simd");
-          }
           '''
-          new_simd = '''    let mut uses_simd = false;
+              if backend.count(feature_marker) != 1:
+                  raise SystemExit("backend: required_wasm_features marker is not unique")
+              backend = backend.replace(feature_marker, helper + feature_marker, 1)
+
+          simd_pattern = re.compile(
+              r'''    let uses_simd = module\.functions\.iter\(\)\.any\(\|function\| \{\n.*?    if uses_simd \{\n        features\.insert\("simd"\);\n    \}\n''',
+              re.DOTALL,
+          )
+          simd_replacement = '''    let mut uses_simd = false;
               for function in &module.functions {
                   let signature = module.signatures.get(function.signature).ok_or_else(|| {
                       format!(
@@ -118,7 +97,10 @@ jobs:
                   features.insert("simd");
               }
           '''
-          replace_once("compiler/src/backend.rs", old_simd, new_simd)
+          backend, count = simd_pattern.subn(simd_replacement, backend, count=1)
+          if count != 1:
+              raise SystemExit(f"backend: expected one SIMD detector, found {count}")
+          backend_path.write_text(backend)
 
           replace_once(
               "docs/wasm-target-profile.md",
