@@ -1,6 +1,6 @@
 {
   "protocol": {
-    "compilerHostAbi": 1,
+    "compilerHostAbi": 2,
     "checkedModuleCertificate": 13,
     "runtimeHir": 4
   },
@@ -268,6 +268,7 @@
     "BLOT_REBINDING_FRAME",
     "BLOT_RECURSIVE_OWNERSHIP_RESULT",
     "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
+    "BLOT_REFINEMENT_BUDGET",
     "BLOT_REFINEMENT_NOT_COMPTIME",
     "BLOT_REFINEMENT_PREDICATE",
     "BLOT_REFLECTION_NOT_INDEXED",
@@ -298,6 +299,7 @@
     "BLOT_SIGNATURE_TARGET",
     "BLOT_SIMD_IMMEDIATE_NOT_COMPTIME",
     "BLOT_SIMD_IMMEDIATE_RANGE",
+    "BLOT_SPECIALIZATION_LIMIT",
     "BLOT_SPREAD_MAY_OVERWRITE",
     "BLOT_TARGET_REFUSAL",
     "BLOT_TEXT_BOUNDS",
@@ -699,7 +701,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 10718
+      "lines": 11002
     },
     {
       "path": "compiler/src/hir.rs",
@@ -714,12 +716,12 @@
       "lines": 5428
     },
     {
-      "path": "compiler/src/frontend_plan.rs",
-      "lines": 3513
+      "path": "compiler/src/eval.rs",
+      "lines": 3525
     },
     {
-      "path": "compiler/src/eval.rs",
-      "lines": 3489
+      "path": "compiler/src/frontend_plan.rs",
+      "lines": 3513
     },
     {
       "path": "compiler/src/lower.rs",
@@ -730,12 +732,12 @@
       "lines": 3148
     },
     {
-      "path": "src/syntax/lower.ts",
-      "lines": 2740
+      "path": "compiler/src/session.rs",
+      "lines": 2766
     },
     {
-      "path": "compiler/src/session.rs",
-      "lines": 2594
+      "path": "src/syntax/lower.ts",
+      "lines": 2740
     },
     {
       "path": "compiler/src/primitives.rs",
@@ -746,16 +748,16 @@
       "lines": 1417
     },
     {
+      "path": "compiler/src/safety.rs",
+      "lines": 1393
+    },
+    {
       "path": "src/runtime/hir.ts",
       "lines": 1362
     },
     {
-      "path": "compiler/src/safety.rs",
-      "lines": 1349
-    },
-    {
       "path": "src/tooling/formatter.ts",
-      "lines": 1238
+      "lines": 1243
     }
   ]
 }

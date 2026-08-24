@@ -14,6 +14,9 @@ use crate::value::{Environment, Value, lookup};
 
 type Identity = u32;
 
+const REFINEMENT_TERM_BUDGET: Identity = 512;
+const REFINEMENT_EDGE_BUDGET: usize = 2_048;
+
 #[derive(Clone, Debug)]
 enum Term {
     Literal(BigInt),
@@ -50,6 +53,7 @@ struct Scope {
     lengths: HashMap<String, Term>,
     relations: HashMap<String, Relation>,
     constraints: Vec<Constraint>,
+    refinement_budget_exhausted: bool,
     shadowed: HashSet<String>,
     top_level: bool,
 }
@@ -134,13 +138,13 @@ impl Analysis<'_> {
                 if let Relation::Index(length) = &relation
                     && let Some(identity) = scope.identities.get(name).copied()
                 {
-                    scope.constraints.push(Constraint {
+                    scope.push_constraint(Constraint {
                         left: Node::Zero,
                         right: Node::Variable(identity),
                         bound: BigInt::from(0),
                     });
                     match length {
-                        Term::Literal(length) => scope.constraints.push(Constraint {
+                        Term::Literal(length) => scope.push_constraint(Constraint {
                             left: Node::Variable(identity),
                             right: Node::Zero,
                             bound: length - 1,
@@ -148,7 +152,7 @@ impl Analysis<'_> {
                         Term::Variable {
                             identity: length,
                             offset,
-                        } => scope.constraints.push(Constraint {
+                        } => scope.push_constraint(Constraint {
                             left: Node::Variable(identity),
                             right: Node::Variable(*length),
                             bound: offset - 1,
@@ -256,9 +260,7 @@ impl Analysis<'_> {
                                 identity,
                                 offset: BigInt::from(0),
                             };
-                            scope
-                                .constraints
-                                .extend(constraints_equal(&subject, &affine));
+                            scope.extend_constraints(constraints_equal(&subject, &affine));
                             scope.affines.insert(name.clone(), affine);
                         }
                         if let Some(length) = length {
@@ -286,9 +288,7 @@ impl Analysis<'_> {
                             identity,
                             offset: BigInt::from(0),
                         };
-                        scope
-                            .constraints
-                            .extend(constraints_equal(&subject, &affine));
+                        scope.extend_constraints(constraints_equal(&subject, &affine));
                         scope.affines.insert(name.clone(), affine);
                     }
                     if let Some(length) = length {
@@ -301,6 +301,7 @@ impl Analysis<'_> {
                         && !identity_referenced(scope, previous)
                     {
                         forget_identity(&mut scope.constraints, previous);
+                        scope.enforce_edge_budget();
                     }
                 }
                 Declaration::Open { value, .. } => {
@@ -398,9 +399,9 @@ impl Analysis<'_> {
                     let (taken, untaken) =
                         self.comparison_constraints(branch.condition, &remaining);
                     let mut consequence = remaining.clone();
-                    consequence.constraints.extend(taken);
+                    consequence.extend_constraints(taken);
                     self.walk(branch.consequence, &mut consequence, false)?;
-                    remaining.constraints.extend(untaken);
+                    remaining.extend_constraints(untaken);
                 }
                 if let Some(fallback) = fallback {
                     self.walk(fallback, &mut remaining, false)?;
@@ -441,6 +442,17 @@ impl Analysis<'_> {
         scope: &Scope,
         span: Span,
     ) -> Result<(), Diagnostic> {
+        if constraint_term_count(&scope.constraints) > REFINEMENT_TERM_BUDGET as usize
+            || scope.refinement_budget_exhausted
+        {
+            return Err(Diagnostic::new(
+                "BLOT_REFINEMENT_BUDGET",
+                format!(
+                    "The bounded affine refinement budget was exceeded (maximum {REFINEMENT_TERM_BUDGET} terms and {REFINEMENT_EDGE_BUDGET} edges per module). Split the proof into a verified helper or reduce the number of simultaneously live affine facts."
+                ),
+                span,
+            ));
+        }
         let Some(length) = self.array_length(array, scope) else {
             return Err(unproven(span));
         };
@@ -1021,6 +1033,30 @@ impl Analysis<'_> {
     }
 }
 
+impl Scope {
+    fn push_constraint(&mut self, constraint: Constraint) {
+        if self.constraints.len() >= REFINEMENT_EDGE_BUDGET {
+            self.refinement_budget_exhausted = true;
+            return;
+        }
+        self.constraints.push(constraint);
+    }
+
+    fn extend_constraints(&mut self, constraints: impl IntoIterator<Item = Constraint>) {
+        for constraint in constraints {
+            self.push_constraint(constraint);
+        }
+    }
+
+    fn enforce_edge_budget(&mut self) {
+        if self.constraints.len() <= REFINEMENT_EDGE_BUDGET {
+            return;
+        }
+        self.constraints.truncate(REFINEMENT_EDGE_BUDGET);
+        self.refinement_budget_exhausted = true;
+    }
+}
+
 fn existing_identity(module: &Module, expression: ExpressionId, scope: &Scope) -> Option<Identity> {
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Var { name, .. } => scope.identities.get(name).copied(),
@@ -1155,6 +1191,14 @@ fn shortest_paths(constraints: &[Constraint]) -> HashMap<Node, HashMap<Node, Big
         result.insert(*source, distances);
     }
     result
+}
+
+fn constraint_term_count(constraints: &[Constraint]) -> usize {
+    constraints
+        .iter()
+        .flat_map(|constraint| [constraint.left, constraint.right])
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 fn identity_referenced(scope: &Scope, identity: Identity) -> bool {

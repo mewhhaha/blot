@@ -41,6 +41,7 @@ export class WorkspaceGraph {
   readonly #loaded = new Map<string, Loaded>();
   readonly #overlays = new Map<string, OverlayRevision>();
   readonly #dirty = new Set<string>();
+  readonly #roots = new Set<string>();
   readonly #inspect: SourceInspector | undefined;
   #overlaySequence = 0;
 
@@ -49,8 +50,10 @@ export class WorkspaceGraph {
   }
 
   async refresh(path: string): Promise<Loaded> {
+    const absolute = resolve(path);
+    this.#roots.add(absolute);
     await refreshLoadedModules(this.#loaded, new Set(this.#overlays.keys()));
-    return await this.#loadCurrent(resolve(path));
+    return await this.#loadCurrent(absolute);
   }
 
   async updateOverlay(
@@ -59,6 +62,7 @@ export class WorkspaceGraph {
     version?: number,
   ): Promise<Loaded> {
     const absolute = resolve(path);
+    this.#roots.add(absolute);
     const previous = this.#overlays.get(absolute);
     let nextVersion = version;
     if (nextVersion === undefined) {
@@ -92,6 +96,22 @@ export class WorkspaceGraph {
     const absolute = resolve(path);
     this.#dirty.add(absolute);
     this.#invalidate(absolute);
+  }
+
+  activePaths(): ReadonlySet<string> {
+    const active = new Set<string>();
+    const pending = [...this.#roots];
+    while (pending.length > 0) {
+      const path = pending.pop();
+      if (path === undefined || active.has(path)) continue;
+      const loaded = this.#loaded.get(path);
+      if (loaded === undefined) continue;
+      active.add(path);
+      for (const dependency of loaded.dependencies.values()) {
+        pending.push(dependency.path);
+      }
+    }
+    return active;
   }
 
   node(path: string): WorkspaceNode | undefined {

@@ -1322,6 +1322,19 @@ pub struct CachedModuleAnalyses {
     safety: Result<(), Diagnostic>,
 }
 
+#[derive(Default)]
+struct SpecializationBinding {
+    keys: BTreeMap<String, SpecializationKey>,
+}
+
+struct SpecializationKey {
+    reason: &'static str,
+    call_sites: Vec<(String, Span)>,
+}
+
+const SPECIALIZATION_SOFT_LIMIT: usize = 2;
+const SPECIALIZATION_HARD_LIMIT: usize = 256;
+
 pub struct Checker {
     context: Rc<Context>,
     variables: RefCell<Vec<Variable>>,
@@ -1350,6 +1363,7 @@ pub struct Checker {
     analysis_expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
     declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
     ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
+    specializations: RefCell<HashMap<(String, ExpressionId), SpecializationBinding>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -1400,6 +1414,7 @@ impl Checker {
             analysis_expression_types: RefCell::new(HashMap::new()),
             declaration_tags: RefCell::new(HashMap::new()),
             ownership_facts: RefCell::new(HashMap::new()),
+            specializations: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -1603,6 +1618,19 @@ impl Checker {
         self.ownership_facts
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
+        self.specializations
+            .borrow_mut()
+            .retain(|(path, _), binding| {
+                if paths.contains(path) {
+                    return false;
+                }
+                binding.keys.retain(|_, key| {
+                    key.call_sites
+                        .retain(|(call_path, _)| !paths.contains(call_path));
+                    !key.call_sites.is_empty()
+                });
+                !binding.keys.is_empty()
+            });
         self.module_work
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
@@ -1694,6 +1722,60 @@ impl Checker {
                 fact["span"]["start"].as_u64().unwrap_or_default(),
             )
         });
+        let mut specializations = self
+            .specializations
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((module_path, body), binding)| {
+                let (span, name) = specialization_binding(&module, *body);
+                let keys = binding
+                    .keys
+                    .iter()
+                    .map(|(representation, key)| {
+                        let mut call_sites = key
+                            .call_sites
+                            .iter()
+                            .map(|(path, span)| {
+                                serde_json::json!({
+                                    "path": path,
+                                    "span": span,
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        call_sites.sort_by_key(|site| {
+                            (
+                                site["path"].as_str().unwrap_or_default().to_owned(),
+                                site["span"]["start"].as_u64().unwrap_or_default(),
+                            )
+                        });
+                        serde_json::json!({
+                            "representation": representation,
+                            "reason": key.reason,
+                            "callSites": call_sites,
+                            "runtimeHirNodes": 0,
+                            "wasmFunctionBytes": 0,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "binding": {
+                        "path": module_path,
+                        "name": name,
+                        "span": span,
+                    },
+                    "specializationCount": keys.len(),
+                    "softLimit": SPECIALIZATION_SOFT_LIMIT,
+                    "hardLimit": SPECIALIZATION_HARD_LIMIT,
+                    "keys": keys,
+                })
+            })
+            .collect::<Vec<_>>();
+        specializations.sort_by_key(|fact| {
+            fact["binding"]["span"]["start"]
+                .as_u64()
+                .unwrap_or_default()
+        });
         serde_json::json!({
             "ok": true,
             "type": self.show(&checked.result),
@@ -1701,6 +1783,7 @@ impl Checker {
             "types": types,
             "tags": tags,
             "ownership": ownership,
+            "specializations": specializations,
             "work": self.module_work.borrow().get(path),
         })
     }
@@ -3385,6 +3468,7 @@ impl Checker {
                     }) = evaluated_function.as_ref()
                     && self_name.is_none()
                 {
+                    self.record_specialization(closure_module, *body, &argument.type_, path, span)?;
                     let function = self.infer_evaluated_closure(
                         path,
                         module,
@@ -3467,6 +3551,7 @@ impl Checker {
                     }) = evaluated_function.as_ref()
                     && self_name.is_none()
                 {
+                    self.record_specialization(closure_module, *body, &argument_type, path, span)?;
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
@@ -4061,6 +4146,52 @@ impl Checker {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn record_specialization(
+        &self,
+        closure_module: &str,
+        body: ExpressionId,
+        parameter_type: &Type,
+        call_path: &str,
+        call_span: Span,
+    ) -> Result<(), Diagnostic> {
+        let representation = self.show_analysis(&self.settle(parameter_type.clone(), true));
+        let mut specializations = self.specializations.borrow_mut();
+        let binding = specializations
+            .entry((closure_module.to_owned(), body))
+            .or_default();
+        if !binding.keys.contains_key(&representation)
+            && binding.keys.len() >= SPECIALIZATION_HARD_LIMIT
+        {
+            return Err(Diagnostic::new(
+                "BLOT_SPECIALIZATION_LIMIT",
+                format!(
+                    "This binding requires more than {SPECIALIZATION_HARD_LIMIT} runtime representations. Narrow the structural parameter, add a public signature, move a compile-time parameter to runtime, or introduce an explicit stable representation."
+                ),
+                call_span,
+            ));
+        }
+        let reason = if binding.keys.is_empty() {
+            "initial parameter representation"
+        } else {
+            "parameter representation differs"
+        };
+        let key = binding
+            .keys
+            .entry(representation)
+            .or_insert_with(|| SpecializationKey {
+                reason,
+                call_sites: Vec::new(),
+            });
+        if !key
+            .call_sites
+            .iter()
+            .any(|site| site == &(call_path.to_owned(), call_span))
+        {
+            key.call_sites.push((call_path.to_owned(), call_span));
+        }
+        Ok(())
+    }
+
     fn infer_evaluated_closure(
         &self,
         path: &str,
@@ -9604,6 +9735,40 @@ fn expression_span(expression: &Expression) -> Span {
         | Expression::Block { span, .. }
         | Expression::Rec { span, .. }
         | Expression::Comptime { span, .. } => *span,
+    }
+}
+
+fn specialization_binding(module: &Module, body: ExpressionId) -> (Span, Option<String>) {
+    for declaration_id in &module.declarations {
+        let Declaration::Binding {
+            pattern,
+            value,
+            span,
+            ..
+        } = &module.arena.declarations[declaration_id.0 as usize]
+        else {
+            continue;
+        };
+        if closure_body(module, *value) != Some(body) {
+            continue;
+        }
+        let name = match &module.arena.patterns[pattern.0 as usize] {
+            Pattern::Name { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        return (*span, name);
+    }
+    (module.arena.expression_span(body), None)
+}
+
+fn closure_body(module: &Module, expression: ExpressionId) -> Option<ExpressionId> {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Lambda { body, .. } => Some(*body),
+        Expression::Rec { lambda, .. } => match &module.arena.expressions[lambda.0 as usize] {
+            Expression::Lambda { body, .. } => Some(*body),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

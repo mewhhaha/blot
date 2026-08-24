@@ -78,6 +78,15 @@ Ambient current directory, process environment, network state, clock, random
 state, or undeclared host capability is not a compiler input unless a future
 language revision makes it explicit and revisioned.
 
+The Node-to-compiler transport is compiler-host ABI 2. Paths are registered once
+as UTF-8 and receive stable session-local module identities. A graph update is a
+length-delimited binary frame containing changed UTF-8 source or compact
+AST/snapshot bytes, direct edges, includes, and removals. The decoder validates
+the complete frame before mutation, rejects unknown identities and trailing
+bytes, and reconstructs UTF-16 source offsets during decoding. Compact success
+summaries avoid JSON on the check hot path; diagnostic and requested analysis
+payloads retain their classified content.
+
 ## 3. Pass graph
 
 The production pass graph is:
@@ -187,6 +196,20 @@ termination or absence of traps.
 A missing ordinary premise yields a source diagnostic. An internal mutable
 graph, worklist, or unconstrained inference variable never crosses a closed
 interface or cache boundary.
+
+Representation-driven closure inference records compiler-authoritative
+specialization keys, call sites, and deterministic soft/hard budgets. The soft
+budget is an editor hint. Exceeding the hard budget is the source diagnostic
+`BLOT_SPECIALIZATION_LIMIT`, because the selected source program requires more
+compiler-generated representations than the documented bounded implementation
+admits; it is not reported as memory exhaustion. Each fact offers remediation
+through a narrower parameter, public signature, runtime parameter, or explicit
+stable representation.
+
+Type, ownership, specialization, and target facts retain compact provenance
+during checking and materialize ordered explanations only on request. Provenance
+is observational: it does not enter semantic equality, cache keys, certificates,
+or emitted artifacts.
 
 ## 7. Safety checking
 

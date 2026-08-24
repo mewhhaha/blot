@@ -409,6 +409,12 @@ equality to the measured array or region length. Thus the untaken branch of
 below `length(xs)`. Two retained non-literal terms remain witnesses with no
 subject and are not compared by this decidable fragment.
 
+The relationship context is explicitly bounded to 512 immutable terms and 2,048
+directed difference edges per module. Exceeding either budget stops fact
+derivation and produces `BLOT_REFINEMENT_BUDGET` if a direct operation later
+requires the truncated proof graph. The checker never substitutes an approximate
+positive result.
+
 Typestate and effects compose without another type constructor. A state machine
 is represented by ordinary closed variants in `Gamma`; a transition has an
 ordinary effectful arrow; and a linear state value is tracked and consumed in

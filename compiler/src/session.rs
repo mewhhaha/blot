@@ -28,6 +28,8 @@ struct ModuleSnapshot {
 
 pub struct CompilerSession {
     context: Rc<Context>,
+    registered_paths: Vec<String>,
+    path_ids: HashMap<String, u32>,
     frontends: HashMap<String, FrontendState>,
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
@@ -73,6 +75,8 @@ impl Default for CompilerSession {
         );
         Self {
             context,
+            registered_paths: Vec::new(),
+            path_ids: HashMap::new(),
             frontends: HashMap::new(),
             module_interfaces,
             module_analyses,
@@ -108,6 +112,37 @@ pub struct AddedModule {
 pub(crate) use crate::source::SourceError as AddSourceError;
 
 impl CompilerSession {
+    pub fn register_paths(&mut self, paths: Vec<String>) -> Result<Vec<u32>, String> {
+        let mut ids = Vec::with_capacity(paths.len());
+        for path in paths {
+            if path.is_empty() {
+                return Err(
+                    "compiler ABI path registration cannot contain an empty path".to_owned(),
+                );
+            }
+            if let Some(id) = self.path_ids.get(&path) {
+                ids.push(*id);
+                continue;
+            }
+            let id = u32::try_from(self.registered_paths.len() + 1)
+                .map_err(|_| "compiler ABI path registry exhausted u32 IDs".to_owned())?;
+            self.registered_paths.push(path.clone());
+            self.path_ids.insert(path, id);
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
+    pub fn registered_path(&self, id: u32) -> Result<&str, String> {
+        let index = id
+            .checked_sub(1)
+            .ok_or_else(|| "compiler ABI module ID 0 is invalid".to_owned())?;
+        self.registered_paths
+            .get(index as usize)
+            .map(String::as_str)
+            .ok_or_else(|| format!("unknown compiler ABI module ID {id}"))
+    }
+
     pub fn remove_module(&mut self, path: &str) -> bool {
         let existed = self.context.modules.borrow().contains_key(path);
         if !existed {
@@ -1896,6 +1931,61 @@ mod tests {
     }
 
     #[test]
+    fn analysis_reports_compiler_authoritative_specializations() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(
+                    "const apply = fn function => function 1\n\
+                     let first = apply (fn value => value)\n\
+                     let second = apply (fn value => { .value = value; })\n\
+                     return (first, second)\n",
+                ),
+            )
+            .expect("specialization source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("specialization source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(analysis["specializations"][0]["binding"]["name"], "apply");
+        assert_eq!(analysis["specializations"][0]["specializationCount"], 2);
+        assert_eq!(
+            analysis["specializations"][0]["keys"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn specialization_bomb_stops_at_the_deterministic_hard_limit() {
+        let mut source_text = String::from("const apply = fn function => function 1\n");
+        for index in 0..257 {
+            source_text.push_str(&format!(
+                "let value_{index} = apply (fn value => {{ .field_{index} = value; }})\n"
+            ));
+        }
+        source_text.push_str("return value_0\n");
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(&source_text))
+            .expect("specialization bomb should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("specialization bomb should configure");
+
+        let checked = session.check_module("main.blot");
+
+        assert_eq!(checked["ok"], false, "{checked}");
+        assert_eq!(checked["diagnostic"]["code"], "BLOT_SPECIALIZATION_LIMIT");
+    }
+
+    #[test]
     fn closed_program_and_artifact_follow_semantic_revision() {
         let mut session = CompilerSession::default();
         session
@@ -2565,6 +2655,27 @@ mod tests {
             .expect("short-circuit refinement test thread should start")
             .join()
             .expect("short-circuit refinement test thread should finish");
+    }
+
+    #[test]
+    fn affine_refinement_budget_refuses_an_unbounded_proof_graph() {
+        let mut source_text = String::new();
+        for index in 0..513 {
+            source_text.push_str(&format!("let value_{index} = {index}\n"));
+        }
+        source_text.push_str("return @array.get [1] 0\n");
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(&source_text))
+            .expect("budget source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("budget source should configure");
+
+        let checked = session.check_module("main.blot");
+
+        assert_eq!(checked["ok"], false, "{checked}");
+        assert_eq!(checked["diagnostic"]["code"], "BLOT_REFINEMENT_BUDGET");
     }
 
     #[test]

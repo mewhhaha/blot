@@ -48,6 +48,7 @@ import {
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
   type CompilerSourceDiagnostic,
+  type CompilerSpecializationFact,
   type CompilerSyntaxSnapshot as RustSyntaxSnapshot,
   type CompilerTagFact,
   type CompilerTargetPreflight,
@@ -101,9 +102,17 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly types: readonly CompilerTypeFact[];
   readonly tags: readonly CompilerTagFact[];
   readonly ownership: readonly CompilerOwnershipFact[];
+  readonly specializations: readonly CompilerSpecializationFact[];
   readonly work: CompilerWork | null;
   readonly invalidation: CompilerInvalidationTelemetry;
   readonly targetPreflight: CompilerTargetPreflight;
+}
+
+export interface CompilerExplanation {
+  readonly kind: "type" | "ownership" | "specialization" | "target";
+  readonly span: { readonly start: number; readonly end: number };
+  readonly summary: string;
+  readonly reasons: readonly string[];
 }
 
 export interface CompilerOptions {
@@ -117,6 +126,7 @@ export interface CompilerHost {
   checkSource(path: string, source: string): Promise<CheckedModule>;
   analyze(path: string): Promise<CompilerAnalysis>;
   analyzeSource(path: string, source: string): Promise<CompilerAnalysis>;
+  explain(path: string, offset: number): Promise<CompilerExplanation | null>;
   evaluate(path: string): Promise<EvaluatedModule>;
   test(path: string): Promise<readonly CompilerTestOutcome[]>;
   portableAst(path: string): Promise<string>;
@@ -242,6 +252,14 @@ export class Compiler implements CompilerHost {
       await this.#syncLoaded(root);
       return this.#analyzeResident(root.path);
     });
+  }
+
+  async explain(
+    path: string,
+    offset: number,
+  ): Promise<CompilerExplanation | null> {
+    const analysis = await this.analyze(path);
+    return explanationAt(analysis, offset);
   }
 
   async evaluate(path: string): Promise<EvaluatedModule> {
@@ -441,7 +459,7 @@ export class Compiler implements CompilerHost {
     if (resident !== undefined && resident.key === key) return resident;
 
     const modules = collectGraph(root);
-    const activePaths = new Set(modules.keys());
+    const activePaths = this.#workspace.activePaths();
     const removedPaths = [...this.#installedModules.keys()].filter((path) =>
       !activePaths.has(path)
     );
@@ -536,6 +554,17 @@ export class Compiler implements CompilerHost {
         storage,
       });
     }
+    const configurationDeltas: Array<{
+      readonly loaded: Loaded;
+      readonly installed: InstalledModuleRevision;
+      readonly configurationDigest: string;
+      readonly configuration: {
+        readonly imports: Readonly<Record<string, string>>;
+        readonly includes: Readonly<
+          Record<string, { readonly path: string; readonly text: string }>
+        >;
+      };
+    }> = [];
     for (const loaded of modules.values()) {
       if (loaded.path === PRELUDE) continue;
       const installed = this.#installedModules.get(loaded.path);
@@ -547,37 +576,56 @@ export class Compiler implements CompilerHost {
       }
       const configurationDigest = loadedConfigurationDigest(loaded);
       if (installed.configurationDigest === configurationDigest) continue;
-      try {
-        this.#compiler.configureCompilerSessionModule(
-          this.#handle,
-          loaded.path,
-          {
-            imports: Object.fromEntries(
-              [...loaded.dependencies].map(([specifier, dependency]) => [
-                specifier,
-                dependency.path,
-              ]),
-            ),
-            includes: Object.fromEntries(
-              [...loaded.includedFiles].map(([specifier, included]) => [
-                specifier,
-                {
-                  path: includePath(loaded, included.path),
-                  text: included.source,
-                },
-              ]),
-            ),
-          },
-        );
-      } catch (error) {
+      configurationDeltas.push({
+        loaded,
+        installed,
+        configurationDigest,
+        configuration: {
+          imports: Object.fromEntries(
+            [...loaded.dependencies].map(([specifier, dependency]) => [
+              specifier,
+              dependency.path,
+            ]),
+          ),
+          includes: Object.fromEntries(
+            [...loaded.includedFiles].map(([specifier, included]) => [
+              specifier,
+              {
+                path: includePath(loaded, included.path),
+                text: included.source,
+              },
+            ]),
+          ),
+        },
+      });
+    }
+    let configurationResults;
+    try {
+      configurationResults = this.#compiler.applyCompilerSessionDelta(
+        this.#handle,
+        configurationDeltas.map((delta) => ({
+          path: delta.loaded.path,
+          payload: { tag: "none" as const },
+          configuration: delta.configuration,
+        })),
+      );
+    } catch (error) {
+      throw new CompilerInvariantFailure(
+        "compiler source-graph configuration",
+        error,
+      );
+    }
+    for (const [index, delta] of configurationDeltas.entries()) {
+      const result = configurationResults[index];
+      if (result === undefined || !result.ok) {
         throw new CompilerInvariantFailure(
           "compiler source-graph configuration",
-          error,
+          new Error(`compiler rejected graph delta for ${delta.loaded.path}`),
         );
       }
-      this.#installedModules.set(loaded.path, {
-        ...installed,
-        configurationDigest,
+      this.#installedModules.set(delta.loaded.path, {
+        ...delta.installed,
+        configurationDigest: delta.configurationDigest,
       });
     }
 
@@ -607,6 +655,7 @@ export class Compiler implements CompilerHost {
       types: result.types.slice(),
       tags: result.tags.slice(),
       ownership: result.ownership.slice(),
+      specializations: result.specializations.slice(),
       work: result.work,
       invalidation: result.invalidation,
       targetPreflight: result.targetPreflight,
@@ -788,4 +837,89 @@ function copiedArtifact(
     capabilities: artifact.capabilities.slice(),
     artifactSource,
   };
+}
+
+export function explanationAt(
+  analysis: CompilerAnalysis,
+  offset: number,
+): CompilerExplanation | null {
+  const specialization = analysis.specializations
+    .filter((fact) => containsOffset(fact.binding.span, offset))
+    .sort((left, right) =>
+      spanWidth(left.binding.span) - spanWidth(right.binding.span)
+    )[0];
+  if (specialization !== undefined) {
+    let name = "binding";
+    if (specialization.binding.name !== null) {
+      name = specialization.binding.name;
+    }
+    return {
+      kind: "specialization",
+      span: specialization.binding.span,
+      summary:
+        `${name} has ${specialization.specializationCount} runtime representations.`,
+      reasons: specialization.keys.map((key) =>
+        `${key.reason}: ${key.representation}`
+      ),
+    };
+  }
+  const ownership = analysis.ownership
+    .filter((fact) => containsOffset(fact.span, offset))
+    .sort((left, right) => spanWidth(left.span) - spanWidth(right.span))[0];
+  if (ownership !== undefined) {
+    let state = "available";
+    if (ownership.spent) state = "consumed";
+    const reasons = [`${ownership.name} is ${state} at the end of its scope.`];
+    if (ownership.last_use !== null) {
+      reasons.push(
+        `Its last recorded use is [${ownership.last_use.start}, ${ownership.last_use.end}).`,
+      );
+    }
+    return {
+      kind: "ownership",
+      span: ownership.span,
+      summary: `${ownership.name} is ${state}.`,
+      reasons,
+    };
+  }
+  const type = analysis.types
+    .filter((fact) => containsOffset(fact.span, offset))
+    .sort((left, right) => spanWidth(left.span) - spanWidth(right.span))[0];
+  if (type !== undefined) {
+    return {
+      kind: "type",
+      span: type.span,
+      summary: `The inferred type is ${type.type}.`,
+      reasons: [
+        "The Rust checker derived this fact from the expression's source constraints and expected type.",
+      ],
+    };
+  }
+  if (!analysis.targetPreflight.supported) {
+    const reasons = analysis.targetPreflight.alternatives.slice();
+    let summary = "The selected target cannot represent this public value.";
+    if (analysis.targetPreflight.unsupportedComponent !== null) {
+      summary = analysis.targetPreflight.unsupportedComponent;
+    }
+    return {
+      kind: "target",
+      span: { start: 0, end: 0 },
+      summary,
+      reasons,
+    };
+  }
+  return null;
+}
+
+function containsOffset(
+  span: { readonly start: number; readonly end: number },
+  offset: number,
+): boolean {
+  return offset >= span.start && offset <= span.end;
+}
+
+function spanWidth(
+  span: { readonly start: number; readonly end: number },
+): number {
+  return span.end - span.start;
 }

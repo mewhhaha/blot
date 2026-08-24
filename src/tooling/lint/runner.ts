@@ -1,5 +1,6 @@
 import type { Decl, Expr, Module, Pattern } from "../../syntax/ast.ts";
 import type { Rule } from "../../syntax/cursor.ts";
+import type { CompilerSpecializationFact } from "../../compiler/wasm.ts";
 import { DEFAULT_LINT_RULES } from "./rules.ts";
 import type {
   AstNode,
@@ -15,6 +16,7 @@ export function lintModule(
   source: string,
   cst: Rule,
   rules: readonly LintRule[] = DEFAULT_LINT_RULES,
+  specializations: readonly CompilerSpecializationFact[] = [],
 ): readonly LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
   const concrete = collectConcrete(cst);
@@ -23,6 +25,7 @@ export function lintModule(
       module,
       source,
       cst,
+      specializations,
       sourceText: (node) => source.slice(node.span.start, node.span.end).trim(),
       report: (report) =>
         diagnostics.push({

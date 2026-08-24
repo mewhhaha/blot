@@ -94,6 +94,13 @@ relation.
 Failure to prove a true proposition is a conservative rejection of the
 proof-required operation. It never licenses unchecked lowering.
 
+The production affine solver admits at most 512 immutable terms and 2,048
+directed difference edges in one module proof context. Once either bound is
+reached it stops retaining new facts. A later proof-required operation reports
+`BLOT_REFINEMENT_BUDGET` with remediation to split the proof into a verified
+helper or shorten the set of simultaneously live affine facts; truncated facts
+are never interpreted as proof.
+
 ## 4. Total and proof-required operations
 
 A total array access performs the source bounds decision and returns the

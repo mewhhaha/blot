@@ -1,7 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseConcrete } from "../syntax/parse.ts";
 import { DEFAULT_FIXITIES } from "../syntax/fixity.ts";
-import { lintModule } from "./lint.ts";
+import type { CompilerSpecializationFact } from "../compiler/wasm.ts";
+import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import type { LintRule } from "./lint.ts";
 
 async function applyLintFix(source: string, code: string): Promise<string> {
@@ -196,15 +197,6 @@ return (updated, previous_length)
 return run
 `,
   },
-  {
-    name: "distinct record arguments disclose specialization count",
-    code: "BLOT_LINT_SPECIALIZATION_COUNT",
-    source: `let project = fn point => point.x
-let first = project { .x = 1; }
-let second = project { .x = 1; .y = 2; }
-return (first, second)
-`,
-  },
 ];
 
 for (const ruleCase of RULE_CASES) {
@@ -224,6 +216,51 @@ for (const ruleCase of RULE_CASES) {
     );
   });
 }
+
+Deno.test("compiler facts disclose specialization count", async () => {
+  const source = `let project = fn point => point.x
+let first = project { .x = 1; }
+let second = project { .x = 1; .y = 2; }
+return (first, second)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("specialization lint fixture did not parse");
+  const first = parsed.module.declarations[0];
+  let bindingSpan = { start: 0, end: 0 };
+  if (first !== undefined) bindingSpan = first.span;
+  const fact: CompilerSpecializationFact = {
+    binding: {
+      path: "/tmp/specialization.blot",
+      name: "project",
+      span: bindingSpan,
+    },
+    specializationCount: 2,
+    softLimit: 2,
+    hardLimit: 256,
+    keys: ["{ .x = Int }", "{ .x = Int; .y = Int }"].map(
+      (representation) => ({
+        representation,
+        reason: "parameter representation differs",
+        callSites: [],
+        runtimeHirNodes: 0,
+        wasmFunctionBytes: 0,
+      }),
+    ),
+  };
+  const diagnostics = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    [fact],
+  );
+  assert(
+    diagnostics.some((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_SPECIALIZATION_COUNT" &&
+      diagnostic.message.includes("compiler-confirmed")
+    ),
+  );
+});
 
 Deno.test("every syntax-only lint fix produces accepted syntax", async () => {
   for (const ruleCase of RULE_CASES) {
