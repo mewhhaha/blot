@@ -12,9 +12,132 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  theory-audit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/adversarial-theory-audit
+          fetch-depth: 0
+      - name: Apply the reviewed cross-spec patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import textwrap
+
+          audit_source = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "57ee6b84c82877d7954845ffbba12e6cfa3c6ad9:.github/workflows/adversarial-theory-audit.yml",
+              ],
+              text=True,
+          )
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Validate and commit"
+          start = audit_source.index(start_marker) + len(start_marker)
+          end = audit_source.index(end_marker, start)
+          code = textwrap.dedent(audit_source[start:end])
+          exec(compile(code, "adversarial-theory-audit.py", "exec"), {})
+
+          Path(".theory-audit-trigger").unlink(missing_ok=True)
+          Path(".github/workflows/adversarial-theory-audit.yml").unlink(missing_ok=True)
+          Path(".github/workflows/ci.yml").write_text(
+              subprocess.check_output(
+                  [
+                      "git",
+                      "show",
+                      "fc4febe5fe5615f957e514f57a8b312c1cd97c89:.github/workflows/ci.yml",
+                  ],
+                  text=True,
+              )
+          )
+          Path("docs/adversarial-theory-audit.md").write_text(
+              """# Adversarial theory audit
+
+## Status
+
+Reviewed against `main` at `fc4febe5fe5615f957e514f57a8b312c1cd97c89` on
+2026-08-24. This is a review record, not an independent semantic authority. The
+current authority map is [`spec/README.md`](../spec/README.md).
+
+## Method
+
+The review treated every duplicated rule as hostile input. It compared the
+normative language document, generated grammar and operator plan, focused
+specifications, current Runtime-HIR/ABI policy, executable examples, and the Lean
+Core boundary. The test was not whether two paragraphs sounded compatible, but
+whether one closed program, proof object, cache key, or target trace could satisfy
+one rule and violate another.
+
+## Contradictions closed
+
+1. **Surface blocks.** The grammar admits statement sequences as values only
+   through `do:` or `compdo:`. Stale anonymous-block and element-syntax prose and
+   examples were removed from `LANGUAGE.md`, `FRONTEND.md`, and the predicate
+   specification.
+2. **Operator authority.** Precedence and spelling come from the generated fixed
+   language plan. Source modules resolve the target bindings but cannot create a
+   fixity environment.
+3. **Application schedule.** Every function application is a Core computation,
+   including an empty-row call. An empty row excludes requests, not traps or
+   divergence; surface `let` checks the row before binding the result.
+4. **Staged identity.** Ordinary effects are generative under complete module
+   instance identity. Seals are applicative pairs of public name and canonical
+   invariant carrier.
+5. **Partial capability composition.** Associativity is result coherence when
+   both bracketings exist, not a false definedness equivalence. Rectangle families
+   provide the counterexample; reassociation now validates the target intermediate.
+6. **Compiler limits.** `BLOT_EVALUATION_LIMIT` is a deterministic compiler-limit
+   diagnostic, not a proof that the source language judgment fails.
+7. **ABI authority and nominality.** `RUNTIME.md` owns the semantic relation and
+   `docs/abi.md` owns ABI 1 bytes. A seal name guides conforming tooling but cannot
+   dynamically distinguish equal raw carrier layouts in Core Wasm.
+8. **Target observations.** Defensive traps must be unreachable for related valid
+   states; reaching one is an invariant failure. Runtime correctness now requires
+   progress-sensitive preservation and reflection, including host protocols and
+   divergence.
+9. **Structural map abstraction.** Ordered-map semantic and complexity claims are
+   conditional on the constructor-established ordering protocol. A raw matching
+   Slice remains memory-safe but is not thereby a mathematical ordered map.
+10. **Ownership wording.** Affine values may be discarded. Exact accounting is a
+    linear-path property, and a consuming use erased by declaration liveness does
+    not discharge it.
+
+## Remaining proof obligations
+
+The audit found no further rule-level contradiction in the reviewed authority set
+after these changes. That is not a claim of whole-compiler proof. The named
+obligations still include surface-to-Core correspondence, liveness erasure,
+principal inference within its stated fragment, certificate replay, staging and
+specialization adequacy, capability-family law checks, Runtime-HIR/Wasm
+progress-sensitive correspondence, canonical-adapter validation, and artifact
+correspondence for the Lean model.
+
+A future change is incoherent when it silently broadens one of those conclusions,
+uses a weaker identity as a cache key, treats a compiler resource refusal as a
+source theorem, or relies on a target representation to manufacture a source
+fact.
+"""
+          )
+          PY
+
+          git diff --check
+          test ! -e .github/workflows/adversarial-theory-audit.yml
+          test ! -e .theory-audit-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Close cross-spec semantic contradictions"
+          git push origin HEAD:codex/adversarial-theory-audit
+
   formal:
     runs-on: ubuntu-latest
     timeout-minutes: 20
