@@ -6,7 +6,7 @@ that implements it.
 | Document                                                     | Authority                                                              |
 | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | [`LANGUAGE.md`](../LANGUAGE.md)                              | Normative accepted syntax and current language behavior                |
-| [`PAPER.md`](PAPER.md)                                       | Coherent target model and research direction for the language          |
+| [`PAPER.md`](PAPER.md)                                       | Integrated semantic model and theorem map                              |
 | [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md)                     | Demand, semantic identities, module instances, handlers, and progress  |
 | [`COMPILER.md`](COMPILER.md)                                 | Compiler-wide judgments, pass contracts, and theorem dependencies      |
 | [`TYPECHECKING.md`](TYPECHECKING.md)                         | Declarative subtyping, inference, staging facts, and solver invariants |
@@ -26,6 +26,12 @@ that implements it.
 | [`INCREMENTAL.md`](INCREMENTAL.md)                           | Revision identity, invalidation, and certified cache reuse             |
 | [`PACKAGES.md`](PACKAGES.md)                                 | Package resolution, portable module capsules, and source fallback      |
 | [`COST_MODEL.md`](COST_MODEL.md)                             | Work model, benchmark boundaries, and optimization acceptance          |
+
+`PAPER.md` explains how the judgments compose. A focused specification owns the
+exact rules in its domain. When explanatory text in the paper conflicts with a
+focused rule, the conflict is a specification defect; the paper does not create
+a second semantics. Current implementation status and migration notes belong in
+`docs/`, not in the timeless rule set.
 
 The files in this directory are specifications, not claims of mechanized proof.
 Each unproved result is named as a lemma or theorem obligation. Tests provide

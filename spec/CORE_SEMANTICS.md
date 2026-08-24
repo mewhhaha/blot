@@ -5,8 +5,8 @@
 [`LANGUAGE.md`](../LANGUAGE.md) remains the normative description of accepted
 source. This document owns the focused semantic obligations that connect source
 evaluation to checking and staging when identity, demand, effects, or module
-instantiation matter. [`PAPER.md`](PAPER.md) supplies the broader research
-model; [`COMPILER.md`](COMPILER.md) supplies the pass graph; and
+instantiation matter. [`PAPER.md`](PAPER.md) supplies the integrated model;
+[`COMPILER.md`](COMPILER.md) supplies the pass graph; and
 [`CORRECTNESS.md`](CORRECTNESS.md) supplies the translation theorems.
 
 The purpose of this document is to prevent several different notions of "same
@@ -22,7 +22,7 @@ The compiler uses identities with different allocation and lifetime rules:
 | binding           | elaboration/checking           | same lexical binding in one source revision                    | only through a closed certificate                          |
 | immutable value   | refinement analysis            | same runtime value origin for `Phi`                            | no, unless reconstructed by a certificate                  |
 | effect atom       | compile-time evaluation        | same generative effect instance                                | only when the owning module-instance identity is preserved |
-| seal              | compile-time type construction | same public name and invariant carrier                         | yes, when both inputs are reconstructed                    |
+| seal              | compile-time type construction | same public name and canonical invariant carrier               | yes, when both inputs are reconstructed                    |
 | module definition | resolver                       | same resolved source/module artifact                           | yes under the ordinary revision rules                      |
 | import occurrence | frontend/resolved source graph | same written import site in one importer revision              | yes only with that importer revision                       |
 | module instance   | module evaluation              | same import occurrence under the same enclosing instance stack | yes only under that complete instance identity             |
@@ -142,7 +142,7 @@ the normal result. This is a checked redundant handler, not a diagnostic.
 ## 6. One-step progress and divergence
 
 For a closed computation well typed at `A ! epsilon`, one-step progress says it
-is exactly one of:
+is one of:
 
 - `return v` for an appropriate value;
 - able to take a reduction step;
@@ -153,7 +153,7 @@ It is not stuck on an unclassified internal state.
 
 Divergence is an execution property, not another current syntactic form. The
 corresponding maximal-execution theorem says that every maximal execution either
-reaches one of the classified outcomes above or contains infinitely many
+reaches one of the classified finite outcomes above or contains infinitely many
 reduction steps.
 
 Compiler divergence preservation is stated over those infinite executions: a
@@ -162,28 +162,36 @@ and an optimization may not erase demanded divergence.
 
 ## 7. Continuation cancellation boundary
 
-The implemented language currently permits explicit sequenced cancellation of a
-one-shot continuation after ownership proves that the continuation binding is
-consumed. That rule proves uniqueness of continuation use. It does not, by
-itself, decide whether every linear value captured by the continuation has an
-observable finalization obligation.
+The implemented ownership judgment is a use discipline. A linear obligation
+means that one consuming action accounts for the value on every terminating exit;
+it does not, by itself, assert that a domain-specific finalizer has run.
 
-Before linear values are used as must-finalize host resources, the language must
-choose and specify one of these extensions:
+The language permits explicit sequenced cancellation of a one-shot continuation
+after ownership proves that the continuation binding is consumed.
+`Continuation.cancel` is a consuming destructor for that continuation: it spends
+the continuation without entering the captured evaluation context. This proves
+that the continuation cannot later be resumed and that its structural ownership
+is accounted for. It does not execute consumers or finalizers located inside the
+discarded continuation.
 
-1. linear means unique but explicitly droppable, with required finalization
-   represented separately;
-2. cancellation carries a checked summary that finalizes every captured must-use
+Consequently, existing tracked values follow a unique-use model, while a future
+must-finalize host resource cannot be modeled merely by assigning it the current
+linear marker. Before such resources are introduced, the language must add and
+specify one of these extensions:
+
+1. required finalization is an explicit effect or consuming operation separate
+   from structural linearity;
+2. cancellation carries checked evidence that finalizes every captured must-use
    obligation; or
 3. a continuation with a must-use capture cannot be cancelled and must resume
    exactly once.
 
-Until such a resource class exists, this remains a design boundary rather than a
-silent strengthening of the current source language.
+This boundary does not weaken the current no-duplication and use-accounting
+theorems. It limits what those theorems claim about observable resource cleanup.
 
 ## 8. Executable obligations
 
-The maintained regressions for this boundary must establish at least:
+Maintained regressions for this boundary must establish at least:
 
 - two written imports of one effect-producing module yield distinct effect
   identities;
@@ -196,8 +204,6 @@ The maintained regressions for this boundary must establish at least:
 - repeated compiler evaluation of one import occurrence recovers the same
   generative atom rather than minting a second one.
 
-The Rust evaluator carries the import-occurrence stack in the identity used by
-ordinary effect allocation. The TypeScript checker/evaluator already evaluates
-written import occurrences independently and refuses reusable checked-leaf state
-that contains a generative brand. Both implementations remain subject to the
-same rules above.
+Production and auxiliary implementations remain subject to the same semantic
+rules. A conformance test may exercise a boundary, but it does not become an
+alternative authority for demand, identity, handler rows, or module instances.
