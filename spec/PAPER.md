@@ -22,9 +22,9 @@ Lean model are evidence only for the boundaries they actually encode.
 ## Abstract
 
 Blot is a small staged functional language with explicit effect sequencing,
-algebraic-subtyping inference, relational safety proofs outside the ordinary type
-lattice, generative algebraic effects, structural ownership, specialization to
-closed Runtime HIR, and a versioned WebAssembly boundary.
+algebraic-subtyping inference, relational safety proofs outside the ordinary
+type lattice, generative algebraic effects, structural ownership, specialization
+to closed Runtime HIR, and a versioned WebAssembly boundary.
 
 The design separates questions that are often conflated:
 
@@ -80,8 +80,8 @@ Blot makes these commitments:
    meanings.
 
 The model does not claim that every program terminates, that every true relation
-is inferable, that current linearity runs finalizers, that raw hostile host values
-are Blot values, or that every well-typed structural carrier satisfies a
+is inferable, that current linearity runs finalizers, that raw hostile host
+values are Blot values, or that every well-typed structural carrier satisfies a
 library-level abstraction invariant.
 
 ## 2. Artifact and judgment stack
@@ -116,23 +116,23 @@ s parse-> cst elaborate-> c
 
 Each boundary owns facts that later passes may validate and consume:
 
-| Boundary | Produced fact |
-| --- | --- |
-| source to CST | token, rule, field, span, and parse identity |
-| CST to Core | scope, explicit-block target, evaluation order, and source origin |
-| demand | exact live binding graph and forced declarations |
-| ordinary checking | type, effect row, coercion, and compile-time identity |
-| safety checking | coverage, relationship, ownership, and reuse certificates |
-| staging | phase erasure and residual closure |
-| specialization | one closed representation at every residual use |
-| Runtime-HIR validation | target-admissible operations and complete metadata |
-| ABI closure | public layout, validation, lifting, lowering, and ownership policy |
-| emission | target program related to validated Runtime HIR |
+| Boundary               | Produced fact                                                      |
+| ---------------------- | ------------------------------------------------------------------ |
+| source to CST          | token, rule, field, span, and parse identity                       |
+| CST to Core            | scope, explicit-block target, evaluation order, and source origin  |
+| demand                 | exact live binding graph and forced declarations                   |
+| ordinary checking      | type, effect row, coercion, and compile-time identity              |
+| safety checking        | coverage, relationship, ownership, and reuse certificates          |
+| staging                | phase erasure and residual closure                                 |
+| specialization         | one closed representation at every residual use                    |
+| Runtime-HIR validation | target-admissible operations and complete metadata                 |
+| ABI closure            | public layout, validation, lifting, lowering, and ownership policy |
+| emission               | target program related to validated Runtime HIR                    |
 
 A later pass may replay an earlier fact; it may not reconstruct a different fact
-from source spelling or incidental target layout. Recomputing an effect identity,
-field set, ownership path, proof premise, or public layout creates another
-judgment and another proof obligation.
+from source spelling or incidental target layout. Recomputing an effect
+identity, field set, ownership path, proof premise, or public layout creates
+another judgment and another proof obligation.
 
 ## 3. Observations, demand, and order
 
@@ -168,13 +168,13 @@ live(block, result) = L
 ```
 
 A pure declaration outside `L` is absent. Every retained pure declaration is
-evaluated exactly once in source order. This is neither call-by-name nor first-use
-forcing: no run-time thunk is introduced.
+evaluated exactly once in source order. This is neither call-by-name nor
+first-use forcing: no run-time thunk is introduced.
 
 The liveness input is fixed before optimization. An optimizer cannot erase a
 trap or divergence and then use its absence as evidence that the binding was
-dead. The erasure lemma preserves every demanded return, request, specified trap,
-and divergence.
+dead. The erasure lemma preserves every demanded return, request, specified
+trap, and divergence.
 
 Ownership is checked over the demanded program. A consuming operation occurring
 only in an erased declaration is absent and cannot discharge a linear
@@ -241,16 +241,16 @@ Gamma |- apply f a : B ! epsilon
 
 Every application is a computation. When `epsilon` is empty, the call issues no
 algebraic-effect request, but it may still return, trap, or diverge. A surface
-pure position admits the call only after the row settles empty and elaborates its
-returned value through this same computation schedule. A non-empty row requires
-sequencing or a computation-returning context.
+pure position admits the call only after the row settles empty and elaborates
+its returned value through this same computation schedule. A non-empty row
+requires sequencing or a computation-returning context.
 
 ### 4.2 Effect rows and traps
 
 Effect rows account for algebraic-effect requests. They do not encode
 termination, arithmetic traps, explicit panic, representation checks, malformed
-host inputs, or compiler failures. Those are classified by the operational,
-ABI, or compiler judgments that own them.
+host inputs, or compiler failures. Those are classified by the operational, ABI,
+or compiler judgments that own them.
 
 ### 4.3 Elaboration
 
@@ -283,9 +283,9 @@ compiler-controlled identity and explicit-input world. A run-time binding cannot
 occur free in a compile-time type, effect descriptor, layout, tag, or reflection
 decision.
 
-Source and host effects are unavailable during compile-time evaluation.
-Resolved imports and included bytes are explicit compiler inputs recorded in the
-revision identity; they are not ambient run-time authority.
+Source and host effects are unavailable during compile-time evaluation. Resolved
+imports and included bytes are explicit compiler inputs recorded in the revision
+identity; they are not ambient run-time authority.
 
 Operator spelling and grouping are not compile-time values. They come from the
 generated language plan and are fixed before source elaboration.
@@ -395,12 +395,12 @@ A, B ::=
   | Opaque(identity)
 ```
 
-Open inference uses an algebraic-subtyping graph of lower and upper bounds. Exact
-ground intersection and difference normalize only after the relevant type is
-closed; arbitrary Boolean negation is not introduced into the open graph.
+Open inference uses an algebraic-subtyping graph of lower and upper bounds.
+Exact ground intersection and difference normalize only after the relevant type
+is closed; arbitrary Boolean negation is not introduced into the open graph.
 
-Predicative `forall` is checked by left instantiation and right skolemization. An
-inference variable is not solved with a polymorphic type. Predicate-defined
+Predicative `forall` is checked by left instantiation and right skolemization.
+An inference variable is not solved with a polymorphic type. Predicate-defined
 integer types normalize at compile time into existing ranges and finite ground
 unions.
 
@@ -521,10 +521,10 @@ return clause may still transform the result.
 
 A captured continuation is one-shot. Affine ownership permits zero or one
 consuming action; linear ownership requires exactly one on every terminating
-clause exit. `Continuation.cancel` is an explicit sequenced consuming destructor.
-It spends the continuation without entering the captured context. It proves
-unique use and structural accounting, not execution of consumers or finalizers
-inside the discarded continuation.
+clause exit. `Continuation.cancel` is an explicit sequenced consuming
+destructor. It spends the continuation without entering the captured context. It
+proves unique use and structural accounting, not execution of consumers or
+finalizers inside the discarded continuation.
 
 Must-finalize resources require an additional protocol such as explicit
 finalization, cancellation evidence, or a must-resume restriction.
@@ -546,8 +546,8 @@ A  affine: at most one consuming use; discard allowed
 L  linear: exactly one consuming action on every terminating exit
 ```
 
-These are not subtype constructors. Erasing `Omega` does not change the
-ordinary principal type.
+These are not subtype constructors. Erasing `Omega` does not change the ordinary
+principal type.
 
 Closures own captured environments. Aggregates carry the joined obligations of
 their components. Moving a container moves its owned paths. Partial projection
@@ -594,8 +594,8 @@ composition.
 Ownership safety and a library abstraction invariant are different claims. The
 current ordered-text-map carrier is structurally a Slice of entries. Its
 constructor establishes strict key ordering and its exported operations preserve
-it. Map-result and logarithmic-cost theorems are conditional on that protocol.
-A raw structurally matching Slice remains memory-safe but is not thereby an
+it. Map-result and logarithmic-cost theorems are conditional on that protocol. A
+raw structurally matching Slice remains memory-safe but is not thereby an
 abstract ordered map.
 
 ## 12. Staging, specialization, and representation
@@ -698,9 +698,9 @@ reaches a classified finite outcome or contains infinitely many reductions.
 
 Coverage safety excludes missing arms. Relationship safety requires every
 proof-required operation to satisfy its replayed proposition. Ownership safety
-is mode-indexed: no path is moved twice or through a borrow, affine paths are not
-duplicated, and linear paths are accounted for on every terminating exit. Reuse
-adequacy relates every permitted target mutation to its persistent source
+is mode-indexed: no path is moved twice or through a borrow, affine paths are
+not duplicated, and linear paths are accounted for on every terminating exit.
+Reuse adequacy relates every permitted target mutation to its persistent source
 operation.
 
 ### 15.3 Compiler correctness
@@ -720,12 +720,12 @@ Each pass additionally supplies progress-sensitive adequacy:
 A progress-sensitive weak bisimulation is an equivalent proof shape. Composition
 produces the whole-compiler theorem: for a closed accepted program and related
 host responses, source evaluation and emitted WebAssembly have the same returns,
-requests, specified traps, and divergence, modulo the representation relation and
-explicit target restrictions.
+requests, specified traps, and divergence, modulo the representation relation
+and explicit target restrictions.
 
-A defensive target check may remain only with proof that related validated states
-cannot reach it. Reaching one is an invariant failure, not a permitted extra
-trap.
+A defensive target check may remain only with proof that related validated
+states cannot reach it. Reaching one is an invariant failure, not a permitted
+extra trap.
 
 ## 16. Evidence and trusted boundaries
 

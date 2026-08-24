@@ -2,10 +2,9 @@
 
 ## Status and scope
 
-[`LANGUAGE.md`](../LANGUAGE.md), subject to
-[`COHERENCE.md`](COHERENCE.md), remains the source-language authority. This
-document owns the reusable ownership proof beneath concrete collection adapters
-such as `Slice`.
+[`LANGUAGE.md`](../LANGUAGE.md), subject to [`COHERENCE.md`](COHERENCE.md),
+remains the source-language authority. This document owns the reusable ownership
+proof beneath concrete collection adapters such as `Slice`.
 
 A partitioned capability is exclusive authority over a footprint of one
 resource. It may be factored into authorities for an exact disjoint cover,
@@ -199,8 +198,8 @@ Cap(F,r,p,E_l * E_r)
 ```
 
 Matching only family, root, or equal footprint is insufficient. A stale witness,
-a witness from another split event, or equal extents under another produced-value
-lineage cannot authorize combination.
+a witness from another split event, or equal extents under another
+produced-value lineage cannot authorize combination.
 
 No source operation fabricates `Part`. It is minted only after the registered
 family validates factorization, or by an admissible coherence rewrite over
@@ -239,8 +238,8 @@ runtime(reassociate(...)) = unit
 ```
 
 Its compiler cost may be constant for a family with canonical footprints, but a
-family registration must state and test its actual proof-normalization cost.
-The checker cannot normalize by silently resurrecting consumed witnesses.
+family registration must state and test its actual proof-normalization cost. The
+checker cannot normalize by silently resurrecting consumed witnesses.
 
 ## 6. Generic operations
 
@@ -251,9 +250,9 @@ acquire_F(Resource(E)) = Cap(F,r,whole_F,E)
 release_F(Cap(F,r,whole_F,E)) = Resource(E)
 ```
 
-Acquisition may copy run-time storage only when copying the payload is permitted.
-If `E` contains owned values, acquisition consumes and transfers the source
-payload or is rejected.
+Acquisition may copy run-time storage only when copying the payload is
+permitted. If `E` contains owned values, acquisition consumes and transfers the
+source payload or is rejected.
 
 Release requires the complete root footprint. Releasing an arbitrary part would
 drop complement authority or expose aliased mutable storage.
@@ -295,18 +294,18 @@ frame locality.
 
 ## 7. Generic core versus family adapter
 
-| Concern | Generic capability core | Family adapter |
-| --- | --- | --- |
-| exclusive use through branches and calls | yes | no |
-| family and root identity | checks | supplies |
-| exact witness lifecycle | yes | validates factorization |
-| ownership conservation | yes | maps positions to payloads |
-| proof-tree reassociation | consumes exact witnesses | validates target partial composition |
-| address meaning | no | supplies index, key, path, or handle semantics |
-| bounds or membership proof | no | supplies |
-| run-time representation | no | supplies Store, nodes, buckets, pages, or links |
-| destructive lowering | authorizes one occurrence | emits family operation |
-| acquisition/release cost | checks transfer safety | chooses copy, reuse, or materialization |
+| Concern                                  | Generic capability core   | Family adapter                                  |
+| ---------------------------------------- | ------------------------- | ----------------------------------------------- |
+| exclusive use through branches and calls | yes                       | no                                              |
+| family and root identity                 | checks                    | supplies                                        |
+| exact witness lifecycle                  | yes                       | validates factorization                         |
+| ownership conservation                   | yes                       | maps positions to payloads                      |
+| proof-tree reassociation                 | consumes exact witnesses  | validates target partial composition            |
+| address meaning                          | no                        | supplies index, key, path, or handle semantics  |
+| bounds or membership proof               | no                        | supplies                                        |
+| run-time representation                  | no                        | supplies Store, nodes, buckets, pages, or links |
+| destructive lowering                     | authorizes one occurrence | emits family operation                          |
+| acquisition/release cost                 | checks transfer safety    | chooses copy, reuse, or materialization         |
 
 The division avoids both hardcoding every collection into ownership flow and
 allowing source code to assert unverified separation.
@@ -349,8 +348,8 @@ rectangle. Therefore not every proof-tree rotation is admissible. The law model
 must test equality where both bracketings exist and refusal where a proposed
 intermediate is L-shaped.
 
-A destructive tensor family additionally needs a Store/stride representation
-and end-to-end target registration.
+A destructive tensor family additionally needs a Store/stride representation and
+end-to-end target registration.
 
 ### 8.4 Linked sequences
 
@@ -363,8 +362,8 @@ implement the same source operation by copying a spine.
 
 A subtree alone is not enough to rebuild the whole tree. Partition returns the
 selected subtree, disjoint siblings or remainder, and a zipper-shaped witness.
-Rebalancing changes paths and must transform every live witness through a checked
-footprint isomorphism.
+Rebalancing changes paths and must transform every live witness through a
+checked footprint isomorphism.
 
 ### 8.6 Ordered maps
 
@@ -382,9 +381,10 @@ could satisfy a stale capability.
 ### 8.8 Graphs
 
 Disjoint node sets do not automatically imply disjoint mutation because edges
-may cross the cut. A graph family must own incident edges, return an explicit cut
-set, separate node and edge authority, or combine read sharing with exclusive
-local mutation. Node-set disjointness alone does not prove frame locality.
+may cross the cut. A graph family must own incident edges, return an explicit
+cut set, separate node and edge authority, or combine read sharing with
+exclusive local mutation. Node-set disjointness alone does not prove frame
+locality.
 
 ## 9. Compiler representation
 

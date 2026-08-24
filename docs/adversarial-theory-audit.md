@@ -2,8 +2,8 @@
 
 ## Status
 
-Reviewed against `main` at `fc4febe5fe5615f957e514f57a8b312c1cd97c89`
-on 2026-08-24. This file records the review; it is not an independent semantic
+Reviewed against `main` at `fc4febe5fe5615f957e514f57a8b312c1cd97c89` on
+2026-08-24. This file records the review; it is not an independent semantic
 authority. Current precedence is defined in
 [`spec/README.md`](../spec/README.md), and the cross-document contract is
 [`spec/COHERENCE.md`](../spec/COHERENCE.md).
@@ -21,8 +21,8 @@ The audit treated every duplicated rule as hostile input. It compared:
 - the stable Core boundary represented by the current Lean development.
 
 The test was not whether two paragraphs sounded compatible. For every boundary,
-the audit looked for one program, proof object, cache key, caller value, or target
-trace that could satisfy one rule and violate another.
+the audit looked for one program, proof object, cache key, caller value, or
+target trace that could satisfy one rule and violate another.
 
 ## Findings
 
@@ -61,15 +61,15 @@ actual sequencing discipline use one computation form.
 
 Every application is now a Core computation. An empty row proves only that the
 call issues no algebraic-effect request. It may still return, take a specified
-trap, or diverge. A surface pure position admits the result after the row settles
-empty but uses the same computation schedule.
+trap, or diverge. A surface pure position admits the result after the row
+settles empty but uses the same computation schedule.
 
 ### 4. Demand and ownership could count an erased consumer
 
 Dead pure declarations are absent from source evaluation. Without an explicit
 ordering between demand and ownership, a consuming call in a dead declaration
-could appear to discharge a linear path even though the declaration never
-exists operationally.
+could appear to discharge a linear path even though the declaration never exists
+operationally.
 
 Ownership is now checked over the demanded program, or under an equivalent
 erasure-preservation proof. A move, cancellation, or destructor erased with a
@@ -77,8 +77,8 @@ dead declaration cannot satisfy a linear obligation.
 
 ### 5. Staging assigned the wrong identity policy to seals
 
-One staging document called effects and seals generative. The type and integrated
-model define ordinary effects as generative but seals as applicative.
+One staging document called effects and seals generative. The type and
+integrated model define ordinary effects as generative but seals as applicative.
 
 The corrected split is:
 
@@ -165,20 +165,21 @@ check". If a related valid state reaches that check, it is not unreachable and
 creates a target-only observation.
 
 A defensive check may remain only with proof that related valid states cannot
-reach it. Reaching one is an invariant failure. Compiler correctness now requires
-progress-sensitive preservation and reflection of returns, host protocols,
-specified traps, and divergence; weak forward simulation alone is insufficient
-because it permits infinite administrative stuttering and target-only outcomes.
+reach it. Reaching one is an invariant failure. Compiler correctness now
+requires progress-sensitive preservation and reflection of returns, host
+protocols, specified traps, and divergence; weak forward simulation alone is
+insufficient because it permits infinite administrative stuttering and
+target-only outcomes.
 
 ### 11. Structural map typing did not establish sortedness
 
 `OrderedTextMap.of V` is structurally the same authority carrier as a `Slice` of
 entries. The type itself cannot prove that keys are strictly increasing.
 
-`copy` dynamically establishes `ordered(S)`, and exported map operations preserve
-it. Map-result and logarithmic-cost claims are conditional on that protocol. A
-raw matching unordered `Slice` remains ownership-safe and memory-safe but is not
-thereby a mathematical ordered map.
+`copy` dynamically establishes `ordered(S)`, and exported map operations
+preserve it. Map-result and logarithmic-cost claims are conditional on that
+protocol. A raw matching unordered `Slice` remains ownership-safe and
+memory-safe but is not thereby a mathematical ordered map.
 
 ### 12. Ownership wording erased the affine/linear distinction
 

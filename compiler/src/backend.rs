@@ -340,6 +340,10 @@ fn direct_tail_call(block: &RuntimeBlock) -> Option<&RuntimeOperation> {
     (operation.kind == "call.direct" && operation.result == *value).then_some(operation)
 }
 
+fn runtime_type_uses_simd(module: &RuntimeModule, type_id: usize) -> Result<bool, String> {
+    Ok(flattened_runtime_type(module, type_id)?.contains(&ValType::V128))
+}
+
 fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, String> {
     let exported_functions = exported_runtime_function_ids(module);
     let internal_functions = module
@@ -379,22 +383,31 @@ fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, S
         features.insert("multi-value");
     }
 
-    let uses_simd = module.functions.iter().any(|function| {
-        function.blocks.iter().any(|block| {
-            block.parameters.iter().any(|parameter| {
-                matches!(
-                    module.types.get(parameter.type_id),
-                    Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
-                )
-            }) || block.operations.iter().any(|operation| {
-                operation.kind == "vector"
-                    || matches!(
-                        module.types.get(operation.type_id),
-                        Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. })
-                    )
-            })
-        })
-    });
+    let mut uses_simd = false;
+    for function in &module.functions {
+        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+            format!(
+                "{}: runtime function {} references unknown signature {}",
+                module.source, function.id, function.signature
+            )
+        })?;
+        for type_id in signature
+            .parameters
+            .iter()
+            .copied()
+            .chain(std::iter::once(signature.result))
+        {
+            uses_simd |= runtime_type_uses_simd(module, type_id)?;
+        }
+        for block in &function.blocks {
+            for parameter in &block.parameters {
+                uses_simd |= runtime_type_uses_simd(module, parameter.type_id)?;
+            }
+            for operation in &block.operations {
+                uses_simd |= runtime_type_uses_simd(module, operation.type_id)?;
+            }
+        }
+    }
     if uses_simd {
         features.insert("simd");
     }

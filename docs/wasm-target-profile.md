@@ -74,28 +74,31 @@ for debugging tools.
 
 CI performs the dedicated target test without experimental flags on:
 
-- Node 24.19.0, using V8 13.6; and
-- Node 26.7.0, using V8 14.6.
+- Node 24.19.0 LTS; and
+- Node 26.7.0 Current.
 
 The test validates the module, checks the manifest feature contract,
 instantiates it, and executes 250,000 recursive tail calls. Failure to emit
 `return_call` would ordinarily exhaust the Wasm stack long before completion.
 
-V8 already optimizes direct, indirect, reference, and tail-call forms. Blot
-still prefers direct calls after specialization because they are the strongest
-and cheapest representation of a known target.
+These runs establish unflagged validation and execution for the emitted profile.
+Blot still prefers direct calls after specialization because they are the
+strongest and cheapest representation of a known target.
 
 ## wasm3 interpreter subset
 
 The wasm3 interpreter currently reports bulk memory, multi-value, typed function
-references in part, and tail-call optimization as ready. It reports multiple
-memories, exception handling, and memory64 as work in progress, and fixed-width
-SIMD and GC as unavailable.
+references in part, and tail-call optimization as ready. Its current
+implementation accepts `return_call` but routes it through ordinary call
+machinery, so that support is decoding compatibility rather than V8-equivalent
+frame elimination. It reports multiple memories, exception handling, and
+memory64 as work in progress, and fixed-width SIMD and GC as unavailable.
 
 Consequently:
 
 - scalar Blot artifacts that require only bulk memory, multi-value, and tail
-  calls are intended to remain within wasm3's reported feature subset;
+  calls are intended to remain within wasm3's reported decoding subset, without
+  a constant-stack recursion guarantee;
 - SIMD artifacts are V8-class artifacts and are not wasm3-compatible; and
 - Blot does not make memory64, multiple memories, EH, or GC baseline
   requirements.

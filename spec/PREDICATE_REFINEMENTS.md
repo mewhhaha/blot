@@ -3,11 +3,10 @@
 ## Status and scope
 
 This document specifies the implemented unknown-first refinement contract.
-[`LANGUAGE.md`](../LANGUAGE.md), subject to
-[`COHERENCE.md`](COHERENCE.md), owns the source surface.
-[`TYPECHECKING.md`](TYPECHECKING.md) owns the ordinary type lattice, and
-[`SAFETY.md`](SAFETY.md) owns propositions about particular immutable run-time
-values.
+[`LANGUAGE.md`](../LANGUAGE.md), subject to [`COHERENCE.md`](COHERENCE.md), owns
+the source surface. [`TYPECHECKING.md`](TYPECHECKING.md) owns the ordinary type
+lattice, and [`SAFETY.md`](SAFETY.md) owns propositions about particular
+immutable run-time values.
 
 Predicate refinements normalize compile-time descriptions into the existing
 canonical type algebra. They do not add arbitrary predicates to open
@@ -16,9 +15,9 @@ representations.
 
 ## 1. Unknown-first inference
 
-An unannotated value begins with fresh inference variables. Uses accumulate lower
-and upper bounds until checking has enough information to settle a canonical
-type and representation.
+An unannotated value begins with fresh inference variables. Uses accumulate
+lower and upper bounds until checking has enough information to settle a
+canonical type and representation.
 
 ```blot
 let identity = fn value => value
@@ -78,9 +77,9 @@ Authority comes from behavior, not spelling:
   boolean truth table; and
 - a negation value must have the boolean-complement truth table.
 
-A shadowed function named `>=`, `&&`, or `not` has no authority merely because of
-its name. Conversely, a source-defined value with the admitted finite semantics
-may be used.
+A shadowed function named `>=`, `&&`, or `not` has no authority merely because
+of its name. Conversely, a source-defined value with the admitted finite
+semantics may be used.
 
 The predicate parameter may occur only through the accepted comparison basis.
 Recursion, effects, run-time captures, arbitrary calls, and opaque observations
@@ -129,8 +128,8 @@ Closed unions have one normal form:
 - normalize zero members to `bottom`; and
 - normalize one member to that member.
 
-Exact closed intersection and difference return through the same normalizer.
-An empty inhabitant refinement is rejected with `BLOT_EMPTY_REFINEMENT`; Blot
+Exact closed intersection and difference return through the same normalizer. An
+empty inhabitant refinement is rejected with `BLOT_EMPTY_REFINEMENT`; Blot
 exposes no ordinary source bottom-type value.
 
 The supported inversion boundary is deliberately narrow. Arrays, records,
@@ -281,9 +280,9 @@ let at = fn values => fn index => do:
   return 0
 ```
 
-Here the direct read is authorized by a replayable identity-sensitive proposition
-about `index` and this exact `values`, not by turning array length into an ordinary
-type parameter.
+Here the direct read is authorized by a replayable identity-sensitive
+proposition about `index` and this exact `values`, not by turning array length
+into an ordinary type parameter.
 
 ## 7. Layout, effects, and ownership
 
@@ -295,14 +294,14 @@ const SmallI32 = refine (I32, fn value => value >= -10 && value <= 10)
 const bits = SmallI32.bit_width
 ```
 
-The inhabitant predicate and closed-type predicate fragments are pure compile-time
-code. They cannot perform source or host effects, inspect run-time values, or add
-a run-time failure branch.
+The inhabitant predicate and closed-type predicate fragments are pure
+compile-time code. They cannot perform source or host effects, inspect run-time
+values, or add a run-time failure branch.
 
 Applying a requirement is an identity on the carrier. It does not copy, borrow,
-move, cancel, or consume the value. `Omega` before and after the assertion is the
-same, subject to ordinary demand: if the assertion occurs only in a dead pure
-declaration, the whole declaration is absent.
+move, cancel, or consume the value. `Omega` before and after the assertion is
+the same, subject to ordinary demand: if the assertion occurs only in a dead
+pure declaration, the whole declaration is absent.
 
 An owned-value example must use an explicit statement block:
 
@@ -332,8 +331,8 @@ No new public ABI type, tag, or run-time proof object is introduced.
 Recognition is linear in the predicate AST after comparison and boolean values
 have been characterized by finite semantic answer sets. Recognition is cached by
 compile-time value identity. The implementation imposes deterministic expansion
-limits and returns a `LimitDiagnostic`, not a source theorem, when such a bound is
-reached before normalization completes.
+limits and returns a `LimitDiagnostic`, not a source theorem, when such a bound
+is reached before normalization completes.
 
 ## 9. Deliberate rejection boundaries
 
@@ -350,8 +349,9 @@ The supported contract rejects:
 - relationship publication outside the separately specified replayable summary
   schemas.
 
-A future broader predicate language requires its own normalization, decidability,
-evidence, and erasure theorem. It is not an unfinished mode of this one.
+A future broader predicate language requires its own normalization,
+decidability, evidence, and erasure theorem. It is not an unfinished mode of
+this one.
 
 ## 10. Obligations and regressions
 

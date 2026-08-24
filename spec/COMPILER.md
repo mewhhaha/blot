@@ -3,8 +3,8 @@
 ## Status and scope
 
 This document owns the compiler-wide judgment, phase graph, fact ownership,
-failure taxonomy, determinism conditions, and validation boundaries. Exact source
-and focused semantic rules live in the documents indexed by
+failure taxonomy, determinism conditions, and validation boundaries. Exact
+source and focused semantic rules live in the documents indexed by
 [`README.md`](README.md), with cross-document constraints in
 [`COHERENCE.md`](COHERENCE.md).
 
@@ -109,8 +109,9 @@ Every pass has:
 - a validator or downstream replay point where appropriate; and
 - a local simulation or adequacy obligation.
 
-A later pass may consume or replay an earlier fact. It may not infer a replacement
-from printed names, source spelling, target layout, or optimization artifacts.
+A later pass may consume or replay an earlier fact. It may not infer a
+replacement from printed names, source spelling, target layout, or optimization
+artifacts.
 
 ## 4. Frontend facts
 
@@ -140,8 +141,8 @@ spans, compact edges, and resolved identities.
 
 ## 5. Demand facts
 
-After resolution and surface elaboration, the compiler builds the lexical binding
-dependency graph and computes:
+After resolution and surface elaboration, the compiler builds the lexical
+binding dependency graph and computes:
 
 ```text
 live(block, result) = L
@@ -158,8 +159,8 @@ The demand artifact records:
 - forced declaration reasons; and
 - source origins for erased declarations needed by diagnostics or tooling.
 
-Demand is fixed before optimization. Ownership consumes the demanded artifact.
-A consuming action inside an erased declaration cannot satisfy a linear use
+Demand is fixed before optimization. Ownership consumes the demanded artifact. A
+consuming action inside an erased declaration cannot satisfy a linear use
 obligation.
 
 ## 6. Ordinary checking
@@ -183,9 +184,9 @@ Every application is typed as a computation. A source pure position may bind its
 result only after the row settles empty. Effect emptiness does not establish
 termination or absence of traps.
 
-A missing ordinary premise yields a source diagnostic. An internal mutable graph,
-worklist, or unconstrained inference variable never crosses a closed interface or
-cache boundary.
+A missing ordinary premise yields a source diagnostic. An internal mutable
+graph, worklist, or unconstrained inference variable never crosses a closed
+interface or cache boundary.
 
 ## 7. Safety checking
 
@@ -310,13 +311,13 @@ It returns target refusal for types or features outside the declared policy. It
 must not accept a boundary whose required malformed-input validation is
 unimplemented.
 
-`RUNTIME.md` owns the semantic source/caller relation.
-`docs/abi.md` owns exact ABI 1 bytes and caller ownership.
+`RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
+ABI 1 bytes and caller ownership.
 
 For every admitted type, lifting validates before constructing a source value,
-and valid values round-trip through lowering and lifting up to the representation
-relation. Seal names are manifest/conformance facts; equal raw carrier bytes do
-not dynamically enforce source nominality.
+and valid values round-trip through lowering and lifting up to the
+representation relation. Seal names are manifest/conformance facts; equal raw
+carrier bytes do not dynamically enforce source nominality.
 
 Private Runtime-HIR roots, live capabilities, proof witnesses, unsupported
 closures, and other no-layout values are refused before emission. Reaching the
@@ -337,9 +338,9 @@ versioned malformed-boundary/ownership trap. A defensive internal check may
 remain only when related valid states cannot reach it; reaching one is an
 invariant failure.
 
-Emission uses the overflow, bounds, NaN, order, ownership, and host-call behavior
-selected by the validated Runtime-HIR operation rather than incidental target
-instruction behavior.
+Emission uses the overflow, bounds, NaN, order, ownership, and host-call
+behavior selected by the validated Runtime-HIR operation rather than incidental
+target instruction behavior.
 
 ## 13. Failure classes
 
@@ -456,8 +457,8 @@ judgments when exhausted.
 ## 17. Pass correctness
 
 Each pass publishes a local relation and progress-sensitive adequacy package as
-specified by [`CORRECTNESS.md`](CORRECTNESS.md). Weak forward simulation alone is
-insufficient.
+specified by [`CORRECTNESS.md`](CORRECTNESS.md). Weak forward simulation alone
+is insufficient.
 
 The composed theorem preserves and reflects:
 
@@ -496,9 +497,10 @@ validator.
 ## 19. Trusted computing base
 
 The trusted computing base includes the parser plan and implementation,
-resolution and elaboration, declarative rule implementations or their validators,
-certificate checkers, Runtime-HIR validator, public-layout builder, emitter,
-manifest encoder, and the WebAssembly engine assumptions used by the theorem.
+resolution and elaboration, declarative rule implementations or their
+validators, certificate checkers, Runtime-HIR validator, public-layout builder,
+emitter, manifest encoder, and the WebAssembly engine assumptions used by the
+theorem.
 
 Trust is reduced when:
 

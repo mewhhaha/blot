@@ -11,12 +11,11 @@ key_P(x) = key_P(x')    validate(cached(P(x')), x)
 P(x) = cached(P(x'))
 ```
 
-Equality includes the same semantic artifact and ordered diagnostics, modulo only
-fresh administrative identities explicitly hidden by the phase relation.
+Equality includes the same semantic artifact and ordered diagnostics, modulo
+only fresh administrative identities explicitly hidden by the phase relation.
 
-Cross-document identity and failure rules are in
-[`COHERENCE.md`](COHERENCE.md); the whole compiler judgment is in
-[`COMPILER.md`](COMPILER.md).
+Cross-document identity and failure rules are in [`COHERENCE.md`](COHERENCE.md);
+the whole compiler judgment is in [`COMPILER.md`](COMPILER.md).
 
 ## 1. Revisions
 
@@ -36,11 +35,11 @@ Revision(G,tau) = hash(
 )
 ```
 
-A phase key may omit a component only after proving that phase cannot observe it.
-Source identity and semantic identity are distinct. If two source texts elaborate
-to equal artifacts including source origins, a downstream phase may share a key.
-If a diagnostic span, import occurrence, or origin changes, that equality does
-not hold.
+A phase key may omit a component only after proving that phase cannot observe
+it. Source identity and semantic identity are distinct. If two source texts
+elaborate to equal artifacts including source origins, a downstream phase may
+share a key. If a diagnostic span, import occurrence, or origin changes, that
+equality does not hold.
 
 A dependency edge contains a fixed-size digest of the dependency's canonical
 phase key:
@@ -72,9 +71,9 @@ Cache identity must preserve the identity class owned by the cached fact:
 - complete revision identity for serialized artifacts.
 
 A module definition path cannot replace a module instance. An equal source name
-cannot replace an effect atom. Equal seal inputs reconstruct a seal; a declaration
-occurrence is not its identity. Equal-looking intervals under another Store are
-not interchangeable.
+cannot replace an effect atom. Equal seal inputs reconstruct a seal; a
+declaration occurrence is not its identity. Equal-looking intervals under
+another Store are not interchangeable.
 
 ## 3. Dependency invalidation
 
@@ -85,7 +84,8 @@ artifacts.
 
 An ordinary effect reachable from a published interface adds the complete owning
 module-instance occurrence to the key. Reuse is sound only when that identity is
-preserved. A seal instead reuses when its canonical applicative inputs are equal.
+preserved. A seal instead reuses when its canonical applicative inputs are
+equal.
 
 Package resolution, include transforms, generated language-plan revisions, and
 target/ABI policy participate only in the phases that observe them, but a phase
@@ -108,8 +108,8 @@ incremental_frontend(previous, edit)
 including token identities, compact nodes, fields, edges, operator folding,
 resolved AST, origins, and diagnostics.
 
-Operator identity uses the generated fixed language-plan revision. Source modules
-have no custom fixity environment to preserve or compare.
+Operator identity uses the generated fixed language-plan revision. Source
+modules have no custom fixity environment to preserve or compare.
 
 ## 5. Demand reuse
 
@@ -132,8 +132,9 @@ values form the later environment. Reuse removes deterministic evaluation work;
 every declaration in the new revision is still inferred and checked unless a
 separately validated closed interface is reused.
 
-Dead source may be omitted from a key only with the source liveness proof that it
-cannot affect demanded evaluation, diagnostics, ownership, or a published fact.
+Dead source may be omitted from a key only with the source liveness proof that
+it cannot affect demanded evaluation, diagnostics, ownership, or a published
+fact.
 
 ## 6. Interface caches
 
@@ -175,8 +176,8 @@ preserve:
 - every diagnostic-relevant origin.
 
 The current Node resident checker deliberately uses a narrower boundary for
-retained full checks. A dependency may retain a complete local check only when it
-is a leaf, has no explicit module input, publishes a closed specialization
+retained full checks. A dependency may retain a complete local check only when
+it is a leaf, has no explicit module input, publishes a closed specialization
 interface, and exposes no generative ordinary-effect atom across the retained
 boundary.
 
@@ -234,9 +235,9 @@ A cached `LimitDiagnostic` additionally names the configured deterministic
 resource bound. It does not become a source diagnostic. Raising the bound must
 miss or reclassify the cache entry so the same source may continue checking.
 
-`TargetRefusal` includes target and ABI policy in its key.
-`InvariantFailure` is not a reusable semantic result; it signals a compiler defect
-or corrupt artifact.
+`TargetRefusal` includes target and ABI policy in its key. `InvariantFailure` is
+not a reusable semantic result; it signals a compiler defect or corrupt
+artifact.
 
 ## 11. Parallel work
 
@@ -245,8 +246,8 @@ module order; diagnostics follow source order. No mutable inference graph,
 ownership state, or staging sink crosses a worker boundary.
 
 A parallel schedule is valid only when its final diagnostics, interfaces,
-certificates, Runtime HIR, manifest, and emitted bytes equal the sequential fresh
-judgment.
+certificates, Runtime HIR, manifest, and emitted bytes equal the sequential
+fresh judgment.
 
 ## 12. Verification
 
