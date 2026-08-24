@@ -1,20 +1,20 @@
 open import "blot:prelude"
 
-sig even_go = Int -> Bool
+sig even_go = Int -> Int
 const rec even_go = fn remaining => do:
   if remaining <= 0:
-    return True
+    return 1
 
   return odd_go (remaining - 1)
 
-sig odd_go = Int -> Bool
+sig odd_go = Int -> Int
 const rec odd_go = fn remaining => do:
   if remaining <= 0:
-    return False
+    return 0
 
   return even_go (remaining - 1)
 
-sig is_even = Int -> Bool
+sig is_even = Int -> Int
 const is_even = fn count => even_go count
 
 return { .is_even = is_even; }
