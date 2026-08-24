@@ -7,6 +7,9 @@ features materially reduce Blot compiler work or improve emitted-code
 performance without weakening source semantics, ABI 1, ownership evidence, or
 engine compatibility.
 
+The compatibility snapshot is dated 2026-08-24. Engine and interpreter support
+must be rechecked before expanding either target profile.
+
 The review used the WebAssembly feature-status table, proposal specifications,
 current V8 feature declarations, wasm-tools support, the wasm3 interpreter's
 published matrix, and Blot's Runtime HIR/backend.
