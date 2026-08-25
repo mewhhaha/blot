@@ -1,0 +1,4 @@
+open import "blot:prelude"
+
+let call = fn callback => callback 41
+return call $ fn value => value + 1

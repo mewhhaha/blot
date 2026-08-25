@@ -1,0 +1,107 @@
+// A traditional game loop over one explicit game-state record.
+//
+// Unlike `main.blot`, this program has no entity-component stores and no
+// systems. Its three objects are ordinary named fields, `update` returns the
+// next game state, and `render` reads that state. The `for` loop carries the
+// state between frames, which is the functional form of the familiar
+// initialize / update / render loop.
+
+open import "blot:prelude"
+
+const M = import "./lib/math.blot"
+const R = import "./lib/render.blot"
+
+const Host =
+  @effect.host {
+    .frame = Unit -> Int;
+  }
+
+const Actor =
+  {
+    .position = F32x4;
+    .angle = Int;
+    .spin = Int;
+    .scale = F32;
+    .colour = Text;
+  }
+
+const Game =
+  {
+    .player = Actor;
+    .rival = Actor;
+    .beacon = { .position = F32x4; .scale = F32; .texture = Text; };
+  }
+
+let update :: Game -> Game
+let update = fn game => {
+  .player = {
+    .position = game.player.position;
+    .angle = (game.player.angle + game.player.spin) % M.turn;
+    .spin = game.player.spin;
+    .scale = game.player.scale;
+    .colour = game.player.colour;
+  };
+  .rival = {
+    .position = game.rival.position;
+    .angle = (game.rival.angle + game.rival.spin) % M.turn;
+    .spin = game.rival.spin;
+    .scale = game.rival.scale;
+    .colour = game.rival.colour;
+  };
+  .beacon = game.beacon;
+}
+
+let render = fn game => do:
+  <- R.frame $ fn draw => do:
+    <- draw.mesh (
+      game.player.position,
+      game.player.angle,
+      game.player.scale,
+      game.player.colour
+    )
+    <- draw.mesh (
+      game.rival.position,
+      game.rival.angle,
+      game.rival.scale,
+      game.rival.colour
+    )
+    <- draw.sprite (
+      game.beacon.position,
+      game.beacon.scale,
+      game.beacon.texture
+    )
+
+let game :: Game
+let game =
+  {
+    .player = {
+      .position = R.point (-1800, 0, 0);
+      .angle = 0;
+      .spin = 2;
+      .scale = R.unit 1400;
+      .colour = "#7ee0ff";
+    };
+    .rival = {
+      .position = R.point (1800, 0, 0);
+      .angle = 0;
+      .spin = -3;
+      .scale = R.unit 1100;
+      .colour = "#ff8b84";
+    };
+    .beacon = {
+      .position = R.point (0, 1800, 0);
+      .scale = R.unit 900;
+      .texture = "ring";
+    };
+  }
+let frames = 0
+for ever:
+  remaining <- Host.frame ()
+  if remaining <= 0:
+    break
+
+  game := update game
+  <- render game
+  frames := frames + 1
+
+return frames

@@ -90,6 +90,7 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "effect_row_tail",
     "import_expression",
     "signature",
+    "bounded_lambda",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -190,6 +191,7 @@ pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
     ("continued_postfix_expression", "suffixes"),
     ("effect_row", "rest"),
     ("expression", "rest"),
+    ("bounded_lambda", "parameters"),
     ("lambda", "parameters"),
     ("operand", "prefixes"),
     ("operator_section", "declarations"),

@@ -21,6 +21,7 @@ WGPU_BACKENDS=vulkan deno task case-study grep "@text.contains" LANGUAGE.md
 WGPU_BACKENDS=vulkan deno task case-study terminal
 WGPU_BACKENDS=vulkan deno task case-study agent
 WGPU_BACKENDS=vulkan deno task case-study engine 60
+WGPU_BACKENDS=vulkan deno task case-study game-loop 60
 ```
 
 The engine also has a browser host, with hot reload:
@@ -72,6 +73,26 @@ an ambient network call.
 lenses, four-lane vector maths, and hot reload for both the scene and the code.
 It draws to a canvas through four host capabilities and reaches nothing else on
 the page.
+
+`engine/game_loop.blot` is the deliberately traditional counterpart. It uses the
+same renderer and host boundary, but keeps named actors in one `Game` record
+instead of component stores. Each frame reads the clock, replaces the record
+with `update game`, renders it, and repeats:
+
+```blot
+for ever:
+  remaining <- Host.frame ()
+  if remaining <= 0:
+    break
+
+  game := update game
+  <- render game
+```
+
+Run it with `deno task case-study game-loop [frames] [ortho]`. The two entry
+points make the tradeoff visible without changing the graphics code: the
+traditional loop is direct when the world has a few fixed roles; the ECS layout
+lets systems traverse an open collection of entities by component.
 
 ### Four modules, and what each of them owns
 

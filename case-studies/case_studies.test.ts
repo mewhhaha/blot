@@ -9,6 +9,7 @@ for (
     "case-studies/terminal/main.blot",
     "case-studies/agent/main.blot",
     "case-studies/engine/main.blot",
+    "case-studies/engine/game_loop.blot",
   ]
 ) {
   Deno.test(`${source} type checks and lowers`, async () => {

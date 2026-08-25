@@ -2154,18 +2154,26 @@ function lowerLambdaParameter(
 }
 
 function lowerLambda(rule: Rule, context: Context): Expr {
+  expect(
+    rule.name === "lambda" || rule.name === "bounded_lambda",
+    `expected lambda, got ${rule.name}`,
+  );
   const parameters = fieldList(rule, "parameters")
     .map((cursor) => asRule(cursor, "lambda_parameter"));
   expect(parameters.length > 0, "a lambda has no parameter");
-  let result = lowerExpression(
-    asRule(field(rule, "body"), "body"),
-    {
-      ...context,
-      loop: null,
-      returnScope: false,
-      escapeBoundary: "none",
-    },
-  );
+  const bodyContext: Context = {
+    ...context,
+    loop: null,
+    returnScope: false,
+    escapeBoundary: "none",
+  };
+  const body = asRule(field(rule, "body"), "body");
+  let result: Expr;
+  if (rule.name === "bounded_lambda") {
+    result = lowerPrimary(body, bodyContext);
+  } else {
+    result = lowerExpression(body, bodyContext);
+  }
   for (const parameter of [...parameters].reverse()) {
     const lowered = lowerLambdaParameter(parameter);
     result = {
@@ -2193,9 +2201,16 @@ function lowerExpression(rule: Rule, context: Context): Expr {
   const first = lowerOperand(asRule(field(rule, "first"), "first"), context);
   const steps: ChainStep[] = fieldList(rule, "rest").map((cursor) => {
     const step = asRule(cursor, "infix_operation");
+    const right = asRule(field(step, "right"), "right");
+    let loweredRight: Expr;
+    if (right.name === "bounded_lambda") {
+      loweredRight = lowerLambda(right, context);
+    } else {
+      loweredRight = lowerOperand(right, context);
+    }
     return {
       operator: tokenOf(required(step, "operator")).text,
-      right: lowerOperand(asRule(field(step, "right"), "right"), context),
+      right: loweredRight,
       span: step.span,
     };
   });

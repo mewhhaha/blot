@@ -19,6 +19,9 @@ let distinct = remainder != 0
 let joined = "a" <> "b" <> "c"
 let piped = 20 |> Int.add 2 |> Int.mul 2
 let applied = Int.add 20 $ 22
+let call = fn callback => callback 40 2
+let block_applied = call $ fn left => fn right => do:
+  return left + right
 let bounded = Int.le 3 4
 let negated = -7 + 10
 
@@ -71,6 +74,7 @@ return {
   .joined = joined;
   .piped = piped;
   .applied = applied;
+  .block_applied = block_applied;
   .bounded = bounded;
   .negated = negated;
   }

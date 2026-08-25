@@ -89,7 +89,7 @@ let advance = fn ts => E.each_1 (
     ts,
     fn t => {
         .position = t.position;
-        .angle = @int.rem (t.angle + t.spin) M.turn;
+        .angle = (t.angle + t.spin) % M.turn;
         .spin = t.spin;
         .scale = t.scale;
       }
@@ -108,7 +108,7 @@ let advance = fn ts => E.each_1 (
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
 let render = fn (transforms, models) => do:
-  <- R.frame (fn draw => do:
+  <- R.frame $ fn draw => do:
       <- E.visit_2 (
           transforms,
           models,
@@ -124,7 +124,6 @@ let render = fn (transforms, models) => do:
                   model.colour
                 )
         )
-    )
 
 // --- loading ----------------------------------------------------------------
 //
@@ -143,14 +142,12 @@ let load_transforms = fn () => do:
   let store = @satisfies Array.empty (Store Transform)
   for id in Iter.range (0, count):
     entry <- Assets.entry id
-    store := @array.push store (Some (
-        {
-          .position = R.point (entry.x, entry.y, entry.z);
-          .angle = 0;
-          .spin = entry.spin;
-          .scale = R.unit entry.scale;
-        }
-    ))
+    store := @array.push store $ Some {
+      .position = R.point (entry.x, entry.y, entry.z);
+      .angle = 0;
+      .spin = entry.spin;
+      .scale = R.unit entry.scale;
+    }
 
   return store
 
@@ -160,7 +157,7 @@ let load_models = fn () => do:
   let store = @satisfies Array.empty (Store Model)
   for id in Iter.range (0, count):
     entry <- Assets.entry id
-    store := @array.push store (Some { .kind = entry.kind; .colour = entry.colour; })
+    store := @array.push store $ Some { .kind = entry.kind; .colour = entry.colour; }
 
   return store
 

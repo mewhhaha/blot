@@ -672,7 +672,13 @@ let area = width * height
 let remainder = total % columns
 let same = left == right
 let length = Array.length values
+let incremented = call $ fn value => do:
+  return value + 1
 ```
+
+The last form works because the `do:` block gives the lambda a layout boundary.
+An expression-bodied lambda still needs grouping when it is an operator operand:
+`call $ (fn value => value + 1)`.
 
 Keep `@` primitives at the boundary that implements those operations. The
 integer multiplication chain is deliberately:

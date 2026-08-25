@@ -256,6 +256,7 @@ export type RuleName =
   | "continued_postfix_expression"
   | "continued_primary_expression"
   | "infix_operation"
+  | "bounded_lambda"
   | "operand"
   | "prefix_operator"
   | "postfix_expression"
@@ -519,7 +520,14 @@ export interface ContinuedPrimaryExpressionCursor extends RuleCursorBase<"contin
 
 export interface InfixOperationCursor extends RuleCursorBase<"infix_operation"> {
   field(name: "operator"): OperatorTokenCursor;
-  field(name: "right"): OperandCursor;
+  field(name: "right"): BoundedLambdaCursor | OperandCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface BoundedLambdaCursor extends RuleCursorBase<"bounded_lambda"> {
+  field(name: "body"): DoBlockCursor;
+  field(name: "parameters"): ReadonlyArray<LambdaParameterCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -779,6 +787,7 @@ export type AnyRuleCursor =
   | ContinuedPostfixExpressionCursor
   | ContinuedPrimaryExpressionCursor
   | InfixOperationCursor
+  | BoundedLambdaCursor
   | OperandCursor
   | PrefixOperatorCursor
   | PostfixExpressionCursor

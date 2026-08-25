@@ -17,7 +17,9 @@ type Study =
   }
   | {
     readonly kind: "engine";
-    readonly source: "case-studies/engine/main.blot";
+    readonly source:
+      | "case-studies/engine/main.blot"
+      | "case-studies/engine/game_loop.blot";
     readonly frames: number;
     readonly lens: number;
   };
@@ -112,10 +114,19 @@ if (studyName === "grep") {
     frames: frames === undefined ? 120 : Number(frames),
     lens: lens === "ortho" ? 1 : 0,
   };
+} else if (studyName === "game-loop" && studyArguments.length <= 2) {
+  const [frames, lens] = studyArguments;
+  study = {
+    kind: "engine",
+    source: "case-studies/engine/game_loop.blot",
+    frames: frames === undefined ? 120 : Number(frames),
+    lens: lens === "ortho" ? 1 : 0,
+  };
 } else {
   throw new Error(
     "usage: deno task case-study " +
-      "<grep <pattern> <path>|terminal|agent|engine [frames] [ortho]>",
+      "<grep <pattern> <path>|terminal|agent|engine [frames] [ortho]|" +
+      "game-loop [frames] [ortho]>",
   );
 }
 
