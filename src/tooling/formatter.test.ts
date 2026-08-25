@@ -797,3 +797,22 @@ return value
   );
   assertEquals(await formatSource(formatted.source), formatted);
 });
+
+Deno.test("formatting preserves compile-time block scope", async () => {
+  const source = `let value = compdo:
+    let local = 1
+    return local
+return value
+`;
+  const formatted = await formatSource(source);
+  if (!formatted.ok) throw new Error("valid compdo block did not format");
+  assertEquals(
+    formatted.source,
+    `let value = compdo:
+  let local = 1
+  return local
+return value
+`,
+  );
+  assertEquals(await formatSource(formatted.source), formatted);
+});

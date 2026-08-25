@@ -34,10 +34,11 @@ record fields without a stable source location remain non-navigable.
 
 The LSP also publishes local references and safe local rename, workspace symbols
 for open documents, local-name/field/constructor completion, inferred signature
-help, and selective top-level type, specialization, and target-status inlay
-hints. Rename refuses invalid identifiers and does not claim that a generated or
-dynamic name has a stable source location. These features use the same resident
-analysis and syntax revision as diagnostics and hover.
+help, current surface-keyword completion, and selective top-level type,
+specialization, and target-status inlay hints. Rename refuses invalid
+identifiers and does not claim that a generated or dynamic name has a stable
+source location. These features use the same resident analysis and syntax
+revision as diagnostics and hover.
 
 LSP requests run through an explicit host queue. `$/cancelRequest` removes work
 that has not reached the compiler; cancellation or a newer document revision

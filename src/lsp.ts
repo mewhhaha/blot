@@ -356,6 +356,7 @@ async function publishDiagnostics(
   uri: string,
 ): Promise<void> {
   const version = service.version(uri);
+  if (version === null) return;
   const diagnostics = await service.diagnostics(uri);
   if (service.version(uri) !== version) return;
   await notify(writer, "textDocument/publishDiagnostics", {

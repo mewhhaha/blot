@@ -397,7 +397,28 @@ export class LanguageService {
         }
       }
     }
-    for (const keyword of ["case", "do", "if", "let", "return"]) {
+    for (
+      const keyword of [
+        "break",
+        "case",
+        "compdo",
+        "const",
+        "do",
+        "else",
+        "fn",
+        "for",
+        "if",
+        "import",
+        "in",
+        "let",
+        "module",
+        "of",
+        "open",
+        "rec",
+        "return",
+        "with",
+      ]
+    ) {
       items.set(keyword, { label: keyword, kind: 13 });
     }
     return [...items.values()].sort((left, right) =>

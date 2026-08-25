@@ -130,6 +130,14 @@ return answer
     });
     assert(completion.some((item) => item.label === "add"));
     assert(completion.some((item) => item.label === "answer"));
+    for (
+      const keyword of ["compdo", "const", "fn", "for", "open", "rec"]
+    ) {
+      assert(
+        completion.some((item) => item.label === keyword),
+        `completion omitted current keyword ${keyword}`,
+      );
+    }
 
     const signature = await service.signatureHelp(uri, {
       line: 3,
