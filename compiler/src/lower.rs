@@ -2380,6 +2380,10 @@ fn lower_lambda(
     context: &LoweringContext<'_>,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
+    let rule_name = cst.rule_name(rule)?;
+    if rule_name != "lambda" && rule_name != "bounded_lambda" {
+        return Err(format!("expected lambda, found `{rule_name}`"));
+    }
     let parameters = cst.field_list(rule, "parameters")?;
     if parameters.is_empty() {
         return Err("a lambda has no parameter".to_owned());
@@ -2389,8 +2393,12 @@ fn lower_lambda(
         Cursor::Rule(body) => body,
         Cursor::Token(_) => return Err(format!("lambda body is token `{}`", cst.text(body)?)),
     };
-    let mut result = lower_expression(cst, body, &context.body(), arena)
-        .map_err(|error| format!("while lowering lambda body: {error}"))?;
+    let mut result = if rule_name == "bounded_lambda" {
+        lower_primary(cst, Cursor::Rule(body), &context.body(), arena)
+    } else {
+        lower_expression(cst, body, &context.body(), arena)
+    }
+    .map_err(|error| format!("while lowering lambda body: {error}"))?;
     for parameter in parameters.into_iter().rev() {
         let parameter = as_rule(parameter)?;
         let pattern_cursor = required(cst, parameter, "pattern")?;
@@ -2485,9 +2493,15 @@ fn lower_expression(
     let mut steps = Vec::new();
     for step in cst.field_list(rule, "rest")? {
         let step = as_rule(step)?;
+        let right = as_rule(required(cst, step, "right")?)?;
+        let right = if cst.rule_name(right)? == "bounded_lambda" {
+            lower_lambda(cst, right, context, arena)?
+        } else {
+            lower_operand(cst, right, context, arena)?
+        };
         steps.push(ChainStep {
             operator: token_text(cst, required(cst, step, "operator")?)?,
-            right: lower_operand(cst, as_rule(required(cst, step, "right")?)?, context, arena)?,
+            right,
             span: cst.span(Cursor::Rule(step))?,
         });
     }

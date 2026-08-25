@@ -209,6 +209,13 @@
         }
       },
       {
+        "rule": "bounded_lambda",
+        "boundary": {
+          "kind": "terminated",
+          "terminal": "LAYOUT_DEDENT"
+        }
+      },
+      {
         "rule": "operand",
         "boundary": {
           "kind": "root"

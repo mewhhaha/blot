@@ -26,6 +26,24 @@ return lazy
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_DEFERRED_PARAMETER");
 });
 
+Deno.test("a block-bodied lambda is an ordinary infix operand", async () => {
+  const parsed = await parse(`let call = fn callback => callback 41
+let value = call $ fn input => fn amount => do:
+  return input + amount
+return value
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[1];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.value.tag, "apply");
+  if (binding.value.tag !== "apply") return;
+  assertEquals(binding.value.arg.tag, "lambda");
+  if (binding.value.arg.tag !== "lambda") return;
+  assertEquals(binding.value.arg.body.tag, "lambda");
+});
+
 Deno.test("do is an explicit value-producing statement scope", async () => {
   const source = `let value = do:
   let local = 1

@@ -21,19 +21,27 @@ in a benchmark months later.
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     120 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
-| `islandCount`               |      67 | one island for every grammar rule                  |
-| `islandStates`              |     399 |                                                    |
-| `islandTransitions`         |     411 |                                                    |
+| `islandCount`               |      68 | one island for every grammar rule                  |
+| `islandStates`              |     403 |                                                    |
+| `islandTransitions`         |     415 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 593,712 | immutable device table                             |
-| `packedBytes`               | 464,654 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 604,500 | immutable device table                             |
+| `packedBytes`               | 472,598 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 67 rules as islands is what preserves
+and edge arrays directly. Declaring all 68 rules as islands is what preserves
 the full CST shape needed by source lowering.
+
+Admitting a block-bodied lambda as an unparenthesized infix right operand adds
+one bounded island, four island states, four island transitions, 10,788 dense
+transition bytes, and 7,944 packed bytes. Lexer states, candidate multiplicity,
+contraction rounds, scratch factors, the root loop, and parallel long-region
+admission do not change. The lambda's `do:` or `compdo:` dedent terminates the
+new island; expression-bodied lambdas remain outside operand chains, so the
+unbounded `expression -> lambda -> expression` recursion does not return.
 
 Removing the expression-local `reuse fn` assertion saves three lexer states, two
 island states, three island transitions, 7,644 dense-transition bytes, and 5,450

@@ -991,6 +991,20 @@ second pair of parentheses around itself: the tuple's comma or closing delimiter
 already marks its boundary, and the formatter removes a grouping used only for
 that purpose.
 
+A lambda whose body is an explicit `do:` or `compdo:` block has another visible
+boundary: the block's layout dedent. Such a bounded lambda may therefore be the
+unparenthesized right operand of an infix operator:
+
+```blot
+let incremented = call $ fn value => do:
+  return value + 1
+```
+
+This is not a special calling rule for `$`. The parser admits the bounded lambda
+where any infix right operand can occur, then ordinary fixity lowering resolves
+the written operator. An expression-bodied lambda remains outside an operator
+chain and needs grouping: `call $ (fn value => value + 1)`.
+
 The `=>` token is reserved for lambda parameters and case arms. A lambda written
 without `fn` is therefore a syntax error rather than an operator chain.
 

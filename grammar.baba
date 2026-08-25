@@ -334,7 +334,17 @@ continued_primary_expression = (
 
 infix_operation = (
   operator:operator_token
-  right:operand
+  right:(operand | bounded_lambda)
+) ;
+
+// A block-bodied lambda has a structural end at its layout dedent, so it can
+// be an unparenthesized operator operand without putting the unbounded
+// `expression -> lambda -> expression` cycle back into the island plan. It is
+// not specific to `$`: fixity lowering treats it like every other right
+// operand, and typing decides whether the operator accepts a function.
+bounded_lambda = (
+  parameters:lambda_parameter+
+  body:do_block
 ) ;
 
 operand = (
