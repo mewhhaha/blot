@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSource } from "../load.ts";
+import { type Loaded, loadSource } from "../load.ts";
 import {
   loadedConfigurationDigest,
   loadedPayloadDigest,
@@ -75,6 +75,53 @@ test("module payload and direct configuration digests vary independently", async
     );
     assert.notEqual(loadedPayloadDigest(changedRoot), payload);
     assert.equal(loadedConfigurationDigest(changedRoot), configuration);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("snapshot revisions use their digest without materializing the module", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-snapshot-revision-"));
+  const dependency = join(directory, "dependency.blot");
+  const root = join(directory, "root.blot");
+  const source =
+    'const dependency = import "./dependency.blot"\nreturn dependency\n';
+  try {
+    const firstDependency: Loaded = {
+      get module(): never {
+        throw new Error("snapshot module was materialized");
+      },
+      dependencies: new Map(),
+      includedFiles: new Map(),
+      source: "",
+      path: dependency,
+      storage: { tag: "snapshot", digest: "first-snapshot" },
+    };
+    const first = await loadSource(
+      root,
+      source,
+      new Map([[dependency, firstDependency]]),
+    );
+    const firstPayload = loadedPayloadDigest(firstDependency);
+    const firstRevision = loadedRevisionKey(first);
+
+    const secondDependency: Loaded = {
+      get module(): never {
+        throw new Error("snapshot module was materialized");
+      },
+      dependencies: new Map(),
+      includedFiles: new Map(),
+      source: "",
+      path: dependency,
+      storage: { tag: "snapshot", digest: "second-snapshot" },
+    };
+    const second = await loadSource(
+      root,
+      source,
+      new Map([[dependency, secondDependency]]),
+    );
+    assert.notEqual(loadedPayloadDigest(secondDependency), firstPayload);
+    assert.notEqual(loadedRevisionKey(second), firstRevision);
   } finally {
     await rm(directory, { recursive: true });
   }

@@ -96,22 +96,30 @@ diagnostics from the Rust inspection before graph configuration.
 The source graph carries import and include edges. Changing a node marks only
 that node dirty. Its next semantic request checks it in isolation and publishes
 a canonical `SealedModuleBoundary` containing the compiler/schema version,
-settled parameter/result/effect types, compile-time result fingerprint, and
-ordered direct-dependency boundaries. Publication is transactional: an invalid
-revision has no active boundary.
+settled parameter/result/effect types, compile-time result identity, and ordered
+direct-dependency boundaries. Publication is transactional: an invalid revision
+has no active boundary.
 
-Exact boundary-byte equality stops propagation. A changed boundary marks only
-direct importers dirty; each importer is checked and may stop the wave in the
-same way. Unrelated modules retain their identities and closed artifacts. The
-request-local invalidation report lists dirty and checked modules, changed and
-unchanged boundaries, invalidated importers, and reused artifacts. Telemetry is
-an observation and never enters a semantic key or certificate.
+An immutable result with a recursively complete structural encoding compares by
+canonical value bytes. If no resident result exists, or the result contains a
+closure environment, deferred environment, function-choice alternative graph,
+Region Store/root, rejoin witness, or residual runtime value, the boundary
+instead retains the exact producing semantic revision. A partial encoding of
+such a value cannot prove equality. Exact boundary-identity equality stops
+propagation. A changed boundary marks only direct importers dirty; each importer
+is checked and may stop the wave in the same way. Unrelated modules retain their
+identities and closed artifacts. The request-local invalidation report lists
+dirty and checked modules, changed and unchanged boundaries, invalidated
+importers, and reused artifacts. Telemetry is an observation and never enters a
+semantic key or certificate.
 
 Within one Rust session, a collision-free monotonic `BoundaryId` is the
 fixed-size digest of a published boundary. The producing module compares its
-complete canonical bytes before retaining an existing identity; a parent stores
-only each direct dependency's identity. These identities never cross a session
-or enter a persistent certificate. If a boundary changes and later returns to
+complete canonical bytes and, when structural result encoding is unavailable,
+its retained semantic-revision identity before keeping an existing boundary
+identity. A parent stores only each direct dependency's identity. Neither the
+boundary identity nor the process-local revision token crosses a session or
+enters a persistent certificate. If a boundary changes and later returns to
 earlier bytes, assigning a fresh identity may conservatively recheck importers.
 Installing an immutable module snapshot mints its initial identity directly;
 replacing that snapshot with source therefore always publishes a changed
@@ -164,15 +172,16 @@ resolved expression identity. Replacing the module invalidates every liveness
 entry before evaluation can observe another AST.
 
 An in-process checker may stop reverse propagation after rechecking a changed
-module only when a sealed boundary fingerprint is unchanged. The canonical
-bytes compared by the producing module contain the closed type/effect boundary,
-relational-summary schema and facts,
-every checked live source node that can constrain an importer, includes, capsule
-input, and fixed-size dependency identities. Dead source may be omitted only by a
-separate proof that it cannot affect inference, evaluation, diagnostics, or a
-published fact. Cache publication is transactional: failure publishes no
-replacement and the failed revision cannot consult the previous boundary as
-semantic authority.
+module only when a sealed boundary fingerprint is unchanged. The canonical bytes
+compared by the producing module contain the closed type/effect boundary,
+relational-summary schema and facts, every checked live source node that can
+constrain an importer, includes, capsule input, and fixed-size dependency
+identities. When no complete structural result fingerprint exists, exact
+semantic-revision equality conservatively stands for the omitted value graph;
+partial value bytes do not. Dead source may be omitted only by a separate proof
+that it cannot affect inference, evaluation, diagnostics, or a published fact.
+Cache publication is transactional: failure publishes no replacement and the
+failed revision cannot consult the previous boundary as semantic authority.
 
 A changed module may reuse evaluated declaration values only for a maximal
 unchanged top-level prefix when all of these remain equal:
@@ -182,12 +191,17 @@ unchanged top-level prefix when all of these remain equal:
 - every reachable expression, pattern, declaration, and source origin in the
   prefix;
 - resolved dependency and include mappings; and
-- every semantic input observed by those declarations.
+- every semantic input observed by those declarations; and
+- every retained value is recursively independent of the producing revision and
+  module instance.
 
 A change to a preceding declaration invalidates the suffix because earlier
-values form the later environment. Reuse removes deterministic evaluation work;
-every declaration in the new revision is still inferred and checked unless a
-separately validated closed interface is reused.
+values form the later environment. Closures, deferred environments, function
+choices, effects, operations, Regions, continuations, and residual runtime
+values are not revision-independent and are evaluated again even when their
+declaration is in the unchanged prefix. Reuse removes deterministic evaluation
+work; every declaration in the new revision is still inferred and checked unless
+a separately validated closed interface is reused.
 
 Dead source may be omitted from a key only with the source liveness proof that
 it cannot affect demanded evaluation, diagnostics, ownership, or a published
@@ -232,16 +246,16 @@ preserve:
 - staging sink contents; and
 - every diagnostic-relevant origin.
 
-The current Node resident checker deliberately uses a narrower boundary for
-retained full checks. A dependency may retain a complete local check only when
-it is a leaf, has no explicit module input, publishes a closed specialization
-interface, and exposes no generative ordinary-effect atom across the retained
-boundary.
+The resident Rust checker publishes a module check only after its parameter,
+result, effects, expression types, and closure signatures encode as a closed
+flat interface. A retained expanded check therefore contains no mutable
+inference variable. Failed checks and results that cannot publish that interface
+are removed before the next request.
 
-The first check runs against an isolated staging sink. A later importer installs
-only the closed interface and freshly instantiates its schemes. Caller-specific
-facts and mutable inference state never cross the boundary. A new leaf revision
-misses the cache.
+A cache hit may reuse the expanded closed check or inflate its flat interface
+with fresh quantified identities. Caller-specific facts remain in the importing
+module, and source, configuration, or dependency-boundary changes invalidate the
+affected resident entry before another request.
 
 ## 8. Staging and specialization caches
 
@@ -250,9 +264,16 @@ source closures, residual Core, and closed representation choices. Its key
 includes every explicit input the staged computation observed.
 
 A resident result for a nullary module with an empty checked effect row is such
-a capsule when its closed result type exposes no generative effect identity.
-Importing that module may reuse the result directly. Effect-bearing results keep
-the complete written module-instance occurrence and are reevaluated.
+a capsule only when its closed result type exposes no generative effect identity
+and the actual value is recursively independent of its producing module
+instance. Importing that module may then reuse the result directly. Closures,
+deferred environments, function choices, effects, operations, Regions,
+continuations, and residual runtime values keep the complete written
+module-instance occurrence and are not shared directly. A validated snapshot may
+retain their compile-time environment as a revision-keyed template. Each import
+decodes that template over its own module-instance and effect-scope prefix, then
+evaluates only the module result expression. This skips declaration replay
+without merging written occurrences.
 
 Ordinary effects retain complete generative occurrence identity. Seals retain
 canonical applicative inputs. A staged result containing process-local mutable
@@ -283,10 +304,55 @@ may fall back to ordinary compilation after validation failure. A compiler-
 distributed snapshot instead reports corrupt distribution when its authority is
 the distribution itself.
 
+Compiler-host ABI 3 exposes trusted-snapshot installation separately from graph
+deltas. The bundled host invokes it only after the artifact manifest
+authenticates the prelude digest. A caller supplying a custom compiler and
+snapshot explicitly owns that trust decision. Source, portable-AST,
+configuration, and removal deltas cannot carry snapshot bytes, and registry
+packages cannot reach this authority.
+
+Snapshot preparation is transactional. The AST, interface, compile-time capsule,
+and result evaluation are completed in path-scoped staging state before the
+resident module, invalidation graph, or identity counters change. A failed
+installation leaves any prior resident module and its published boundary intact.
+Effect declarations and extensions created by `@type.attach` are exact-identity,
+module-owned resident-context facts. The declaration retains the effect's
+operation metadata; later module-owned attachments form overlays, so removing an
+attachment reveals the declaring value. Staging excludes the replaced module's
+prior facts and publishes new ones only with the successful snapshot. They
+cannot leak from a failed installation, another module's same-spelled effect, or
+another compiler session.
+
+The cached-interface path requires all three of an eligible compile-time
+environment, a certificate with no generative effect label or opaque effect
+identity, and a validated AST containing no `@effect` or `@effect.host`
+constructor. Only then may installation borrow the decoded immutable type arena
+and install the interface after the AST without cloning the arena or validating
+the same certificate twice. A captured closure's application and module-instance
+provenance remains complete: the capsule records the scope graph only when every
+root names the snapshot module's current revision, validates every referenced
+AST node on installation, and remaps the roots to the installed revision. Every
+other snapshot still validates its supplied certificate and AST references, then
+performs an ordinary Rust check in staging. A nullary module is evaluated there;
+a parameterized module remains unevaluated until an ordinary `import ... with`
+supplies its argument. Generative effects therefore receive the receiving
+session's occurrence identities and retain their operation and attached-member
+metadata rather than transplanting producer-local labels. The pinned snapshot
+path also does not construct the source-inspection portable-AST digest, because
+its manifest-validated snapshot digest is already the revision identity. An
+eligible environment remains installed as a module-result template keyed by that
+revision. Template decoding prepends the importing runtime's complete
+module-instance and effect-scope stacks to every reconstructed closure; source
+or configuration invalidation removes the template before renewing the revision.
+
 The compiler host seeds the resolved graph's prelude leaf from the validated
 snapshot AST and pins that leaf to the compiler instance. It does not reparse a
-source twin merely to rediscover the snapshot's dependency-free graph. Source-
-backed formatting and editor requests remain ordinary syntax consumers.
+source twin merely to rediscover the snapshot's dependency-free graph.
+Formatting and editor requests over source remain ordinary syntax consumers. The
+pinned leaf's revision is the validated snapshot digest; ordinary semantic
+commands therefore do not export or decode its portable AST. A syntax consumer
+that explicitly requests that AST materializes it lazily from the installed
+snapshot.
 
 Registry capsules remain package-controlled inputs. A package hash proves only
 unchanged transport. It does not prove that a claimed interface follows from its
@@ -296,10 +362,13 @@ cheaply than ordinary checking.
 An active workspace graph owns the resident module set. Removing a node from
 that set removes its frontend snapshot, mutable inference generation,
 compile-time evaluation caches, effect-identity entries, closed programs, and
-request-local analyses. A later module with the same path is a new revision and
-must install and validate its payload again. Stable sealed boundaries and
-checked snapshots are self-contained; none retains a live variable or another
-private generation merely because a removed module once published it.
+request-local analyses. Every direct importer is invalidated before that
+dependency disappears, so no importer can reuse an environment, boundary, or
+closed program containing the removed value. A later module with the same path
+is a new revision and must install and validate its payload again. Stable sealed
+boundaries and checked snapshots are self-contained; none retains a live
+variable or another private generation merely because a removed module once
+published it.
 
 ## 10. Diagnostic and limit reuse
 

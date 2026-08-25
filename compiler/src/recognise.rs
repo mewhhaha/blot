@@ -4,7 +4,10 @@ use std::rc::Rc;
 use num_bigint::BigInt;
 
 use crate::ast::{Declaration, Expression, ExpressionId, Module, Pattern, PatternId, Span};
-use crate::eval::{Context, Phase, Runtime, apply, run};
+use crate::diagnostic::{Diagnostic, FailureClass};
+use crate::eval::{
+    ApplicationSite, CompilerApplication, Context, Phase, RecognitionProbe, Runtime, apply, run,
+};
 use crate::value::Value;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -287,57 +290,91 @@ fn pattern_name(module: &Module, pattern: PatternId) -> Option<&str> {
 
 fn probe_int(context: &Rc<Context>, value: &Value, left: i64, right: i64) -> Option<bool> {
     let runtime = probe_runtime(value);
-    let partial = run(apply(
+    let probe = RecognitionProbe::Integer {
+        left: i8::try_from(left).ok()?,
+        right: i8::try_from(right).ok()?,
+    };
+    let application = probe_application(context, value)?;
+    let partial = recognition_result(run(apply(
         context.clone(),
         value.clone(),
         Value::Int(BigInt::from(left)),
         nowhere(),
         runtime.clone(),
-    ))
-    .ok()?;
-    let answer = run(apply(
+        application
+            .clone()
+            .compiler(CompilerApplication::RecognitionArgument { probe, position: 0 }),
+    )))?;
+    let answer = recognition_result(run(apply(
         context.clone(),
         partial,
         Value::Int(BigInt::from(right)),
         nowhere(),
         runtime,
-    ))
-    .ok()?;
+        application.compiler(CompilerApplication::RecognitionArgument { probe, position: 1 }),
+    )))?;
     boolean(answer)
 }
 
 fn probe_bool(context: &Rc<Context>, value: &Value, left: bool, right: bool) -> Option<bool> {
     let runtime = probe_runtime(value);
-    let partial = run(apply(
+    let probe = RecognitionProbe::Boolean { left, right };
+    let application = probe_application(context, value)?;
+    let partial = recognition_result(run(apply(
         context.clone(),
         value.clone(),
         boolean_value(left),
         nowhere(),
         runtime.clone(),
-    ))
-    .ok()?;
-    let answer = run(apply(
+        application
+            .clone()
+            .compiler(CompilerApplication::RecognitionArgument { probe, position: 0 }),
+    )))?;
+    let answer = recognition_result(run(apply(
         context.clone(),
         partial,
         boolean_value(right),
         nowhere(),
         runtime,
-    ))
-    .ok()?;
+        application.compiler(CompilerApplication::RecognitionArgument { probe, position: 1 }),
+    )))?;
     boolean(answer)
 }
 
 fn probe_bool_unary(context: &Rc<Context>, value: &Value, argument: bool) -> Option<bool> {
     let runtime = probe_runtime(value);
-    let answer = run(apply(
+    let probe = RecognitionProbe::BooleanUnary { argument };
+    let application = probe_application(context, value)?
+        .compiler(CompilerApplication::RecognitionArgument { probe, position: 0 });
+    let answer = recognition_result(run(apply(
         context.clone(),
         value.clone(),
         boolean_value(argument),
         nowhere(),
         runtime,
-    ))
-    .ok()?;
+        application,
+    )))?;
     boolean(answer)
+}
+
+fn probe_application(context: &Context, value: &Value) -> Option<ApplicationSite> {
+    let Value::Closure { module, body, .. } = value else {
+        return None;
+    };
+    recognition_result(ApplicationSite::for_expression(context, module, *body))
+}
+
+fn recognition_result<T>(result: Result<T, Diagnostic>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(diagnostic) if diagnostic.failure_class() == FailureClass::Invariant => {
+            panic!(
+                "recognition probe violated compiler invariant {}: {}",
+                diagnostic.code, diagnostic.message
+            )
+        }
+        Err(_) => None,
+    }
 }
 
 fn probe_runtime(value: &Value) -> Runtime {
@@ -390,6 +427,28 @@ mod tests {
         assert_eq!(
             orderings_from_answers(true, true, true),
             BTreeSet::from([Ordering::Less, Ordering::Equal, Ordering::Greater])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "recognition probe violated compiler invariant BLOT_RUST_INVARIANT")]
+    fn recognition_probe_reports_invariant_failures() {
+        recognition_result::<Value>(Err(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "missing module revision",
+            nowhere(),
+        )));
+    }
+
+    #[test]
+    fn recognition_probe_refuses_source_failures() {
+        assert!(
+            recognition_result::<Value>(Err(Diagnostic::new(
+                "BLOT_TYPE",
+                "candidate is not a boolean function",
+                nowhere(),
+            )))
+            .is_none()
         );
     }
 }

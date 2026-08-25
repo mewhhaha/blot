@@ -317,7 +317,8 @@ ownership-authorized Store write and performs no persistent element-Store copy.
 
 ## 15. Production gates
 
-The adapter is production-complete only when Node and Rust/Wasm agree on:
+The adapter is production-complete only when the Rust checker/evaluator and
+emitted Wasm satisfy their respective obligations for:
 
 1. non-trapping validation;
 2. successful acquisition and trapping invalid acquisition;

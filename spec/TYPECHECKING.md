@@ -3,8 +3,8 @@
 This document specifies the mathematical model and implementation obligations of
 Blot's type checker. [`LANGUAGE.md`](../LANGUAGE.md) remains the normative
 language specification, and [`COMPILER.md`](COMPILER.md) places this judgment in
-the whole compiler. This document is the authority for deciding whether two
-checker implementations compute the same result, and for changing their internal
+the whole compiler. This document defines the judgment implemented by the
+Rust/Wasm semantic checker and the obligations for changing its internal
 representation without changing the language.
 
 The checker is split into three parts:
@@ -610,9 +610,9 @@ serializes their parent and value edges once, and reconstructs all environment
 shells before filling those edges. A module-local closure stores a local marker
 rather than the producer's path, so installation restores the consumer's module
 identity. Closure signatures come from the separately validated checked-module
-certificate rather than being duplicated on every closure value. Mutable
-runtime Stores, continuations, residual values, and generative effects cannot
-enter this capsule.
+certificate rather than being duplicated on every closure value. Mutable runtime
+Stores, continuations, residual values, and generative effects cannot enter this
+capsule.
 
 The cache key is the loader's module-revision identity together with every
 generative declaration identity observed in the closed type graph. Today the
@@ -623,10 +623,28 @@ equivalent to stable serialized declaration IDs, while permitting the in-process
 evaluator to retain fresh numeric brands.
 
 For a resident nullary module with an empty checked effect row, the evaluator
-may return its retained compile-time result directly when the closed result type
-contains no ordinary or host effect identity. This is the zero-generative-key
-case of the same capsule rule. An exposed effect value or non-empty nested
-effect row requires evaluation under the importing occurrence.
+may return its retained compile-time result directly only when the closed result
+type contains no ordinary or host effect identity and the actual value is
+recursively independent of its producing module instance. A higher-order closure
+can expose its creation scope by invoking a supplied effect constructor even
+when its own module is effect-free, so closure-bearing results are evaluated
+under each importing occurrence. The same applies to exposed effects,
+operations, deferred environments, function choices, Regions, continuations,
+residual runtime values, and non-empty nested effect rows.
+
+A validated snapshot environment may be instantiated as a revision-keyed
+template for each import. Decoding prefixes every recorded module-instance and
+creation scope with the importing occurrence before evaluating the module's
+result expression. This preserves the no-sharing judgment while avoiding a
+second evaluation of declarations whose values the capsule already records.
+
+Sharing that resident result does not by itself make its reverse-invalidation
+fingerprint structural. Scalars, closed types, and recursively complete
+immutable aggregates compare by value. A missing result or one containing a
+closure, deferred environment, function choice, Region Store/root, rejoin
+witness, or residual runtime value is bound to the exact loader revision. An
+edit therefore cannot preserve an importer through equality of only the
+printable or source-naming parts of such a value.
 
 The in-process representation may retain AST and compile-time value identities
 instead of encoding bytes. It must nevertheless enforce the same boundary by
@@ -898,39 +916,6 @@ invalidation ensure that environment denotes the same module instance.
 Parameterised analyses remain per-check because their values may depend on the
 caller's argument.
 
-The Node checker implements the first full-check reuse case at a stronger
-boundary than the Rust type-interface cache. For a leaf module `m`,
-
-```txt
-parameter(m) = unit    closed-interface(m)    no-generative-brand(m)
--------------------------------------------------------------------- resident-leaf
-check_root(..., m, ...) may reuse settled_check(m)
-```
-
-The cache miss checks `m` with a private `Staging`, settles every local fact
-read, and only then publishes the result. Because `m` is a leaf there is no
-contextual dependency result to copy into another compilation; because it is
-nullary no caller input can settle its module input. The module result may still
-contain inference variables, but it is retained only as a read-only scheme
-template: import instantiation wraps the internal module closure at level `-1`
-and instantiates it, so importer constraints land on fresh copies. The lexical
-specialization interface is stricter: it must close because selected source
-closures reconstruct their captured typing scope from that interface.
-
-On a hit the importing compilation installs the closed specialization interface
-but derives new call-site specializations and their fact sinks in its own
-`Staging`. User effect labels are generative (`name#id`), so a branded closed
-leaf may use its isolated check in the compilation that produced the brand but
-is not retained for the next compilation. Fixed compiler-private labels are not
-generative brands. A leaf that cannot publish a closed interface is remembered
-as unsealable for that loader revision and uses the ordinary shared-staging path
-on later checks.
-
-This is intentionally a leaf theorem, not a prelude exception. Generalizing it
-to modules with dependencies requires a packaged transitive checked artifact so
-all dependency facts cross one coherent revision boundary rather than being
-transplanted piecemeal.
-
 The source text and the semantic revision are distinct. Write `lower(s) = m` for
 Baba tokenisation, island parsing, compact-CST materialisation, and Blot
 lowering together. When an edit satisfies `lower(s') = lower(s)`, equality here
@@ -1102,21 +1087,19 @@ HIR certificates, and emitted ABI bytes before the next stage begins.
 8. Consider explicit SIMD only when a finite-set scan remains a measured hot
    loop.
 
-Stages 1 and 2 are implemented in both checking authorities. The TypeScript
-solver journals bound insertions and inference-identity allocation around every
-right-union candidate; its visited relation is a direct ordered pair of object
-identities rather than a formatted string. The Rust solver uses the equivalent
-bound journal and variable-arena checkpoint. Both have executable rollback
-tests, including a candidate that mutates a nested variable before failing.
+Stages 1 and 2 are implemented in the Rust checker shipped as Wasm. The solver
+journals bound insertions and checkpoints both the variable arena and skolem
+allocator around every right-union candidate. Its rollback tests include a
+candidate that mutates a nested variable before failing.
 
 Lexical environments in the Rust checker use persistent copy-on-write maps, as
 per Lemma 6. Compile-time records opened into scope remain immutable open frames
 under Lemma 7; their ordered field storage and target indices are shared between
 the evaluator and checker, so importing a large module does not clone every
-recursive value and type merely to establish aliases. TypeScript scheme
-instantiation memoises immutable structural nodes within one freshening while
-still allocating distinct generalized variables. Neither change alters the
-lattice or lets mutable inference state cross a module boundary.
+recursive value and type merely to establish aliases. Scheme instantiation
+memoises generalized variable replacements within one freshening while
+allocating distinct replacements for separate instantiations. Neither change
+alters the lattice or lets mutable inference state cross a module boundary.
 
 The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache
@@ -1129,12 +1112,15 @@ invalidation boundary. Checked value environments are retained under the
 `checked-environment` premise, so Runtime-HIR preparation does not evaluate a
 complete nullary module twice.
 
-The 2026-08-03 `storage.blot` profiles justified stage 3 but not SIMD. Across 50
-repeated TypeScript checks, replacing formatted visited keys reduced sampled
-constraint time from 178.6 ms to 49.6 ms. In the Rust checker, named Wasm
-profiles identified allocation, recursive `Type` destruction, and lexical-map
-cloning as the hottest implementation costs. Persistent lexical maps reduced
-that cost without adding per-binding indirection.
+The 2026-08-03 `storage.blot` profiles justified stage 3 but not SIMD. A
+historical TypeScript implementation, measured before Rust/Wasm became the sole
+semantic authority, reduced sampled constraint time from 178.6 ms to 49.6 ms
+across 50 repeated checks by replacing formatted visited keys. Those numbers are
+migration history, not a current correctness or performance gate. In the Rust
+checker, named Wasm profiles identified allocation, recursive `Type`
+destruction, and lexical-map cloning as the hottest implementation costs.
+Persistent lexical maps reduced that cost without adding per-binding
+indirection.
 
 After flat constraint edges, incremental Baba frontend state, resident caches,
 and persistent open frames, five independent nine-sample runs on 2026-08-04
@@ -1143,8 +1129,9 @@ took 14.4 ms, while a trailing comment edit that preserved the lowered module
 took 0.781 ms. The changed-module phase medians were 13.0 ms for loading and
 checking, 1.30 ms for HIR preparation, and 0.344 ms for emission after
 preparation. Cold end-to-end compilation took 73.6 ms including 3.4 ms of
-compiler-Wasm instantiation. The corresponding TypeScript medians were 29.7 ms
-for changed-module edits and 164.4 ms cold.
+compiler-Wasm instantiation. For historical migration context, the retired
+TypeScript implementation measured 29.7 ms for changed-module edits and 164.4 ms
+cold.
 
 A separate 30-sample native release profile isolated the two representation
 changes. Replacing copied active-island sets with one stack reduced prelude
@@ -1169,10 +1156,14 @@ compilation of `examples/storage.blot`.
 Correctness gates:
 
 ```txt
-deno task check
-deno task test
+cargo fmt --manifest-path compiler/Cargo.toml -- --check
+cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 pnpm compiler:build
-pnpm conformance
+deno check .
+deno fmt --check
+deno lint
+pnpm test
+pnpm test:compiler
 ```
 
 Performance reports record medians, source path, compiler artifact hash, sample

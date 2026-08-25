@@ -1,6 +1,6 @@
 {
   "protocol": {
-    "compilerHostAbi": 2,
+    "compilerHostAbi": 3,
     "checkedModuleCertificate": 13,
     "runtimeHir": 4
   },
@@ -337,7 +337,6 @@
     "@continuation.cancel",
     "@effect",
     "@effect.host",
-    "@effect.named",
     "@f32",
     "@f32.add",
     "@f32.cmp",
@@ -701,11 +700,11 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 11172
+      "lines": 11324
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9280
+      "lines": 9306
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -716,8 +715,12 @@
       "lines": 5428
     },
     {
+      "path": "compiler/src/session.rs",
+      "lines": 4399
+    },
+    {
       "path": "compiler/src/eval.rs",
-      "lines": 3601
+      "lines": 4314
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -732,20 +735,16 @@
       "lines": 3148
     },
     {
-      "path": "compiler/src/session.rs",
-      "lines": 2920
-    },
-    {
       "path": "src/syntax/lower.ts",
       "lines": 2755
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2181
+      "lines": 2119
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1410
+      "lines": 1481
     },
     {
       "path": "compiler/src/safety.rs",
@@ -756,8 +755,8 @@
       "lines": 1362
     },
     {
-      "path": "src/tooling/formatter.ts",
-      "lines": 1243
+      "path": "compiler/src/value_capsule.rs",
+      "lines": 1308
     }
   ]
 }

@@ -116,6 +116,7 @@ export interface CompilerExplanation {
 }
 
 export interface CompilerOptions {
+  /** A custom compiler/snapshot pair is trusted as one caller-owned distribution. */
   readonly wasm?: Uint8Array;
   readonly preludeSnapshot?: Uint8Array;
   readonly targetPolicy?: CompilerTargetPolicy;
@@ -165,31 +166,43 @@ export class Compiler implements CompilerHost {
   #requests: Promise<void> = Promise.resolve();
   #destroyed = false;
 
-  private constructor(compiler: CompilerWasm, preludeSnapshot: Uint8Array) {
+  private constructor(
+    compiler: CompilerWasm,
+    preludeSnapshot: Uint8Array,
+    preludeSnapshotDigest: string,
+  ) {
     this.#compiler = compiler;
     this.#handle = compiler.createCompilerSession();
-    compiler.installCompilerSessionModuleSnapshot(
+    const sessionHandle = this.#handle;
+    compiler.installCompilerSessionTrustedModuleSnapshot(
       this.#handle,
       PRELUDE,
       preludeSnapshot,
     );
-    const exportedPrelude = compiler.exportCompilerSessionModuleAst(
-      this.#handle,
-      PRELUDE,
-    );
-    if (!exportedPrelude.ok) {
-      throw new Error("installed prelude snapshot omitted its portable AST");
-    }
+    let decodedPrelude: Module | undefined;
     const prelude: Loaded = {
-      module: decodePortableModule(
-        JSON.parse(exportedPrelude.ast),
-        "distributed prelude snapshot",
-      ),
+      get module(): Module {
+        if (decodedPrelude !== undefined) return decodedPrelude;
+        const exportedPrelude = compiler.exportCompilerSessionModuleAst(
+          sessionHandle,
+          PRELUDE,
+        );
+        if (!exportedPrelude.ok) {
+          throw new Error(
+            "installed prelude snapshot omitted its portable AST",
+          );
+        }
+        decodedPrelude = decodePortableModule(
+          JSON.parse(exportedPrelude.ast),
+          "distributed prelude snapshot",
+        );
+        return decodedPrelude;
+      },
       dependencies: new Map(),
       includedFiles: new Map(),
       source: "",
       path: PRELUDE,
-      storage: { tag: "source" },
+      storage: { tag: "snapshot", digest: preludeSnapshotDigest },
     };
     this.#workspace = new WorkspaceGraph(
       (path, source) => this.#inspectSource(path, source),
@@ -201,6 +214,7 @@ export class Compiler implements CompilerHost {
     resolveTargetPolicy(options.targetPolicy);
     let wasm = options.wasm;
     let preludeSnapshot = options.preludeSnapshot;
+    let preludeSnapshotDigest: string | undefined;
     if (wasm === undefined) {
       try {
         const [compilerBytes, manifestSource, prelude] = await Promise.all([
@@ -209,9 +223,10 @@ export class Compiler implements CompilerHost {
           readFile(bundledPreludeSnapshot),
         ]);
         const manifest = decodeCompilerArtifactManifest(manifestSource);
+        preludeSnapshotDigest = await sha256(prelude);
         await validateCompilerArtifact(compilerBytes, manifest, {
           hostAbi: COMPILER_HOST_ABI_VERSION,
-          preludeSha256: await sha256(prelude),
+          preludeSha256: preludeSnapshotDigest,
         });
         wasm = compilerBytes;
         preludeSnapshot = prelude;
@@ -233,10 +248,14 @@ export class Compiler implements CompilerHost {
         ),
       );
     }
+    if (preludeSnapshotDigest === undefined) {
+      preludeSnapshotDigest = await sha256(preludeSnapshot);
+    }
     try {
       return new Compiler(
         await CompilerWasm.load(wasm),
         preludeSnapshot,
+        preludeSnapshotDigest,
       );
     } catch (error) {
       throw new CompilerInvariantFailure("compiler initialization", error);

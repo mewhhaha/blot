@@ -78,14 +78,16 @@ Ambient current directory, process environment, network state, clock, random
 state, or undeclared host capability is not a compiler input unless a future
 language revision makes it explicit and revisioned.
 
-The Node-to-compiler transport is compiler-host ABI 2. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 3. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
-length-delimited binary frame containing changed UTF-8 source or compact
-AST/snapshot bytes, direct edges, includes, and removals. The decoder validates
-the complete frame before mutation, rejects unknown identities and trailing
-bytes, and reconstructs UTF-16 source offsets during decoding. Compact success
-summaries avoid JSON on the check hot path; diagnostic and requested analysis
-payloads retain their classified content.
+length-delimited binary frame containing changed UTF-8 source or compact AST
+bytes, direct edges, includes, and removals. A trusted compiler-distributed
+snapshot uses a separate explicitly named installation operation and is never a
+generic graph-delta payload. The decoder validates the complete frame before
+mutation, rejects unknown identities and trailing bytes, and reconstructs UTF-16
+source offsets during decoding. Compact success summaries avoid JSON on the
+check hot path; diagnostic and requested analysis payloads retain their
+classified content.
 
 ## 3. Pass graph
 
@@ -454,13 +456,37 @@ Mutable bounds, worklists, AST object addresses, and fact sinks do not cross the
 cache boundary. A content hash proves transport integrity, not semantic
 correctness of a package-controlled claimed interface.
 
-The checked module snapshot may additionally carry a deterministic compile-time
-environment graph. Its schema is independent of the checked-interface schema;
-decoding validates environment references and parent acyclicity, remaps
-module-local closure provenance to the installed path, and obtains closure
-signatures from the checked certificate. Unsupported process-local or
-generative values make the environment ineligible rather than weakening the
-cache boundary.
+The trusted checked-module snapshot may additionally carry a deterministic
+compile-time environment graph. Its schema is independent of the
+checked-interface schema; decoding validates environment references and parent
+acyclicity, remaps module-local closure provenance to the installed path,
+requires every closure's parameter, body, and evaluation mode to match one
+lambda in the installed AST, and obtains closure signatures from the checked
+certificate. Because installable snapshots are dependency-free, an external
+module reference is invalid. The bundled host reaches this decoder only after
+validating the snapshot digest against the compiler artifact manifest. Supplying
+a custom compiler/snapshot pair explicitly makes that distribution the caller's
+trust boundary; neither registry capsules nor ordinary graph deltas can invoke
+this path. Unsupported process-local or generative values make the environment
+ineligible rather than weakening the cache boundary. A captured closure retains
+its complete application and module-instance provenance. Encoding accepts only
+provenance rooted in the snapshot module's current semantic revision; decoding
+validates every source expression and declaration reference and remaps that
+revision to the installed module. An external or stale revision makes the
+environment ineligible. The optimized interface path additionally requires the
+certificate to contain no generative effect label or opaque effect identity and
+the exact snapshot AST to contain no ordinary or host effect constructor.
+Otherwise installation validates the supplied certificate but checks the
+snapshot AST in isolated resident staging, so generative identities and effect
+metadata are reconstructed in the receiving session. Nullary modules are then
+evaluated in staging; parameterized modules remain unevaluated until an import
+supplies their argument.
+
+The validated environment may also serve as a revision-keyed module-result
+template. A nullary import decodes it over that written occurrence's complete
+module-instance and effect-scope prefixes and evaluates only the result
+expression. The resulting closures are occurrence-local; the template is never a
+directly shared closure-bearing module result.
 
 A cache hit and fresh compilation produce equivalent results; only work changes.
 

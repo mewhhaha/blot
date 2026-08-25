@@ -1,10 +1,10 @@
 # Generated-code performance
 
-`deno task experiment:generated-code` compares WebAssembly emitted by the
-production Blot compiler with equivalent Rust compiled for
-`wasm32-unknown-unknown`. Both artifacts execute in the same Deno V8 process.
-Compilation, validation, instantiation, warmup, and observation validation are
-outside the clock.
+`deno run --allow-read --allow-write --allow-run=rustc experiments/generated-code/benchmark.ts`
+compares WebAssembly emitted by the production Blot compiler with equivalent
+Rust compiled for `wasm32-unknown-unknown`. Both artifacts execute in the same
+Deno V8 process. Compilation, validation, instantiation, warmup, and observation
+validation are outside the clock.
 
 Every timed row first checks both artifacts against an independent TypeScript
 result. The harness takes eleven alternating samples, reports the median with

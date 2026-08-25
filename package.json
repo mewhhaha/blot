@@ -3,28 +3,54 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
+  "types": "./dist/mod.d.ts",
   "exports": {
-    ".": "./mod.ts",
-    "./compiler": "./src/compiler.ts"
+    ".": {
+      "types": "./dist/mod.d.ts",
+      "import": "./dist/mod.js",
+      "default": "./dist/mod.js"
+    },
+    "./compiler": {
+      "types": "./dist/src/compiler.d.ts",
+      "import": "./dist/src/compiler.js",
+      "default": "./dist/src/compiler.js"
+    }
   },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.blot",
+    "dist/generated/wasm/*.json",
+    "dist/generated/wasm/parser.plan",
+    "dist/generated/wasm/parser.wasm",
+    "dist/generated/compiler/compiler.wasm",
+    "dist/generated/compiler/compiler-artifact.json",
+    "dist/generated/compiler/prelude.snapshot"
+  ],
   "scripts": {
-    "blot": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts",
-    "check": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot",
+    "blot": "tsx src/node/cli.ts",
+    "check": "tsx src/node/cli.ts check examples/minimal.blot",
     "test": "pnpm test:node && pnpm test:regression",
-    "test:node": "tsx --import ./src/node/polyfills.mjs --test src/node/*.test.ts",
-    "test:v8-wasm": "tsx --import ./src/node/polyfills.mjs --test src/node/v8_wasm.test.ts",
+    "test:node": "tsx --test src/node/*.test.ts",
+    "test:v8-wasm": "tsx --test src/node/v8_wasm.test.ts",
     "test:regression": "node scripts/node_regression_tests.mjs",
-    "smoke": "tsx --import ./src/node/polyfills.mjs src/node/cli.ts build examples/minimal.blot",
-    "benchmark": "tsx --import ./src/node/polyfills.mjs experiments/node-wasm-benchmark.ts",
-    "benchmark:owned-arrays": "tsx --import ./src/node/polyfills.mjs experiments/owned-arrays/benchmark.ts",
-    "benchmark:owned-regions": "tsx --import ./src/node/polyfills.mjs experiments/owned-regions/benchmark.ts",
-    "benchmark:owned-maps": "tsx --import ./src/node/polyfills.mjs experiments/owned-maps/benchmark.ts",
-    "benchmark:owned-sorts": "tsx --import ./src/node/polyfills.mjs experiments/owned-sorts/benchmark.ts",
-    "benchmark:predicate-refinements": "tsx --import ./src/node/polyfills.mjs experiments/predicate-refinements/benchmark.ts",
-    "benchmark:type-scaling": "tsx --import ./src/node/polyfills.mjs experiments/type-scaling/benchmark.ts",
-    "benchmark:compiler": "tsx --import ./src/node/polyfills.mjs experiments/compiler-bench/benchmark.ts",
-    "benchmark:compiler-soak": "tsx --import ./src/node/polyfills.mjs experiments/compiler-soak.ts",
-    "benchmark:compiler-profiles": "tsx --import ./src/node/polyfills.mjs experiments/compiler-profile-matrix.ts",
+    "package:build": "node scripts/build_node_package.mjs",
+    "package:check": "tsx --test scripts/package_contents.test.ts",
+    "prepack": "pnpm package:build",
+    "smoke": "tsx src/node/cli.ts build examples/minimal.blot",
+    "benchmark": "tsx experiments/node-wasm-benchmark.ts",
+    "benchmark:owned-arrays": "tsx experiments/owned-arrays/benchmark.ts",
+    "benchmark:owned-regions": "tsx experiments/owned-regions/benchmark.ts",
+    "benchmark:owned-maps": "tsx experiments/owned-maps/benchmark.ts",
+    "benchmark:owned-sorts": "tsx experiments/owned-sorts/benchmark.ts",
+    "benchmark:predicate-refinements": "tsx experiments/predicate-refinements/benchmark.ts",
+    "benchmark:type-scaling": "tsx experiments/type-scaling/benchmark.ts",
+    "benchmark:compiler": "tsx experiments/compiler-bench/benchmark.ts",
+    "benchmark:compiler-suite": "tsx experiments/compiler-bench/suite.ts",
+    "benchmark:compiler-compare": "tsx experiments/compiler-bench/compare.ts",
+    "benchmark:compiler-startup": "tsx experiments/compiler-startup/benchmark.ts",
+    "benchmark:compiler-soak": "tsx experiments/compiler-soak.ts",
+    "benchmark:compiler-profiles": "tsx experiments/compiler-profile-matrix.ts",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
     "test:compiler": "cargo test --manifest-path compiler/Cargo.toml && deno run --allow-read scripts/verify_runtime.ts",
     "conformance": "deno run --allow-read scripts/verify_runtime.ts",
@@ -38,13 +64,15 @@
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
-    "@mewhhaha/gpupaper": "npm:@jsr/mewhhaha__gpupaper@0.1.6",
     "@std/path": "npm:@jsr/std__path@1.1.6"
   },
   "devDependencies": {
+    "@mewhhaha/gpupaper": "npm:@jsr/mewhhaha__gpupaper@0.1.6",
     "@std/assert": "npm:@jsr/std__assert@1.0.19",
     "@types/node": "22.20.1",
-    "tsx": "4.23.5"
+    "esbuild": "0.28.2",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=22.16.0"

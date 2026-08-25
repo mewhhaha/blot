@@ -364,13 +364,13 @@ argument authority through the defining module's parameter pattern. Thus an
 imported wrapper has exactly the same ownership meaning as the same wrapper
 written locally.
 
-The resident Node checker retains these immutable contracts with the checked
-module interface. The Rust production compiler serializes them in the checked
-module certificate beside closure signatures and validates every expression,
-pattern, span, and region derivation reference against the exact AST installed
-for that certificate. A contract never crosses a source revision independently
-of that AST. Unknown or host-supplied callees publish no contract and retain the
-ordinary conservative call rule.
+The resident Rust checker retains these immutable contracts with the checked
+module interface and serializes them in the checked module certificate beside
+closure signatures. It validates every expression, pattern, span, and region
+derivation reference against the exact AST installed for that certificate. A
+contract never crosses a source revision independently of that AST. Unknown or
+host-supplied callees publish no contract and retain the ordinary conservative
+call rule.
 
 ## 6. Static certificate shape
 
@@ -655,14 +655,14 @@ remain separate focused contracts.
 
 ## 13. Recombination witnesses
 
-Implemented. The first draft carried three compensations that contradicted the
-prelude's own principle that nothing in it is built into the compiler:
+Implemented. An earlier prototype carried three compensations that contradicted
+the prelude's own principle that nothing in it is built into the compiler:
 
-- the ownership checkers certified the prelude's `Slice` wrappers under a
-  trusted mode, because a join of two abstract parameters had no split lineage
-  to inspect;
-- both checkers recognize an unshadowed variable spelled `Slice` and map its
-  fields back to `@region.*`, so caller-side proofs bypass the wrapper; and
+- its ownership checker certified the prelude's `Slice` wrappers under a trusted
+  mode, because a join of two abstract parameters had no split lineage to
+  inspect;
+- it recognized an unshadowed variable spelled `Slice` and mapped its fields
+  back to `@region.*`, so caller-side proofs bypass the wrapper; and
 - argument interpretation changes when the callee is spelled `Slice`, to unpack
   the wrappers' tuple calling convention.
 
@@ -673,8 +673,9 @@ contract language could express it, but there is a smaller design: make the
 relation a value. The trusted mode is deleted; a region proof over an abstract
 parameter defers as a pending obligation carried in the function's summary and
 is discharged at the call site, after parameter substitution makes the caller's
-authorities concrete. Ownership contracts now cross module interfaces, so the
-name recognition and tuple reinterpretation are deleted from both checkers.
+authorities concrete. Ownership contracts now cross module interfaces; the
+production Rust checker contains neither name recognition nor tuple
+reinterpretation.
 
 ### The witness
 
@@ -757,7 +758,7 @@ ordinary linear values, so helper functions of any shape stay certifiable.
 With witnesses, the prelude's `Slice` wrappers are ordinary certifiable source:
 each body forwards values whose proofs travel with them.
 
-Deleted in this revision, from both checkers:
+The production Rust checker contains none of:
 
 - the trusted-prelude ownership mode and every path by which the prelude was
   identified;
@@ -774,8 +775,8 @@ authorities.
 The witness generalizes the family contract of section 11: a region family's
 partition operation returns pieces plus a recombination witness, and its combine
 operation consumes them. Matrix tiles, tree partitions, and arena chunks can
-implement the same shape without either checker learning anything per family
-beyond the family's own partition/combine laws.
+implement the same shape without the checker learning anything per family beyond
+the family's own partition/combine laws.
 
 ## 14. Owned elements and composable witnesses
 
@@ -881,7 +882,8 @@ an invariant failure.
 
 ### 14.4 Production gates
 
-This revision is complete only when both Node and Rust implementations agree on:
+This revision is complete only when the Rust checker/evaluator and emitted Wasm
+satisfy their respective obligations for:
 
 - consuming copy and freeze for arrays containing affine and linear elements;
 - rejection of any copy path that would duplicate an owned element;
@@ -896,8 +898,9 @@ This revision is complete only when both Node and Rust implementations agree on:
   runtime code for proof reassociation;
 - accepted and rejected catalog examples exercising nested partitions with owned
   elements; and
-- strict host/direct Rust/Wasm agreement with the generated prelude snapshot and
-  compiler specifications updated in the same change.
+- strict Rust-evaluator/emitted-Wasm agreement under the Node host, with the
+  generated prelude snapshot and compiler specifications updated in the same
+  change.
 
 ### 14.5 Ownership representation and conservation
 

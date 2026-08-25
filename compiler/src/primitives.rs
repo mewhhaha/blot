@@ -1,7 +1,5 @@
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
-use std::cell::RefCell;
-use std::collections::BTreeMap;
 
 use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
@@ -19,39 +17,6 @@ const I16X8: &str = "I16x8";
 const I16X8_MASK: &str = "I16x8Mask";
 const I8X16: &str = "I8x16";
 const I8X16_MASK: &str = "I8x16Mask";
-
-thread_local! {
-    static EFFECT_EXTENSIONS: RefCell<BTreeMap<u32, Value>> = const {
-        RefCell::new(BTreeMap::new())
-    };
-    static NAMED_EFFECT_EXTENSIONS: RefCell<BTreeMap<String, Value>> = const {
-        RefCell::new(BTreeMap::new())
-    };
-}
-
-pub(crate) fn effect_value(label: &str) -> Option<Value> {
-    let mut parts = label.splitn(3, ':');
-    let host = match parts.next()? {
-        "host" => true,
-        "effect" => false,
-        _ => return None,
-    };
-    let id = parts.next()?.parse().ok()?;
-    let name = parts.next()?.to_owned();
-    if let Some(value) = EFFECT_EXTENSIONS.with(|values| values.borrow().get(&id).cloned()) {
-        return Some(value);
-    }
-    if let Some(value) = NAMED_EFFECT_EXTENSIONS.with(|values| values.borrow().get(&name).cloned())
-    {
-        return Some(value);
-    }
-    Some(Value::Effect {
-        id,
-        name,
-        operations: OrderedFields::default(),
-        host,
-    })
-}
 
 pub fn constant(name: &str) -> Option<Value> {
     match name {
@@ -97,7 +62,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         return Some(arity);
     }
     let arity = match name {
-        "@effect" | "@effect.host" | "@effect.named" | "@forall" | "@handle" | "@import" => 1,
+        "@effect" | "@effect.host" | "@forall" | "@handle" | "@import" => 1,
         "@include" => 2,
         "@continuation.cancel"
         | "@type.of"
@@ -1945,34 +1910,7 @@ fn attach(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
         ));
     }
     members.insert(key, arguments[2].clone());
-    let extended = Value::Extended { inner, members };
-    if let Some(id) = effect_value_id(&extended) {
-        EFFECT_EXTENSIONS.with(|values| {
-            values.borrow_mut().insert(id, extended.clone());
-        });
-    }
-    if let Some(name) = effect_value_name(&extended) {
-        NAMED_EFFECT_EXTENSIONS.with(|values| {
-            values.borrow_mut().insert(name, extended.clone());
-        });
-    }
-    Ok(extended)
-}
-
-fn effect_value_id(value: &Value) -> Option<u32> {
-    match value {
-        Value::Effect { id, .. } => Some(*id),
-        Value::Extended { inner, .. } => effect_value_id(inner),
-        _ => None,
-    }
-}
-
-fn effect_value_name(value: &Value) -> Option<String> {
-    match value {
-        Value::Effect { name, .. } => Some(name.clone()),
-        Value::Extended { inner, .. } => effect_value_name(inner),
-        _ => None,
-    }
+    Ok(Value::Extended { inner, members })
 }
 
 fn cancel(value: &Value, span: Span) -> Result<Value, Diagnostic> {

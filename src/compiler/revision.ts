@@ -25,6 +25,13 @@ export function loadedPayloadDigest(loaded: Loaded): string {
       source: loaded.source,
     });
   }
+  if (loaded.storage.tag === "snapshot") {
+    return digest({
+      path: loaded.path,
+      storage: "snapshot",
+      digest: loaded.storage.digest,
+    });
+  }
   return digest({
     path: loaded.path,
     storage: "ast",
@@ -75,9 +82,15 @@ export function loadedRevisionKey(loaded: Loaded): string {
       source: included.source,
     }),
   );
+  let moduleRevision: unknown;
+  if (loaded.storage.tag === "snapshot") {
+    moduleRevision = { snapshot: loaded.storage.digest };
+  } else {
+    moduleRevision = encodePortableModule(loaded.module);
+  }
   const key = digest({
     path: loaded.path,
-    module: encodePortableModule(loaded.module),
+    module: moduleRevision,
     dependencies,
     includedFiles,
   });

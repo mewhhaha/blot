@@ -367,6 +367,8 @@ pub enum Value {
     },
     Closure {
         module: Rc<String>,
+        module_instances: Rc<crate::eval::ModuleInstanceScope>,
+        effect_scope: Rc<crate::eval::EffectScope>,
         parameter: PatternId,
         body: ExpressionId,
         environment: Environment,
@@ -451,6 +453,71 @@ pub enum Value {
     },
 }
 
+pub(crate) fn reusable_across_module_instances(value: &Value) -> bool {
+    match value {
+        Value::Int(_)
+        | Value::Float(_)
+        | Value::Float32(_)
+        | Value::Vector(_)
+        | Value::VectorMask(_)
+        | Value::IntegerVector { .. }
+        | Value::IntegerVectorMask { .. }
+        | Value::Text(_)
+        | Value::Unit
+        | Value::ModuleClosure { .. }
+        | Value::Unbounded
+        | Value::TypeVariable(_) => true,
+        Value::Shape(fields) => fields
+            .iter()
+            .all(|(_, value)| reusable_across_module_instances(value)),
+        Value::Array(values) | Value::Union(values) => {
+            values.iter().all(reusable_across_module_instances)
+        }
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::DeferredScratch { capacity: element }
+        | Value::EmptyArray { element }
+        | Value::Forall { body: element, .. } => reusable_across_module_instances(element),
+        Value::Scratch { values, .. } | Value::IndexedStep { elements: values } => {
+            values.iter().all(reusable_across_module_instances)
+        }
+        Value::Tag { payload, .. } => payload
+            .as_deref()
+            .is_none_or(reusable_across_module_instances),
+        Value::Primitive { applied, .. } => applied.iter().all(reusable_across_module_instances),
+        Value::Range { low, high, .. } => {
+            reusable_across_module_instances(low) && reusable_across_module_instances(high)
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+            ..
+        } => {
+            reusable_across_module_instances(domain)
+                && reusable_across_module_instances(codomain)
+                && effects.iter().all(reusable_across_module_instances)
+        }
+        Value::Extended { inner, members } => {
+            reusable_across_module_instances(inner)
+                && members
+                    .iter()
+                    .all(|(_, value)| reusable_across_module_instances(value))
+        }
+        Value::Sealed { inner, .. } => reusable_across_module_instances(inner),
+        Value::OpaqueType(name) => !name.starts_with("Effect:"),
+        Value::Closure { .. }
+        | Value::Deferred { .. }
+        | Value::ClosureChoice { .. }
+        | Value::Region { .. }
+        | Value::RegionRejoin { .. }
+        | Value::Effect { .. }
+        | Value::Operation { .. }
+        | Value::Runtime(_)
+        | Value::Continuation { .. } => false,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeValue {
     pub id: usize,
@@ -465,6 +532,8 @@ pub struct RuntimeValue {
 pub enum ChoiceSource {
     Lambda {
         module: Rc<String>,
+        module_instances: Rc<crate::eval::ModuleInstanceScope>,
+        effect_scope: Rc<crate::eval::EffectScope>,
         parameter: PatternId,
         body: ExpressionId,
         environment: Environment,
@@ -1126,6 +1195,8 @@ mod type_value_tests {
     fn enclosing_values_do_not_degrade_a_closure_signature() {
         let mut closure = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(Vec::new()),
             parameter: PatternId(0),
             body: ExpressionId(0),
             environment: child_env(None),

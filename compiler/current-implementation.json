@@ -41,9 +41,7 @@
     "selective inlay hints"
   ],
   "latestBenchmarks": [
-    "experiments/resident-leaf-check-performance.md",
     "experiments/revision-key-performance.md",
-    "experiments/compiler-profile-matrix.latest.json",
-    "experiments/generated-code/latest.json"
+    "experiments/compiler-profile-matrix.latest.json"
   ]
 }

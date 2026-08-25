@@ -179,6 +179,27 @@ newEffect(module-instance, source-node, compile-time-scope, Sigma)
   => effect(ell, Sigma)
 ```
 
+An application occurrence is the exact source-expression identity in its
+complete semantic module revision, not its span or the printed form of its
+argument. The compile-time scope is the ordered stack of closure-application
+occurrences. Each frame also retains the closure's creation-scope provenance;
+closures created by imported module instances retain that defining instance
+stack. A compiler-owned application that may reach `newEffect` has a typed role
+rooted in its owning source expression, declaration, handler request, or runtime
+export parameter. It may not use a dummy span or an argument rendering as that
+root.
+
+Two executions of one application node under an equal outer stack record the
+same occurrence. A second written application records another occurrence.
+Recursive evaluation at one application node appends another frame, so recursion
+depth remains distinct while administrative re-evaluation of the same recorded
+stack is stable. A module revision changes when its source, configuration, or an
+observable dependency boundary changes.
+
+`Sigma` is compared by exact type-value equality: quantified variables are
+alpha-equivalent, record order is immaterial, and referenced effect atoms keep
+their exact identities. It is never replaced by a partial structural hash.
+
 `ell` is fresh for every different tuple. Administrative compiler re-evaluation
 of the same recorded tuple recovers the same atom. Evaluation in another module
 instance mints another atom.

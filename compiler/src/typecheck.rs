@@ -15,12 +15,12 @@ use crate::ast::{
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
-    Context, Phase, Runtime, apply, closure_free_names, evaluate_binding, evaluate_expression,
-    force_effect_value, match_pattern, run,
+    ApplicationSite, CompilerApplication, Context, Phase, Runtime, apply, closure_free_names,
+    evaluate_binding, evaluate_expression, force_effect_value, match_pattern, run,
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, OrderedFields, Value,
-    attach_signature, child_env, closure_signature, lookup,
+    attach_signature, child_env, closure_signature, lookup, reusable_across_module_instances,
 };
 
 type VariableId = u32;
@@ -897,13 +897,10 @@ impl SealedModuleBoundary {
                 self.certificate_schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
             ));
         }
-        let arena = FlatTypeArena {
-            nodes: self.types.clone(),
-        };
-        validate_certificate_type(&arena, self.result, &mut HashSet::new())?;
-        validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
+        validate_certificate_type(&self.types, self.result, &mut HashSet::new())?;
+        validate_certificate_type(&self.types, self.effects, &mut HashSet::new())?;
         if let Some(parameter) = self.parameter {
-            validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, parameter, &mut HashSet::new())?;
         }
         Ok(())
     }
@@ -1004,7 +1001,7 @@ impl CachedModuleInterface {
         }
     }
 
-    fn from_certificate(certificate: CheckedModuleCertificate) -> Result<Self, String> {
+    pub(crate) fn from_certificate(certificate: CheckedModuleCertificate) -> Result<Self, String> {
         certificate.validate()?;
         Ok(Self {
             types: Rc::new(FlatTypeArena {
@@ -1190,6 +1187,16 @@ fn copy_boundary_type(
 }
 
 impl CheckedModuleCertificate {
+    pub(crate) fn contains_generative_effect_identity(&self) -> bool {
+        self.types.iter().any(|node| match node {
+            FlatTypeNode::Effects(labels) | FlatTypeNode::OpenEffects { labels, .. } => labels
+                .iter()
+                .any(|label| label.starts_with("effect:") || label.starts_with("host:")),
+            FlatTypeNode::Opaque(name) => name.starts_with("Effect:"),
+            _ => false,
+        })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
             return Err(format!(
@@ -1197,17 +1204,14 @@ impl CheckedModuleCertificate {
                 self.schema, CHECKED_MODULE_CERTIFICATE_SCHEMA
             ));
         }
-        let arena = FlatTypeArena {
-            nodes: self.types.clone(),
-        };
-        validate_certificate_type(&arena, self.result, &mut HashSet::new())?;
-        validate_certificate_type(&arena, self.effects, &mut HashSet::new())?;
+        validate_certificate_type(&self.types, self.result, &mut HashSet::new())?;
+        validate_certificate_type(&self.types, self.effects, &mut HashSet::new())?;
         if let Some(parameter) = self.parameter {
-            validate_certificate_type(&arena, parameter, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, parameter, &mut HashSet::new())?;
         }
         let mut expressions = HashSet::new();
         for (expression, type_) in &self.expression_types {
-            validate_certificate_type(&arena, *type_, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, *type_, &mut HashSet::new())?;
             if !expressions.insert(*expression) {
                 return Err(format!(
                     "checked-module certificate repeats expression type {}",
@@ -1215,14 +1219,16 @@ impl CheckedModuleCertificate {
                 ));
             }
         }
-        for (_, signature) in &self.closure_signatures {
-            validate_certificate_type(&arena, *signature, &mut HashSet::new())?;
+        let mut closure_bodies = HashSet::new();
+        for (body, signature) in &self.closure_signatures {
+            validate_certificate_type(&self.types, *signature, &mut HashSet::new())?;
+            if !closure_bodies.insert(*body) {
+                return Err(format!(
+                    "checked-module certificate repeats closure signature expression {}",
+                    body.0
+                ));
+            }
         }
-        let closure_bodies = self
-            .closure_signatures
-            .iter()
-            .map(|(body, _)| *body)
-            .collect::<HashSet<_>>();
         let mut recursive_bodies = HashSet::new();
         for body in &self.recursive_closures {
             if !closure_bodies.contains(body) {
@@ -1258,13 +1264,12 @@ impl CheckedModuleCertificate {
 }
 
 fn validate_certificate_type(
-    arena: &FlatTypeArena,
+    types: &[FlatTypeNode],
     type_: FlatTypeId,
     bound: &mut HashSet<VariableId>,
 ) -> Result<(), String> {
     let index = type_.0 as usize;
-    let node = arena
-        .nodes
+    let node = types
         .get(index)
         .ok_or_else(|| format!("checked-module certificate references missing type {index}"))?;
     let validate_child =
@@ -1275,7 +1280,7 @@ fn validate_certificate_type(
                     type_.0, child.0
                 ));
             }
-            validate_certificate_type(arena, child, bound)
+            validate_certificate_type(types, child, bound)
         };
     match node {
         FlatTypeNode::Rigid(variable) => {
@@ -1352,11 +1357,12 @@ pub struct CachedModuleAnalyses {
     safety: Result<(), Diagnostic>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SpecializationBinding {
     keys: BTreeMap<String, SpecializationKey>,
 }
 
+#[derive(Clone)]
 struct SpecializationKey {
     reason: &'static str,
     call_sites: Vec<(String, Span)>,
@@ -1452,6 +1458,101 @@ impl Checker {
             incomplete_evaluations: RefCell::new(HashSet::new()),
             module_interfaces,
             module_analyses,
+        }
+    }
+
+    pub(crate) fn snapshot_staging(
+        &self,
+        context: Rc<Context>,
+        module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
+        module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
+    ) -> Self {
+        let checker = Self::with_caches(context, module_interfaces, module_analyses);
+        checker.next_skolem.set(self.next_skolem.get());
+        checker
+            .next_representation_hole
+            .set(self.next_representation_hole.get());
+        checker
+    }
+
+    pub(crate) fn commit_staged_snapshot(
+        &self,
+        path: &str,
+        interface: CachedModuleInterface,
+        staged: &Self,
+    ) {
+        self.next_representation_hole
+            .set(staged.next_representation_hole.get());
+        let checked = self.inflate_interface(path, interface.clone());
+        self.module_interfaces
+            .borrow_mut()
+            .insert(path.to_owned(), interface);
+        let analyses = staged.module_analyses.borrow().get(path).cloned();
+        self.module_analyses.borrow_mut().remove(path);
+        if let Some(analyses) = analyses {
+            self.module_analyses
+                .borrow_mut()
+                .insert(path.to_owned(), analyses);
+        }
+        self.modules
+            .borrow_mut()
+            .insert(path.to_owned(), Ok(checked));
+
+        let analysis_expression_types = staged
+            .analysis_expression_types
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((module, expression), type_)| {
+                (
+                    (module.clone(), *expression),
+                    staged.residual_signature(type_.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.analysis_expression_types
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.analysis_expression_types
+            .borrow_mut()
+            .extend(analysis_expression_types);
+
+        let declaration_tags = staged
+            .declaration_tags
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|(key, names)| (key.clone(), names.clone()))
+            .collect::<Vec<_>>();
+        self.declaration_tags
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.declaration_tags.borrow_mut().extend(declaration_tags);
+
+        let ownership_facts = staged.ownership_facts.borrow().get(path).cloned();
+        self.ownership_facts.borrow_mut().remove(path);
+        if let Some(ownership_facts) = ownership_facts {
+            self.ownership_facts
+                .borrow_mut()
+                .insert(path.to_owned(), ownership_facts);
+        }
+
+        let specializations = staged
+            .specializations
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|(key, binding)| (key.clone(), binding.clone()))
+            .collect::<Vec<_>>();
+        self.specializations
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.specializations.borrow_mut().extend(specializations);
+
+        let work = staged.module_work.borrow().get(path).cloned();
+        self.module_work.borrow_mut().remove(path);
+        if let Some(work) = work {
+            self.module_work.borrow_mut().insert(path.to_owned(), work);
         }
     }
 
@@ -1581,10 +1682,23 @@ impl Checker {
         Ok(interface.certificate())
     }
 
-    pub fn install_certificate(
+    pub(crate) fn install_interface(
         &self,
         path: &str,
-        certificate: CheckedModuleCertificate,
+        interface: CachedModuleInterface,
+    ) -> Result<(), String> {
+        self.validate_interface(path, &interface)?;
+        self.module_interfaces
+            .borrow_mut()
+            .insert(path.to_owned(), interface);
+        self.modules.borrow_mut().remove(path);
+        Ok(())
+    }
+
+    pub(crate) fn validate_interface(
+        &self,
+        path: &str,
+        interface: &CachedModuleInterface,
     ) -> Result<(), String> {
         if !self.context.modules.borrow().contains_key(path) {
             return Err(format!(
@@ -1599,7 +1713,7 @@ impl Checker {
             .expect("checked module presence was tested")
             .module
             .clone();
-        for (expression, _) in &certificate.expression_types {
+        for (expression, _) in &interface.expression_types {
             if expression.0 as usize >= module.arena.expressions.len() {
                 return Err(format!(
                     "checked-module certificate references missing expression {}",
@@ -1607,12 +1721,15 @@ impl Checker {
                 ));
             }
         }
-        crate::ownership::validate_contracts(&module, &certificate.ownership_contracts)?;
-        let interface = CachedModuleInterface::from_certificate(certificate)?;
-        self.module_interfaces
-            .borrow_mut()
-            .insert(path.to_owned(), interface);
-        self.modules.borrow_mut().remove(path);
+        for (body, _) in &interface.closure_signatures {
+            if body.0 as usize >= module.arena.expressions.len() {
+                return Err(format!(
+                    "checked-module certificate references missing closure expression {}",
+                    body.0
+                ));
+            }
+        }
+        crate::ownership::validate_contracts(&module, &interface.ownership_contracts)?;
         Ok(())
     }
 
@@ -1715,27 +1832,42 @@ impl Checker {
             .iter()
             .filter(|((module, _), _)| module == path)
             .map(|((_, expression), type_)| {
-                serde_json::json!({
-                    "span": module.arena.expression_span(*expression),
-                    "type": self.show_analysis(type_),
-                })
+                (
+                    *expression,
+                    serde_json::json!({
+                        "span": module.arena.expression_span(*expression),
+                        "type": self.show_analysis(type_),
+                    }),
+                )
             })
             .collect::<Vec<_>>();
-        types.sort_by_key(|fact| {
+        types.sort_by_key(|(expression, fact)| {
             let span = &fact["span"];
             (
                 span["start"].as_u64().unwrap_or_default(),
                 span["end"].as_u64().unwrap_or_default(),
+                expression.0,
             )
         });
+        let types = types.into_iter().map(|(_, fact)| fact).collect::<Vec<_>>();
         let mut tags = self
             .declaration_tags
             .borrow()
             .iter()
             .filter(|((module, _), _)| module == path)
-            .map(|((_, span), names)| serde_json::json!({ "span": span, "names": names }))
+            .map(|((_, span), names)| {
+                (
+                    *span,
+                    names.clone(),
+                    serde_json::json!({ "span": span, "names": names }),
+                )
+            })
             .collect::<Vec<_>>();
-        tags.sort_by_key(|fact| fact["span"]["start"].as_u64().unwrap_or_default());
+        tags.sort_by_key(|(span, names, _)| (span.start, span.end, names.clone()));
+        let tags = tags
+            .into_iter()
+            .map(|(_, _, fact)| fact)
+            .collect::<Vec<_>>();
         let mut ownership = self
             .ownership_facts
             .borrow()
@@ -1756,6 +1888,8 @@ impl Checker {
             (
                 fact["path"].as_str().unwrap_or_default().to_owned(),
                 fact["span"]["start"].as_u64().unwrap_or_default(),
+                fact["span"]["end"].as_u64().unwrap_or_default(),
+                fact["name"].as_str().unwrap_or_default().to_owned(),
             )
         });
         let mut specializations = self
@@ -1769,9 +1903,10 @@ impl Checker {
                     .keys
                     .iter()
                     .map(|(representation, key)| {
-                        let mut call_sites = key
-                            .call_sites
-                            .iter()
+                        let mut call_sites = key.call_sites.clone();
+                        call_sites.sort_by_key(|(path, span)| (path.clone(), span.start, span.end));
+                        let call_sites = call_sites
+                            .into_iter()
                             .map(|(path, span)| {
                                 serde_json::json!({
                                     "path": path,
@@ -1779,12 +1914,6 @@ impl Checker {
                                 })
                             })
                             .collect::<Vec<_>>();
-                        call_sites.sort_by_key(|site| {
-                            (
-                                site["path"].as_str().unwrap_or_default().to_owned(),
-                                site["span"]["start"].as_u64().unwrap_or_default(),
-                            )
-                        });
                         serde_json::json!({
                             "representation": representation,
                             "reason": key.reason,
@@ -1794,24 +1923,28 @@ impl Checker {
                         })
                     })
                     .collect::<Vec<_>>();
-                serde_json::json!({
-                    "binding": {
-                        "path": module_path,
-                        "name": name,
-                        "span": span,
-                    },
-                    "specializationCount": keys.len(),
-                    "softLimit": SPECIALIZATION_SOFT_LIMIT,
-                    "hardLimit": SPECIALIZATION_HARD_LIMIT,
-                    "keys": keys,
-                })
+                (
+                    span,
+                    *body,
+                    serde_json::json!({
+                        "binding": {
+                            "path": module_path,
+                            "name": name,
+                            "span": span,
+                        },
+                        "specializationCount": keys.len(),
+                        "softLimit": SPECIALIZATION_SOFT_LIMIT,
+                        "hardLimit": SPECIALIZATION_HARD_LIMIT,
+                        "keys": keys,
+                    }),
+                )
             })
             .collect::<Vec<_>>();
-        specializations.sort_by_key(|fact| {
-            fact["binding"]["span"]["start"]
-                .as_u64()
-                .unwrap_or_default()
-        });
+        specializations.sort_by_key(|(span, body, _)| (span.start, span.end, body.0));
+        let specializations = specializations
+            .into_iter()
+            .map(|(_, _, fact)| fact)
+            .collect::<Vec<_>>();
         serde_json::json!({
             "ok": true,
             "type": self.show(&checked.result),
@@ -1965,6 +2098,7 @@ impl Checker {
             let declaration_effects = self.check_declaration(
                 path,
                 &loaded.module,
+                *declaration_id,
                 declaration,
                 &mut types,
                 &values,
@@ -2170,11 +2304,13 @@ impl Checker {
             Runtime::new(Phase::Comptime, path.to_owned()),
         ));
         if let Ok(value) = result {
+            let reusable = !type_exposes_generative_effect(&checked.result)
+                && reusable_across_module_instances(&value);
             self.context
                 .module_results
                 .borrow_mut()
                 .insert(path.to_owned(), value);
-            if !type_exposes_generative_effect(&checked.result) {
+            if reusable {
                 self.context
                     .reusable_module_results
                     .borrow_mut()
@@ -2581,6 +2717,7 @@ impl Checker {
         &self,
         path: &str,
         module: &Module,
+        declaration_id: DeclarationId,
         declaration: Declaration,
         types: &mut TypeEnvironment,
         values: &ValueEnvironment,
@@ -2787,6 +2924,7 @@ impl Checker {
                             match run(force_effect_value(
                                 self.context.clone(),
                                 value,
+                                declaration_id,
                                 span,
                                 Runtime::new(Phase::Runtime, path.to_owned()),
                             )) {
@@ -3405,6 +3543,7 @@ impl Checker {
                     if let Ok(value) = self.evaluate(path, argument, values, Phase::Comptime) {
                         return self.apply_requirement(
                             path,
+                            expression_id,
                             subject,
                             self.requirement(value),
                             span,
@@ -4002,6 +4141,7 @@ impl Checker {
                 let mut effects = pure();
                 scope.forward = Rc::new(future_binding_names(module, &declarations));
                 for (index, declaration) in declarations.iter().enumerate() {
+                    let declaration_id = *declaration;
                     remove_declaration_names(
                         module,
                         *declaration,
@@ -4012,6 +4152,7 @@ impl Checker {
                     let declaration_effects = self.check_declaration(
                         path,
                         module,
+                        declaration_id,
                         declaration,
                         &mut scope,
                         &value_scope,
@@ -4355,6 +4496,7 @@ impl Checker {
     fn apply_requirement(
         &self,
         path: &str,
+        expression: ExpressionId,
         subject: Inferred,
         requirement: Requirement,
         span: Span,
@@ -4376,12 +4518,15 @@ impl Checker {
                         span,
                     )
                 })?;
+                let application = ApplicationSite::for_expression(&self.context, path, expression)?
+                    .compiler(CompilerApplication::RequirementPredicate);
                 let answer = run(apply(
                     self.context.clone(),
                     predicate,
                     reified,
                     span,
                     Runtime::new(Phase::Comptime, path.to_owned()),
+                    application,
                 ))?;
                 match answer {
                     Value::Tag { name, .. } if name == "True" => Ok(subject),
@@ -5607,7 +5752,7 @@ impl Checker {
 
     fn reify_runtime_type(&self, type_: &Type) -> Option<Value> {
         let mut next_hole = self.next_representation_hole.get();
-        let value = reify_type_with_holes(type_, &mut next_hole);
+        let value = reify_type_with_holes(&self.context, type_, &mut next_hole);
         self.next_representation_hole.set(next_hole);
         value
     }
@@ -7567,7 +7712,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             curried(vec![value.clone(), checker.fresh()], value)
         }
         "@fail" | "@panic" => curried(vec![text], Type::Bottom),
-        "@effect" | "@effect.host" | "@effect.named" | "@forall" | "@import" => {
+        "@effect" | "@effect.host" | "@forall" | "@import" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
         "@include" => {
@@ -9027,10 +9172,10 @@ fn scalar_bound(value: &Value) -> Option<Scalar> {
 #[cfg(test)]
 fn reify_type(type_: &Type) -> Option<Value> {
     let mut next_hole = u32::MAX;
-    reify_type_with_holes(type_, &mut next_hole)
+    reify_type_with_holes(&Context::default(), type_, &mut next_hole)
 }
 
-fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
+fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -> Option<Value> {
     match type_ {
         Type::Bottom => {
             let hole = *next_hole;
@@ -9039,7 +9184,7 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
         }
         Type::Rigid(id) => Some(Value::TypeVariable(*id)),
         Type::Forall { variables, body } => {
-            let mut body = reify_type_with_holes(body, next_hole)?;
+            let mut body = reify_type_with_holes(context, body, next_hole)?;
             for variable in variables.iter().rev() {
                 body = Value::Forall {
                     variable: *variable,
@@ -9069,25 +9214,30 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
         Type::Record(fields) => Some(Value::Shape(
             fields
                 .iter()
-                .map(|(name, type_)| Some((name.clone(), reify_type_with_holes(type_, next_hole)?)))
+                .map(|(name, type_)| {
+                    Some((
+                        name.clone(),
+                        reify_type_with_holes(context, type_, next_hole)?,
+                    ))
+                })
                 .collect::<Option<Vec<_>>>()?
                 .into_iter()
                 .collect(),
         )),
         Type::Array(element) => Some(Value::Array(vec![reify_type_with_holes(
-            element, next_hole,
+            context, element, next_hole,
         )?])),
         Type::Region(element) => Some(Value::RegionType(Box::new(reify_type_with_holes(
-            element, next_hole,
+            context, element, next_hole,
         )?))),
         Type::Scratch(element) => Some(Value::ScratchType(Box::new(reify_type_with_holes(
-            element, next_hole,
+            context, element, next_hole,
         )?))),
         Type::Variant { cases, open: false } => Some(Value::Union(
             cases
                 .iter()
                 .map(|(name, payload)| {
-                    let payload = reify_type_with_holes(payload, next_hole)?;
+                    let payload = reify_type_with_holes(context, payload, next_hole)?;
                     Some(Value::Tag {
                         name: name.clone(),
                         payload: if matches!(payload, Value::Unit) {
@@ -9108,7 +9258,9 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
             let (labels, effect_tail) = match effects.as_ref() {
                 Type::Effects(labels) => (labels.clone(), None),
                 Type::OpenEffects { labels, tail } => {
-                    let Value::TypeVariable(tail) = reify_type_with_holes(tail, next_hole)? else {
+                    let Value::TypeVariable(tail) =
+                        reify_type_with_holes(context, tail, next_hole)?
+                    else {
                         return None;
                     };
                     (labels.clone(), Some(tail))
@@ -9118,11 +9270,11 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
             };
             Some(Value::Arrow {
                 deferred: *deferred,
-                domain: Box::new(reify_type_with_holes(parameter, next_hole)?),
-                codomain: Box::new(reify_type_with_holes(result, next_hole)?),
+                domain: Box::new(reify_type_with_holes(context, parameter, next_hole)?),
+                codomain: Box::new(reify_type_with_holes(context, result, next_hole)?),
                 effects: labels
                     .iter()
-                    .map(|label| crate::primitives::effect_value(label))
+                    .map(|label| context.effect_value(label))
                     .collect::<Option<Vec<_>>>()?,
                 effect_tail,
             })
@@ -9130,7 +9282,7 @@ fn reify_type_with_holes(type_: &Type, next_hole: &mut u32) -> Option<Value> {
         Type::Union(members) => Some(Value::Union(
             members
                 .iter()
-                .map(|member| reify_type_with_holes(member, next_hole))
+                .map(|member| reify_type_with_holes(context, member, next_hole))
                 .collect::<Option<Vec<_>>>()?,
         )),
         Type::Top => {

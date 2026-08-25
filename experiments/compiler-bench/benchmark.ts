@@ -1,23 +1,37 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
+  decodeCompilerArtifactManifest,
+  sha256,
+  validateCompilerArtifact,
+} from "../../src/compiler/artifact.ts";
+import { COMPILER_HOST_ABI_VERSION } from "../../src/compiler/host_abi.ts";
+import {
   type CheckedModule,
   Compiler,
   type CompilerAnalysis,
 } from "../../src/compiler.ts";
+import { load } from "../../src/load.ts";
 import {
   type CompilerBenchmarkClass,
   type CompilerBenchmarkReport,
   type CompilerBenchmarkSample,
   type CompilerBenchmarkScenario,
   compilerBenchmarkSchema,
+  medianAbsoluteDeviation,
   percentile,
 } from "./schema.ts";
+import { compilerObservation } from "./observation.ts";
+import {
+  benchmarkEnvironment,
+  benchmarkInputsIdentity,
+  hostInputsIdentity,
+  workloadGraphIdentity,
+} from "./provenance.ts";
 
 const exec = promisify(execFile);
 const benchmarkDirectory = dirname(fileURLToPath(import.meta.url));
@@ -30,6 +44,7 @@ interface Options {
 
 interface MeasuredResult {
   readonly durationMilliseconds: number;
+  readonly sourceBytes: number;
   readonly checked: CheckedModule;
   readonly analysis: CompilerAnalysis | null;
   readonly runtimeHirNodes?: number;
@@ -41,12 +56,32 @@ interface ColdProcessResult {
   readonly hostRssBytes: number;
 }
 
+interface BenchmarkProvenance {
+  readonly source: string;
+  readonly sourceBytes: number;
+  readonly commit: string;
+  readonly hostInputsSha256: string;
+  readonly benchmarkInputsSha256: string;
+  readonly compilerArtifactSha256: string;
+  readonly compilerManifestSha256: string;
+  readonly compilerInputsSha256: string;
+  readonly compilerPreludeSha256: string;
+  readonly compilerSourceCommit: string;
+  readonly compilerSourceTree: string;
+  readonly compilerRustc: string;
+  readonly graphIdentity: string;
+  readonly versions: CompilerBenchmarkReport["versions"];
+  readonly environment: CompilerBenchmarkReport["environment"];
+}
+
 function options(): Options {
   let path = "examples/minimal.blot";
   let samples = 9;
   let output: string | null = null;
   for (const argument of process.argv.slice(2)) {
-    if (argument.startsWith("--samples=")) {
+    if (argument === "--") {
+      continue;
+    } else if (argument.startsWith("--samples=")) {
       samples = Number(argument.slice("--samples=".length));
     } else if (argument.startsWith("--output=")) {
       output = argument.slice("--output=".length);
@@ -71,8 +106,61 @@ async function command(
   }
 }
 
-function observation(checked: CheckedModule): string {
-  return JSON.stringify({ type: checked.type, effects: checked.effects });
+async function benchmarkProvenance(path: string): Promise<BenchmarkProvenance> {
+  const [
+    loaded,
+    compilerBytes,
+    manifestBytes,
+    preludeSnapshot,
+    commit,
+    hostInputsSha256,
+    benchmarkInputsSha256,
+    rust,
+    deno,
+  ] = await Promise.all([
+    load(path, new Map()),
+    readFile("generated/compiler/compiler.wasm"),
+    readFile("generated/compiler/compiler-artifact.json"),
+    readFile("generated/compiler/prelude.snapshot"),
+    command("git", ["rev-parse", "HEAD"]),
+    hostInputsIdentity(),
+    benchmarkInputsIdentity(),
+    command("rustc", ["--version"]),
+    command("deno", ["--version"]),
+  ]);
+  if (commit === null || !/^[0-9a-f]{40,64}$/.test(commit)) {
+    throw new Error("compiler benchmark omitted its repository commit");
+  }
+  const manifest = decodeCompilerArtifactManifest(
+    new TextDecoder().decode(manifestBytes),
+  );
+  const compilerPreludeSha256 = await sha256(preludeSnapshot);
+  await validateCompilerArtifact(compilerBytes, manifest, {
+    hostAbi: COMPILER_HOST_ABI_VERSION,
+    preludeSha256: compilerPreludeSha256,
+  });
+  return {
+    source: loaded.source,
+    sourceBytes: Buffer.byteLength(loaded.source),
+    commit,
+    hostInputsSha256,
+    benchmarkInputsSha256,
+    compilerArtifactSha256: manifest.sha256,
+    compilerManifestSha256: await sha256(manifestBytes),
+    compilerInputsSha256: manifest.compilerInputsSha256,
+    compilerPreludeSha256,
+    compilerSourceCommit: manifest.sourceCommit,
+    compilerSourceTree: manifest.sourceTree,
+    compilerRustc: manifest.rustc,
+    graphIdentity: workloadGraphIdentity(loaded),
+    versions: {
+      node: process.version,
+      deno,
+      v8: process.versions.v8,
+      rust,
+    },
+    environment: benchmarkEnvironment(),
+  };
 }
 
 function runtimeHirNodes(
@@ -101,10 +189,7 @@ function semanticEdit(source: string, index: number): string {
   throw new Error("compiler benchmark source has no top-level return line");
 }
 
-function benchmarkSample(
-  sourceBytes: number,
-  result: MeasuredResult,
-): CompilerBenchmarkSample {
+function benchmarkSample(result: MeasuredResult): CompilerBenchmarkSample {
   let hirNodes: number | null = null;
   if (result.runtimeHirNodes !== undefined) {
     hirNodes = result.runtimeHirNodes;
@@ -122,7 +207,7 @@ function benchmarkSample(
   }
   return {
     durationMilliseconds: result.durationMilliseconds,
-    sourceBytes,
+    sourceBytes: result.sourceBytes,
     runtimeHirNodes: hirNodes,
     wasmBytes,
     checkedModules,
@@ -147,6 +232,7 @@ function summarizedScenario(
     observation: expected,
     samples,
     p50Milliseconds: percentile(durations, 0.5),
+    madMilliseconds: medianAbsoluteDeviation(durations),
     p90Milliseconds: percentile(durations, 0.9),
     p95Milliseconds: percentile(durations, 0.95),
   };
@@ -164,8 +250,6 @@ async function coldProcessScenario(
     const result = await exec(process.execPath, [
       "--import",
       "tsx",
-      "--import",
-      resolve("src/node/polyfills.mjs"),
       resolve(benchmarkDirectory, "cold_process.ts"),
       path,
     ]);
@@ -190,8 +274,8 @@ async function coldProcessScenario(
   }
   return summarizedScenario(
     "cold-process",
-    "process launch through completed semantic check",
-    "source and compiler bundle already exist on disk",
+    "fresh-process wall time through semantic result collection and child exit",
+    "provenance was validated; source and compiler bundle already exist on disk",
     expected,
     samples,
   );
@@ -210,11 +294,12 @@ async function coldCompilerScenario(
     try {
       const checked = await compiler.check(path);
       const durationMilliseconds = performance.now() - before;
-      const current = observation(checked);
+      const current = compilerObservation(checked);
       if (index === 0) expected = current;
       assert.equal(current, expected, "cold compiler observation changed");
-      samples.push(benchmarkSample(sourceBytes, {
+      samples.push(benchmarkSample({
         durationMilliseconds,
+        sourceBytes,
         checked,
         analysis: null,
       }));
@@ -225,7 +310,7 @@ async function coldCompilerScenario(
   return summarizedScenario(
     "cold-compiler",
     "compiler bundle load, instantiation, graph load, and semantic check",
-    "Node process and benchmark module are warm",
+    "provenance and Baba parser runtime are warm; no compiler or source revision is resident",
     expected,
     samples,
   );
@@ -235,7 +320,6 @@ async function compilerScenario(
   name: Exclude<CompilerBenchmarkClass, "cold-process" | "cold-compiler">,
   measuredBoundary: string,
   setupOutsideClock: string,
-  sourceBytes: number,
   sampleCount: number,
   operation: (compiler: Compiler, index: number) => Promise<MeasuredResult>,
 ): Promise<CompilerBenchmarkScenario> {
@@ -245,10 +329,10 @@ async function compilerScenario(
   try {
     for (let index = 0; index < sampleCount; index += 1) {
       const result = await operation(compiler, index);
-      const current = observation(result.checked);
+      const current = compilerObservation(result.checked);
       if (index === 0) expected = current;
       assert.equal(current, expected, `${name} observation changed`);
-      samples.push(benchmarkSample(sourceBytes, result));
+      samples.push(benchmarkSample(result));
     }
   } finally {
     compiler.destroy();
@@ -264,17 +348,9 @@ async function compilerScenario(
 
 async function main(): Promise<void> {
   const selected = options();
-  const source = await readFile(selected.path, "utf8");
-  const sourceBytes = Buffer.byteLength(source);
-  let compilerArtifactSha256 = "unavailable";
-  try {
-    const compilerBytes = await readFile("generated/compiler/compiler.wasm");
-    compilerArtifactSha256 = createHash("sha256").update(compilerBytes).digest(
-      "hex",
-    );
-  } catch {
-    // Compiler.create reports the actionable artifact error.
-  }
+  const initialProvenance = await benchmarkProvenance(selected.path);
+  const source = initialProvenance.source;
+  const sourceBytes = initialProvenance.sourceBytes;
 
   const scenarios: CompilerBenchmarkScenario[] = [];
   scenarios.push(
@@ -288,7 +364,6 @@ async function main(): Promise<void> {
       "warm-compiler",
       "load and check one source revision absent from the resident compiler",
       "compiler artifact and prelude are resident",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         if (index === 0) await compiler.check(selected.path);
@@ -296,7 +371,7 @@ async function main(): Promise<void> {
         const before = performance.now();
         const checked = await compiler.checkSource(path, source);
         const durationMilliseconds = performance.now() - before;
-        return { durationMilliseconds, checked, analysis: null };
+        return { durationMilliseconds, sourceBytes, checked, analysis: null };
       },
     ),
   );
@@ -305,14 +380,13 @@ async function main(): Promise<void> {
       "resident-unchanged",
       "semantic check of the exact resident revision",
       "source graph was checked once before sampling",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         if (index === 0) await compiler.check(selected.path);
         const before = performance.now();
         const checked = await compiler.check(selected.path);
         const durationMilliseconds = performance.now() - before;
-        return { durationMilliseconds, checked, analysis: null };
+        return { durationMilliseconds, sourceBytes, checked, analysis: null };
       },
     ),
   );
@@ -321,7 +395,6 @@ async function main(): Promise<void> {
       "source-only-edit",
       "load and check an edit with an unchanged canonical AST",
       "compiler artifact and initial source graph are resident",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         if (index === 0) await compiler.check(selected.path);
@@ -330,7 +403,12 @@ async function main(): Promise<void> {
         const before = performance.now();
         const checked = await compiler.checkSource(selected.path, edited);
         const durationMilliseconds = performance.now() - before;
-        return { durationMilliseconds, checked, analysis: null };
+        return {
+          durationMilliseconds,
+          sourceBytes: Buffer.byteLength(edited),
+          checked,
+          analysis: null,
+        };
       },
     ),
   );
@@ -339,7 +417,6 @@ async function main(): Promise<void> {
       "semantic-edit",
       "load and check a changed private declaration",
       "compiler artifact and initial source graph are resident",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         if (index === 0) await compiler.check(selected.path);
@@ -347,7 +424,12 @@ async function main(): Promise<void> {
         const before = performance.now();
         const checked = await compiler.checkSource(selected.path, edited);
         const durationMilliseconds = performance.now() - before;
-        return { durationMilliseconds, checked, analysis: null };
+        return {
+          durationMilliseconds,
+          sourceBytes: Buffer.byteLength(edited),
+          checked,
+          analysis: null,
+        };
       },
     ),
   );
@@ -356,7 +438,6 @@ async function main(): Promise<void> {
       "semantic-analysis-edit",
       "load, check, and return analysis facts for a changed private declaration",
       "compiler artifact and initial source graph are resident",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         if (index === 0) await compiler.analyze(selected.path);
@@ -365,7 +446,12 @@ async function main(): Promise<void> {
         const analysis = await compiler.analyzeSource(selected.path, edited);
         const durationMilliseconds = performance.now() - before;
         const checked = { type: analysis.type, effects: analysis.effects };
-        return { durationMilliseconds, checked, analysis };
+        return {
+          durationMilliseconds,
+          sourceBytes: Buffer.byteLength(edited),
+          checked,
+          analysis,
+        };
       },
     ),
   );
@@ -374,7 +460,6 @@ async function main(): Promise<void> {
       "prepare-after-check",
       "Runtime-HIR preparation for an already checked semantic revision",
       "semantic edit was loaded and checked",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         const edited = semanticEdit(source, index);
@@ -384,6 +469,7 @@ async function main(): Promise<void> {
         const durationMilliseconds = performance.now() - before;
         return {
           durationMilliseconds,
+          sourceBytes: Buffer.byteLength(edited),
           checked,
           analysis: null,
           runtimeHirNodes: runtimeHirNodes(hir),
@@ -396,7 +482,6 @@ async function main(): Promise<void> {
       "emit-after-prepare",
       "Wasm emission for an already prepared semantic revision",
       "semantic edit was loaded, checked, and prepared",
-      sourceBytes,
       selected.samples,
       async (compiler, index) => {
         const edited = semanticEdit(source, index);
@@ -407,6 +492,7 @@ async function main(): Promise<void> {
         const durationMilliseconds = performance.now() - before;
         return {
           durationMilliseconds,
+          sourceBytes: Buffer.byteLength(edited),
           checked,
           analysis: null,
           wasmBytes: artifact.wasm.byteLength,
@@ -415,22 +501,27 @@ async function main(): Promise<void> {
     ),
   );
 
-  const commit = await command("git", ["rev-parse", "HEAD"]);
-  const rust = await command("rustc", ["--version"]);
-  const deno = await command("deno", ["--version"]);
-  let commitIdentity = "unknown";
-  if (commit !== null) commitIdentity = commit;
+  const finalProvenance = await benchmarkProvenance(selected.path);
+  assert.deepEqual(
+    finalProvenance,
+    initialProvenance,
+    "compiler benchmark inputs changed while sampling",
+  );
   const report: CompilerBenchmarkReport = {
     schema: compilerBenchmarkSchema,
-    commit: commitIdentity,
-    compilerArtifactSha256,
-    versions: {
-      node: process.version,
-      deno,
-      v8: process.versions.v8,
-      rust,
-    },
-    graphIdentity: createHash("sha256").update(source).digest("hex"),
+    commit: initialProvenance.commit,
+    hostInputsSha256: initialProvenance.hostInputsSha256,
+    benchmarkInputsSha256: initialProvenance.benchmarkInputsSha256,
+    compilerArtifactSha256: initialProvenance.compilerArtifactSha256,
+    compilerManifestSha256: initialProvenance.compilerManifestSha256,
+    compilerInputsSha256: initialProvenance.compilerInputsSha256,
+    compilerPreludeSha256: initialProvenance.compilerPreludeSha256,
+    compilerSourceCommit: initialProvenance.compilerSourceCommit,
+    compilerSourceTree: initialProvenance.compilerSourceTree,
+    compilerRustc: initialProvenance.compilerRustc,
+    versions: initialProvenance.versions,
+    environment: initialProvenance.environment,
+    graphIdentity: initialProvenance.graphIdentity,
     sourcePath: selected.path,
     sourceBytes,
     sampleCount: selected.samples,

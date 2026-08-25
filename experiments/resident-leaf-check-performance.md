@@ -1,22 +1,21 @@
 # Resident closed-leaf check reuse
 
-This experiment measures the first full TypeScript checker reuse boundary from
-`spec/TYPECHECKING.md`: an unchanged dependency may reuse its complete check
-when it is a nullary leaf, its lexical specialization interface closes, and that
-interface contains no generative effect brand. The check is first settled in an
-isolated staging sink, so caller-specific fact reads are not retained.
+This historical experiment measured a retired TypeScript checker reuse boundary.
+It predates the Rust/Wasm compiler becoming the sole semantic authority and is
+retained only as a migration performance record. In that implementation, an
+unchanged dependency could reuse its complete check when it was a nullary leaf,
+its lexical specialization interface closed, and that interface contained no
+generative effect brand. The check was first settled in an isolated staging
+sink, so caller-specific fact reads were not retained.
 
-`examples/storage.blot` is a useful workload because it imports the ordinary
-`blot:prelude` leaf and then performs substantial structural specialization in
-the edited root. The prelude is not special-cased by the implementation; it just
-satisfies the same reusable-leaf predicate.
+`examples/storage.blot` was useful because it imported the ordinary
+`blot:prelude` leaf and then performed substantial structural specialization in
+the edited root. The retired implementation did not special-case the prelude; it
+satisfied the same reusable-leaf predicate.
 
-Run the existing end-to-end benchmark in Node-only mode:
-
-```sh
-pnpm exec tsx --import ./src/node/polyfills.mjs \
-  experiments/node-wasm-benchmark.ts --node-only examples/storage.blot
-```
+This retired boundary is no longer reproducible from the current code. Current
+benchmarks exercise the Rust/Wasm compiler and do not reproduce these
+TypeScript-checker measurements.
 
 Three independent nine-sample runs were taken on Node 22.16.0. The baseline is
 merged PR #35; the optimized column is the resident-leaf implementation. Values

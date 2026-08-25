@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import { Compiler } from "./compiler/session.ts";
 import { load, type Loaded, refreshLoadedModules } from "./load.ts";
@@ -67,8 +68,8 @@ export async function buildPackage(
     compiler.destroy();
   }
   for (const artifact of prepared) {
-    await Deno.mkdir(dirname(artifact.built), { recursive: true });
-    await Deno.writeTextFile(artifact.built, artifact.contents);
+    await mkdir(dirname(artifact.built), { recursive: true });
+    await writeFile(artifact.built, artifact.contents, "utf8");
   }
   return prepared.map(({ contents: _contents, ...artifact }) => artifact);
 }

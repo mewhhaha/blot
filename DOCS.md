@@ -914,7 +914,7 @@ delimiters should not collapse into an ambiguous wall of equally indented `)`.
 Do not hand-align code or preserve a personal wrapping style. Run:
 
 ```bash
-deno task blot fmt path/to/file.blot
+just format path/to/file.blot
 ```
 
 The formatter owns the 80-column bias, redundant parentheses, vertical arrays
@@ -929,7 +929,7 @@ linter for mechanical improvements:
 
 ```bash
 just check-file path/to/file.blot
-deno task blot fmt path/to/file.blot
+just format path/to/file.blot
 just test
 ```
 

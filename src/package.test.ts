@@ -218,6 +218,24 @@ return answer.answer
   assertStringIncludes(failure.message, "content hash");
 });
 
+Deno.test("a package capsule rejects malformed base64", async () => {
+  const failure = await assertRejects(
+    () =>
+      decodeModuleCapsule(
+        JSON.stringify({
+          schema: "blot-module-capsule",
+          version: PACKAGE_FORMAT_VERSION,
+          encoding: "gzip+json",
+          payload: "not base64!",
+          hash: "irrelevant",
+        }),
+        "malformed.blotc",
+      ),
+    PackageArtifactError,
+  );
+  assertStringIncludes(failure.message, "payload is not base64");
+});
+
 Deno.test("package exports cannot escape their package directory", async () => {
   const directory = await Deno.makeTempDir();
   const manifestPath = join(directory, "blot.json");

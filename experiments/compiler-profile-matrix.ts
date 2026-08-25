@@ -94,7 +94,7 @@ async function buildProfile(
   const preludePath = "snapshot:prelude";
   try {
     const freshStart = performance.now();
-    compiler.installCompilerSessionModuleSnapshot(
+    compiler.installCompilerSessionTrustedModuleSnapshot(
       handle,
       preludePath,
       preludeSnapshot,

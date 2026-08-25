@@ -84,7 +84,7 @@ interface CompilerWasmExports {
     pathPointer: number,
     pathUnits: number,
   ): number;
-  install_compiler_session_module_snapshot(
+  install_compiler_session_trusted_module_snapshot(
     handle: number,
     pathPointer: number,
     pathUnits: number,
@@ -194,7 +194,6 @@ export interface CompilerSessionDelta {
   readonly payload:
     | { readonly tag: "source"; readonly source: string }
     | { readonly tag: "ast"; readonly ast: string }
-    | { readonly tag: "snapshot"; readonly bytes: Uint8Array }
     | { readonly tag: "none" }
     | { readonly tag: "remove" };
   readonly configuration?: CompilerModuleConfiguration;
@@ -342,8 +341,11 @@ export class CompilerWasm {
     this.#exports = exports;
   }
 
-  static async load(wasm: Uint8Array): Promise<CompilerWasm> {
-    const module = await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  static async compile(wasm: Uint8Array): Promise<WebAssembly.Module> {
+    return await WebAssembly.compile(Uint8Array.from(wasm).buffer);
+  }
+
+  static async instantiate(module: WebAssembly.Module): Promise<CompilerWasm> {
     const instance = await WebAssembly.instantiate(module);
     const exports = instance.exports as unknown as CompilerWasmExports;
     if (
@@ -355,6 +357,10 @@ export class CompilerWasm {
       );
     }
     return new CompilerWasm(exports);
+  }
+
+  static async load(wasm: Uint8Array): Promise<CompilerWasm> {
+    return await CompilerWasm.instantiate(await CompilerWasm.compile(wasm));
   }
 
   lower(source: string): CompilerLoweringResult {
@@ -703,19 +709,30 @@ export class CompilerWasm {
     }
   }
 
-  installCompilerSessionModuleSnapshot(
+  installCompilerSessionTrustedModuleSnapshot(
     handle: number,
     path: string,
     snapshot: Uint8Array,
   ): void {
-    const [result] = this.applyCompilerSessionDelta(handle, [{
-      path,
-      payload: { tag: "snapshot", bytes: snapshot },
-    }]);
-    if (result === undefined) {
-      throw new Error("compiler delta omitted snapshot result");
+    const pathAllocation = this.#allocate(textWords(path));
+    const snapshotAllocation = this.#allocateBytes(snapshot);
+    try {
+      const length = this.#exports
+        .install_compiler_session_trusted_module_snapshot(
+          handle,
+          pathAllocation.pointer,
+          pathAllocation.wordCount,
+          snapshotAllocation.pointer,
+          snapshotAllocation.byteCount,
+        );
+      const result = this.#readResult(length) as
+        | { readonly ok: true }
+        | { readonly ok: false; readonly message: string };
+      if (!result.ok) throw new Error(result.message);
+    } finally {
+      this.#freeBytes(snapshotAllocation);
+      this.#free(pathAllocation);
     }
-    if (!result.ok) throw new Error(failureMessage(result));
   }
 
   prepareCompilerSessionRuntimeHir(
@@ -851,7 +868,7 @@ interface ByteAllocation {
   readonly byteCount: number;
 }
 
-const compilerBinaryFrameMagic = 0x32544c42;
+const compilerBinaryFrameMagic = 0x33544c42;
 const compilerAnalysisFactMask = 0xffff_ffff;
 
 class BinaryEncoder {
@@ -948,12 +965,8 @@ function encodeDeltaPayload(
       encoder.u32(2);
       encoder.bytes(new TextEncoder().encode(payload.ast));
       return;
-    case "snapshot":
-      encoder.u32(3);
-      encoder.bytes(payload.bytes);
-      return;
     case "remove":
-      encoder.u32(4);
+      encoder.u32(3);
       encoder.bytes(new Uint8Array());
       return;
   }

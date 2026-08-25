@@ -173,7 +173,7 @@ pub unsafe extern "C" fn register_compiler_session_paths(
 }
 
 #[unsafe(no_mangle)]
-/// Applies a validated ABI-2 binary graph delta in one guest call.
+/// Applies a validated ABI-3 binary graph delta in one guest call.
 ///
 /// # Safety
 ///
@@ -588,14 +588,14 @@ pub unsafe extern "C" fn export_compiler_session_module_snapshot(
 }
 
 #[unsafe(no_mangle)]
-/// Installs a dependency-free binary module snapshot in one session.
+/// Installs a trusted dependency-free binary module snapshot in one session.
 ///
 /// # Safety
 ///
 /// `path_pointer` must address `path_unit_count` initialized `i32` words and
 /// `snapshot_pointer` must address `snapshot_byte_count` initialized bytes in
 /// this module's linear memory for the duration of the call.
-pub unsafe extern "C" fn install_compiler_session_module_snapshot(
+pub unsafe extern "C" fn install_compiler_session_trusted_module_snapshot(
     handle: u32,
     path_pointer: *const i32,
     path_unit_count: u32,
@@ -613,7 +613,7 @@ pub unsafe extern "C" fn install_compiler_session_module_snapshot(
                 .get_mut(index)
                 .and_then(Option::as_mut)
                 .ok_or_else(|| format!("unknown compiler session {handle}"))?;
-            session.install_module_snapshot(&path, snapshot)
+            session.install_trusted_module_snapshot(&path, snapshot)
         })
     });
     let result = match installed {

@@ -4,15 +4,20 @@ use std::rc::Rc;
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{ExpressionId, PatternId, Span};
+use crate::ast::{DeclarationId, Expression, ExpressionId, Module, PatternId, Span};
+use crate::eval::{
+    ApplicationRoot, ApplicationSite, ClosureApplication, CompilerApplication, EffectScope,
+    ModuleInstanceScope, ModuleInstanceSite, ModuleRevision, RecognitionProbe,
+};
 use crate::value::{Domain, Environment, OpenedValues, OrderedFields, Value, child_env};
 
-const VALUE_CAPSULE_SCHEMA: u32 = 2;
+const VALUE_CAPSULE_SCHEMA: u32 = 3;
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct ValueCapsule {
     schema: u32,
     environments: Vec<CapsuleEnvironment>,
+    effect_scopes: Vec<Vec<CapsuleClosureApplication>>,
     root: u32,
 }
 
@@ -57,6 +62,8 @@ enum CapsuleValue {
     },
     Closure {
         module: CapsuleModule,
+        module_instances: Vec<CapsuleModuleInstanceSite>,
+        effect_scope: u32,
         parameter: PatternId,
         body: ExpressionId,
         environment: u32,
@@ -112,10 +119,68 @@ enum CapsuleModule {
     External(String),
 }
 
+#[derive(Deserialize, Serialize)]
+enum CapsuleApplicationRoot {
+    Expression(ExpressionId),
+    Declaration(DeclarationId),
+}
+
+#[derive(Deserialize, Serialize)]
+struct CapsuleApplicationSite {
+    root: CapsuleApplicationRoot,
+    compiler_steps: Vec<CapsuleCompilerApplication>,
+}
+
+#[derive(Deserialize, Serialize)]
+enum CapsuleCompilerApplication {
+    ForceEffectDeclaration,
+    ForallBody,
+    IncludeParser,
+    HandleThunk,
+    HandleReturn,
+    HandleOperation {
+        operation: String,
+        request: Box<CapsuleApplicationSite>,
+    },
+    RequirementPredicate,
+    RecognitionArgument {
+        probe: CapsuleRecognitionProbe,
+        position: u8,
+    },
+    RuntimeExportParameter(u32),
+}
+
+#[derive(Deserialize, Serialize)]
+enum CapsuleRecognitionProbe {
+    Integer { left: i8, right: i8 },
+    Boolean { left: bool, right: bool },
+    BooleanUnary { argument: bool },
+}
+
+#[derive(Deserialize, Serialize)]
+struct CapsuleClosureApplication {
+    application: CapsuleApplicationSite,
+    creation_scope: u32,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CapsuleModuleInstanceSite {
+    application: CapsuleApplicationSite,
+}
+
 struct CapsuleEncoder {
     module_path: String,
+    module_revision: ModuleRevision,
     environment_ids: HashMap<usize, u32>,
     environments: Vec<Option<CapsuleEnvironment>>,
+    effect_scope_ids: HashMap<usize, u32>,
+    effect_scopes: Vec<Option<Vec<CapsuleClosureApplication>>>,
+}
+
+struct CapsuleDecodeProvenance<'a> {
+    effect_scopes: &'a [Rc<EffectScope>],
+    module_instances: &'a ModuleInstanceScope,
+    module_revision: &'a ModuleRevision,
 }
 
 enum CapsuleEncodingFailure {
@@ -127,11 +192,15 @@ impl ValueCapsule {
     pub(crate) fn encode(
         environment: &Environment,
         module_path: &str,
+        module_revision: &ModuleRevision,
     ) -> Result<Option<Self>, String> {
         let mut encoder = CapsuleEncoder {
             module_path: module_path.to_owned(),
+            module_revision: module_revision.clone(),
             environment_ids: HashMap::new(),
             environments: Vec::new(),
+            effect_scope_ids: HashMap::new(),
+            effect_scopes: Vec::new(),
         };
         let root = match encoder.encode_environment(environment) {
             Ok(root) => root,
@@ -146,9 +215,18 @@ impl ValueCapsule {
                 environment.ok_or_else(|| format!("value capsule omitted environment {id}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let effect_scopes = encoder
+            .effect_scopes
+            .into_iter()
+            .enumerate()
+            .map(|(id, effect_scope)| {
+                effect_scope.ok_or_else(|| format!("value capsule omitted effect scope {id}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Some(Self {
             schema: VALUE_CAPSULE_SCHEMA,
             environments,
+            effect_scopes,
             root,
         }))
     }
@@ -156,7 +234,11 @@ impl ValueCapsule {
     pub(crate) fn decode(
         &self,
         module_path: &str,
+        module: &Module,
+        module_revision: &ModuleRevision,
         closure_signatures: &HashMap<(String, ExpressionId), Value>,
+        base_module_instances: &ModuleInstanceScope,
+        base_effect_scope: &Rc<EffectScope>,
     ) -> Result<Environment, String> {
         if self.schema != VALUE_CAPSULE_SCHEMA {
             return Err(format!(
@@ -165,6 +247,18 @@ impl ValueCapsule {
             ));
         }
         self.validate_environment_graph()?;
+        let effect_scopes = decode_effect_scopes(
+            &self.effect_scopes,
+            module_path,
+            module,
+            module_revision,
+            base_effect_scope,
+        )?;
+        let provenance = CapsuleDecodeProvenance {
+            effect_scopes: &effect_scopes,
+            module_instances: base_module_instances,
+            module_revision,
+        };
         let environments = (0..self.environments.len())
             .map(|_| child_env(None))
             .collect::<Vec<_>>();
@@ -188,7 +282,14 @@ impl ValueCapsule {
                 .map(|(name, value)| {
                     Ok((
                         name.clone(),
-                        decode_value(value, &environments, module_path, closure_signatures)?,
+                        decode_value(
+                            value,
+                            &environments,
+                            &provenance,
+                            module_path,
+                            module,
+                            closure_signatures,
+                        )?,
                     ))
                 })
                 .collect::<Result<_, String>>()?;
@@ -199,7 +300,9 @@ impl ValueCapsule {
                     Ok(OpenedValues::new(decode_fields(
                         fields,
                         &environments,
+                        &provenance,
                         module_path,
+                        module,
                         closure_signatures,
                     )?))
                 })
@@ -210,7 +313,14 @@ impl ValueCapsule {
                 .map(|(variable, value)| {
                     Ok((
                         *variable,
-                        decode_value(value, &environments, module_path, closure_signatures)?,
+                        decode_value(
+                            value,
+                            &environments,
+                            &provenance,
+                            module_path,
+                            module,
+                            closure_signatures,
+                        )?,
                     ))
                 })
                 .collect::<Result<_, String>>()?;
@@ -360,6 +470,8 @@ impl CapsuleEncoder {
             },
             Value::Closure {
                 module,
+                module_instances,
+                effect_scope,
                 parameter,
                 body,
                 environment,
@@ -367,9 +479,11 @@ impl CapsuleEncoder {
                 imports,
                 reuse_assertion,
                 deferred,
-                ..
+                signature: _,
             } => CapsuleValue::Closure {
-                module: self.encode_module(module),
+                module: self.encode_module(module)?,
+                module_instances: self.encode_module_instances(module_instances)?,
+                effect_scope: self.encode_effect_scope(effect_scope)?,
                 parameter: *parameter,
                 body: *body,
                 environment: self.encode_environment(environment)?,
@@ -379,7 +493,7 @@ impl CapsuleEncoder {
                 deferred: *deferred,
             },
             Value::ModuleClosure { module } => CapsuleValue::ModuleClosure {
-                module: self.encode_module(module),
+                module: self.encode_module(module)?,
             },
             Value::IndexedStep { elements } => CapsuleValue::IndexedStep {
                 elements: self.encode_values(elements)?,
@@ -430,6 +544,9 @@ impl CapsuleEncoder {
                 name: name.clone(),
                 inner: Box::new(self.encode_value(inner)?),
             },
+            Value::OpaqueType(name) if name.starts_with("Effect:") => {
+                return Err(CapsuleEncodingFailure::Ineligible);
+            }
             Value::OpaqueType(name) => CapsuleValue::OpaqueType(name.clone()),
             Value::Scratch { .. }
             | Value::Region { .. }
@@ -445,19 +562,359 @@ impl CapsuleEncoder {
         })
     }
 
-    fn encode_module(&self, module: &str) -> CapsuleModule {
-        if module == self.module_path {
-            CapsuleModule::Local
-        } else {
-            CapsuleModule::External(module.to_owned())
+    fn encode_effect_scope(
+        &mut self,
+        effect_scope: &Rc<EffectScope>,
+    ) -> Result<u32, CapsuleEncodingFailure> {
+        let identity = Rc::as_ptr(effect_scope) as usize;
+        if let Some(id) = self.effect_scope_ids.get(&identity) {
+            return Ok(*id);
         }
+        let id = u32::try_from(self.effect_scopes.len()).map_err(|_| {
+            CapsuleEncodingFailure::Invalid(
+                "value capsule exhausted u32 effect-scope identities".to_owned(),
+            )
+        })?;
+        self.effect_scope_ids.insert(identity, id);
+        self.effect_scopes.push(None);
+        let mut encoded = Vec::with_capacity(effect_scope.len());
+        for frame in effect_scope.iter() {
+            encoded.push(CapsuleClosureApplication {
+                application: self.encode_application_site(&frame.application)?,
+                creation_scope: self.encode_effect_scope(&frame.creation_scope)?,
+            });
+        }
+        self.effect_scopes[id as usize] = Some(encoded);
+        Ok(id)
+    }
+
+    fn encode_module_instances(
+        &self,
+        module_instances: &ModuleInstanceScope,
+    ) -> Result<Vec<CapsuleModuleInstanceSite>, CapsuleEncodingFailure> {
+        module_instances
+            .iter()
+            .map(|site| {
+                self.require_local_revision(&site.imported)?;
+                Ok(CapsuleModuleInstanceSite {
+                    application: self.encode_application_site(&site.application)?,
+                })
+            })
+            .collect()
+    }
+
+    fn encode_application_site(
+        &self,
+        application: &ApplicationSite,
+    ) -> Result<CapsuleApplicationSite, CapsuleEncodingFailure> {
+        let root = match &application.root {
+            ApplicationRoot::Expression {
+                revision,
+                expression,
+            } => {
+                self.require_local_revision(revision)?;
+                CapsuleApplicationRoot::Expression(*expression)
+            }
+            ApplicationRoot::Declaration {
+                revision,
+                declaration,
+            } => {
+                self.require_local_revision(revision)?;
+                CapsuleApplicationRoot::Declaration(*declaration)
+            }
+        };
+        let compiler_steps = application
+            .compiler_steps
+            .iter()
+            .map(|step| self.encode_compiler_application(step))
+            .collect::<Result<_, _>>()?;
+        Ok(CapsuleApplicationSite {
+            root,
+            compiler_steps,
+        })
+    }
+
+    fn encode_compiler_application(
+        &self,
+        application: &CompilerApplication,
+    ) -> Result<CapsuleCompilerApplication, CapsuleEncodingFailure> {
+        Ok(match application {
+            CompilerApplication::ForceEffectDeclaration => {
+                CapsuleCompilerApplication::ForceEffectDeclaration
+            }
+            CompilerApplication::ForallBody => CapsuleCompilerApplication::ForallBody,
+            CompilerApplication::IncludeParser => CapsuleCompilerApplication::IncludeParser,
+            CompilerApplication::HandleThunk => CapsuleCompilerApplication::HandleThunk,
+            CompilerApplication::HandleReturn => CapsuleCompilerApplication::HandleReturn,
+            CompilerApplication::HandleOperation { operation, request } => {
+                CapsuleCompilerApplication::HandleOperation {
+                    operation: operation.clone(),
+                    request: Box::new(self.encode_application_site(request)?),
+                }
+            }
+            CompilerApplication::RequirementPredicate => {
+                CapsuleCompilerApplication::RequirementPredicate
+            }
+            CompilerApplication::RecognitionArgument { probe, position } => {
+                CapsuleCompilerApplication::RecognitionArgument {
+                    probe: encode_recognition_probe(*probe),
+                    position: *position,
+                }
+            }
+            CompilerApplication::RuntimeExportParameter(parameter) => {
+                CapsuleCompilerApplication::RuntimeExportParameter(*parameter)
+            }
+        })
+    }
+
+    fn require_local_revision(
+        &self,
+        revision: &ModuleRevision,
+    ) -> Result<(), CapsuleEncodingFailure> {
+        if revision == &self.module_revision {
+            return Ok(());
+        }
+        Err(CapsuleEncodingFailure::Ineligible)
+    }
+
+    fn encode_module(&self, module: &str) -> Result<CapsuleModule, CapsuleEncodingFailure> {
+        if module == self.module_path {
+            return Ok(CapsuleModule::Local);
+        }
+        Err(CapsuleEncodingFailure::Ineligible)
+    }
+}
+
+fn encode_recognition_probe(probe: RecognitionProbe) -> CapsuleRecognitionProbe {
+    match probe {
+        RecognitionProbe::Integer { left, right } => {
+            CapsuleRecognitionProbe::Integer { left, right }
+        }
+        RecognitionProbe::Boolean { left, right } => {
+            CapsuleRecognitionProbe::Boolean { left, right }
+        }
+        RecognitionProbe::BooleanUnary { argument } => {
+            CapsuleRecognitionProbe::BooleanUnary { argument }
+        }
+    }
+}
+
+fn decode_effect_scopes(
+    encoded: &[Vec<CapsuleClosureApplication>],
+    module_path: &str,
+    module: &Module,
+    module_revision: &ModuleRevision,
+    base_effect_scope: &Rc<EffectScope>,
+) -> Result<Vec<Rc<EffectScope>>, String> {
+    let mut decoded = vec![None; encoded.len()];
+    let mut visiting = HashSet::new();
+    let mut decoder = EffectScopeDecoder {
+        encoded,
+        module_path,
+        module,
+        module_revision,
+        base_effect_scope,
+        decoded: &mut decoded,
+        visiting: &mut visiting,
+    };
+    for id in 0..encoded.len() {
+        decoder.decode(
+            u32::try_from(id)
+                .map_err(|_| "value capsule has more than u32 effect scopes".to_owned())?,
+        )?;
+    }
+    decoded
+        .into_iter()
+        .enumerate()
+        .map(|(id, effect_scope)| {
+            effect_scope.ok_or_else(|| format!("value capsule omitted decoded effect scope {id}"))
+        })
+        .collect()
+}
+
+struct EffectScopeDecoder<'a> {
+    encoded: &'a [Vec<CapsuleClosureApplication>],
+    module_path: &'a str,
+    module: &'a Module,
+    module_revision: &'a ModuleRevision,
+    base_effect_scope: &'a Rc<EffectScope>,
+    decoded: &'a mut [Option<Rc<EffectScope>>],
+    visiting: &'a mut HashSet<u32>,
+}
+
+impl EffectScopeDecoder<'_> {
+    fn decode(&mut self, id: u32) -> Result<Rc<EffectScope>, String> {
+        if let Some(effect_scope) = self.decoded.get(id as usize).and_then(Option::as_ref) {
+            return Ok(effect_scope.clone());
+        }
+        if !self.visiting.insert(id) {
+            return Err(format!("value capsule effect scope {id} is cyclic"));
+        }
+        let frame_count = self
+            .encoded
+            .get(id as usize)
+            .ok_or_else(|| format!("value capsule references missing effect scope {id}"))?
+            .len();
+        if frame_count == 0 {
+            self.visiting.remove(&id);
+            self.decoded[id as usize] = Some(self.base_effect_scope.clone());
+            return Ok(self.base_effect_scope.clone());
+        }
+        let mut effect_scope = Vec::with_capacity(self.base_effect_scope.len() + frame_count);
+        effect_scope.extend(self.base_effect_scope.iter().cloned());
+        for frame_index in 0..frame_count {
+            let (application, creation_scope) = {
+                let frame = &self.encoded[id as usize][frame_index];
+                (
+                    decode_application_site(
+                        &frame.application,
+                        self.module_path,
+                        self.module,
+                        self.module_revision,
+                    )?,
+                    frame.creation_scope,
+                )
+            };
+            effect_scope.push(ClosureApplication {
+                application,
+                creation_scope: self.decode(creation_scope)?,
+            });
+        }
+        self.visiting.remove(&id);
+        let effect_scope = Rc::new(effect_scope);
+        self.decoded[id as usize] = Some(effect_scope.clone());
+        Ok(effect_scope)
+    }
+}
+
+fn decode_module_instances(
+    encoded: &[CapsuleModuleInstanceSite],
+    module_path: &str,
+    module: &Module,
+    module_revision: &ModuleRevision,
+    base_module_instances: &ModuleInstanceScope,
+) -> Result<ModuleInstanceScope, String> {
+    let mut module_instances = Vec::with_capacity(base_module_instances.len() + encoded.len());
+    module_instances.extend(base_module_instances.iter().cloned());
+    for site in encoded {
+        module_instances.push(ModuleInstanceSite {
+            application: decode_application_site(
+                &site.application,
+                module_path,
+                module,
+                module_revision,
+            )?,
+            imported: module_revision.clone(),
+        });
+    }
+    Ok(module_instances)
+}
+
+fn decode_application_site(
+    encoded: &CapsuleApplicationSite,
+    module_path: &str,
+    module: &Module,
+    module_revision: &ModuleRevision,
+) -> Result<ApplicationSite, String> {
+    let root = match encoded.root {
+        CapsuleApplicationRoot::Expression(expression) => {
+            if expression.0 as usize >= module.arena.expressions.len() {
+                return Err(format!(
+                    "value capsule application in {module_path} references missing expression {}",
+                    expression.0
+                ));
+            }
+            ApplicationRoot::Expression {
+                revision: module_revision.clone(),
+                expression,
+            }
+        }
+        CapsuleApplicationRoot::Declaration(declaration) => {
+            if declaration.0 as usize >= module.arena.declarations.len() {
+                return Err(format!(
+                    "value capsule application in {module_path} references missing declaration {}",
+                    declaration.0
+                ));
+            }
+            ApplicationRoot::Declaration {
+                revision: module_revision.clone(),
+                declaration,
+            }
+        }
+    };
+    let compiler_steps = encoded
+        .compiler_steps
+        .iter()
+        .map(|step| decode_compiler_application(step, module_path, module, module_revision))
+        .collect::<Result<_, _>>()?;
+    Ok(ApplicationSite {
+        root,
+        compiler_steps,
+    })
+}
+
+fn decode_compiler_application(
+    encoded: &CapsuleCompilerApplication,
+    module_path: &str,
+    module: &Module,
+    module_revision: &ModuleRevision,
+) -> Result<CompilerApplication, String> {
+    Ok(match encoded {
+        CapsuleCompilerApplication::ForceEffectDeclaration => {
+            CompilerApplication::ForceEffectDeclaration
+        }
+        CapsuleCompilerApplication::ForallBody => CompilerApplication::ForallBody,
+        CapsuleCompilerApplication::IncludeParser => CompilerApplication::IncludeParser,
+        CapsuleCompilerApplication::HandleThunk => CompilerApplication::HandleThunk,
+        CapsuleCompilerApplication::HandleReturn => CompilerApplication::HandleReturn,
+        CapsuleCompilerApplication::HandleOperation { operation, request } => {
+            CompilerApplication::HandleOperation {
+                operation: operation.clone(),
+                request: Box::new(decode_application_site(
+                    request,
+                    module_path,
+                    module,
+                    module_revision,
+                )?),
+            }
+        }
+        CapsuleCompilerApplication::RequirementPredicate => {
+            CompilerApplication::RequirementPredicate
+        }
+        CapsuleCompilerApplication::RecognitionArgument { probe, position } => {
+            CompilerApplication::RecognitionArgument {
+                probe: decode_recognition_probe(probe),
+                position: *position,
+            }
+        }
+        CapsuleCompilerApplication::RuntimeExportParameter(parameter) => {
+            CompilerApplication::RuntimeExportParameter(*parameter)
+        }
+    })
+}
+
+fn decode_recognition_probe(probe: &CapsuleRecognitionProbe) -> RecognitionProbe {
+    match probe {
+        CapsuleRecognitionProbe::Integer { left, right } => RecognitionProbe::Integer {
+            left: *left,
+            right: *right,
+        },
+        CapsuleRecognitionProbe::Boolean { left, right } => RecognitionProbe::Boolean {
+            left: *left,
+            right: *right,
+        },
+        CapsuleRecognitionProbe::BooleanUnary { argument } => RecognitionProbe::BooleanUnary {
+            argument: *argument,
+        },
     }
 }
 
 fn decode_fields(
     fields: &[(String, CapsuleValue)],
     environments: &[Environment],
+    provenance: &CapsuleDecodeProvenance,
     module_path: &str,
+    module: &Module,
     closure_signatures: &HashMap<(String, ExpressionId), Value>,
 ) -> Result<OrderedFields, String> {
     fields
@@ -465,7 +922,14 @@ fn decode_fields(
         .map(|(name, value)| {
             Ok((
                 name.clone(),
-                decode_value(value, environments, module_path, closure_signatures)?,
+                decode_value(
+                    value,
+                    environments,
+                    provenance,
+                    module_path,
+                    module,
+                    closure_signatures,
+                )?,
             ))
         })
         .collect()
@@ -474,19 +938,32 @@ fn decode_fields(
 fn decode_values(
     values: &[CapsuleValue],
     environments: &[Environment],
+    provenance: &CapsuleDecodeProvenance,
     module_path: &str,
+    module: &Module,
     closure_signatures: &HashMap<(String, ExpressionId), Value>,
 ) -> Result<Vec<Value>, String> {
     values
         .iter()
-        .map(|value| decode_value(value, environments, module_path, closure_signatures))
+        .map(|value| {
+            decode_value(
+                value,
+                environments,
+                provenance,
+                module_path,
+                module,
+                closure_signatures,
+            )
+        })
         .collect()
 }
 
 fn decode_value(
     value: &CapsuleValue,
     environments: &[Environment],
+    provenance: &CapsuleDecodeProvenance,
     module_path: &str,
+    module: &Module,
     closure_signatures: &HashMap<(String, ExpressionId), Value>,
 ) -> Result<Value, String> {
     Ok(match value {
@@ -508,32 +985,42 @@ fn decode_value(
         CapsuleValue::Shape(fields) => Value::Shape(decode_fields(
             fields,
             environments,
+            provenance,
             module_path,
+            module,
             closure_signatures,
         )?),
         CapsuleValue::Array(values) => Value::Array(decode_values(
             values,
             environments,
+            provenance,
             module_path,
+            module,
             closure_signatures,
         )?),
         CapsuleValue::RegionType(element) => Value::RegionType(Box::new(decode_value(
             element,
             environments,
+            provenance,
             module_path,
+            module,
             closure_signatures,
         )?)),
         CapsuleValue::ScratchType(element) => Value::ScratchType(Box::new(decode_value(
             element,
             environments,
+            provenance,
             module_path,
+            module,
             closure_signatures,
         )?)),
         CapsuleValue::DeferredScratch { capacity } => Value::DeferredScratch {
             capacity: Box::new(decode_value(
                 capacity,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
         },
@@ -541,7 +1028,9 @@ fn decode_value(
             element: Box::new(decode_value(
                 element,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
         },
@@ -550,13 +1039,22 @@ fn decode_value(
             payload: payload
                 .as_deref()
                 .map(|payload| {
-                    decode_value(payload, environments, module_path, closure_signatures)
-                        .map(Box::new)
+                    decode_value(
+                        payload,
+                        environments,
+                        provenance,
+                        module_path,
+                        module,
+                        closure_signatures,
+                    )
+                    .map(Box::new)
                 })
                 .transpose()?,
         },
         CapsuleValue::Closure {
-            module,
+            module: encoded_module,
+            module_instances,
+            effect_scope,
             parameter,
             body,
             environment,
@@ -565,9 +1063,27 @@ fn decode_value(
             reuse_assertion,
             deferred,
         } => {
-            let module = decode_module(module, module_path);
+            let closure_module = decode_module(encoded_module, module_path)?;
+            validate_closure(module_path, module, *parameter, *body, *deferred)?;
             Value::Closure {
-                module: Rc::new(module.clone()),
+                module: Rc::new(closure_module.clone()),
+                module_instances: Rc::new(decode_module_instances(
+                    module_instances,
+                    module_path,
+                    module,
+                    provenance.module_revision,
+                    provenance.module_instances,
+                )?),
+                effect_scope: provenance
+                    .effect_scopes
+                    .get(*effect_scope as usize)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "value capsule closure {closure_module}#{} references missing effect scope {effect_scope}",
+                            body.0
+                        )
+                    })?,
                 parameter: *parameter,
                 body: *body,
                 environment: environments
@@ -575,25 +1091,34 @@ fn decode_value(
                     .cloned()
                     .ok_or_else(|| {
                         format!(
-                            "value capsule closure {module}#{} references missing environment {environment}",
+                            "value capsule closure {closure_module}#{} references missing environment {environment}",
                             body.0
                         )
                     })?,
                 self_name: self_name.clone(),
                 imports: imports.clone(),
                 signature: closure_signatures
-                    .get(&(module.clone(), *body))
+                    .get(&(closure_module, *body))
                     .cloned()
                     .map(Box::new),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
             }
         }
-        CapsuleValue::ModuleClosure { module } => Value::ModuleClosure {
-            module: decode_module(module, module_path),
+        CapsuleValue::ModuleClosure {
+            module: encoded_module,
+        } => Value::ModuleClosure {
+            module: decode_module(encoded_module, module_path)?,
         },
         CapsuleValue::IndexedStep { elements } => Value::IndexedStep {
-            elements: decode_values(elements, environments, module_path, closure_signatures)?,
+            elements: decode_values(
+                elements,
+                environments,
+                provenance,
+                module_path,
+                module,
+                closure_signatures,
+            )?,
         },
         CapsuleValue::Primitive {
             name,
@@ -603,19 +1128,30 @@ fn decode_value(
             name: name.clone(),
             arity: usize::try_from(*arity)
                 .map_err(|_| format!("primitive {name} arity {arity} exceeds usize"))?,
-            applied: decode_values(applied, environments, module_path, closure_signatures)?,
+            applied: decode_values(
+                applied,
+                environments,
+                provenance,
+                module_path,
+                module,
+                closure_signatures,
+            )?,
         },
         CapsuleValue::Range { low, high, domain } => Value::Range {
             low: Box::new(decode_value(
                 low,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
             high: Box::new(decode_value(
                 high,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
             domain: domain.map(decode_domain).transpose()?,
@@ -623,7 +1159,9 @@ fn decode_value(
         CapsuleValue::Union(values) => Value::Union(decode_values(
             values,
             environments,
+            provenance,
             module_path,
+            module,
             closure_signatures,
         )?),
         CapsuleValue::Unbounded => Value::Unbounded,
@@ -638,16 +1176,27 @@ fn decode_value(
             domain: Box::new(decode_value(
                 domain,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
             codomain: Box::new(decode_value(
                 codomain,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
-            effects: decode_values(effects, environments, module_path, closure_signatures)?,
+            effects: decode_values(
+                effects,
+                environments,
+                provenance,
+                module_path,
+                module,
+                closure_signatures,
+            )?,
             effect_tail: *effect_tail,
         },
         CapsuleValue::TypeVariable(variable) => Value::TypeVariable(*variable),
@@ -656,7 +1205,9 @@ fn decode_value(
             body: Box::new(decode_value(
                 body,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
         },
@@ -664,29 +1215,76 @@ fn decode_value(
             inner: Box::new(decode_value(
                 inner,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
-            members: decode_fields(members, environments, module_path, closure_signatures)?,
+            members: decode_fields(
+                members,
+                environments,
+                provenance,
+                module_path,
+                module,
+                closure_signatures,
+            )?,
         },
         CapsuleValue::Sealed { name, inner } => Value::Sealed {
             name: name.clone(),
             inner: Box::new(decode_value(
                 inner,
                 environments,
+                provenance,
                 module_path,
+                module,
                 closure_signatures,
             )?),
         },
+        CapsuleValue::OpaqueType(name) if name.starts_with("Effect:") => {
+            return Err(format!(
+                "value capsule contains generative effect type {name}"
+            ));
+        }
         CapsuleValue::OpaqueType(name) => Value::OpaqueType(name.clone()),
     })
 }
 
-fn decode_module(module: &CapsuleModule, module_path: &str) -> String {
+fn decode_module(module: &CapsuleModule, module_path: &str) -> Result<String, String> {
     match module {
-        CapsuleModule::Local => module_path.to_owned(),
-        CapsuleModule::External(module) => module.clone(),
+        CapsuleModule::Local => Ok(module_path.to_owned()),
+        CapsuleModule::External(module) => Err(format!(
+            "value capsule for dependency-free module {module_path} references external module {module}"
+        )),
     }
+}
+
+fn validate_closure(
+    module_path: &str,
+    module: &Module,
+    parameter: PatternId,
+    body: ExpressionId,
+    deferred: bool,
+) -> Result<(), String> {
+    let matches_lambda = module.arena.expressions.iter().any(|expression| {
+        matches!(
+            expression,
+            Expression::Lambda {
+                parameter: source_parameter,
+                body: source_body,
+                deferred: source_deferred,
+                ..
+            } if *source_parameter == parameter
+                && *source_body == body
+                && *source_deferred == deferred
+        )
+    });
+    if matches_lambda {
+        return Ok(());
+    }
+    Err(format!(
+        "value capsule closure {module_path}#{} has no matching source lambda for parameter {}",
+        body.0, parameter.0
+    ))
 }
 
 fn encode_domain(domain: Domain) -> u8 {

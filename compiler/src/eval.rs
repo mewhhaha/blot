@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::ast::{
@@ -13,6 +14,7 @@ use crate::value::{
     RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup,
     lookup_signature, show, tuple,
 };
+use crate::value_capsule::ValueCapsule;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IncludedFile {
@@ -25,37 +27,275 @@ pub struct LoadedModule {
     pub module: Rc<Module>,
     pub imports: BTreeMap<String, String>,
     pub includes: BTreeMap<String, IncludedFile>,
+    revision: ModuleRevision,
+}
+
+impl LoadedModule {
+    pub(crate) fn new(
+        path: &str,
+        module: Rc<Module>,
+        imports: BTreeMap<String, String>,
+        includes: BTreeMap<String, IncludedFile>,
+    ) -> Self {
+        Self {
+            module,
+            imports,
+            includes,
+            revision: ModuleRevision::new(path),
+        }
+    }
+
+    pub(crate) fn renew_revision(&mut self, path: &str) {
+        self.revision = ModuleRevision::new(path);
+    }
+
+    pub(crate) fn revision(&self) -> ModuleRevision {
+        self.revision.clone()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ModuleRevision {
+    module: String,
+    identity: Rc<()>,
+}
+
+impl ModuleRevision {
+    fn new(module: &str) -> Self {
+        Self {
+            module: module.to_owned(),
+            identity: Rc::new(()),
+        }
+    }
+
+    fn references_module(&self, module: &str) -> bool {
+        self.module == module
+    }
+}
+
+impl PartialEq for ModuleRevision {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module && Rc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl Eq for ModuleRevision {}
+
+impl Hash for ModuleRevision {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        Rc::as_ptr(&self.identity).hash(state);
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(crate) enum RecognitionProbe {
+    Integer { left: i8, right: i8 },
+    Boolean { left: bool, right: bool },
+    BooleanUnary { argument: bool },
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-struct ModuleInstanceSite {
-    importer: String,
-    span_start: u32,
-    span_end: u32,
-    imported: String,
+pub(crate) enum CompilerApplication {
+    ForceEffectDeclaration,
+    ForallBody,
+    IncludeParser,
+    HandleThunk,
+    HandleReturn,
+    HandleOperation {
+        operation: String,
+        request: Box<ApplicationSite>,
+    },
+    RequirementPredicate,
+    RecognitionArgument {
+        probe: RecognitionProbe,
+        position: u8,
+    },
+    RuntimeExportParameter(u32),
 }
 
-type ModuleInstanceScope = Vec<ModuleInstanceSite>;
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub(crate) enum ApplicationRoot {
+    Expression {
+        revision: ModuleRevision,
+        expression: ExpressionId,
+    },
+    Declaration {
+        revision: ModuleRevision,
+        declaration: DeclarationId,
+    },
+}
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub(crate) struct ApplicationSite {
+    pub(crate) root: ApplicationRoot,
+    pub(crate) compiler_steps: Vec<CompilerApplication>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct ClosureApplication {
+    pub(crate) application: ApplicationSite,
+    pub(crate) creation_scope: Rc<EffectScope>,
+}
+
+impl ClosureApplication {
+    fn references_module(&self, module: &str) -> bool {
+        self.application.references_module(module)
+            || self
+                .creation_scope
+                .iter()
+                .any(|frame| frame.references_module(module))
+    }
+}
+
+pub type EffectScope = Vec<ClosureApplication>;
+
+impl ApplicationSite {
+    fn expression(revision: ModuleRevision, expression: ExpressionId) -> Self {
+        Self {
+            root: ApplicationRoot::Expression {
+                revision,
+                expression,
+            },
+            compiler_steps: Vec::new(),
+        }
+    }
+
+    fn declaration(revision: ModuleRevision, declaration: DeclarationId) -> Self {
+        Self {
+            root: ApplicationRoot::Declaration {
+                revision,
+                declaration,
+            },
+            compiler_steps: Vec::new(),
+        }
+    }
+
+    pub(crate) fn for_expression(
+        context: &Context,
+        module: &str,
+        expression: ExpressionId,
+    ) -> Result<Self, Diagnostic> {
+        Ok(Self::expression(
+            context.module_revision(module)?,
+            expression,
+        ))
+    }
+
+    pub(crate) fn compiler(mut self, step: CompilerApplication) -> Self {
+        self.compiler_steps.push(step);
+        self
+    }
+
+    fn references_module(&self, module: &str) -> bool {
+        let root_references_module = match &self.root {
+            ApplicationRoot::Expression { revision, .. }
+            | ApplicationRoot::Declaration { revision, .. } => revision.references_module(module),
+        };
+        root_references_module
+            || self.compiler_steps.iter().any(|step| match step {
+                CompilerApplication::HandleOperation { request, .. } => {
+                    request.references_module(module)
+                }
+                CompilerApplication::ForceEffectDeclaration
+                | CompilerApplication::ForallBody
+                | CompilerApplication::IncludeParser
+                | CompilerApplication::HandleThunk
+                | CompilerApplication::HandleReturn
+                | CompilerApplication::RequirementPredicate
+                | CompilerApplication::RecognitionArgument { .. }
+                | CompilerApplication::RuntimeExportParameter(_) => false,
+            })
+    }
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct ModuleInstanceSite {
+    pub(crate) application: ApplicationSite,
+    pub(crate) imported: ModuleRevision,
+}
+
+pub type ModuleInstanceScope = Vec<ModuleInstanceSite>;
+
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct EffectIdentity {
     module: String,
-    span_start: u32,
-    span_end: u32,
-    scope: String,
+    source: ApplicationSite,
+    scope: EffectScope,
     instances: ModuleInstanceScope,
     host: bool,
 }
 
+impl EffectIdentity {
+    fn references_module(&self, module: &str) -> bool {
+        self.module == module
+            || self.source.references_module(module)
+            || self
+                .scope
+                .iter()
+                .any(|frame| frame.references_module(module))
+            || self.instances.iter().any(|instance| {
+                instance.application.references_module(module)
+                    || instance.imported.references_module(module)
+            })
+    }
+}
+
+type EffectSignatures = Vec<(OrderedFields, u32)>;
+
 type LiveDeclarations = Rc<Vec<DeclarationId>>;
 type LivenessCache = HashMap<(String, Option<ExpressionId>), LiveDeclarations>;
 type EvaluatedBindings = HashMap<String, HashMap<(PatternId, ExpressionId, Phase), Value>>;
+
+#[derive(Clone, Default)]
+struct ResidentEffectValue {
+    declaration: Option<(String, Value)>,
+    attachments: Vec<(String, Value)>,
+}
+
+impl ResidentEffectValue {
+    fn remove_module(&mut self, path: &str) {
+        if self
+            .declaration
+            .as_ref()
+            .is_some_and(|(module, _)| module == path)
+        {
+            self.declaration = None;
+        }
+        self.attachments.retain(|(module, _)| module != path);
+    }
+
+    fn remove_modules(&mut self, paths: &HashSet<String>) {
+        if self
+            .declaration
+            .as_ref()
+            .is_some_and(|(module, _)| paths.contains(module))
+        {
+            self.declaration = None;
+        }
+        self.attachments
+            .retain(|(module, _)| !paths.contains(module));
+    }
+
+    fn value(&self) -> Option<&Value> {
+        self.attachments
+            .last()
+            .map(|(_, value)| value)
+            .or_else(|| self.declaration.as_ref().map(|(_, value)| value))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.declaration.is_none() && self.attachments.is_empty()
+    }
+}
 
 #[derive(Default)]
 pub struct Context {
     pub modules: RefCell<HashMap<String, LoadedModule>>,
     pub module_results: RefCell<HashMap<String, Value>>,
     pub(crate) reusable_module_results: RefCell<HashSet<String>>,
+    pub(crate) module_result_templates:
+        RefCell<HashMap<String, (ModuleRevision, Rc<ValueCapsule>)>>,
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
@@ -66,16 +306,119 @@ pub struct Context {
     pub(crate) ownership_contracts:
         RefCell<HashMap<(String, ExpressionId), crate::ownership::OwnershipContract>>,
     next_effect: Cell<u32>,
-    effect_ids: RefCell<HashMap<EffectIdentity, u32>>,
-    named_effects: RefCell<HashMap<(String, String, bool), u32>>,
+    effect_ids: RefCell<HashMap<EffectIdentity, EffectSignatures>>,
+    effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
     next_type_variable: Cell<u32>,
 }
 
 impl Context {
+    pub(crate) fn snapshot_staging(&self, path: &str) -> Self {
+        let replaced = HashSet::from([path.to_owned()]);
+        let removed_effects = self.effect_ids_referencing(&replaced);
+        Self {
+            next_effect: Cell::new(self.next_effect.get()),
+            effect_ids: RefCell::new(
+                self.effect_ids
+                    .borrow()
+                    .iter()
+                    .filter(|(identity, _)| !identity.references_module(path))
+                    .map(|(identity, signatures)| (identity.clone(), signatures.clone()))
+                    .collect(),
+            ),
+            effect_values: RefCell::new(
+                self.effect_values
+                    .borrow()
+                    .iter()
+                    .filter_map(|(id, value)| {
+                        if removed_effects.contains(id) {
+                            return None;
+                        }
+                        let mut value = value.clone();
+                        value.remove_module(path);
+                        (!value.is_empty()).then_some((*id, value))
+                    })
+                    .collect(),
+            ),
+            next_type_variable: Cell::new(self.next_type_variable.get()),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn commit_staged_snapshot(&self, path: &str, staged: &Self) {
+        self.next_effect.set(staged.next_effect.get());
+        self.next_type_variable.set(staged.next_type_variable.get());
+        self.effect_ids
+            .borrow_mut()
+            .retain(|identity, _| !identity.references_module(path));
+        self.effect_ids.borrow_mut().extend(
+            staged
+                .effect_ids
+                .borrow()
+                .iter()
+                .filter(|(identity, _)| identity.references_module(path))
+                .map(|(identity, signatures)| (identity.clone(), signatures.clone())),
+        );
+        *self.effect_values.borrow_mut() = staged.effect_values.borrow().clone();
+
+        self.live_declarations
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.live_declarations
+            .borrow_mut()
+            .extend(staged.live_declarations.borrow_mut().drain());
+        let evaluated_bindings = staged.evaluated_bindings.borrow_mut().remove(path);
+        self.evaluated_bindings.borrow_mut().remove(path);
+        if let Some(bindings) = evaluated_bindings {
+            self.evaluated_bindings
+                .borrow_mut()
+                .insert(path.to_owned(), bindings);
+        }
+        self.module_result_templates.borrow_mut().remove(path);
+        if let Some(template) = staged.module_result_templates.borrow().get(path).cloned() {
+            self.module_result_templates
+                .borrow_mut()
+                .insert(path.to_owned(), template);
+        }
+
+        self.expression_types
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.expression_types
+            .borrow_mut()
+            .extend(staged.expression_types.borrow_mut().drain());
+        self.closure_signatures
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.closure_signatures
+            .borrow_mut()
+            .extend(staged.closure_signatures.borrow_mut().drain());
+        self.recursive_closures
+            .borrow_mut()
+            .retain(|(module, _)| module != path);
+        self.recursive_closures
+            .borrow_mut()
+            .extend(staged.recursive_closures.borrow_mut().drain());
+        self.ownership_contracts
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.ownership_contracts
+            .borrow_mut()
+            .extend(staged.ownership_contracts.borrow_mut().drain());
+        if self
+            .module_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|(module, _)| module == path)
+        {
+            self.module_cache.borrow_mut().take();
+        }
+    }
+
     pub(crate) fn remove_module_state(&self, path: &str) {
         self.modules.borrow_mut().remove(path);
         self.module_results.borrow_mut().remove(path);
         self.reusable_module_results.borrow_mut().remove(path);
+        self.module_result_templates.borrow_mut().remove(path);
         self.live_declarations
             .borrow_mut()
             .retain(|(module, _), _| module != path);
@@ -93,12 +436,7 @@ impl Context {
         self.ownership_contracts
             .borrow_mut()
             .retain(|(module, _), _| module != path);
-        self.effect_ids
-            .borrow_mut()
-            .retain(|identity, _| identity.module != path);
-        self.named_effects
-            .borrow_mut()
-            .retain(|(module, _, _), _| module != path);
+        self.remove_effect_state(&HashSet::from([path.to_owned()]));
         if self
             .module_cache
             .borrow()
@@ -115,42 +453,128 @@ impl Context {
         id
     }
 
-    fn effect_id(&self, runtime: &Runtime, span: Span, host: bool) -> u32 {
+    fn module_revision(&self, path: &str) -> Result<ModuleRevision, Diagnostic> {
+        self.modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.revision.clone())
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    format!("Compiler application provenance refers to unloaded module `{path}`."),
+                    Span { start: 0, end: 0 },
+                )
+            })
+    }
+
+    fn effect_id(
+        &self,
+        runtime: &Runtime,
+        source: ApplicationSite,
+        signature: &OrderedFields,
+        host: bool,
+    ) -> u32 {
         let key = EffectIdentity {
             module: runtime.module.as_ref().clone(),
-            span_start: span.start,
-            span_end: span.end,
-            scope: runtime
-                .effect_scope
-                .iter()
-                .map(|argument| show(argument))
-                .collect::<Vec<_>>()
-                .join("\u{1f}"),
+            source,
+            scope: runtime.effect_scope.as_ref().clone(),
             instances: runtime.module_instances.as_ref().clone(),
             host,
         };
-        if let Some(id) = self.effect_ids.borrow().get(&key) {
+        if let Some(signatures) = self.effect_ids.borrow().get(&key)
+            && let Some((_, id)) = signatures
+                .iter()
+                .find(|(candidate, _)| effect_signatures_equal(candidate, signature))
+        {
             return *id;
         }
         let id = self.fresh_effect_id();
-        self.effect_ids.borrow_mut().insert(key, id);
+        self.effect_ids
+            .borrow_mut()
+            .entry(key)
+            .or_default()
+            .push((signature.clone(), id));
         id
     }
 
-    fn named_effect_id(&self, module: &str, name: &str, host: bool) -> u32 {
-        let key = (module.to_owned(), name.to_owned(), host);
-        if let Some(id) = self.named_effects.borrow().get(&key) {
-            return *id;
+    fn register_effect_declaration(&self, module: &str, value: &Value) {
+        if let Some(id) = effect_value_id(value) {
+            self.effect_values
+                .borrow_mut()
+                .entry(id)
+                .or_default()
+                .declaration = Some((module.to_owned(), value.clone()));
         }
-        let id = self.fresh_effect_id();
-        self.named_effects.borrow_mut().insert(key, id);
-        id
+    }
+
+    fn register_effect_attachment(&self, module: &str, value: &Value) {
+        if let Some(id) = effect_value_id(value) {
+            let mut values = self.effect_values.borrow_mut();
+            let resident = values.entry(id).or_default();
+            resident.attachments.retain(|(owner, _)| owner != module);
+            resident
+                .attachments
+                .push((module.to_owned(), value.clone()));
+        }
+    }
+
+    pub(crate) fn effect_value(&self, label: &str) -> Option<Value> {
+        let mut parts = label.splitn(3, ':');
+        match parts.next()? {
+            "host" | "effect" => {}
+            _ => return None,
+        }
+        let id = parts.next()?.parse().ok()?;
+        parts.next()?;
+        self.effect_values
+            .borrow()
+            .get(&id)
+            .and_then(ResidentEffectValue::value)
+            .cloned()
+    }
+
+    fn effect_ids_referencing(&self, paths: &HashSet<String>) -> HashSet<u32> {
+        self.effect_ids
+            .borrow()
+            .iter()
+            .filter(|(identity, _)| paths.iter().any(|path| identity.references_module(path)))
+            .flat_map(|(_, signatures)| signatures.iter().map(|(_, id)| *id))
+            .collect()
+    }
+
+    pub(crate) fn remove_effect_state(&self, paths: &HashSet<String>) {
+        let removed = self.effect_ids_referencing(paths);
+        self.effect_ids
+            .borrow_mut()
+            .retain(|identity, _| !paths.iter().any(|path| identity.references_module(path)));
+        self.effect_values.borrow_mut().retain(|_, value| {
+            value.remove_modules(paths);
+            !value.is_empty()
+        });
+        self.effect_values
+            .borrow_mut()
+            .retain(|id, _| !removed.contains(id));
     }
 
     fn type_variable(&self) -> u32 {
         let id = self.next_type_variable.get() + 1;
         self.next_type_variable.set(id);
         id
+    }
+}
+
+fn effect_signatures_equal(left: &OrderedFields, right: &OrderedFields) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .all(|(name, value)| right.get(name).is_some_and(|other| equal(value, other)))
+}
+
+fn effect_value_id(value: &Value) -> Option<u32> {
+    match value {
+        Value::Effect { id, .. } => Some(*id),
+        Value::Extended { inner, .. } => effect_value_id(inner),
+        _ => None,
     }
 }
 
@@ -167,7 +591,7 @@ pub struct Runtime {
     pub limit: i64,
     pub module: Rc<String>,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
-    effect_scope: Rc<Vec<Rc<Value>>>,
+    effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
 }
 
@@ -233,7 +657,7 @@ pub enum Computation {
     Done(Result<Value, Diagnostic>),
     Step(Box<dyn FnOnce() -> Computation>),
     Perform {
-        request: Perform,
+        request: Box<Perform>,
         resume: Box<dyn FnOnce(Value) -> Computation>,
     },
 }
@@ -302,6 +726,7 @@ pub struct Perform {
     pub result_type: Value,
     pub span: Span,
     pub host: bool,
+    application: ApplicationSite,
 }
 
 pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
@@ -545,6 +970,14 @@ pub fn evaluate_expression(
         Expression::Apply {
             function, argument, ..
         } => {
+            let application = match ApplicationSite::for_expression(
+                &context,
+                module_path.as_str(),
+                expression_id,
+            ) {
+                Ok(application) => application,
+                Err(error) => return Computation::error(error),
+            };
             let expected_result = context
                 .expression_types
                 .borrow()
@@ -595,6 +1028,7 @@ pub fn evaluate_expression(
                         span,
                         argument_runtime,
                         expected_result.clone(),
+                        application.clone(),
                     );
                 }
                 evaluate_expression(
@@ -612,6 +1046,7 @@ pub fn evaluate_expression(
                         span,
                         argument_runtime,
                         expected_result,
+                        application,
                     )
                 })
             })
@@ -635,6 +1070,8 @@ pub fn evaluate_expression(
                 .map(Box::new);
             Computation::value(Value::Closure {
                 module: module_path,
+                module_instances: runtime.module_instances.clone(),
+                effect_scope: runtime.effect_scope,
                 parameter: *parameter,
                 body: *body,
                 deferred: *deferred,
@@ -1788,7 +2225,7 @@ fn evaluate_declarations(
             )
             .and_then(move |value| {
                 if kind == DeclarationKind::Effect {
-                    force_effect_value(effect_context, value, span, effect_runtime)
+                    force_effect_value(effect_context, value, declaration_id, span, effect_runtime)
                 } else {
                     Computation::value(value)
                 }
@@ -1884,12 +2321,20 @@ pub(crate) fn evaluate_binding(
             Pattern::Name { name, .. } => Some(name.clone()),
             _ => None,
         };
+        let binding_context = context.clone();
+        let binding_module = module_path.clone();
         return evaluate_expression(context, module_path, value, environment, runtime).and_then(
             move |value| {
-                Computation::value(match &binding_name {
+                let declares_effect = binding_name.is_some()
+                    && matches!(&value, Value::Effect { name, .. } if name == "Effect");
+                let value = match &binding_name {
                     Some(name) => named_effect(value, name),
                     None => value,
-                })
+                };
+                if declares_effect {
+                    binding_context.register_effect_declaration(&binding_module, &value);
+                }
+                Computation::value(value)
             },
         );
     };
@@ -1904,6 +2349,8 @@ pub(crate) fn evaluate_binding(
     evaluate_expression(context, module_path, lambda, environment, runtime).and_then(move |value| {
         let Value::Closure {
             module: closure_module,
+            module_instances,
+            effect_scope,
             parameter,
             body,
             environment,
@@ -1922,6 +2369,8 @@ pub(crate) fn evaluate_binding(
         };
         Computation::value(Value::Closure {
             module: closure_module,
+            module_instances,
+            effect_scope,
             parameter,
             body,
             deferred,
@@ -1963,6 +2412,7 @@ fn named_effect(value: Value, name: &str) -> Value {
 pub(crate) fn force_effect_value(
     context: Rc<Context>,
     value: Value,
+    declaration: DeclarationId,
     span: Span,
     runtime: Runtime,
 ) -> Computation {
@@ -1996,28 +2446,45 @@ pub(crate) fn force_effect_value(
     if !runs_with_unit {
         return Computation::value(value);
     }
-    apply(context, value, Value::Unit, span, runtime)
+    let revision = match context.module_revision(runtime.module.as_str()) {
+        Ok(revision) => revision,
+        Err(error) => return Computation::error(error),
+    };
+    let application = ApplicationSite::declaration(revision, declaration)
+        .compiler(CompilerApplication::ForceEffectDeclaration);
+    apply(context, value, Value::Unit, span, runtime, application)
 }
 
-fn enter_module_instance(mut runtime: Runtime, imported: &str, span: Span) -> Runtime {
+fn enter_module_instance(
+    mut runtime: Runtime,
+    imported: ModuleRevision,
+    application: ApplicationSite,
+) -> Runtime {
     let site = ModuleInstanceSite {
-        importer: runtime.module.as_ref().clone(),
-        span_start: span.start,
-        span_end: span.end,
-        imported: imported.to_owned(),
+        application,
+        imported,
     };
     Rc::make_mut(&mut runtime.module_instances).push(site);
     runtime
 }
 
-pub fn apply(
+pub(crate) fn apply(
     context: Rc<Context>,
     function: Value,
     argument: Value,
     span: Span,
     runtime: Runtime,
+    application: ApplicationSite,
 ) -> Computation {
-    apply_with_expected(context, function, argument, span, runtime, None)
+    apply_with_expected(
+        context,
+        function,
+        argument,
+        span,
+        runtime,
+        None,
+        application,
+    )
 }
 
 fn apply_with_expected(
@@ -2027,6 +2494,7 @@ fn apply_with_expected(
     span: Span,
     runtime: Runtime,
     expected_result: Option<Value>,
+    application: ApplicationSite,
 ) -> Computation {
     match function {
         Value::ModuleClosure { module } => {
@@ -2039,7 +2507,56 @@ fn apply_with_expected(
             // across import expressions is valid only when the closed interface
             // proves that no generative identity is observable. Otherwise,
             // re-evaluate under the written occurrence's stable instance stack.
-            let module_runtime = enter_module_instance(runtime, &module, span);
+            let imported_revision = match context.module_revision(&module) {
+                Ok(revision) => revision,
+                Err(error) => return Computation::error(error),
+            };
+            let module_runtime =
+                enter_module_instance(runtime, imported_revision.clone(), application);
+            let result_template = context
+                .module_result_templates
+                .borrow()
+                .get(&module)
+                .filter(|(revision, _)| revision == &imported_revision)
+                .map(|(_, capsule)| capsule.clone());
+            if matches!(argument, Value::Unit)
+                && let Some(result_template) = result_template
+            {
+                let loaded = match context.modules.borrow().get(&module).cloned() {
+                    Some(loaded) => loaded,
+                    None => {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_UNRESOLVED_IMPORT",
+                            format!("Module `{module}` was not loaded."),
+                            span,
+                        ));
+                    }
+                };
+                let environment = match result_template.decode(
+                    &module,
+                    loaded.module.as_ref(),
+                    &imported_revision,
+                    &context.closure_signatures.borrow(),
+                    module_runtime.module_instances.as_ref(),
+                    &module_runtime.effect_scope,
+                ) {
+                    Ok(environment) => environment,
+                    Err(error) => {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            format!("module result template for `{module}` failed: {error}"),
+                            span,
+                        ));
+                    }
+                };
+                return evaluate_expression(
+                    context,
+                    Rc::new(module),
+                    loaded.module.result,
+                    environment,
+                    module_runtime,
+                );
+            }
             evaluate_module(context, module, argument, module_runtime)
         }
         Value::IndexedStep { elements } => {
@@ -2073,9 +2590,22 @@ fn apply_with_expected(
         Value::ClosureChoice {
             selector,
             alternatives,
-        } => apply_closure_choice(context, selector, alternatives, 0, argument, span, runtime),
+        } => apply_closure_choice(
+            context,
+            selector,
+            alternatives,
+            0,
+            ClosureChoiceCall {
+                argument,
+                span,
+                runtime,
+                application,
+            },
+        ),
         Value::Closure {
             module: closure_module,
+            module_instances,
+            effect_scope: creation_scope,
             parameter,
             body,
             deferred: _,
@@ -2152,6 +2682,8 @@ fn apply_with_expected(
                     name.clone(),
                     Value::Closure {
                         module: closure_module.clone(),
+                        module_instances: module_instances.clone(),
+                        effect_scope: creation_scope.clone(),
                         parameter,
                         body,
                         deferred: false,
@@ -2203,7 +2735,11 @@ fn apply_with_expected(
             }
             let mut closure_runtime = runtime;
             closure_runtime.module = closure_module.clone();
-            Rc::make_mut(&mut closure_runtime.effect_scope).push(Rc::new(argument));
+            closure_runtime.module_instances = module_instances;
+            Rc::make_mut(&mut closure_runtime.effect_scope).push(ClosureApplication {
+                application,
+                creation_scope,
+            });
             Computation::step(move || {
                 evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
                     move |mut value| {
@@ -2294,9 +2830,10 @@ fn apply_with_expected(
                 result_type,
                 span,
                 host,
+                application,
             };
             Computation::Perform {
-                request,
+                request: Box::new(request),
                 resume: Box::new(Computation::value),
             }
         }
@@ -2338,6 +2875,7 @@ fn apply_with_expected(
                 span,
                 runtime,
                 expected_result.as_ref(),
+                application,
             );
             match expected_result {
                 Some(signature) => computation.and_then(move |mut value| {
@@ -2359,15 +2897,26 @@ fn apply_with_expected(
 /// branch projects its alternative's captures out of the payload, then applies
 /// that alternative's body, so the body specializes for the concrete argument
 /// representation this call site supplies. The last alternative needs no test.
+struct ClosureChoiceCall {
+    argument: Value,
+    span: Span,
+    runtime: Runtime,
+    application: ApplicationSite,
+}
+
 fn apply_closure_choice(
     context: Rc<Context>,
     selector: RuntimeValue,
     alternatives: Rc<Vec<ClosureAlternative>>,
     index: usize,
-    argument: Value,
-    span: Span,
-    runtime: Runtime,
+    call: ClosureChoiceCall,
 ) -> Computation {
+    let ClosureChoiceCall {
+        argument,
+        span,
+        runtime,
+        application,
+    } = call;
     let Some(trace) = runtime.residual.clone() else {
         return Computation::error(Diagnostic::new(
             "BLOT_RUST_INVARIANT",
@@ -2407,13 +2956,14 @@ fn apply_closure_choice(
             Err(error) => return Computation::error(error),
         };
     let Some(branches) = branches else {
-        return apply(context, selected, argument, span, runtime);
+        return apply(context, selected, argument, span, runtime, application);
     };
     let alternate_context = context.clone();
     let join_context = context.clone();
     let alternate_argument = argument.clone();
     let alternate_runtime = runtime.clone();
-    apply(context, selected, argument, span, runtime).and_then(move |consequent| {
+    let alternate_application = application.clone();
+    apply(context, selected, argument, span, runtime, application).and_then(move |consequent| {
         let consequent_end = trace.borrow().current_block();
         trace.borrow_mut().select_block(branches.alternate);
         let join_trace = trace.clone();
@@ -2422,9 +2972,12 @@ fn apply_closure_choice(
             selector,
             alternatives,
             index + 1,
-            alternate_argument,
-            span,
-            alternate_runtime,
+            ClosureChoiceCall {
+                argument: alternate_argument,
+                span,
+                runtime: alternate_runtime,
+                application: alternate_application,
+            },
         )
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
@@ -2451,72 +3004,37 @@ fn run_special_or_primitive(
     span: Span,
     runtime: Runtime,
     expected_result: Option<&Value>,
+    application: ApplicationSite,
 ) -> Computation {
-    if name == "@effect" || name == "@effect.host" || name == "@effect.named" {
-        let (effect_name, operations, host) = if name == "@effect.named" {
-            let Some(parts) = arguments.first().and_then(|value| as_tuple(value, 2)) else {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_TYPE",
-                    "`@effect.named` takes `(name, operations)`.",
-                    span,
-                ));
-            };
-            let Value::Text(effect_name) = &parts[0] else {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_TYPE",
-                    "The first `@effect.named` value must be text.",
-                    span,
-                ));
-            };
-            let Value::Shape(operations) = &parts[1] else {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_TYPE",
-                    "The second `@effect.named` value must be an operation shape.",
-                    span,
-                ));
-            };
-            (effect_name.clone(), operations.clone(), false)
-        } else {
-            let Some(Value::Shape(operations)) = arguments.first() else {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_TYPE",
-                    format!("`{name}` takes a shape of operation types."),
-                    span,
-                ));
-            };
-            (
-                "Effect".to_owned(),
-                operations.clone(),
-                name == "@effect.host",
-            )
-        };
-        if effect_name.is_empty() {
+    if name == "@effect" || name == "@effect.host" {
+        let Some(Value::Shape(operations)) = arguments.first() else {
             return Computation::error(Diagnostic::new(
                 "BLOT_TYPE",
-                "An effect name must not be empty.",
+                format!("`{name}` takes a shape of operation types."),
                 span,
             ));
-        }
-        return Computation::value(Value::Effect {
-            id: if name == "@effect.named" {
-                context.named_effect_id(&runtime.module, &effect_name, host)
-            } else {
-                context.effect_id(&runtime, span, host)
-            },
-            name: effect_name,
-            operations,
+        };
+        let host = name == "@effect.host";
+        let value = Value::Effect {
+            id: context.effect_id(&runtime, application, operations, host),
+            name: "Effect".to_owned(),
+            operations: operations.clone(),
             host,
-        });
+        };
+        context.register_effect_declaration(&runtime.module, &value);
+        return Computation::value(value);
     }
     if name == "@forall" {
         let variable = context.type_variable();
         let function = arguments[0].clone();
+        let application = application.compiler(CompilerApplication::ForallBody);
         return apply(
             context,
             function,
             Value::TypeVariable(variable),
             span,
             runtime,
+            application,
         )
         .and_then(move |body| {
             Computation::value(Value::Forall {
@@ -2576,7 +3094,15 @@ fn run_special_or_primitive(
             ("path".to_owned(), Value::Text(included.path)),
             ("text".to_owned(), Value::Text(included.text)),
         ]));
-        return apply(context, arguments[1].clone(), source, span, runtime);
+        let application = application.compiler(CompilerApplication::IncludeParser);
+        return apply(
+            context,
+            arguments[1].clone(),
+            source,
+            span,
+            runtime,
+            application,
+        );
     }
     if name == "@import" {
         let Value::Text(specifier) = &arguments[0] else {
@@ -2613,6 +3139,7 @@ fn run_special_or_primitive(
             parts[2].clone(),
             span,
             runtime,
+            application,
         );
     }
     if let Some(trace) = &runtime.residual {
@@ -2620,13 +3147,23 @@ fn run_special_or_primitive(
             .borrow_mut()
             .primitive(name, &arguments, expected_result, span)
         {
-            Ok(Some(value)) => return Computation::value(value),
+            Ok(Some(value)) => {
+                if name == "@type.attach" {
+                    context.register_effect_attachment(&runtime.module, &value);
+                }
+                return Computation::value(value);
+            }
             Ok(None) => {}
             Err(error) => return Computation::error(error),
         }
     }
     match run_primitive(name, arguments, span, runtime.phase) {
-        Ok(value) => Computation::value(value),
+        Ok(value) => {
+            if name == "@type.attach" {
+                context.register_effect_attachment(&runtime.module, &value);
+            }
+            Computation::value(value)
+        }
         Err(error) => Computation::error(error),
     }
 }
@@ -2638,6 +3175,7 @@ fn handle(
     handler: Value,
     span: Span,
     runtime: Runtime,
+    application: ApplicationSite,
 ) -> Computation {
     let Value::Effect {
         id,
@@ -2664,8 +3202,26 @@ fn handle(
             ));
         }
     }
-    let computation = apply(context.clone(), thunk, Value::Unit, span, runtime.clone());
-    drive(context, computation, id, Rc::new(handler), span, runtime)
+    let thunk_application = application
+        .clone()
+        .compiler(CompilerApplication::HandleThunk);
+    let computation = apply(
+        context.clone(),
+        thunk,
+        Value::Unit,
+        span,
+        runtime.clone(),
+        thunk_application,
+    );
+    drive(
+        context,
+        computation,
+        id,
+        Rc::new(handler),
+        span,
+        runtime,
+        application,
+    )
 }
 
 fn drive(
@@ -2675,16 +3231,35 @@ fn drive(
     handler: Rc<OrderedFields>,
     span: Span,
     runtime: Runtime,
+    application: ApplicationSite,
 ) -> Computation {
     match computation {
         Computation::Done(Err(error)) => Computation::Done(Err(error)),
         Computation::Done(Ok(value)) => match handler.get("return").cloned() {
-            Some(return_clause) => apply(context, return_clause, value, span, runtime),
+            Some(return_clause) => {
+                let return_application = application.compiler(CompilerApplication::HandleReturn);
+                apply(
+                    context,
+                    return_clause,
+                    value,
+                    span,
+                    runtime,
+                    return_application,
+                )
+            }
             None => Computation::value(value),
         },
-        Computation::Step(step) => {
-            Computation::step(move || drive(context, step(), effect_id, handler, span, runtime))
-        }
+        Computation::Step(step) => Computation::step(move || {
+            drive(
+                context,
+                step(),
+                effect_id,
+                handler,
+                span,
+                runtime,
+                application,
+            )
+        }),
         Computation::Perform { request, resume } => {
             let operation = if request.effect_id == effect_id {
                 handler.get(&request.operation).cloned()
@@ -2695,6 +3270,7 @@ fn drive(
                 let next_context = context.clone();
                 let next_handler = handler.clone();
                 let next_runtime = runtime.clone();
+                let next_application = application.clone();
                 return Computation::Perform {
                     request,
                     resume: Box::new(move |value| {
@@ -2705,6 +3281,7 @@ fn drive(
                             next_handler,
                             span,
                             next_runtime,
+                            next_application,
                         )
                     }),
                 };
@@ -2713,6 +3290,7 @@ fn drive(
                 let next_context = context.clone();
                 let next_handler = handler.clone();
                 let next_runtime = runtime.clone();
+                let next_application = application.clone();
                 move |value| {
                     drive(
                         next_context,
@@ -2721,6 +3299,7 @@ fn drive(
                         next_handler,
                         span,
                         next_runtime,
+                        next_application,
                     )
                 }
             }))));
@@ -2728,12 +3307,18 @@ fn drive(
                 used: Rc::new(RefCell::new(false)),
                 resume,
             };
+            let operation_application =
+                application.compiler(CompilerApplication::HandleOperation {
+                    operation: request.operation.clone(),
+                    request: Box::new(request.application.clone()),
+                });
             apply(
                 context,
                 operation,
                 tuple(vec![request.argument, continuation]),
                 request.span,
                 runtime,
+                operation_application,
             )
         }
     }
@@ -3525,31 +4110,144 @@ impl BigIntExt {
 mod tests {
     use super::*;
 
-    fn effect_id_for_instance(context: &Context, mut runtime: Runtime, effect_span: Span) -> u32 {
+    fn effect_id_for_instance(
+        context: &Context,
+        mut runtime: Runtime,
+        effect_revision: ModuleRevision,
+    ) -> u32 {
         runtime.module = Rc::new("dependency.blot".to_owned());
-        context.effect_id(&runtime, effect_span, false)
+        context.effect_id(
+            &runtime,
+            ApplicationSite::expression(effect_revision, ExpressionId(10)),
+            &OrderedFields::default(),
+            false,
+        )
     }
 
     #[test]
     fn import_occurrence_is_part_of_generative_effect_identity() {
         let context = Context::default();
         let base = Runtime::new(Phase::Comptime, "root.blot".to_owned());
-        let effect_span = Span { start: 10, end: 20 };
-        let first_site = Span { start: 1, end: 2 };
-        let second_site = Span { start: 3, end: 4 };
+        let root_revision = ModuleRevision::new("root.blot");
+        let dependency_revision = ModuleRevision::new("dependency.blot");
+        let first_site = ApplicationSite::expression(root_revision.clone(), ExpressionId(1));
+        let second_site = ApplicationSite::expression(root_revision, ExpressionId(2));
 
-        let first = enter_module_instance(base.clone(), "dependency.blot", first_site);
-        let first_again = enter_module_instance(base.clone(), "dependency.blot", first_site);
-        let second = enter_module_instance(base, "dependency.blot", second_site);
+        let first = enter_module_instance(
+            base.clone(),
+            dependency_revision.clone(),
+            first_site.clone(),
+        );
+        let first_again =
+            enter_module_instance(base.clone(), dependency_revision.clone(), first_site);
+        let second = enter_module_instance(base, dependency_revision.clone(), second_site);
 
-        let first_id = effect_id_for_instance(&context, first, effect_span);
+        let first_id = effect_id_for_instance(&context, first, dependency_revision.clone());
         assert_eq!(
             first_id,
-            effect_id_for_instance(&context, first_again, effect_span)
+            effect_id_for_instance(&context, first_again, dependency_revision.clone())
         );
         assert_ne!(
             first_id,
-            effect_id_for_instance(&context, second, effect_span)
+            effect_id_for_instance(&context, second, dependency_revision)
+        );
+    }
+
+    #[test]
+    fn effect_signatures_use_exact_alpha_equivalence() {
+        let context = Context::default();
+        let runtime = Runtime::new(Phase::Comptime, "effect.blot".to_owned());
+        let revision = ModuleRevision::new("effect.blot");
+        let application = ApplicationSite::expression(revision, ExpressionId(1));
+        let signature = |variable| {
+            OrderedFields::from([(
+                "map".to_owned(),
+                Value::Forall {
+                    variable,
+                    body: Box::new(Value::Arrow {
+                        deferred: false,
+                        domain: Box::new(Value::TypeVariable(variable)),
+                        codomain: Box::new(Value::TypeVariable(variable)),
+                        effects: Vec::new(),
+                        effect_tail: None,
+                    }),
+                },
+            )])
+        };
+        let first = context.effect_id(&runtime, application.clone(), &signature(1), false);
+        let alpha_equivalent =
+            context.effect_id(&runtime, application.clone(), &signature(7), false);
+        let different = OrderedFields::from([(
+            "map".to_owned(),
+            Value::Arrow {
+                deferred: false,
+                domain: Box::new(Value::Unit),
+                codomain: Box::new(Value::Unit),
+                effects: Vec::new(),
+                effect_tail: None,
+            },
+        )]);
+
+        assert_eq!(first, alpha_equivalent);
+        assert_ne!(
+            first,
+            context.effect_id(&runtime, application, &different, false)
+        );
+    }
+
+    #[test]
+    fn recursive_applications_at_one_call_site_have_distinct_depths() {
+        let context = Context::default();
+        let revision = ModuleRevision::new("recursive-effect.blot");
+        let call = ApplicationSite::expression(revision.clone(), ExpressionId(1));
+        let source = ApplicationSite::expression(revision, ExpressionId(2));
+        let frame = ClosureApplication {
+            application: call,
+            creation_scope: Rc::new(Vec::new()),
+        };
+        let mut shallow = Runtime::new(Phase::Comptime, "recursive-effect.blot".to_owned());
+        Rc::make_mut(&mut shallow.effect_scope).push(frame.clone());
+        let mut recursive = shallow.clone();
+        Rc::make_mut(&mut recursive.effect_scope).push(frame);
+
+        let shallow_id =
+            context.effect_id(&shallow, source.clone(), &OrderedFields::default(), false);
+        assert_eq!(
+            shallow_id,
+            context.effect_id(&shallow, source.clone(), &OrderedFields::default(), false,)
+        );
+        assert_ne!(
+            shallow_id,
+            context.effect_id(&recursive, source, &OrderedFields::default(), false)
+        );
+    }
+
+    #[test]
+    fn returned_closures_retain_their_distinct_creation_scopes() {
+        let context = Context::default();
+        let revision = ModuleRevision::new("returned-effect.blot");
+        let creation_scope = |expression| {
+            Rc::new(vec![ClosureApplication {
+                application: ApplicationSite::expression(revision.clone(), expression),
+                creation_scope: Rc::new(Vec::new()),
+            }])
+        };
+        let invocation = ApplicationSite::expression(revision.clone(), ExpressionId(3));
+        let runtime_for = |creation_scope| {
+            let mut runtime = Runtime::new(Phase::Comptime, "returned-effect.blot".to_owned());
+            Rc::make_mut(&mut runtime.effect_scope).push(ClosureApplication {
+                application: invocation.clone(),
+                creation_scope,
+            });
+            runtime
+        };
+        let first = runtime_for(creation_scope(ExpressionId(1)));
+        let second = runtime_for(creation_scope(ExpressionId(2)));
+        let source = ApplicationSite::expression(revision, ExpressionId(4));
+
+        assert_ne!(
+            context.effect_id(&first, source.clone(), &OrderedFields::default(), false,),
+            context.effect_id(&second, source, &OrderedFields::default(), false),
         );
     }
 
@@ -3573,6 +4271,7 @@ mod tests {
             Value::Unit,
             Span { start: 1, end: 2 },
             Runtime::new(Phase::Comptime, "root.blot".to_owned()),
+            ApplicationSite::expression(ModuleRevision::new("root.blot"), ExpressionId(1)),
         ))
         .expect("resident module result should evaluate");
 
@@ -3583,18 +4282,32 @@ mod tests {
     fn parent_instance_keeps_nested_imports_distinct() {
         let context = Context::default();
         let base = Runtime::new(Phase::Comptime, "root.blot".to_owned());
-        let effect_span = Span { start: 30, end: 40 };
-        let nested_site = Span { start: 7, end: 8 };
+        let root_revision = ModuleRevision::new("root.blot");
+        let parent_revision = ModuleRevision::new("parent.blot");
+        let dependency_revision = ModuleRevision::new("dependency.blot");
+        let nested_site = ApplicationSite::expression(parent_revision.clone(), ExpressionId(7));
 
-        let first_parent =
-            enter_module_instance(base.clone(), "parent.blot", Span { start: 1, end: 2 });
-        let second_parent = enter_module_instance(base, "parent.blot", Span { start: 3, end: 4 });
-        let first_nested = enter_module_instance(first_parent, "dependency.blot", nested_site);
-        let second_nested = enter_module_instance(second_parent, "dependency.blot", nested_site);
+        let first_parent = enter_module_instance(
+            base.clone(),
+            parent_revision.clone(),
+            ApplicationSite::expression(root_revision.clone(), ExpressionId(1)),
+        );
+        let second_parent = enter_module_instance(
+            base,
+            parent_revision,
+            ApplicationSite::expression(root_revision, ExpressionId(2)),
+        );
+        let first_nested = enter_module_instance(
+            first_parent,
+            dependency_revision.clone(),
+            nested_site.clone(),
+        );
+        let second_nested =
+            enter_module_instance(second_parent, dependency_revision.clone(), nested_site);
 
         assert_ne!(
-            effect_id_for_instance(&context, first_nested, effect_span),
-            effect_id_for_instance(&context, second_nested, effect_span)
+            effect_id_for_instance(&context, first_nested, dependency_revision.clone()),
+            effect_id_for_instance(&context, second_nested, dependency_revision)
         );
     }
 }

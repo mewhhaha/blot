@@ -37,7 +37,8 @@ The compiler Wasm and manifest are derived outputs. The prelude snapshot is
 tracked because it is the language's distributed ordinary-module interface. The
 Node host refuses a missing, mismatched, or incompatible artifact before it
 creates a compiler session. A caller supplying custom compiler bytes must also
-supply the matching prelude snapshot.
+supply the matching prelude snapshot and thereby owns the trust decision for
+that pair.
 
 One `Compiler` owns one resident Rust session. Requests are serialized, while
 unchanged loaded revisions reuse prepared Runtime HIR and emitted artifacts.

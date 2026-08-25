@@ -16,8 +16,8 @@ The authority order is defined by [`README.md`](README.md). In particular:
 
 Nothing here claims that the whole language or compiler has been mechanized.
 Named lemmas and theorems are obligations. Tests, certificate replay, the Rust
-and Node evaluators, Runtime-HIR validation, Wasm validation, and the current
-Lean model are evidence only for the boundaries they actually encode.
+evaluator, Runtime-HIR validation, emitted-Wasm validation, and the current Lean
+model are evidence only for the boundaries they actually encode.
 
 ## Abstract
 

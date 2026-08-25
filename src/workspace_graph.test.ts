@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { load } from "./load.ts";
+import { load, type Loaded } from "./load.ts";
 import { WorkspaceGraph } from "./workspace_graph.ts";
 
 test("a pinned module is not reread from disk", async () => {
@@ -26,6 +26,36 @@ test("a pinned module is not reread from disk", async () => {
       (await graph.refresh(root)).dependencies.get("./dependency.blot"),
       pinned,
     );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("a pinned dependency does not materialize its module", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "blot-workspace-lazy-pinned-"),
+  );
+  const dependency = join(directory, "dependency.blot");
+  const root = join(directory, "root.blot");
+  const pinned: Loaded = {
+    get module(): never {
+      throw new Error("pinned module was materialized");
+    },
+    dependencies: new Map(),
+    includedFiles: new Map(),
+    source: "",
+    path: dependency,
+    storage: { tag: "snapshot", digest: "test-pinned-snapshot" },
+  };
+  try {
+    await writeFile(
+      root,
+      'const dependency = import "./dependency.blot"\nreturn dependency\n',
+    );
+    const graph = new WorkspaceGraph(undefined, [pinned]);
+
+    const loaded = await graph.refresh(root);
+    assert.equal(loaded.dependencies.get("./dependency.blot"), pinned);
   } finally {
     await rm(directory, { recursive: true });
   }

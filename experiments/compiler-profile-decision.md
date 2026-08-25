@@ -1,6 +1,7 @@
 # Compiler Wasm optimization profile decision
 
-Status: current decision for compiler-host ABI 2.
+Status: current profile decision for compiler-host ABI 3, based on the recorded
+ABI-2 matrix below.
 
 The release compiler remains at `opt-level = "s"`. The controlled 10,000-edit
 matrix in

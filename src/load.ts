@@ -44,6 +44,7 @@ export interface Loaded {
 
 export type LoadedStorage =
   | { readonly tag: "source" }
+  | { readonly tag: "snapshot"; readonly digest: string }
   | {
     readonly tag: "capsule";
     readonly path: string;

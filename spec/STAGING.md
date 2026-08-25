@@ -113,11 +113,27 @@ Administrative re-evaluation of the same recorded occurrence recovers the same
 atom. Evaluation under another module-instance stack mints a distinct atom even
 when the operation descriptors are structurally equal.
 
+The compile-time scope component is the ordered stack of revision-qualified
+source application identities, including each callee's recorded creation scope.
+Compiler-owned closure applications carry a typed sub-occurrence rooted in the
+source expression, declaration, effect request, or export parameter that owns
+them. Repeated evaluation of one stack is stable; a second written call or an
+additional recursive frame is distinct. Signature equality is exact semantic
+type-value equality, including alpha-equivalence and referenced effect atoms;
+neither displayed values nor partial hashes are identity evidence.
+
 A resident nullary module result may replace administrative re-evaluation only
-when its checked effect row is empty and its closed result type exposes no
-ordinary or host effect identity. Reuse then preserves no observable generative
-atom. A result whose closed type contains an effect value or a non-empty effect
-row is evaluated under each written module-instance occurrence as above.
+when its checked effect row is empty, its closed result type exposes no ordinary
+or host effect identity, and the actual value is recursively independent of its
+producing module instance. In particular, a closure can invoke a caller-supplied
+effect constructor, so an effect-free result type alone cannot justify sharing
+that closure. Values containing closures, deferred environments, function
+choices, effects, operations, Regions, continuations, or residual runtime values
+are evaluated under each written module-instance occurrence as above. An
+authenticated snapshot may avoid replaying declarations by decoding its
+validated environment as a template over the current occurrence's complete
+module-instance and compile-time scope stacks. This is per-occurrence
+instantiation, not resident-result sharing.
 
 A reusable cache entry containing an ordinary effect is valid only when the
 complete owning instance identity and revision are preserved. A module path or

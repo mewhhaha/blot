@@ -23,7 +23,7 @@ compiler with Baba's CPU frontend and does not initialize WebGPU. Run it outside
 Helix with:
 
 ```bash
-deno task lsp
+just lsp
 ```
 
 Go-to-definition resolves local bindings, lambda parameters, case patterns,
@@ -85,8 +85,8 @@ Baba CST nodes, so formatting cannot discard them. Use it from the command line
 with:
 
 ```bash
-deno task blot fmt source.blot
-deno task blot fmt --check source.blot
+just format source.blot
+just format-check source.blot
 ```
 
 Lints are independent rules over the lowered AST. A rule registers typed module,

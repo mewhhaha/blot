@@ -5,7 +5,8 @@ use serde::Serialize;
 
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
-    Computation, Context, Phase, Runtime, closure_free_names, evaluate_expression, evaluate_module,
+    ApplicationSite, CompilerApplication, Computation, Context, Phase, Runtime, closure_free_names,
+    evaluate_expression, evaluate_module,
 };
 use crate::ownership::Produced;
 use crate::protocol::RUNTIME_HIR_SCHEMA;
@@ -2256,6 +2257,8 @@ impl ResidualTrace {
             Value::ClosureChoice { alternatives, .. } => Ok(alternatives.as_ref().clone()),
             Value::Closure {
                 module,
+                module_instances,
+                effect_scope,
                 parameter,
                 body,
                 environment,
@@ -2279,6 +2282,8 @@ impl ResidualTrace {
                 Ok(vec![ClosureAlternative {
                     source: ChoiceSource::Lambda {
                         module: module.clone(),
+                        module_instances: module_instances.clone(),
+                        effect_scope: effect_scope.clone(),
                         parameter: *parameter,
                         body: *body,
                         environment: environment.clone(),
@@ -2606,6 +2611,8 @@ impl ResidualTrace {
         match &alternative.source {
             ChoiceSource::Lambda {
                 module,
+                module_instances,
+                effect_scope,
                 parameter,
                 body,
                 environment,
@@ -2630,6 +2637,8 @@ impl ResidualTrace {
                 };
                 Ok(Value::Closure {
                     module: module.clone(),
+                    module_instances: module_instances.clone(),
+                    effect_scope: effect_scope.clone(),
                     parameter: *parameter,
                     body: *body,
                     deferred: *deferred,
@@ -7418,6 +7427,22 @@ fn prepare_function_export(
             let trace = trace.borrow();
             mark_reusable_stores(&input, argument, &trace.types)
         };
+        let (application_module, application_expression) =
+            match &function {
+                Value::Closure { module, body, .. } => (module.as_str(), *body),
+                _ => {
+                    let loaded =
+                        context.modules.borrow().get(path).cloned().ok_or_else(|| {
+                            hir_error("A function export lost its source module.")
+                        })?;
+                    (path, loaded.module.result)
+                }
+            };
+        let application =
+            ApplicationSite::for_expression(&context, application_module, application_expression)?
+                .compiler(CompilerApplication::RuntimeExportParameter(
+                    parameter_types.len() as u32,
+                ));
         parameter_types.push(parameter_type);
         function = complete_residual_host_calls(
             crate::eval::apply(
@@ -7426,6 +7451,7 @@ fn prepare_function_export(
                 argument,
                 crate::ast::Span { start: 0, end: 0 },
                 runtime.clone(),
+                application,
             ),
             &trace,
         )?;

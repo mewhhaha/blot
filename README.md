@@ -24,7 +24,10 @@ import { parse } from "@mewhhaha/blot";
 const result = await parse("return 42\n");
 ```
 
-Run `pnpm pack --dry-run` to verify the package before publishing.
+After installing or building the matching compiler artifact, run
+`pnpm package:check` to build the JavaScript distribution and verify it in plain
+Node before publishing. Runtime exports resolve to generated JavaScript, and
+their generated declarations are checked from a TypeScript consumer.
 
 ## Direct definitions should stay viable
 

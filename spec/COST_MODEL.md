@@ -42,9 +42,37 @@ The following boundaries are not interchangeable:
 | source-only edit   | source changes but semantic AST revision is equal          |
 | semantic edit      | lowered module changes and affected phases rerun           |
 
-Every report names the source graph, compiler artifact hash, sample count,
-aggregation statistic, and which setup work lies outside the clock. It reports
-artifact equality or observation parity before timing comparisons.
+Every report names the exact benchmark and host inputs, source graph, compiler
+artifact and manifest identities, toolchain versions, sample count, aggregation
+statistic, and which setup work lies outside the clock. Comparisons require the
+same workload/scenario matrix and stable workload paths. Independent runs are
+not paired by array index: each candidate target-run median is compared with the
+aggregate baseline and must clear the run's noise threshold. Every non-target
+candidate-run regression is checked against the aggregate baseline with the same
+percentage and noise gates, in addition to the aggregate regression check. A
+suite retains every run's raw durations and recomputes both run and aggregate
+summaries before comparison. A report establishes artifact provenance and
+observation parity before comparing time.
+
+Cold-process timing is an operational wall-clock boundary through child result
+collection and exit, so result transport and teardown remain visible after the
+completed check. Compiler-only boundaries stop at their named operation.
+
+The semantic startup internal timer ends exactly at the completed check. Its
+outer-process total is an adjusted operational estimate that subtracts the
+measured syntax-consumer-only internal tail from fresh-process wall time.
+Portable-AST export and decode belong to an explicitly named syntax-consumer
+total; including them in the semantic total would charge ordinary compilation
+for work it does not do. Benchmark provenance is captured before the first
+sample and after the final sample, outside every measured boundary; a changed
+capture rejects the report so one run cannot mix revisions. Startup provenance
+covers the runnable harness, host worktree including relevant untracked files
+and tracked deletions, root-plus-prelude source graph, compiler artifact and
+manifest, manifest compiler inputs and source identities, compiler build
+toolchain, repository commit, Node/V8 versions, platform, architecture, CPU
+models/count, and the Node invocation flags. A comparison requires the same
+execution environment. A startup report is invalid when its phase matrix is
+incomplete or a distribution cannot be recomputed exactly from its raw samples.
 
 Generated-code execution is a separate boundary from every compiler class above.
 A warm generated-execution measurement starts with validated and compiled
@@ -150,10 +178,24 @@ structural compiler traversal.
 A resident deterministic nullary module result is evaluated once per semantic
 revision when its closed interface exposes no generative effect identity.
 Importers then share that result by structural reference; reopening a large
-module must not replay its declarations or copy every exported field.
-Installing its persistent snapshot decodes each lexical environment once and
-evaluates only the module's result expression over that environment. It does not
-replay the declaration sequence or duplicate a closure signature per value.
+module must not replay its declarations or copy every exported field. Installing
+its persistent snapshot decodes each lexical environment once and evaluates only
+the module's result expression over that environment. It does not replay the
+declaration sequence or duplicate a closure signature per value.
+
+Reverse invalidation structurally fingerprints a recursively complete immutable
+result. If the result is absent or contains a process-local closure, deferred
+environment, function choice, Region authority, rejoin witness, or residual
+runtime value, a fixed-size semantic-revision identity replaces graph
+serialization. Complete first-order boundaries can still stop propagation after
+a private edit; graph-private boundaries conservatively recheck their importers
+instead of paying for an incomplete or recursively sized fingerprint.
+
+The snapshot's immutable flat-type arena is validated in place and moved into
+the installed interface. A snapshot revision uses its manifest-validated digest
+directly, so installation does not serialize the AST merely to compute the
+source-inspection digest. Quantified identities are still freshened when the
+closed interface is inflated.
 
 For a resident module `m`, let `A_m` be the size of the canonical phase input
 for that module and `d_m` its number of direct dependency/include edges. Once
@@ -167,8 +209,8 @@ compiler work.
 
 Published semantic boundaries follow the same rule inside a resident session.
 The producing module compares its complete canonical bytes, but a parent stores
-only a collision-free fixed-size session identity for each direct dependency.
-No parent copies the dependency's serialized type or compile-time value graph.
+only a collision-free fixed-size session identity for each direct dependency. No
+parent copies the dependency's serialized type or compile-time value graph.
 
 For reachable closure values with total inspected summary-body size `B`,
 deriving relational summaries is `O(B)` per fresh value graph and memoized
@@ -255,13 +297,12 @@ earlier artifact omitted a necessary certificate. Moving work between
 TypeScript, Rust, an external oracle, or Wasm without removing it is not itself
 an optimization.
 
-The progressive-HIR benchmark reports checking, pending-node completion,
-whole-graph validation, emission, and phase-boundary heap high-water marks as
-separate counters for unchanged, source-only, and semantic edits. A win requires
-the combined check-plus-prepare median to improve with identical Runtime HIR and
-artifact observations; relabeling the same work is rejected. The measured
-baseline and artifact hash are recorded in
-[`experiments/progressive-hir-performance.md`](../experiments/progressive-hir-performance.md).
+The maintained compiler benchmark reports checking, analysis, Runtime-HIR
+preparation, and emission as separate boundaries for unchanged, source-only, and
+semantic edits. A win requires exact public observations and deterministic work
+with no significant regression at another boundary; relabeling the same work is
+rejected. The benchmark contract and reproduction commands are recorded in
+[`experiments/compiler-bench/README.md`](../experiments/compiler-bench/README.md).
 
 ## 6. Prelude economics
 

@@ -136,10 +136,10 @@ The source contract should also decide whether handling an effect absent from
 Any choice can use the subtraction rule; leaving the policy unstated makes
 implementations invent it.
 
-**Specified and tested here.** Both checkers already implement the subtraction.
-The focused contract chooses the current implementation policy for an absent
-effect: it is valid, its operation clauses are unreachable, and a return clause
-may still transform the result.
+**Specified and tested here.** At the reviewed historical revision, both
+then-existing checkers implemented the subtraction. The focused contract chose
+the implementation policy for an absent effect: it is valid, its operation
+clauses are unreachable, and a return clause may still transform the result.
 
 ### 3. Divergence is not a one-step progress case
 

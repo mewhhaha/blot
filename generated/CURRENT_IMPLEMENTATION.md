@@ -7,7 +7,7 @@
 | Frontend | `baba-general-cpu-hosted-by-rust-wasm` |
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
-| Compiler-host ABI | 2 |
+| Compiler-host ABI | 3 |
 | Checked-module certificate | 13 |
 | Runtime HIR | 4 |
 | Public ABI | 1.0 |
@@ -49,7 +49,5 @@
 
 ## Latest benchmark records
 
-- [experiments/resident-leaf-check-performance.md](../experiments/resident-leaf-check-performance.md)
 - [experiments/revision-key-performance.md](../experiments/revision-key-performance.md)
 - [experiments/compiler-profile-matrix.latest.json](../experiments/compiler-profile-matrix.latest.json)
-- [experiments/generated-code/latest.json](../experiments/generated-code/latest.json)

@@ -2480,6 +2480,14 @@ const Console = @effect {
 }
 ```
 
+Ordinary effects are generative by semantic occurrence. Two written calls of an
+effect-producing function create distinct effect values even when their
+arguments print alike, while aliasing one result preserves its identity.
+Re-evaluating the same written occurrence in the same source and dependency
+revision recovers that occurrence's identity. A changed operation signature,
+source revision, observable dependency revision, or module-import occurrence
+creates a different identity.
+
 Projecting an operation from an effect and calling it performs that operation:
 
 ```blot

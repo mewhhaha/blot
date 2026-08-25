@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import {
@@ -236,7 +237,7 @@ export async function encodeModuleCapsule(
       schema: MODULE_CAPSULE_SCHEMA,
       version: PACKAGE_FORMAT_VERSION,
       encoding: CAPSULE_ENCODING,
-      payload: compressed.toBase64(),
+      payload: encodeBase64(compressed),
       hash,
     })
   }\n`;
@@ -298,7 +299,7 @@ async function decodeCapsule(
   );
   let compressed: Uint8Array;
   try {
-    compressed = Uint8Array.fromBase64(encodedPayload);
+    compressed = decodeBase64(encodedPayload);
   } catch (cause) {
     throw new PackageArtifactError(
       `Blot module capsule ${JSON.stringify(path)} payload is not base64`,
@@ -337,6 +338,19 @@ async function decodeCapsule(
     normalizeAst,
   );
   return { ...normalized, hash };
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+    "base64",
+  );
+}
+
+function decodeBase64(source: string): Uint8Array {
+  const canonical =
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+  if (!canonical.test(source)) throw new Error("invalid base64 text");
+  return Uint8Array.from(Buffer.from(source, "base64"));
 }
 
 function normalizePayload(

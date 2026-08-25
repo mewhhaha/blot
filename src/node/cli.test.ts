@@ -18,8 +18,6 @@ test("build never overwrites an extensionless source", async () => {
       process.execPath,
       [
         "--import",
-        resolve("src/node/polyfills.mjs"),
-        "--import",
         "tsx",
         resolve("src/node/cli.ts"),
         "build",

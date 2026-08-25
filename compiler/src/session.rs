@@ -18,7 +18,7 @@ use crate::typecheck::{
     CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, empty_effects,
     type_exposes_generative_effect,
 };
-use crate::value::{OrderedFields, Value, show};
+use crate::value::{OrderedFields, Value, reusable_across_module_instances, show};
 use crate::value_capsule::ValueCapsule;
 
 const MODULE_SNAPSHOT_SCHEMA: u32 = 2;
@@ -31,10 +31,20 @@ struct ModuleSnapshot {
     comptime_environment: Option<ValueCapsule>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+enum BoundaryFingerprint {
+    Prepublished,
+    Complete(Rc<[u8]>),
+    RevisionBound {
+        bytes: Rc<[u8]>,
+        revision: crate::eval::ModuleRevision,
+    },
+}
+
 #[derive(Clone)]
 struct PublishedBoundary {
     id: u64,
-    bytes: Option<Rc<[u8]>>,
+    fingerprint: BoundaryFingerprint,
 }
 
 pub struct CompilerSession {
@@ -161,6 +171,7 @@ impl CompilerSession {
         if !existed {
             return false;
         }
+        self.invalidate_direct_importers(path);
         self.invalidate_exact(&HashSet::from([path.to_owned()]));
         self.context.remove_module_state(path);
         self.frontends.remove(path);
@@ -173,7 +184,13 @@ impl CompilerSession {
         true
     }
 
-    pub fn install_module_snapshot(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+    /// Installs a snapshot whose caller authenticated as part of its compiler
+    /// distribution. Decoding still enforces every structural cache invariant.
+    pub fn install_trusted_module_snapshot(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
         let snapshot: ModuleSnapshot = rmp_serde::from_slice(bytes)
             .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
         if snapshot.schema != MODULE_SNAPSHOT_SCHEMA {
@@ -183,72 +200,185 @@ impl CompilerSession {
             ));
         }
         snapshot.ast.validate()?;
-        snapshot.certificate.validate()?;
         let dependencies = module_dependencies(&snapshot.ast);
         if !dependencies.imports.is_empty() || !dependencies.includes.is_empty() {
             return Err(format!(
                 "module snapshot for {path} must be dependency-free"
             ));
         }
-        let result = snapshot.ast.result;
-        self.install_module(path.to_owned(), snapshot.ast)?;
-        self.checker
-            .install_certificate(path, snapshot.certificate)?;
-        let checked = self.checker.check(path).map_err(|diagnostic| {
-            format!(
-                "module snapshot interface for {path} failed to inflate: {} ({})",
-                diagnostic.message, diagnostic.code,
+        let empty_resident = self.context.modules.borrow().is_empty();
+        let replacing_resident = self.context.modules.borrow().contains_key(path);
+        let ModuleSnapshot {
+            ast,
+            certificate,
+            comptime_environment,
+            ..
+        } = snapshot;
+        let module = Rc::new(ast);
+        let result = module.result;
+        let loaded_module =
+            LoadedModule::new(path, module.clone(), BTreeMap::new(), BTreeMap::new());
+        let module_revision = loaded_module.revision();
+        let staged_context = Rc::new(self.context.snapshot_staging(path));
+        let use_cached_interface = comptime_environment.is_some()
+            && !certificate.contains_generative_effect_identity()
+            && !module.arena.expressions.iter().any(|expression| {
+                matches!(
+                    expression,
+                    Expression::Intrinsic { name, .. }
+                        if matches!(name.as_str(), "@effect" | "@effect.host")
+                )
+            });
+        let result_template = use_cached_interface.then(|| {
+            Rc::new(
+                comptime_environment
+                    .expect("cached snapshot interface requires a compile-time environment"),
             )
-        })?;
-        let evaluated = if let Some(capsule) = snapshot.comptime_environment {
-            let environment = capsule.decode(path, &self.context.closure_signatures.borrow())?;
-            run(evaluate_expression(
-                self.context.clone(),
-                Rc::new(path.to_owned()),
-                result,
-                environment,
-                Runtime::new(Phase::Comptime, path.to_owned()),
-            ))
-        } else {
-            self.context
-                .captured_binding_modules
-                .borrow_mut()
-                .insert(path.to_owned());
-            let evaluated = run(evaluate_module(
-                self.context.clone(),
-                path.to_owned(),
-                Value::Unit,
-                Runtime::new(Phase::Comptime, path.to_owned()),
-            ));
-            self.context
-                .captured_binding_modules
-                .borrow_mut()
-                .remove(path);
-            evaluated
-        };
-        let value = evaluated.map_err(|diagnostic| {
-            format!(
-                "module snapshot evaluation for {path} failed: {} ({})",
-                diagnostic.message, diagnostic.code,
-            )
-        })?;
-        self.context
-            .module_results
+        });
+        let interface = CachedModuleInterface::from_certificate(certificate)?;
+        staged_context
+            .modules
             .borrow_mut()
-            .insert(path.to_owned(), value);
-        if checked.parameter.is_none()
+            .insert(path.to_owned(), loaded_module.clone());
+        let staged_interfaces = Rc::new(RefCell::new(HashMap::new()));
+        let staged_analyses = Rc::new(RefCell::new(HashMap::new()));
+        let staged_checker = self.checker.snapshot_staging(
+            staged_context.clone(),
+            staged_interfaces.clone(),
+            staged_analyses.clone(),
+        );
+        if use_cached_interface {
+            staged_checker.install_interface(path, interface)?;
+        } else {
+            staged_checker.validate_interface(path, &interface)?;
+        }
+        let checked = staged_checker.check(path).map_err(|diagnostic| {
+            let operation = if use_cached_interface {
+                "interface inflation"
+            } else {
+                "source check"
+            };
+            format!(
+                "module snapshot {operation} for {path} failed: {} ({})",
+                diagnostic.message, diagnostic.code,
+            )
+        })?;
+        let installed_interface = staged_interfaces.borrow().get(path).cloned().ok_or_else(
+            || {
+                format!(
+                    "module snapshot source check for {path} produced no closed checked interface"
+                )
+            },
+        )?;
+        let value = if checked.parameter.is_some() {
+            None
+        } else {
+            let evaluated = if let Some(capsule) = &result_template {
+                let base_module_instances = Vec::new();
+                let base_effect_scope = Rc::new(Vec::new());
+                let environment = capsule.decode(
+                    path,
+                    module.as_ref(),
+                    &module_revision,
+                    &staged_context.closure_signatures.borrow(),
+                    &base_module_instances,
+                    &base_effect_scope,
+                )?;
+                run(evaluate_expression(
+                    staged_context.clone(),
+                    Rc::new(path.to_owned()),
+                    result,
+                    environment,
+                    Runtime::new(Phase::Comptime, path.to_owned()),
+                ))
+            } else {
+                staged_context
+                    .captured_binding_modules
+                    .borrow_mut()
+                    .insert(path.to_owned());
+                let evaluated = run(evaluate_module(
+                    staged_context.clone(),
+                    path.to_owned(),
+                    Value::Unit,
+                    Runtime::new(Phase::Comptime, path.to_owned()),
+                ));
+                staged_context
+                    .captured_binding_modules
+                    .borrow_mut()
+                    .remove(path);
+                evaluated
+            };
+            Some(evaluated.map_err(|diagnostic| {
+                format!(
+                    "module snapshot evaluation for {path} failed: {} ({})",
+                    diagnostic.message, diagnostic.code,
+                )
+            })?)
+        };
+        if let Some(template) = result_template {
+            staged_context
+                .module_result_templates
+                .borrow_mut()
+                .insert(path.to_owned(), (module_revision.clone(), template));
+        }
+        let id =
+            self.next_boundary_id.get().checked_add(1).ok_or_else(|| {
+                "compiler session exhausted module boundary identities".to_owned()
+            })?;
+        let reusable = checked.parameter.is_none()
             && empty_effects(&checked.effects)
             && !type_exposes_generative_effect(&checked.result)
-        {
+            && value.as_ref().is_some_and(reusable_across_module_instances);
+        if empty_resident {
+            if let Some(value) = value {
+                staged_context
+                    .module_results
+                    .borrow_mut()
+                    .insert(path.to_owned(), value);
+            }
+            if reusable {
+                staged_context
+                    .reusable_module_results
+                    .borrow_mut()
+                    .insert(path.to_owned());
+            }
+            self.context = staged_context;
+            self.module_interfaces = staged_interfaces;
+            self.module_analyses = staged_analyses;
+            self.checker = staged_checker;
+        } else {
+            self.mark_dirty(path, "snapshot installed");
             self.context
-                .reusable_module_results
+                .modules
                 .borrow_mut()
-                .insert(path.to_owned());
+                .insert(path.to_owned(), loaded_module);
+            self.context.commit_staged_snapshot(path, &staged_context);
+            self.checker
+                .commit_staged_snapshot(path, installed_interface, &staged_checker);
+            if let Some(value) = value {
+                self.context
+                    .module_results
+                    .borrow_mut()
+                    .insert(path.to_owned(), value);
+            }
+            if reusable {
+                self.context
+                    .reusable_module_results
+                    .borrow_mut()
+                    .insert(path.to_owned());
+            }
         }
-        let id = self.allocate_boundary_id()?;
-        self.published_boundaries
-            .borrow_mut()
-            .insert(path.to_owned(), PublishedBoundary { id, bytes: None });
+        self.next_boundary_id.set(id);
+        self.published_boundaries.borrow_mut().insert(
+            path.to_owned(),
+            PublishedBoundary {
+                id,
+                fingerprint: BoundaryFingerprint::Prepublished,
+            },
+        );
+        if replacing_resident {
+            self.invalidate_direct_importers(path);
+        }
         self.dirty_modules.borrow_mut().remove(path);
         Ok(())
     }
@@ -299,7 +429,22 @@ impl CompilerSession {
         }
 
         let retained_bindings = previous.as_ref().and_then(|loaded| {
-            if loaded.module.parameter != module.parameter {
+            let can_retain_values = loaded.module.parameter.is_none()
+                && loaded.module.parameter == module.parameter
+                && !loaded.module.arena.expressions.iter().any(|expression| {
+                    matches!(
+                        expression,
+                        Expression::Intrinsic { name, .. }
+                            if matches!(name.as_str(), "@effect" | "@effect.host")
+                    )
+                })
+                && loaded.imports.values().all(|dependency| {
+                    self.context
+                        .reusable_module_results
+                        .borrow()
+                        .contains(dependency)
+                });
+            if !can_retain_values {
                 return None;
             }
             let unchanged_declarations =
@@ -325,8 +470,9 @@ impl CompilerSession {
                 .map(|bindings| {
                     bindings
                         .iter()
-                        .filter(|((pattern, expression, _), _)| {
+                        .filter(|((pattern, expression, _), value)| {
                             unchanged_bindings.contains(&(*pattern, *expression))
+                                && reusable_across_module_instances(value)
                         })
                         .map(|(key, value)| (*key, value.clone()))
                         .collect::<HashMap<_, _>>()
@@ -341,11 +487,7 @@ impl CompilerSession {
         self.mark_dirty(&path, "payload changed");
         self.context.modules.borrow_mut().insert(
             path.clone(),
-            LoadedModule {
-                module: Rc::new(module),
-                imports,
-                includes,
-            },
+            LoadedModule::new(&path, Rc::new(module), imports, includes),
         );
         if let Some(bindings) = retained_bindings
             && !bindings.is_empty()
@@ -670,12 +812,12 @@ impl CompilerSession {
                 diagnostic.message, diagnostic.code
             )
         })?;
-        let ast = self
+        let (ast, module_revision) = self
             .context
             .modules
             .borrow()
             .get(path)
-            .map(|loaded| loaded.module.as_ref().clone())
+            .map(|loaded| (loaded.module.as_ref().clone(), loaded.revision()))
             .ok_or_else(|| format!("cannot snapshot unknown module {path}"))?;
         let certificate = self.checker.certificate(path)?;
         let checked = self.checker.check(path).map_err(|diagnostic| {
@@ -706,7 +848,7 @@ impl CompilerSession {
                     .1
                 }
             };
-            ValueCapsule::encode(&environment, path)?
+            ValueCapsule::encode(&environment, path, &module_revision)?
         } else {
             None
         };
@@ -859,13 +1001,13 @@ impl CompilerSession {
 
     fn publish_boundary(&self, path: &str) -> Result<bool, String> {
         let mut boundary = self.checker.sealed_boundary_bytes(path)?;
-        let dependencies = self
-            .context
-            .modules
-            .borrow()
+        let modules = self.context.modules.borrow();
+        let loaded = modules
             .get(path)
-            .map(|loaded| loaded.imports.clone())
-            .unwrap_or_default();
+            .ok_or_else(|| format!("cannot publish unknown module {path}"))?;
+        let dependencies = loaded.imports.clone();
+        let revision = loaded.revision();
+        drop(modules);
         for (specifier, dependency) in dependencies {
             append_boundary_string(&mut boundary, &specifier);
             let dependency_boundary_id = self
@@ -878,29 +1020,29 @@ impl CompilerSession {
                 })?;
             boundary.extend_from_slice(&dependency_boundary_id.to_le_bytes());
         }
-        if let Some(value) = self.context.module_results.borrow().get(path) {
+        let value_identity = if let Some(value) = self.context.module_results.borrow().get(path) {
             boundary.push(1);
-            encode_boundary_value(value, &mut boundary)?;
+            encode_boundary_value(value, &mut boundary)?
         } else {
             boundary.push(0);
-        }
+            BoundaryValueIdentity::RevisionBound
+        };
         let bytes = Rc::<[u8]>::from(boundary);
+        let fingerprint = match value_identity {
+            BoundaryValueIdentity::Complete => BoundaryFingerprint::Complete(bytes),
+            BoundaryValueIdentity::RevisionBound => {
+                BoundaryFingerprint::RevisionBound { bytes, revision }
+            }
+        };
         let mut published_boundaries = self.published_boundaries.borrow_mut();
         if published_boundaries
             .get(path)
-            .and_then(|previous| previous.bytes.as_deref())
-            .is_some_and(|previous| previous == bytes.as_ref())
+            .is_some_and(|previous| previous.fingerprint == fingerprint)
         {
             return Ok(false);
         }
         let id = self.allocate_boundary_id()?;
-        published_boundaries.insert(
-            path.to_owned(),
-            PublishedBoundary {
-                id,
-                bytes: Some(bytes),
-            },
-        );
+        published_boundaries.insert(path.to_owned(), PublishedBoundary { id, fingerprint });
         Ok(true)
     }
 
@@ -951,6 +1093,13 @@ impl CompilerSession {
 
     fn invalidate_exact(&self, invalidated: &HashSet<String>) {
         self.context.module_cache.borrow_mut().take();
+        self.context.remove_effect_state(invalidated);
+        let mut modules = self.context.modules.borrow_mut();
+        for path in invalidated {
+            if let Some(module) = modules.get_mut(path) {
+                module.renew_revision(path);
+            }
+        }
         self.context
             .live_declarations
             .borrow_mut()
@@ -986,6 +1135,10 @@ impl CompilerSession {
             .reusable_module_results
             .borrow_mut()
             .retain(|path| !invalidated.contains(path));
+        self.context
+            .module_result_templates
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
         self.closed_programs
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
@@ -1027,7 +1180,25 @@ fn append_boundary_string(target: &mut Vec<u8>, value: &str) {
     append_boundary_bytes(target, value.as_bytes());
 }
 
-fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), String> {
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum BoundaryValueIdentity {
+    Complete,
+    RevisionBound,
+}
+
+impl BoundaryValueIdentity {
+    fn include(&mut self, nested: Self) {
+        if nested == Self::RevisionBound {
+            *self = Self::RevisionBound;
+        }
+    }
+}
+
+fn encode_boundary_value(
+    value: &Value,
+    target: &mut Vec<u8>,
+) -> Result<BoundaryValueIdentity, String> {
+    let mut identity = BoundaryValueIdentity::Complete;
     match value {
         Value::Int(value) => {
             target.push(0);
@@ -1079,99 +1250,49 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
             fields.sort_by(|left, right| left.0.cmp(right.0));
             for (name, value) in fields {
                 append_boundary_string(target, name);
-                encode_boundary_value(value, target)?;
+                identity.include(encode_boundary_value(value, target)?);
             }
         }
         Value::Array(values) => {
             target.push(10);
             target.extend_from_slice(&(values.len() as u64).to_le_bytes());
             for value in values {
-                encode_boundary_value(value, target)?;
+                identity.include(encode_boundary_value(value, target)?);
             }
         }
         Value::RegionType(element) => {
             target.push(11);
-            encode_boundary_value(element, target)?;
+            identity.include(encode_boundary_value(element, target)?);
         }
         Value::ScratchType(element) => {
             target.push(12);
-            encode_boundary_value(element, target)?;
+            identity.include(encode_boundary_value(element, target)?);
         }
         Value::Scratch { values, capacity } => {
             target.push(13);
             target.extend_from_slice(&(*capacity as u64).to_le_bytes());
             target.extend_from_slice(&(values.len() as u64).to_le_bytes());
             for value in values {
-                encode_boundary_value(value, target)?;
+                identity.include(encode_boundary_value(value, target)?);
             }
         }
         Value::DeferredScratch { capacity } => {
             target.push(14);
-            encode_boundary_value(capacity, target)?;
-        }
-        Value::Region { start, end, .. } => {
-            target.push(15);
-            target.extend_from_slice(&(*start as u64).to_le_bytes());
-            target.extend_from_slice(&(*end as u64).to_le_bytes());
-        }
-        Value::RegionRejoin {
-            start, middle, end, ..
-        } => {
-            target.push(16);
-            target.extend_from_slice(&(*start as u64).to_le_bytes());
-            target.extend_from_slice(&(*middle as u64).to_le_bytes());
-            target.extend_from_slice(&(*end as u64).to_le_bytes());
+            identity.include(encode_boundary_value(capacity, target)?);
         }
         Value::EmptyArray { element } => {
             target.push(17);
-            encode_boundary_value(element, target)?;
+            identity.include(encode_boundary_value(element, target)?);
         }
         Value::Tag { name, payload } => {
             target.push(18);
             append_boundary_string(target, name);
             if let Some(payload) = payload {
                 target.push(1);
-                encode_boundary_value(payload, target)?;
+                identity.include(encode_boundary_value(payload, target)?);
             } else {
                 target.push(0);
             }
-        }
-        Value::Closure {
-            module,
-            body,
-            self_name,
-            signature,
-            deferred,
-            ..
-        } => {
-            target.push(19);
-            append_boundary_string(target, module);
-            target.extend_from_slice(&body.0.to_le_bytes());
-            target.push(u8::from(*deferred));
-            if let Some(self_name) = self_name {
-                target.push(1);
-                append_boundary_string(target, self_name);
-            } else {
-                target.push(0);
-            }
-            if let Some(signature) = signature {
-                target.push(1);
-                encode_boundary_value(signature, target)?;
-            } else {
-                target.push(0);
-            }
-        }
-        Value::Deferred {
-            module, expression, ..
-        } => {
-            target.push(20);
-            append_boundary_string(target, module);
-            target.extend_from_slice(&expression.0.to_le_bytes());
-        }
-        Value::ClosureChoice { selector, .. } => {
-            target.push(21);
-            target.extend_from_slice(&(selector.id as u64).to_le_bytes());
-            target.extend_from_slice(&(selector.type_id as u64).to_le_bytes());
         }
         Value::ModuleClosure { module } => {
             target.push(22);
@@ -1181,7 +1302,7 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
             target.push(23);
             target.extend_from_slice(&(elements.len() as u64).to_le_bytes());
             for element in elements {
-                encode_boundary_value(element, target)?;
+                identity.include(encode_boundary_value(element, target)?);
             }
         }
         Value::Primitive {
@@ -1194,7 +1315,7 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
             target.extend_from_slice(&(*arity as u64).to_le_bytes());
             target.extend_from_slice(&(applied.len() as u64).to_le_bytes());
             for value in applied {
-                encode_boundary_value(value, target)?;
+                identity.include(encode_boundary_value(value, target)?);
             }
         }
         Value::Range { low, high, domain } => {
@@ -1206,14 +1327,14 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
                 Some(crate::value::Domain::Float32) => 4,
                 None => 0,
             });
-            encode_boundary_value(low, target)?;
-            encode_boundary_value(high, target)?;
+            identity.include(encode_boundary_value(low, target)?);
+            identity.include(encode_boundary_value(high, target)?);
         }
         Value::Union(values) => {
             target.push(26);
             target.extend_from_slice(&(values.len() as u64).to_le_bytes());
             for value in values {
-                encode_boundary_value(value, target)?;
+                identity.include(encode_boundary_value(value, target)?);
             }
         }
         Value::Unbounded => target.push(27),
@@ -1226,11 +1347,11 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
         } => {
             target.push(28);
             target.push(u8::from(*deferred));
-            encode_boundary_value(domain, target)?;
-            encode_boundary_value(codomain, target)?;
+            identity.include(encode_boundary_value(domain, target)?);
+            identity.include(encode_boundary_value(codomain, target)?);
             target.extend_from_slice(&(effects.len() as u64).to_le_bytes());
             for effect in effects {
-                encode_boundary_value(effect, target)?;
+                identity.include(encode_boundary_value(effect, target)?);
             }
             target.extend_from_slice(&effect_tail.unwrap_or(u32::MAX).to_le_bytes());
         }
@@ -1241,7 +1362,7 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
         Value::Forall { variable, body } => {
             target.push(30);
             target.extend_from_slice(&variable.to_le_bytes());
-            encode_boundary_value(body, target)?;
+            identity.include(encode_boundary_value(body, target)?);
         }
         Value::Effect {
             id,
@@ -1253,53 +1374,44 @@ fn encode_boundary_value(value: &Value, target: &mut Vec<u8>) -> Result<(), Stri
             target.extend_from_slice(&id.to_le_bytes());
             append_boundary_string(target, name);
             target.push(u8::from(*host));
-            encode_boundary_value(&Value::Shape(operations.clone()), target)?;
+            identity.include(encode_boundary_value(
+                &Value::Shape(operations.clone()),
+                target,
+            )?);
         }
         Value::Operation { effect, name } => {
             target.push(32);
-            encode_boundary_value(effect, target)?;
+            identity.include(encode_boundary_value(effect, target)?);
             append_boundary_string(target, name);
         }
         Value::Extended { inner, members } => {
             target.push(33);
-            encode_boundary_value(inner, target)?;
-            encode_boundary_value(&Value::Shape(members.clone()), target)?;
+            identity.include(encode_boundary_value(inner, target)?);
+            identity.include(encode_boundary_value(
+                &Value::Shape(members.clone()),
+                target,
+            )?);
         }
         Value::Sealed { name, inner } => {
             target.push(34);
             append_boundary_string(target, name);
-            encode_boundary_value(inner, target)?;
+            identity.include(encode_boundary_value(inner, target)?);
         }
         Value::OpaqueType(name) => {
             target.push(35);
             append_boundary_string(target, name);
         }
-        Value::Runtime(runtime) => {
-            target.push(36);
-            target.extend_from_slice(&(runtime.id as u64).to_le_bytes());
-            target.extend_from_slice(&(runtime.type_id as u64).to_le_bytes());
-            match &runtime.meaning {
-                crate::value::RuntimeMeaning::Plain => target.push(0),
-                crate::value::RuntimeMeaning::ReusableStore => target.push(1),
-                crate::value::RuntimeMeaning::Ordering => target.push(2),
-                crate::value::RuntimeMeaning::ScalarOrdering { right } => {
-                    target.push(3);
-                    target.extend_from_slice(&(*right as u64).to_le_bytes());
-                }
-                crate::value::RuntimeMeaning::Sum { cases } => {
-                    target.push(4);
-                    target.extend_from_slice(&(cases.len() as u64).to_le_bytes());
-                    for case in cases {
-                        append_boundary_string(target, case);
-                    }
-                }
-            }
-        }
+        Value::Closure { .. }
+        | Value::Deferred { .. }
+        | Value::ClosureChoice { .. }
+        | Value::Region { .. }
+        | Value::RegionRejoin { .. }
+        | Value::Runtime(_) => identity = BoundaryValueIdentity::RevisionBound,
         Value::Continuation { .. } => {
             return Err("a live continuation cannot enter a sealed module boundary".to_owned());
         }
     }
-    Ok(())
+    Ok(identity)
 }
 
 fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagnostic> {
@@ -1885,27 +1997,36 @@ fn source_expression_span(expression: &Expression) -> crate::ast::Span {
 mod tests {
     use super::*;
     use crate::ast::{AstArena, Expression, ResultEffects, Span};
+    use crate::eval::{ApplicationSite, apply};
+
+    const TOP_LEVEL_FAULT_SOURCE: &str = "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"snapshot\"\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .action = action; .origin = @shape.get (@type.members Extended) \"origin\"; }\u{e000}\n";
+    const CLOSURE_LOCAL_FAULT_SOURCE: &str = "let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  const Extended = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members Extended) \"origin\"\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\n";
+    const CLOSURE_PROVENANCE_SOURCE: &str = "const make = fn captured => fn constructor => constructor { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
+
+    fn snapshot_from_source(path: &str, text: &str) -> Vec<u8> {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(path.to_owned(), source(text))
+            .expect("snapshot source should load");
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .expect("snapshot source should configure");
+        session
+            .module_snapshot(path)
+            .expect("module snapshot should encode")
+    }
 
     #[test]
     fn binary_module_snapshot_restores_interface_and_value() {
         const MODULE_PATH: &str = "snapshot:library";
         const MODULE_SOURCE: &str = "let rec increment = fn value => @int.add value 1\n\u{e000}const identity = fn value => value\n\u{e000}return { .increment = increment; .identity = identity; }\u{e000}\n";
-        let mut builder = CompilerSession::default();
-        builder
-            .add_source(MODULE_PATH.to_owned(), source(MODULE_SOURCE))
-            .expect("module source should load");
-        builder
-            .configure_module(MODULE_PATH, BTreeMap::new(), BTreeMap::new())
-            .expect("module source should configure");
-        let bytes = builder
-            .module_snapshot(MODULE_PATH)
-            .expect("module snapshot should encode");
+        let bytes = snapshot_from_source(MODULE_PATH, MODULE_SOURCE);
         let snapshot: ModuleSnapshot =
             rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
         assert!(snapshot.comptime_environment.is_some());
         let mut consumer = CompilerSession::default();
         consumer
-            .install_module_snapshot(MODULE_PATH, &bytes)
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
             .expect("module snapshot should install");
         assert!(
             consumer
@@ -1945,28 +2066,1174 @@ mod tests {
     }
 
     #[test]
-    fn module_snapshot_replays_an_ineligible_private_environment() {
-        const MODULE_PATH: &str = "snapshot:private-effect";
-        let mut builder = CompilerSession::default();
-        builder
+    fn snapshot_capsule_preserves_closure_application_provenance() {
+        const MODULE_PATH: &str = "snapshot:closure-application-provenance";
+        let bytes = snapshot_from_source(MODULE_PATH, CLOSURE_PROVENANCE_SOURCE);
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        assert!(snapshot.comptime_environment.is_some());
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        assert!(
+            consumer
+                .context
+                .module_result_templates
+                .borrow()
+                .contains_key(MODULE_PATH)
+        );
+        assert!(
+            !consumer
+                .context
+                .reusable_module_results
+                .borrow()
+                .contains(MODULE_PATH)
+        );
+        let results = consumer.context.module_results.borrow();
+        let Value::Shape(closures) = &results[MODULE_PATH] else {
+            panic!("snapshot module should evaluate to its closure shape");
+        };
+        let closure = |name| {
+            let closure = closures
+                .get(name)
+                .unwrap_or_else(|| panic!("snapshot result should contain field {name}"));
+            let Value::Closure { effect_scope, .. } = closure else {
+                panic!("snapshot field {name} should be a closure");
+            };
+            (closure.clone(), effect_scope.clone())
+        };
+        let (first, first_scope) = closure("first");
+        let (second, second_scope) = closure("second");
+        assert!(!first_scope.is_empty());
+        assert!(!second_scope.is_empty());
+        assert!(first_scope != second_scope);
+        drop(results);
+
+        let application = ApplicationSite::for_expression(
+            &consumer.context,
+            MODULE_PATH,
+            consumer.context.modules.borrow()[MODULE_PATH].module.result,
+        )
+        .expect("snapshot result should provide application provenance");
+        let runtime = Runtime::new(Phase::Comptime, MODULE_PATH.to_owned());
+        let constructor = Value::Primitive {
+            name: "@effect".to_owned(),
+            arity: 1,
+            applied: Vec::new(),
+        };
+        let mint = |wrapper| {
+            let effect = run(apply(
+                consumer.context.clone(),
+                wrapper,
+                constructor.clone(),
+                Span { start: 0, end: 0 },
+                runtime.clone(),
+                application.clone(),
+            ))
+            .expect("snapshot wrapper should mint its supplied effect");
+            let Value::Effect { id, .. } = effect else {
+                panic!("snapshot wrapper should return an effect");
+            };
+            id
+        };
+        assert_ne!(mint(first), mint(second));
+
+        consumer
+            .add_source(
+                "snapshot:closure-application-provenance-consumer".to_owned(),
+                source(
+                    "const library = import \"library\"\n\u{e000}let first = library.first (fn operations => 41)\n\u{e000}let second = library.second (fn operations => 42)\n\u{e000}return (first, second)\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(
+                "snapshot:closure-application-provenance-consumer",
+                BTreeMap::from([("library".to_owned(), MODULE_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("consumer should configure");
+
+        assert_eq!(
+            consumer.evaluate_module("snapshot:closure-application-provenance-consumer")["display"],
+            "(41, 42)"
+        );
+    }
+
+    #[test]
+    fn snapshot_template_instantiates_closures_for_each_import_occurrence() {
+        const MODULE_PATH: &str = "snapshot:closure-template";
+        const CONSUMER_PATH: &str = "snapshot:closure-template-consumer";
+        let bytes = snapshot_from_source(MODULE_PATH, CLOSURE_PROVENANCE_SOURCE);
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        consumer
+            .add_source(
+                CONSUMER_PATH.to_owned(),
+                source(
+                    "const left = import \"left\"\n\u{e000}const right = import \"right\"\n\u{e000}return { .left = left.first; .right = right.first; }\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(
+                CONSUMER_PATH,
+                BTreeMap::from([
+                    ("left".to_owned(), MODULE_PATH.to_owned()),
+                    ("right".to_owned(), MODULE_PATH.to_owned()),
+                ]),
+                BTreeMap::new(),
+            )
+            .expect("consumer should configure");
+
+        let result = run(crate::eval::evaluate_module(
+            consumer.context.clone(),
+            CONSUMER_PATH.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Comptime, CONSUMER_PATH.to_owned()),
+        ))
+        .expect("consumer should evaluate");
+        let Value::Shape(fields) = result else {
+            panic!("consumer should return a closure shape");
+        };
+        let module_instances = |name| {
+            let field = fields
+                .get(name)
+                .unwrap_or_else(|| panic!("consumer should contain field {name}"));
+            let Value::Closure {
+                module_instances, ..
+            } = field
+            else {
+                panic!("consumer field {name} should be a closure");
+            };
+            module_instances.clone()
+        };
+
+        assert!(module_instances("left") != module_instances("right"));
+    }
+
+    #[test]
+    fn snapshot_provenance_encoding_is_deterministic_across_sessions() {
+        const PATH: &str = "snapshot:deterministic-provenance";
+        let first = snapshot_from_source(PATH, CLOSURE_PROVENANCE_SOURCE);
+        let second = snapshot_from_source(PATH, CLOSURE_PROVENANCE_SOURCE);
+
+        assert!(first == second);
+    }
+
+    #[test]
+    fn closure_module_results_are_evaluated_per_import_occurrence() {
+        const LIBRARY_PATH: &str = "instance-specific-library.blot";
+        const IMPORTER_PATH: &str = "instance-specific-importer.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                LIBRARY_PATH.to_owned(),
+                source("return fn callback => callback ()\n"),
+            )
+            .expect("library source should load");
+        session
+            .configure_module(LIBRARY_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("library source should configure");
+        assert_eq!(session.check_module(LIBRARY_PATH)["ok"], true);
+        assert!(
+            !session
+                .context
+                .reusable_module_results
+                .borrow()
+                .contains(LIBRARY_PATH)
+        );
+
+        session
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source(
+                    "const first = import \"first\"\n\u{e000}const second = import \"second\"\n\u{e000}return { .first = first; .second = second; }\u{e000}\n",
+                ),
+            )
+            .expect("importer source should load");
+        session
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([
+                    ("first".to_owned(), LIBRARY_PATH.to_owned()),
+                    ("second".to_owned(), LIBRARY_PATH.to_owned()),
+                ]),
+                BTreeMap::new(),
+            )
+            .expect("importer source should configure");
+        assert_eq!(session.check_module(IMPORTER_PATH)["ok"], true);
+
+        let results = session.context.module_results.borrow();
+        let Value::Shape(closures) = &results[IMPORTER_PATH] else {
+            panic!("importer should evaluate to its closure shape");
+        };
+        let module_instances = |name| {
+            let Value::Closure {
+                module_instances, ..
+            } = closures
+                .get(name)
+                .unwrap_or_else(|| panic!("importer result should contain field {name}"))
+            else {
+                panic!("importer field {name} should be a closure");
+            };
+            module_instances.clone()
+        };
+        let first_instances = module_instances("first");
+        let second_instances = module_instances("second");
+        assert!(!first_instances.is_empty());
+        assert!(!second_instances.is_empty());
+        assert!(first_instances != second_instances);
+    }
+
+    #[test]
+    fn parameterized_snapshot_is_instantiated_with_the_import_argument() {
+        const MODULE_PATH: &str = "snapshot:parameterized";
+        const IMPORTER_PATH: &str = "snapshot:parameterized-importer";
+        let snapshot =
+            snapshot_from_source(MODULE_PATH, "module with input\nreturn @int.add input 1\n");
+        let decoded: ModuleSnapshot =
+            rmp_serde::from_slice(&snapshot).expect("module snapshot should decode");
+        assert!(decoded.comptime_environment.is_none());
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &snapshot)
+            .expect("parameterized module snapshot should install");
+        consumer
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source("return import \"library\" with 41\n"),
+            )
+            .expect("snapshot importer source should load");
+        consumer
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([("library".to_owned(), MODULE_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("snapshot importer should configure");
+
+        assert_eq!(consumer.evaluate_module(IMPORTER_PATH)["display"], "42");
+    }
+
+    #[test]
+    fn module_snapshot_replays_effect_extensions_from_an_ineligible_environment() {
+        const PATH: &str = "snapshot:effect-extension";
+        let snapshot = snapshot_from_source(PATH, TOP_LEVEL_FAULT_SOURCE);
+        let decoded: ModuleSnapshot =
+            rmp_serde::from_slice(&snapshot).expect("module snapshot should decode");
+        assert!(decoded.comptime_environment.is_none());
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("module snapshot should install");
+        consumer
+            .add_source(
+                "snapshot:effect-extension-consumer".to_owned(),
+                source(
+                    "const library = import \"library\"\n\u{e000}return @type.reflect (@type.of library.action)\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(
+                "snapshot:effect-extension-consumer",
+                BTreeMap::from([("library".to_owned(), PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("consumer source should configure");
+
+        let evaluated = consumer.evaluate_module("snapshot:effect-extension-consumer");
+        assert_snapshot_fault(reflected_arrow_effect(&evaluated));
+    }
+
+    #[test]
+    fn effect_minting_ast_rejects_a_forged_effect_free_certificate_fast_path() {
+        const PATH: &str = "snapshot:forged-effect-free-certificate";
+        let snapshot = snapshot_from_source(PATH, CLOSURE_LOCAL_FAULT_SOURCE);
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&snapshot).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        for node in encoded["certificate"]["types"]
+            .as_array_mut()
+            .expect("certificate should contain types")
+        {
+            if let Some(labels) = node
+                .get_mut("Effects")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                labels.retain(|label| {
+                    !label.as_str().is_some_and(|label| {
+                        label.starts_with("effect:") || label.starts_with("host:")
+                    })
+                });
+            }
+            if let Some(labels) = node
+                .get_mut("OpenEffects")
+                .and_then(|open| open.get_mut("labels"))
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                labels.retain(|label| {
+                    !label.as_str().is_some_and(|label| {
+                        label.starts_with("effect:") || label.starts_with("host:")
+                    })
+                });
+            }
+            if node
+                .get("Opaque")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|name| name.starts_with("Effect:"))
+            {
+                node["Opaque"] = serde_json::json!("ForgedEffect");
+            }
+        }
+        let forged: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("forged snapshot should deserialize");
+        assert!(forged.comptime_environment.is_some());
+        assert!(!forged.certificate.contains_generative_effect_identity());
+        let forged = rmp_serde::to_vec(&forged).expect("forged snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(PATH, &forged)
+            .expect("effect-minting AST should be checked from source");
+        let evaluated = consumer.evaluate_module(PATH);
+        assert_snapshot_fault(reflected_arrow_effect(&evaluated));
+    }
+
+    #[test]
+    fn occupied_session_rechecks_capsuled_generative_effect_metadata_with_local_identity() {
+        const PATH: &str = "snapshot:occupied-effect-operations";
+        let snapshot = snapshot_from_source(PATH, CLOSURE_LOCAL_FAULT_SOURCE);
+        let decoded: ModuleSnapshot =
+            rmp_serde::from_slice(&snapshot).expect("module snapshot should decode");
+        assert!(decoded.comptime_environment.is_some());
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(
+                "snapshot:occupied-effect-resident".to_owned(),
+                source(
+                    "const Occupied = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Occupied \"origin\" \"resident\"\n\u{e000}return @shape.get (@type.members Extended) \"origin\"\u{e000}\n",
+                ),
+            )
+            .expect("resident source should load");
+        consumer
+            .configure_module(
+                "snapshot:occupied-effect-resident",
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+            .expect("resident source should configure");
+        assert_eq!(
+            consumer.evaluate_module("snapshot:occupied-effect-resident")["display"],
+            "\"resident\""
+        );
+        consumer
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("module snapshot should install");
+        let evaluated = consumer.evaluate_module(PATH);
+        let effect = reflected_arrow_effect(&evaluated);
+        assert_snapshot_fault(effect);
+        assert_eq!(effect["inner"]["id"], 2, "{evaluated}");
+    }
+
+    #[test]
+    fn occupied_snapshot_source_recheck_preserves_fresh_session_analysis() {
+        const PATH: &str = "snapshot:analysis-parity";
+        let snapshot = snapshot_from_source(
+            PATH,
+            "const apply = fn function => function 1\n\u{e000}let first = apply (fn value => value)\n\u{e000}let second = apply (fn value => { .value = value; })\n\u{e000}let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .first = first; .second = second; .signature = @type.reflect (@type.of action); }\u{e000}\n",
+        );
+
+        let mut fresh = CompilerSession::default();
+        fresh
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("fresh analysis snapshot should install");
+        let fresh_analysis = fresh.analyze_module(PATH);
+
+        let mut occupied = CompilerSession::default();
+        occupied
+            .add_source(
+                "snapshot:analysis-resident".to_owned(),
+                source("return 0\n"),
+            )
+            .expect("resident source should load");
+        occupied
+            .configure_module(
+                "snapshot:analysis-resident",
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+            .expect("resident source should configure");
+        occupied
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("occupied analysis snapshot should install");
+        let occupied_analysis = occupied.analyze_module(PATH);
+
+        assert_eq!(fresh_analysis["ok"], true, "{fresh_analysis}");
+        assert_eq!(occupied_analysis["ok"], true, "{occupied_analysis}");
+        for field in [
+            "type",
+            "effects",
+            "types",
+            "tags",
+            "ownership",
+            "specializations",
+        ] {
+            assert_eq!(
+                occupied_analysis[field], fresh_analysis[field],
+                "analysis field {field} differs"
+            );
+        }
+        assert_eq!(
+            fresh_analysis["specializations"][0]["specializationCount"],
+            2
+        );
+    }
+
+    #[test]
+    fn occupied_snapshot_source_recheck_preserves_polymorphic_interface() {
+        const PATH: &str = "snapshot:polymorphic-parity";
+        let snapshot = snapshot_from_source(
+            PATH,
+            "const Hidden = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let identity = fn value => value\n\u{e000}return identity\u{e000}\n",
+        );
+
+        let mut fresh = CompilerSession::default();
+        fresh
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("fresh polymorphic snapshot should install");
+        let fresh_check = fresh.check_module(PATH);
+
+        let mut occupied = CompilerSession::default();
+        occupied
+            .add_source(
+                "snapshot:polymorphic-resident".to_owned(),
+                source("return 0\n"),
+            )
+            .expect("resident source should load");
+        occupied
+            .configure_module(
+                "snapshot:polymorphic-resident",
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+            .expect("resident source should configure");
+        occupied
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect("occupied polymorphic snapshot should install");
+        let occupied_check = occupied.check_module(PATH);
+
+        assert_eq!(fresh_check["ok"], true, "{fresh_check}");
+        assert_eq!(occupied_check, fresh_check);
+    }
+
+    #[test]
+    fn snapshot_replacement_clears_configuration_and_invalidates_importers() {
+        const MODULE_PATH: &str = "snapshot:replacement";
+        const IMPORTER_PATH: &str = "snapshot:replacement-importer";
+        let snapshot = snapshot_from_source(MODULE_PATH, "return 2\n");
+
+        let mut session = CompilerSession::default();
+        session
+            .add_source("snapshot:resident".to_owned(), source("return 1\n"))
+            .expect("resident source should load");
+        session
+            .configure_module("snapshot:resident", BTreeMap::new(), BTreeMap::new())
+            .expect("resident source should configure");
+        session
             .add_source(
                 MODULE_PATH.to_owned(),
-                source("const Hidden = @effect { .read = @type.unit -> @type.int; }\nreturn 42\n"),
+                source(
+                    "const resident = import \"resident\"\n\u{e000}const included = @include \"old.txt\" (fn text => text)\n\u{e000}return resident\u{e000}\n",
+                ),
             )
-            .expect("module source should load");
-        builder
-            .configure_module(MODULE_PATH, BTreeMap::new(), BTreeMap::new())
-            .expect("module source should configure");
-        let bytes = builder
-            .module_snapshot(MODULE_PATH)
-            .expect("module snapshot should encode");
+            .expect("replaceable source should load");
+        session
+            .configure_module(
+                MODULE_PATH,
+                BTreeMap::from([("resident".to_owned(), "snapshot:resident".to_owned())]),
+                BTreeMap::from([(
+                    "old.txt".to_owned(),
+                    IncludedFile {
+                        path: "snapshot:old.txt".to_owned(),
+                        text: "old".to_owned(),
+                    },
+                )]),
+            )
+            .expect("replaceable source should configure");
+        session
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source("const dependency = import \"dependency\"\nreturn dependency\n"),
+            )
+            .expect("importer source should load");
+        session
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([("dependency".to_owned(), MODULE_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("importer source should configure");
+        assert_eq!(session.check_module(IMPORTER_PATH)["type"], "1");
+
+        session
+            .install_trusted_module_snapshot(MODULE_PATH, &snapshot)
+            .expect("module snapshot should replace source");
+
+        let modules = session.context.modules.borrow();
+        assert!(modules[MODULE_PATH].imports.is_empty());
+        assert!(modules[MODULE_PATH].includes.is_empty());
+        drop(modules);
+        assert!(session.dirty_modules.borrow().contains(IMPORTER_PATH));
+        assert!(
+            session
+                .invalidation
+                .borrow()
+                .invalidated_importers
+                .iter()
+                .any(|path| path == IMPORTER_PATH)
+        );
+        assert_eq!(session.check_module(IMPORTER_PATH)["type"], "2");
+    }
+
+    #[test]
+    fn corrupt_snapshot_capsule_leaves_the_resident_module_unchanged() {
+        const PATH: &str = "snapshot:transaction-capsule";
+        let bytes = snapshot_from_source(
+            PATH,
+            "let identity = fn value => value\nreturn identity 42\n",
+        );
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        encoded["comptime_environment"]["schema"] = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(PATH.to_owned(), source("return 7\n"))
+            .expect("resident source should load");
+        consumer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("resident source should configure");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("corrupt capsule should be rejected");
+        assert!(error.contains("value capsule has schema"), "{error}");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        assert_eq!(consumer.evaluate_module(PATH)["display"], "7");
+    }
+
+    #[test]
+    fn invalid_cached_closure_body_leaves_the_resident_module_unchanged() {
+        const PATH: &str = "snapshot:transaction-closure";
+        let bytes = snapshot_from_source(
+            PATH,
+            "let identity = fn value => value\nreturn identity 42\n",
+        );
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let closure = encoded["comptime_environment"]["environments"]
+            .as_array_mut()
+            .expect("value capsule should contain environments")
+            .iter_mut()
+            .find_map(|environment| environment["names"].get_mut("identity"))
+            .expect("value capsule should contain the identity closure");
+        closure["Closure"]["body"] = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(PATH.to_owned(), source("return 7\n"))
+            .expect("resident source should load");
+        consumer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("resident source should configure");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        assert_eq!(consumer.evaluate_module(PATH)["display"], "7");
+        let boundary = consumer.published_boundaries.borrow()[PATH].id;
+
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("invalid closure body should be rejected");
+
+        assert!(error.contains("has no matching source lambda"), "{error}");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        assert_eq!(consumer.evaluate_module(PATH)["display"], "7");
+        assert_eq!(consumer.published_boundaries.borrow()[PATH].id, boundary);
+    }
+
+    #[test]
+    fn snapshot_rejects_a_missing_effect_scope() {
+        const PATH: &str = "snapshot:missing-effect-scope";
+        let bytes = snapshot_from_source(PATH, CLOSURE_PROVENANCE_SOURCE);
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let frame = encoded["comptime_environment"]["effect_scopes"]
+            .as_array_mut()
+            .expect("value capsule should contain effect scopes")
+            .iter_mut()
+            .find_map(|effect_scope| effect_scope.as_array_mut()?.first_mut())
+            .expect("value capsule should contain an application frame");
+        frame["creation_scope"] = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("missing effect scope should be rejected");
+
+        assert!(error.contains("missing effect scope"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_rejects_application_provenance_outside_its_ast() {
+        const PATH: &str = "snapshot:invalid-application-provenance";
+        let bytes = snapshot_from_source(PATH, CLOSURE_PROVENANCE_SOURCE);
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let frame = encoded["comptime_environment"]["effect_scopes"]
+            .as_array_mut()
+            .expect("value capsule should contain effect scopes")
+            .iter_mut()
+            .find_map(|effect_scope| effect_scope.as_array_mut()?.first_mut())
+            .expect("value capsule should contain an application frame");
+        let root = frame["application"]["root"]
+            .as_object_mut()
+            .expect("application root should be a tagged identity");
+        let expression = root
+            .values_mut()
+            .next()
+            .expect("application root should contain its AST identity");
+        *expression = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("application outside the AST should be rejected");
+
+        assert!(error.contains("references missing expression"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_rejects_duplicate_closure_signature_bodies() {
+        const PATH: &str = "snapshot:duplicate-closure-signature";
+        let bytes = snapshot_from_source(
+            PATH,
+            "let identity = fn value => value\nreturn identity 42\n",
+        );
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let signatures = encoded["certificate"]["closure_signatures"]
+            .as_array_mut()
+            .expect("snapshot certificate should contain closure signatures");
+        let duplicate = signatures
+            .first()
+            .expect("snapshot should contain an identity closure signature")
+            .clone();
+        signatures.push(duplicate);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("duplicate closure signature should be rejected");
+        assert!(
+            error.contains("repeats closure signature expression"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_closure_signature_body_outside_its_ast() {
+        const PATH: &str = "snapshot:missing-closure-body";
+        let bytes = snapshot_from_source(
+            PATH,
+            "let identity = fn value => value\nreturn identity 42\n",
+        );
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        encoded["certificate"]["closure_signatures"][0][0] = serde_json::json!(u32::MAX);
+        encoded["certificate"]["ownership_contracts"] = serde_json::json!([]);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("missing closure body should be rejected");
+        assert!(error.contains("missing closure expression"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_evaluation_failure_leaves_the_resident_module_unchanged() {
+        const PATH: &str = "snapshot:transaction-evaluation";
+        const EFFECT_LABEL: &str = "effect:1:Fault";
+        let snapshot = snapshot_from_source(
+            PATH,
+            "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}return do:\n  let attached = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members attached) \"origin\"\n  return @int.div (@text.len origin) 0\u{e000}\n",
+        );
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"resident\"\n\u{e000}return 7\u{e000}\n",
+                ),
+            )
+            .expect("resident source should load");
+        consumer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("resident source should configure");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        let resident = consumer.context.modules.borrow()[PATH].module.clone();
+        let boundary = consumer.published_boundaries.borrow()[PATH].id;
+        let next_boundary = consumer.next_boundary_id.get();
+        let invalidation = serde_json::to_value(&*consumer.invalidation.borrow())
+            .expect("invalidation should serialize");
+        let extension = consumer
+            .context
+            .effect_value(EFFECT_LABEL)
+            .expect("resident effect should reify");
+        let Value::Extended { members, .. } = extension else {
+            panic!("resident effect should retain its extension")
+        };
+        assert_eq!(
+            show(
+                members
+                    .get("origin")
+                    .expect("resident extension has origin")
+            ),
+            "\"resident\""
+        );
+
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &snapshot)
+            .expect_err("trapping snapshot should be rejected");
+        assert!(error.contains("BLOT_DIVIDE_BY_ZERO"), "{error}");
+        assert!(Rc::ptr_eq(
+            &resident,
+            &consumer.context.modules.borrow()[PATH].module
+        ));
+        assert_eq!(consumer.published_boundaries.borrow()[PATH].id, boundary);
+        assert_eq!(consumer.next_boundary_id.get(), next_boundary);
+        assert_eq!(
+            serde_json::to_value(&*consumer.invalidation.borrow())
+                .expect("invalidation should serialize"),
+            invalidation
+        );
+        assert!(!consumer.dirty_modules.borrow().contains(PATH));
+        let extension = consumer
+            .context
+            .effect_value(EFFECT_LABEL)
+            .expect("resident effect should still reify");
+        let Value::Extended { members, .. } = extension else {
+            panic!("failed snapshot should not replace the resident extension")
+        };
+        assert_eq!(
+            show(
+                members
+                    .get("origin")
+                    .expect("resident extension has origin")
+            ),
+            "\"resident\""
+        );
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        assert_eq!(consumer.evaluate_module(PATH)["display"], "7");
+    }
+
+    #[test]
+    fn effect_extensions_do_not_cross_compiler_sessions() {
+        const PATH: &str = "effect-extension-isolation.blot";
+        let mut producer = CompilerSession::default();
+        producer
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"producer\"\n\u{e000}return @text.len (@shape.get (@type.members Extended) \"origin\")\u{e000}\n",
+                ),
+            )
+            .expect("producer source should load");
+        producer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("producer source should configure");
+        assert_eq!(producer.evaluate_module(PATH)["display"], "8");
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("consumer source should configure");
+
+        let evaluated = consumer.evaluate_module(PATH);
+        let effect = reflected_arrow_effect(&evaluated);
+        assert_eq!(effect["tag"], "effect", "{evaluated}");
+        assert!(effect.get("members").is_none(), "{evaluated}");
+    }
+
+    #[test]
+    fn same_named_effects_do_not_share_extensions_between_modules() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "effect-extension-producer.blot".to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"producer\"\n\u{e000}return @text.len (@shape.get (@type.members Extended) \"origin\")\u{e000}\n",
+                ),
+            )
+            .expect("producer source should load");
+        session
+            .configure_module(
+                "effect-extension-producer.blot",
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+            .expect("producer source should configure");
+        assert_eq!(
+            session.evaluate_module("effect-extension-producer.blot")["display"],
+            "8"
+        );
+
+        session
+            .add_source(
+                "effect-extension-consumer.blot".to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
+                ),
+            )
+            .expect("consumer source should load");
+        session
+            .configure_module(
+                "effect-extension-consumer.blot",
+                BTreeMap::new(),
+                BTreeMap::new(),
+            )
+            .expect("consumer source should configure");
+
+        let evaluated = session.evaluate_module("effect-extension-consumer.blot");
+        let effect = reflected_arrow_effect(&evaluated);
+        assert_eq!(effect["tag"], "effect", "{evaluated}");
+        assert!(effect.get("members").is_none(), "{evaluated}");
+    }
+
+    #[test]
+    fn removing_an_importer_reclaims_its_nested_effect_instance() {
+        const LIBRARY_PATH: &str = "effect-overlay-library.blot";
+        const ATTACHMENT_PATH: &str = "effect-overlay-attachment.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                LIBRARY_PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .Fault = Fault; .action = action; }\u{e000}\n",
+                ),
+            )
+            .expect("effect library source should load");
+        session
+            .configure_module(LIBRARY_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect library should configure");
+        assert_eq!(session.evaluate_module(LIBRARY_PATH)["ok"], true);
+
+        session
+            .add_source(
+                ATTACHMENT_PATH.to_owned(),
+                source(
+                    "const library = import \"library\"\n\u{e000}const Alias = library.Fault\n\u{e000}const Extended = @type.attach Alias \"origin\" \"attachment\"\n\u{e000}return @shape.get (@type.members Extended) \"origin\"\u{e000}\n",
+                ),
+            )
+            .expect("effect attachment source should load");
+        session
+            .configure_module(
+                ATTACHMENT_PATH,
+                BTreeMap::from([("library".to_owned(), LIBRARY_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("effect attachment should configure");
+        assert_eq!(
+            session.evaluate_module(ATTACHMENT_PATH)["display"],
+            "\"attachment\""
+        );
+
+        assert!(session.remove_module(ATTACHMENT_PATH));
+        assert!(session.context.effect_value("effect:2:Fault").is_none());
+        let effect = session
+            .context
+            .effect_value("effect:1:Fault")
+            .expect("the library's independent effect instance should remain registered");
+        let Value::Effect {
+            name, operations, ..
+        } = effect
+        else {
+            panic!("the library effect should retain its declaration")
+        };
+        assert_eq!(name, "Fault");
+        assert!(operations.get("raise").is_some());
+    }
+
+    #[test]
+    fn distinct_written_calls_with_same_displayed_argument_mint_distinct_effects() {
+        const PATH: &str = "effect-call-provenance.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const make = fn argument => @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make (fn () => 1)\n\u{e000}const second = make (fn () => 2)\n\u{e000}return @type.equal first second\n",
+                ),
+            )
+            .expect("effect factory source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect factory source should configure");
+
+        assert_eq!(session.evaluate_module(PATH)["display"], "#False");
+    }
+
+    #[test]
+    fn aliases_preserve_one_generated_effect_identity() {
+        const PATH: &str = "effect-alias-provenance.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const make = fn argument => @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const generated = make (fn () => 1)\n\u{e000}const alias = generated\n\u{e000}return @type.equal generated alias\n",
+                ),
+            )
+            .expect("effect alias source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect alias source should configure");
+
+        assert_eq!(session.evaluate_module(PATH)["display"], "#True");
+    }
+
+    #[test]
+    fn administrative_reevaluation_recovers_the_same_effect_identity() {
+        const PATH: &str = "effect-reevaluation-provenance.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const make = fn argument => @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}return make 1\n",
+                ),
+            )
+            .expect("effect source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect source should configure");
+
+        let first = session.evaluate_module(PATH);
+        let second = session.evaluate_module(PATH);
+        assert_eq!(first["value"]["id"], second["value"]["id"]);
+    }
+
+    #[test]
+    fn parameterized_import_occurrences_mint_distinct_effects() {
+        const LIBRARY_PATH: &str = "parameterized-effect-library.blot";
+        const IMPORTER_PATH: &str = "parameterized-effect-importer.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                LIBRARY_PATH.to_owned(),
+                source(
+                    "module with argument\nconst Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}return Fault\n",
+                ),
+            )
+            .expect("parameterized effect library should load");
+        session
+            .configure_module(LIBRARY_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("parameterized effect library should configure");
+        session
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source(
+                    "const first = import \"library\" with (fn () => 1)\n\u{e000}const second = import \"library\" with (fn () => 2)\n\u{e000}return @type.equal first second\n",
+                ),
+            )
+            .expect("parameterized effect importer should load");
+        session
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([("library".to_owned(), LIBRARY_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("parameterized effect importer should configure");
+
+        assert_eq!(session.evaluate_module(IMPORTER_PATH)["display"], "#False");
+    }
+
+    #[test]
+    fn dependency_value_changes_renew_effect_call_provenance() {
+        const DEPENDENCY_PATH: &str = "effect-provenance-dependency.blot";
+        const IMPORTER_PATH: &str = "effect-provenance-importer.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(DEPENDENCY_PATH.to_owned(), source("return 1\n"))
+            .expect("effect dependency should load");
+        session
+            .configure_module(DEPENDENCY_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("effect dependency should configure");
+        session
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source(
+                    "const dependency = import \"dependency\"\n\u{e000}const make = fn argument => @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}return make dependency\n",
+                ),
+            )
+            .expect("effect importer should load");
+        session
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([("dependency".to_owned(), DEPENDENCY_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("effect importer should configure");
+        let first = session.evaluate_module(IMPORTER_PATH);
+
+        session
+            .add_source(DEPENDENCY_PATH.to_owned(), source("return 2\n"))
+            .expect("changed effect dependency should load");
+        let second = session.evaluate_module(IMPORTER_PATH);
+
+        assert_ne!(first["value"]["id"], second["value"]["id"]);
+    }
+
+    #[test]
+    fn changing_only_an_effect_signature_mints_a_new_identity() {
+        const PATH: &str = "effect-signature-revision.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}return Fault\n",
+                ),
+            )
+            .expect("first effect signature should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("first effect signature should configure");
+        let first = session.evaluate_module(PATH);
+
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .stop = @type.unit -> @type.unit; }\n\u{e000}return Fault\n",
+                ),
+            )
+            .expect("changed effect signature should load");
+        let second = session.evaluate_module(PATH);
+
+        assert_ne!(first["value"]["id"], second["value"]["id"]);
+        assert_eq!(second["value"]["operations"][0][0], "stop");
+    }
+
+    #[test]
+    fn suffix_edits_do_not_retain_an_effect_from_the_previous_revision() {
+        const PATH: &str = "effect-prefix-revision.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const marker = 1\n\u{e000}return Fault\n",
+                ),
+            )
+            .expect("first effect revision should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("first effect revision should configure");
+        let first = session.evaluate_module(PATH);
+
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const marker = 2\n\u{e000}return Fault\n",
+                ),
+            )
+            .expect("suffix edit should load");
+        let second = session.evaluate_module(PATH);
+
+        assert_ne!(first["value"]["id"], second["value"]["id"]);
+    }
+
+    #[test]
+    fn residual_type_attachment_registers_with_the_session_context() {
+        const PATH: &str = "effect-extension-residual.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let attach :: @type.int -> @type.int\n\u{e000}let attach = fn value => @shape.get (@type.members (@type.attach Fault \"origin\" value)) \"origin\"\n\u{e000}return attach\u{e000}\n",
+                ),
+            )
+            .expect("residual attachment source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("residual attachment source should configure");
+
+        let prepared = session.prepare_runtime_hir(PATH);
+        assert_eq!(prepared["ok"], true, "{prepared}");
+        assert!(matches!(
+            session.context.effect_value("effect:1:Fault"),
+            Some(Value::Extended { .. })
+        ));
+    }
+
+    #[test]
+    fn module_snapshot_replays_an_ineligible_private_environment() {
+        const MODULE_PATH: &str = "snapshot:private-effect";
+        let bytes = snapshot_from_source(
+            MODULE_PATH,
+            "const Hidden = @effect { .read = @type.unit -> @type.int; }\nreturn 42\n",
+        );
         let snapshot: ModuleSnapshot =
             rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
         assert!(snapshot.comptime_environment.is_none());
 
         let mut consumer = CompilerSession::default();
         consumer
-            .install_module_snapshot(MODULE_PATH, &bytes)
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
             .expect("module snapshot should install");
         assert_eq!(consumer.evaluate_module(MODULE_PATH)["display"], "42");
     }
@@ -2001,6 +3268,41 @@ mod tests {
             .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
             .expect("replacement should configure");
         assert_eq!(session.evaluate_module(PATH)["display"], "2");
+    }
+
+    #[test]
+    fn removing_a_dependency_invalidates_its_importers() {
+        const DEPENDENCY_PATH: &str = "removed:dependency";
+        const IMPORTER_PATH: &str = "removed:importer";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(DEPENDENCY_PATH.to_owned(), source("return 1\n"))
+            .expect("dependency source should load");
+        session
+            .configure_module(DEPENDENCY_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("dependency source should configure");
+        session
+            .add_source(
+                IMPORTER_PATH.to_owned(),
+                source("const dependency = import \"dependency\"\nreturn dependency\n"),
+            )
+            .expect("importer source should load");
+        session
+            .configure_module(
+                IMPORTER_PATH,
+                BTreeMap::from([("dependency".to_owned(), DEPENDENCY_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("importer source should configure");
+        assert_eq!(session.evaluate_module(IMPORTER_PATH)["display"], "1");
+        assert_eq!(session.prepare_runtime_hir(IMPORTER_PATH)["ok"], true);
+        assert!(session.closed_programs.borrow().contains_key(IMPORTER_PATH));
+
+        assert!(session.remove_module(DEPENDENCY_PATH));
+
+        assert!(session.dirty_modules.borrow().contains(IMPORTER_PATH));
+        assert!(!session.closed_programs.borrow().contains_key(IMPORTER_PATH));
+        assert_eq!(session.evaluate_module(IMPORTER_PATH)["ok"], false);
     }
 
     #[test]
@@ -2273,6 +3575,40 @@ mod tests {
     }
 
     #[test]
+    fn declaration_prefix_reuse_drops_revision_bound_closures() {
+        const PATH: &str = "prefix-closure.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const wrapper = fn callback => callback ()\n\u{e000}const answer = 42\n\u{e000}return answer\u{e000}\n",
+                ),
+            )
+            .expect("initial source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("initial source should configure");
+        assert_eq!(session.check_module(PATH)["ok"], true);
+        assert_eq!(session.context.evaluated_bindings.borrow()[PATH].len(), 2);
+
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(
+                    "const wrapper = fn callback => callback ()\n\u{e000}const answer = 42\n\u{e000}let unused = answer\n\u{e000}return answer\u{e000}\n",
+                ),
+            )
+            .expect("appended declaration should load");
+        let retained = session.context.evaluated_bindings.borrow();
+        assert_eq!(retained[PATH].len(), 1);
+        assert!(matches!(
+            retained[PATH].values().next(),
+            Some(Value::Int(_))
+        ));
+    }
+
+    #[test]
     fn dependency_changes_invalidate_importers_after_boundary_publication() {
         let dependency_path = "dependency.blot";
         let root_path = "main.blot";
@@ -2325,6 +3661,110 @@ mod tests {
             analysis["invalidation"]["invalidatedImporters"],
             serde_json::json!([root_path]),
         );
+    }
+
+    #[test]
+    fn captured_closure_change_invalidates_importers() {
+        let dependency_path = "dependency.blot";
+        let root_path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source(
+                    "const captured :: @type.int\n\u{e000}const captured = 1\n\u{e000}const read :: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
+                ),
+            )
+            .expect("dependency source should load");
+        session
+            .configure_module(dependency_path, BTreeMap::new(), BTreeMap::new())
+            .expect("dependency source should configure");
+        session
+            .add_source(
+                root_path.to_owned(),
+                source("const read = import \"dep\"\n\u{e000}return read ()\u{e000}\n"),
+            )
+            .expect("root source should load");
+        session
+            .configure_module(
+                root_path,
+                BTreeMap::from([("dep".to_owned(), dependency_path.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("root source should configure");
+        assert_eq!(session.evaluate_module(root_path)["display"], "1");
+        assert_eq!(session.prepare_runtime_hir(root_path)["ok"], true);
+
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source(
+                    "const captured :: @type.int\n\u{e000}const captured = 2\n\u{e000}const read :: @type.unit -> @type.int\n\u{e000}const read = fn () => captured\n\u{e000}return read\u{e000}\n",
+                ),
+            )
+            .expect("changed dependency should load");
+        let analysis = session.analyze_module(root_path);
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(
+            analysis["invalidation"]["checkedModules"],
+            serde_json::json!([dependency_path, root_path]),
+        );
+        assert_eq!(
+            analysis["invalidation"]["invalidatedImporters"],
+            serde_json::json!([root_path]),
+        );
+        assert_eq!(session.evaluate_module(root_path)["display"], "2");
+    }
+
+    #[test]
+    fn parameterized_module_change_invalidates_importers_without_a_cached_result() {
+        let dependency_path = "dependency.blot";
+        let root_path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source("module with input\n\u{e000}return @int.add input 1\u{e000}\n"),
+            )
+            .expect("dependency source should load");
+        session
+            .configure_module(dependency_path, BTreeMap::new(), BTreeMap::new())
+            .expect("dependency source should configure");
+        session
+            .add_source(
+                root_path.to_owned(),
+                source("return import \"dep\" with 40\u{e000}\n"),
+            )
+            .expect("root source should load");
+        session
+            .configure_module(
+                root_path,
+                BTreeMap::from([("dep".to_owned(), dependency_path.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("root source should configure");
+        assert_eq!(session.evaluate_module(root_path)["display"], "41");
+        assert_eq!(session.prepare_runtime_hir(root_path)["ok"], true);
+
+        session
+            .add_source(
+                dependency_path.to_owned(),
+                source("module with input\n\u{e000}return @int.add input 2\u{e000}\n"),
+            )
+            .expect("changed dependency should load");
+        let analysis = session.analyze_module(root_path);
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(
+            analysis["invalidation"]["checkedModules"],
+            serde_json::json!([dependency_path, root_path]),
+        );
+        assert_eq!(
+            analysis["invalidation"]["invalidatedImporters"],
+            serde_json::json!([root_path]),
+        );
+        assert_eq!(session.evaluate_module(root_path)["display"], "42");
     }
 
     #[test]
@@ -2895,6 +4335,45 @@ mod tests {
             .expect("empty Scratch test thread should start")
             .join()
             .expect("empty Scratch test thread should finish");
+    }
+
+    fn reflected_arrow_effect(evaluated: &serde_json::Value) -> &serde_json::Value {
+        let fields = evaluated["value"]["payload"]["fields"]
+            .as_array()
+            .expect("reflected arrow should contain fields");
+        let effects = fields
+            .iter()
+            .find(|field| field[0] == "effects")
+            .expect("reflected arrow should contain effects");
+        &effects[1]["elements"][0]
+    }
+
+    fn assert_snapshot_fault(effect: &serde_json::Value) {
+        assert_eq!(effect["tag"], "extended", "{effect}");
+        assert_fault_effect(&effect["inner"]);
+        assert!(
+            effect["members"]
+                .as_array()
+                .is_some_and(|members| members.iter().any(|member| {
+                    member[0] == "origin"
+                        && member[1]["tag"] == "text"
+                        && member[1]["value"] == "snapshot"
+                })),
+            "{effect}"
+        );
+    }
+
+    fn assert_fault_effect(effect: &serde_json::Value) {
+        assert_eq!(effect["tag"], "effect", "{effect}");
+        assert_eq!(effect["name"], "Fault", "{effect}");
+        assert!(
+            effect["operations"]
+                .as_array()
+                .is_some_and(|operations| operations
+                    .iter()
+                    .any(|operation| operation[0] == "raise")),
+            "{effect}"
+        );
     }
 
     fn source(value: &str) -> Vec<u16> {

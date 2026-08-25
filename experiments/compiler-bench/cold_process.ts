@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { Compiler } from "../../src/compiler.ts";
+import { compilerObservation } from "./observation.ts";
 
 const path = process.argv[2];
 if (path === undefined) {
@@ -10,10 +11,7 @@ const compiler = await Compiler.create();
 try {
   const checked = await compiler.check(resolve(path));
   process.stdout.write(JSON.stringify({
-    observation: JSON.stringify({
-      type: checked.type,
-      effects: checked.effects,
-    }),
+    observation: compilerObservation(checked),
     hostRssBytes: process.memoryUsage().rss,
   }));
 } finally {

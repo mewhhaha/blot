@@ -87,7 +87,8 @@ manifest is schema version 2 and binds the bytes to:
 `Compiler.create()` requires the Wasm, manifest, and prelude snapshot and
 validates the byte digest, host ABI, and prelude digest before instantiation. It
 never invokes Cargo and never falls back to TypeScript. A custom Wasm passed to
-`Compiler.create` must include its matching prelude snapshot.
+`Compiler.create` must include its matching prelude snapshot; that explicit pair
+is a caller-owned trusted distribution.
 
 Build the bundle locally with:
 
@@ -107,14 +108,16 @@ installing anything.
 
 ## Host ABI
 
-Compiler-host ABI 2 registers UTF-8 paths once and refers to them through stable
-session-local `ModuleId` values. Changed UTF-8 source or compact AST/snapshot
-bytes, resolved import edges, included bytes, and removals travel in validated
-batched binary delta frames. UTF-8 decoding reconstructs the frontend's UTF-16
-offset space, so source spans retain their documented units without copying one
-32-bit word per source unit. Successful checks return compact binary summaries;
-full diagnostics and requested analysis facts remain available in the same
-versioned response envelope.
+Compiler-host ABI 3 registers UTF-8 paths once and refers to them through stable
+session-local `ModuleId` values. Changed UTF-8 source or compact AST bytes,
+resolved import edges, included bytes, and removals travel in validated batched
+binary delta frames. Trusted compiler-distributed snapshots use a separate
+installation operation after manifest validation and cannot enter a generic
+delta. UTF-8 decoding reconstructs the frontend's UTF-16 offset space, so source
+spans retain their documented units without copying one 32-bit word per source
+unit. Successful checks return compact binary summaries; full diagnostics and
+requested analysis facts remain available in the same versioned response
+envelope.
 
 The compiler also exports session operations for evaluation, tagged test
 execution, canonical AST export, Runtime-HIR preparation, and compilation.
@@ -130,9 +133,10 @@ executes Rust-discovered declaration tags. These facts are observations of the
 Rust check, not a second host analysis.
 
 The compiler-distributed prelude snapshot contains the Rust AST and checked
-certificate. The host installs it under the ordinary resolved prelude path.
-Package capsules are different: package format 4 stores canonical AST JSON
-exported by Rust, but consumers still check and specialize that graph normally.
+certificate. The host installs it through the explicitly trusted operation under
+the ordinary resolved prelude path. Package capsules are different: package
+format 4 stores canonical AST JSON exported by Rust, but consumers still check
+and specialize that graph normally.
 
 ## Caching
 
@@ -160,6 +164,22 @@ memory soak. The checked-in
 [profile decision](../experiments/compiler-profile-decision.md) keeps
 `opt-level = "s"` from the latest raw matrix; scheduled runs record wall time
 without making it an ordinary pull-request gate.
+
+`pnpm benchmark:compiler-startup` decomposes direct semantic-core fresh-process
+startup through a completed check. The unified benchmark's cold boundaries
+measure the public host. `pnpm benchmark:compiler-suite` runs 31 samples in each
+of three independent runs over the minimal, terminal, and agent workloads;
+`pnpm benchmark:compiler-compare` requires every candidate target-run median to
+improve by 10% against the aggregate baseline, rejects significant 5%
+regressions, requires comparable provenance, and requires public observations
+and deterministic compiler work to remain exact.
+
+On 2026-08-25, a stable-path host comparison against `bf8143a`, holding the
+compiler artifact constant, reduced the cold-compiler median from 59.415 to
+33.479 ms for minimal, 61.538 to 36.039 ms for terminal, and 63.261 to 39.570 ms
+for agent. The primary improvement was 43.7%; its independent runs improved by
+43.7%, 45.7%, and 42.6%, with no significant measured-boundary regression above
+5%.
 
 ## CI boundary
 

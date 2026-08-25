@@ -4,6 +4,8 @@ tree-sitter-blot/
 *.wasm.json
 generated/compiler/compiler-artifact.json
 formal/lean/.lake/
-compiler/target/
+target/
+dist/
+.blot-package-*/
 node_modules/
 .pnp.cjs

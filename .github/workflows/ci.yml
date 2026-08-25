@@ -73,6 +73,16 @@ jobs:
             generated/compiler/compiler-artifact.json
           if-no-files-found: error
           retention-days: 90
+      - name: Select minimum supported Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+      - name: Verify packed npm package on minimum supported Node
+        run: pnpm package:check
+      - name: Restore primary Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
       - name: Check Rust formatting
         run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
       - name: Check generated-code Rust formatting
@@ -88,7 +98,6 @@ jobs:
       - name: Deterministic compiler performance gates
         run: >-
           node
-          --import ./src/node/polyfills.mjs
           --import ./src/node/deno_test_compat.mjs
           --import tsx
           --test
@@ -134,8 +143,8 @@ jobs:
           test -f generated/compiler/compiler.wasm
           test -f generated/compiler/compiler-artifact.json
           test -s .pnp.cjs
-          pnpm exec tsx --import ./src/node/polyfills.mjs src/node/cli.ts check examples/minimal.blot
-          pnpm exec tsx --import ./src/node/polyfills.mjs --test src/node/pipeline.test.ts
+          pnpm exec tsx src/node/cli.ts check examples/minimal.blot
+          pnpm exec tsx --test src/node/pipeline.test.ts
           pnpm conformance
       - name: Upload runnable Node workspace
         uses: actions/upload-artifact@v7

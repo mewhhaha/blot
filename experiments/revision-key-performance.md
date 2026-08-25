@@ -14,7 +14,7 @@ identity is 64 hexadecimal bytes and the final key is also 64 bytes.
 Run:
 
 ```sh
-pnpm exec tsx --import ./src/node/polyfills.mjs experiments/revision-key-benchmark.ts
+pnpm exec tsx experiments/revision-key-benchmark.ts
 ```
 
 Three consecutive local runs on Node 22.16.0 measured these median run means:

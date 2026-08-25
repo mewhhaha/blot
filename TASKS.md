@@ -29,8 +29,8 @@ remain outside its scope.
    fallback representation. Runtime-HIR preparation consumes the existing
    checked artifact, structural specialization keys replace formatted types, and
    revision reuse preserves exact source origins. The measured boundary and
-   byte-identical artifact check are recorded in
-   `experiments/progressive-hir-performance.md`.
+   observation-equivalence gate are recorded in
+   `experiments/compiler-bench/README.md`.
 
 4. **Single semantic implementation.** TypeScript semantic passes and the
    dual-compiler parity inventory were removed. The Rust evaluator and emitted

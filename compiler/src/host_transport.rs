@@ -3,14 +3,13 @@ use std::collections::BTreeMap;
 use crate::eval::IncludedFile;
 use crate::session::{AddSourceError, CompilerSession};
 
-pub const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"BLT2");
-pub const FRAME_SCHEMA: u32 = 2;
+pub const FRAME_MAGIC: u32 = u32::from_le_bytes(*b"BLT3");
+pub const FRAME_SCHEMA: u32 = 3;
 
 const PAYLOAD_NONE: u32 = 0;
 const PAYLOAD_SOURCE: u32 = 1;
 const PAYLOAD_AST: u32 = 2;
-const PAYLOAD_SNAPSHOT: u32 = 3;
-const PAYLOAD_REMOVE: u32 = 4;
+const PAYLOAD_REMOVE: u32 = 3;
 const MAX_RECORDS: usize = 1_000_000;
 
 struct DeltaRecord {
@@ -23,7 +22,6 @@ enum DeltaPayload {
     None,
     Source(Vec<u8>),
     Ast(Vec<u8>),
-    Snapshot(Vec<u8>),
     Remove,
 }
 
@@ -147,7 +145,6 @@ fn decode_delta(frame: &[u8]) -> Result<Vec<DeltaRecord>, String> {
             }
             PAYLOAD_SOURCE => DeltaPayload::Source(payload_bytes),
             PAYLOAD_AST => DeltaPayload::Ast(payload_bytes),
-            PAYLOAD_SNAPSHOT => DeltaPayload::Snapshot(payload_bytes),
             PAYLOAD_REMOVE => {
                 if !payload_bytes.is_empty() {
                     return Err("remove compiler ABI payload carried bytes".to_owned());
@@ -271,12 +268,6 @@ fn apply_record(session: &mut CompilerSession, record: ResolvedDeltaRecord) -> s
                 "message": format!("portable AST is not UTF-8: {error}"),
             }),
         },
-        DeltaPayload::Snapshot(bytes) => {
-            match session.install_module_snapshot(&record.path, &bytes) {
-                Ok(()) => serde_json::json!({ "ok": true }),
-                Err(message) => serde_json::json!({ "ok": false, "message": message }),
-            }
-        }
         DeltaPayload::Remove => {
             serde_json::json!({ "ok": true, "removed": session.remove_module(&record.path) })
         }
@@ -398,7 +389,7 @@ mod tests {
     #[test]
     fn rejects_truncated_and_trailing_registration_frames() {
         let mut session = CompilerSession::default();
-        assert!(register_paths(&mut session, b"BLT2").is_err());
+        assert!(register_paths(&mut session, b"BLT3").is_err());
 
         let mut frame = Encoder::default();
         frame.u32(FRAME_MAGIC);
@@ -445,6 +436,28 @@ mod tests {
         frame.bytes(b"return 1");
         frame.u32(2);
         assert!(apply_delta(&mut session, &frame.finish()).is_err());
+        assert!(!session.remove_module("/tmp/module.blot"));
+    }
+
+    #[test]
+    fn graph_deltas_reject_snapshot_bytes() {
+        let mut session = CompilerSession::default();
+        session
+            .register_paths(vec!["/tmp/module.blot".to_owned()])
+            .unwrap();
+        let mut frame = Encoder::default();
+        frame.u32(FRAME_MAGIC);
+        frame.u32(FRAME_SCHEMA);
+        frame.u32(1);
+        frame.u32(1);
+        frame.u32(PAYLOAD_REMOVE);
+        frame.bytes(b"snapshot bytes");
+        frame.u32(0);
+
+        let error = apply_delta(&mut session, &frame.finish())
+            .expect_err("graph deltas must not accept trusted snapshot bytes");
+
+        assert!(error.contains("remove compiler ABI payload carried bytes"));
         assert!(!session.remove_module("/tmp/module.blot"));
     }
 }

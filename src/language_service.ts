@@ -627,7 +627,7 @@ export class LanguageService {
     ).catch((error) => {
       if (
         error instanceof BlotError || error instanceof LoadError ||
-        error instanceof Deno.errors.NotFound
+        (error instanceof Error && "code" in error && error.code === "ENOENT")
       ) return null;
       throw error;
     });
