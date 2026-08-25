@@ -288,6 +288,8 @@ async function coldCompilerScenario(
 ): Promise<CompilerBenchmarkScenario> {
   const samples: CompilerBenchmarkSample[] = [];
   let expected = "";
+  const warmup = await Compiler.create();
+  warmup.destroy();
   for (let index = 0; index < sampleCount; index += 1) {
     const before = performance.now();
     const compiler = await Compiler.create();
@@ -309,8 +311,8 @@ async function coldCompilerScenario(
   }
   return summarizedScenario(
     "cold-compiler",
-    "compiler bundle load, instantiation, graph load, and semantic check",
-    "provenance and Baba parser runtime are warm; no compiler or source revision is resident",
+    "compiler instantiation, snapshot installation, graph load, and semantic check",
+    "the validated immutable compiler module and Baba parser runtime are process-resident; no compiler session or source revision is resident",
     expected,
     samples,
   );

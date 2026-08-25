@@ -27,7 +27,7 @@ import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import {
   decodeCompilerArtifactManifest,
   sha256,
-  validateCompilerArtifact,
+  verifyCompilerArtifactIntegrity,
 } from "./artifact.ts";
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 import {
@@ -71,6 +71,16 @@ const bundledPreludeSnapshot = new URL(
   "../../generated/compiler/prelude.snapshot",
   import.meta.url,
 );
+
+interface BundledCompilerDistribution {
+  readonly module: WebAssembly.Module;
+  readonly preludeSnapshot: Uint8Array;
+  readonly preludeSnapshotDigest: string;
+}
+
+let bundledCompilerDistribution:
+  | Promise<BundledCompilerDistribution>
+  | undefined;
 
 export interface CompilerArtifact {
   readonly wasm: Uint8Array;
@@ -212,25 +222,38 @@ export class Compiler implements CompilerHost {
 
   static async create(options: CompilerOptions = {}): Promise<Compiler> {
     resolveTargetPolicy(options.targetPolicy);
-    let wasm = options.wasm;
+    const wasm = options.wasm;
     let preludeSnapshot = options.preludeSnapshot;
     let preludeSnapshotDigest: string | undefined;
+    let compilerModule: WebAssembly.Module | undefined;
     if (wasm === undefined) {
+      if (bundledCompilerDistribution === undefined) {
+        bundledCompilerDistribution = (async () => {
+          const [compilerBytes, manifestSource, prelude] = await Promise.all([
+            readFile(bundledCompiler),
+            readFile(bundledCompilerManifest, "utf8"),
+            readFile(bundledPreludeSnapshot),
+          ]);
+          const manifest = decodeCompilerArtifactManifest(manifestSource);
+          const digest = await sha256(prelude);
+          await verifyCompilerArtifactIntegrity(compilerBytes, manifest, {
+            hostAbi: COMPILER_HOST_ABI_VERSION,
+            preludeSha256: digest,
+          });
+          return {
+            module: await CompilerWasm.compile(compilerBytes),
+            preludeSnapshot: prelude,
+            preludeSnapshotDigest: digest,
+          };
+        })();
+      }
       try {
-        const [compilerBytes, manifestSource, prelude] = await Promise.all([
-          readFile(bundledCompiler),
-          readFile(bundledCompilerManifest, "utf8"),
-          readFile(bundledPreludeSnapshot),
-        ]);
-        const manifest = decodeCompilerArtifactManifest(manifestSource);
-        preludeSnapshotDigest = await sha256(prelude);
-        await validateCompilerArtifact(compilerBytes, manifest, {
-          hostAbi: COMPILER_HOST_ABI_VERSION,
-          preludeSha256: preludeSnapshotDigest,
-        });
-        wasm = compilerBytes;
-        preludeSnapshot = prelude;
+        const distribution = await bundledCompilerDistribution;
+        compilerModule = distribution.module;
+        preludeSnapshot = distribution.preludeSnapshot;
+        preludeSnapshotDigest = distribution.preludeSnapshotDigest;
       } catch (error) {
+        bundledCompilerDistribution = undefined;
         throw new CompilerInvariantFailure(
           "compiler artifact loading",
           new Error(
@@ -252,8 +275,16 @@ export class Compiler implements CompilerHost {
       preludeSnapshotDigest = await sha256(preludeSnapshot);
     }
     try {
+      let compiler: CompilerWasm;
+      if (compilerModule !== undefined) {
+        compiler = await CompilerWasm.instantiate(compilerModule);
+      } else if (wasm !== undefined) {
+        compiler = await CompilerWasm.load(wasm);
+      } else {
+        throw new Error("compiler distribution omitted its Wasm module");
+      }
       return new Compiler(
-        await CompilerWasm.load(wasm),
+        compiler,
         preludeSnapshot,
         preludeSnapshotDigest,
       );

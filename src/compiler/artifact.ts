@@ -89,6 +89,15 @@ export async function validateCompilerArtifact(
   expected: ExpectedCompilerArtifact,
 ): Promise<void> {
   requireWasm(bytes);
+  await verifyCompilerArtifactIntegrity(bytes, manifest, expected);
+}
+
+export async function verifyCompilerArtifactIntegrity(
+  bytes: Uint8Array,
+  manifest: CompilerArtifactManifest,
+  expected: ExpectedCompilerArtifact,
+): Promise<void> {
+  requireWasmHeader(bytes);
   if (expected.hostAbi !== undefined && manifest.hostAbi !== expected.hostAbi) {
     throw new Error(
       `compiler artifact host ABI is ${manifest.hostAbi}, expected ${expected.hostAbi}`,
@@ -127,16 +136,21 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
 }
 
 function requireWasm(bytes: Uint8Array): void {
-  const owned = Uint8Array.from(bytes);
+  requireWasmHeader(bytes);
+  if (!WebAssembly.validate(Uint8Array.from(bytes))) {
+    throw new Error("compiler artifact is not valid WebAssembly");
+  }
+}
+
+function requireWasmHeader(bytes: Uint8Array): void {
   if (
     bytes.byteLength < 8 ||
     bytes[0] !== 0x00 ||
     bytes[1] !== 0x61 ||
     bytes[2] !== 0x73 ||
-    bytes[3] !== 0x6d ||
-    !WebAssembly.validate(owned)
+    bytes[3] !== 0x6d
   ) {
-    throw new Error("compiler artifact is not valid WebAssembly");
+    throw new Error("compiler artifact has no WebAssembly header");
   }
 }
 

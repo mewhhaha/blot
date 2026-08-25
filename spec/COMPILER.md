@@ -78,6 +78,19 @@ Ambient current directory, process environment, network state, clock, random
 state, or undeclared host capability is not a compiler input unless a future
 language revision makes it explicit and revisioned.
 
+The Node host may retain one validated immutable `WebAssembly.Module` for the
+bundled compiler distribution per process. Each `Compiler` still instantiates
+fresh Wasm state and creates a fresh semantic session; compile-time
+environments, module revisions, generative identities, diagnostics, and
+artifacts are never shared through the code cache. A custom compiler/snapshot
+pair does not enter the bundled cache. On that production load path, the host
+checks the Wasm header, authenticated digest, manifest, ABI, and prelude
+identity before compiling. Wasm compilation performs structural validation once;
+the host does not parse the complete binary once with `WebAssembly.validate` and
+immediately again with `WebAssembly.compile`. Artifact download verification
+remains independently usable and therefore performs standalone structural
+validation.
+
 The Node-to-compiler transport is compiler-host ABI 3. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST

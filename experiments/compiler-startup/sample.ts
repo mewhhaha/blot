@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import {
   decodeCompilerArtifactManifest,
   sha256,
-  validateCompilerArtifact,
+  verifyCompilerArtifactIntegrity,
 } from "../../src/compiler/artifact.ts";
 import { COMPILER_HOST_ABI_VERSION } from "../../src/compiler/host_abi.ts";
 import { CompilerWasm } from "../../src/compiler/wasm.ts";
@@ -52,7 +52,7 @@ const bundle = await measured("bundle-read", async () => {
 });
 await measured("artifact-validation", async () => {
   const manifest = decodeCompilerArtifactManifest(bundle.manifestSource);
-  await validateCompilerArtifact(bundle.wasm, manifest, {
+  await verifyCompilerArtifactIntegrity(bundle.wasm, manifest, {
     hostAbi: COMPILER_HOST_ABI_VERSION,
     preludeSha256: await sha256(bundle.preludeSnapshot),
   });
