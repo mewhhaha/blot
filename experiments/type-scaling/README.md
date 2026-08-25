@@ -45,14 +45,15 @@ The `evidence` family builds `N` independent checked packages; it does not
 assume that reconstructing a record through arbitrary wrappers grants a new
 transitive proof rule.
 
-Each row also includes resident Rust checker work schema 2: unique type nodes,
+Each row also includes resident Rust checker work schema 3: unique type nodes,
 recursive intern attempts, constraints, settle/freshen/union visits, boundary
-materializations, closure free-name candidates, captures actually bridged, and
-peak pending solver worklist items. The executable scaling gate uses the
-semantic decisions whose required count is linear in these sources—constraints,
-boundary materializations, and capture selection—and requires the final doubling
-to stay at or below 2.25. Recursive graph visits remain visible separately;
-timing is never replaced by the gate.
+materializations, closure free-name candidates, captures actually bridged,
+opened interface fields actually demanded, and peak pending solver worklist
+items. The executable scaling gate uses the semantic decisions whose required
+count is linear in these sources—constraints, boundary materializations, and
+capture selection—and requires the final doubling to stay at or below 2.25.
+Recursive graph visits remain visible separately; timing is never replaced by
+the gate.
 
 ## Current results
 

@@ -454,6 +454,14 @@ Mutable bounds, worklists, AST object addresses, and fact sinks do not cross the
 cache boundary. A content hash proves transport integrity, not semantic
 correctness of a package-controlled claimed interface.
 
+The checked module snapshot may additionally carry a deterministic compile-time
+environment graph. Its schema is independent of the checked-interface schema;
+decoding validates environment references and parent acyclicity, remaps
+module-local closure provenance to the installed path, and obtains closure
+signatures from the checked certificate. Unsupported process-local or
+generative values make the environment ineligible rather than weakening the
+cache boundary.
+
 A cache hit and fresh compilation produce equivalent results; only work changes.
 
 ## 16. Artifact production

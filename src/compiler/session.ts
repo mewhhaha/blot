@@ -156,23 +156,44 @@ interface InspectedSource {
 /** The sole high-level host for Blot's Rust/Wasm semantic compiler. */
 export class Compiler implements CompilerHost {
   readonly #compiler: CompilerWasm;
-  readonly #preludeSnapshot: Uint8Array;
   readonly #handle: number;
   readonly #revisions = new Map<string, ResidentRevision>();
   readonly #sources = new Map<string, string>();
   readonly #installedModules = new Map<string, InstalledModuleRevision>();
   readonly #inspectedSources = new Map<string, InspectedSource>();
   readonly #workspace: WorkspaceGraph;
-  #preludeInstalled = false;
   #requests: Promise<void> = Promise.resolve();
   #destroyed = false;
 
   private constructor(compiler: CompilerWasm, preludeSnapshot: Uint8Array) {
     this.#compiler = compiler;
-    this.#preludeSnapshot = preludeSnapshot.slice();
     this.#handle = compiler.createCompilerSession();
-    this.#workspace = new WorkspaceGraph((path, source) =>
-      this.#inspectSource(path, source)
+    compiler.installCompilerSessionModuleSnapshot(
+      this.#handle,
+      PRELUDE,
+      preludeSnapshot,
+    );
+    const exportedPrelude = compiler.exportCompilerSessionModuleAst(
+      this.#handle,
+      PRELUDE,
+    );
+    if (!exportedPrelude.ok) {
+      throw new Error("installed prelude snapshot omitted its portable AST");
+    }
+    const prelude: Loaded = {
+      module: decodePortableModule(
+        JSON.parse(exportedPrelude.ast),
+        "distributed prelude snapshot",
+      ),
+      dependencies: new Map(),
+      includedFiles: new Map(),
+      source: "",
+      path: PRELUDE,
+      storage: { tag: "source" },
+    };
+    this.#workspace = new WorkspaceGraph(
+      (path, source) => this.#inspectSource(path, source),
+      [prelude],
     );
   }
 
@@ -480,21 +501,6 @@ export class Compiler implements CompilerHost {
             "prelude snapshot installation",
             new Error("the distributed prelude must remain dependency-free"),
           );
-        }
-        if (!this.#preludeInstalled) {
-          try {
-            this.#compiler.installCompilerSessionModuleSnapshot(
-              this.#handle,
-              loaded.path,
-              this.#preludeSnapshot,
-            );
-          } catch (error) {
-            throw new CompilerInvariantFailure(
-              "prelude snapshot installation",
-              error,
-            );
-          }
-          this.#preludeInstalled = true;
         }
         continue;
       }

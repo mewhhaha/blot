@@ -1,25 +1,33 @@
 import type { CompilerWork } from "../../src/compiler/wasm.ts";
 
-export const compilerBenchmarkSchema = 1 as const;
+export const compilerBenchmarkSchema = 2 as const;
+
+export type CompilerBenchmarkClass =
+  | "cold-process"
+  | "cold-compiler"
+  | "warm-compiler"
+  | "resident-unchanged"
+  | "source-only-edit"
+  | "semantic-edit"
+  | "semantic-analysis-edit"
+  | "prepare-after-check"
+  | "emit-after-prepare";
 
 export interface CompilerBenchmarkSample {
   readonly durationMilliseconds: number;
   readonly sourceBytes: number;
-  readonly astBytes: number | null;
   readonly runtimeHirNodes: number | null;
   readonly wasmBytes: number | null;
-  readonly modulesLoaded: number;
-  readonly modulesTransported: number;
-  readonly modulesChecked: number;
-  readonly importersInvalidated: number;
-  readonly guestMemoryPagesBefore: number | null;
-  readonly guestMemoryPagesAfter: number | null;
+  readonly checkedModules: readonly string[] | null;
+  readonly invalidatedImporters: readonly string[] | null;
   readonly hostRssBytes: number;
   readonly work: CompilerWork | null;
 }
 
 export interface CompilerBenchmarkScenario {
-  readonly name: string;
+  readonly name: CompilerBenchmarkClass;
+  readonly measuredBoundary: string;
+  readonly setupOutsideClock: string;
   readonly observation: string;
   readonly samples: readonly CompilerBenchmarkSample[];
   readonly p50Milliseconds: number;
@@ -38,6 +46,8 @@ export interface CompilerBenchmarkReport {
     readonly rust: string | null;
   };
   readonly graphIdentity: string;
+  readonly sourcePath: string;
+  readonly sourceBytes: number;
   readonly sampleCount: number;
   readonly scenarios: readonly CompilerBenchmarkScenario[];
 }

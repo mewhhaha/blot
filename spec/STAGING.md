@@ -113,6 +113,12 @@ Administrative re-evaluation of the same recorded occurrence recovers the same
 atom. Evaluation under another module-instance stack mints a distinct atom even
 when the operation descriptors are structurally equal.
 
+A resident nullary module result may replace administrative re-evaluation only
+when its checked effect row is empty and its closed result type exposes no
+ordinary or host effect identity. Reuse then preserves no observable generative
+atom. A result whose closed type contains an effect value or a non-empty effect
+row is evaluated under each written module-instance occurrence as above.
+
 A reusable cache entry containing an ordinary effect is valid only when the
 complete owning instance identity and revision are preserved. A module path or
 declaration spelling alone is insufficient.

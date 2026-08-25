@@ -19,8 +19,8 @@ use crate::eval::{
     force_effect_value, match_pattern, run,
 };
 use crate::value::{
-    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, Value, attach_signature,
-    child_env, closure_signature, lookup,
+    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, OrderedFields, Value,
+    attach_signature, child_env, closure_signature, lookup,
 };
 
 type VariableId = u32;
@@ -632,6 +632,7 @@ struct CompilerWork {
     boundary_materializations: u64,
     capture_candidates: u64,
     captures_bridged: u64,
+    interface_fields_demanded: u64,
     solver_worklist_peak: u64,
 }
 
@@ -646,6 +647,7 @@ struct WorkSnapshot {
     boundary_materializations: u64,
     capture_candidates: u64,
     captures_bridged: u64,
+    interface_fields_demanded: u64,
 }
 
 #[derive(Clone)]
@@ -667,14 +669,38 @@ struct TypeEnvironment {
 
 #[derive(Clone)]
 struct OpenedTypes {
-    fields: Rc<Vec<(String, Type)>>,
-    positions_by_target: Rc<BTreeMap<String, usize>>,
+    inferred: TypeList<(String, Type)>,
+    values: OrderedFields,
+    resolved: Rc<RefCell<HashMap<String, Type>>>,
 }
 
 impl OpenedTypes {
-    fn get(&self, target: &str) -> Option<Type> {
-        let position = self.positions_by_target.get(target)?;
-        Some(self.fields[*position].1.clone())
+    fn get(&self, target: &str, checker: &Checker) -> Option<Type> {
+        if !self.values.contains_key(target) {
+            return None;
+        }
+        if let Some(type_) = self.resolved.borrow().get(target) {
+            return Some(type_.clone());
+        }
+        let type_ = match self
+            .inferred
+            .iter()
+            .find_map(|(name, type_)| (name == target).then_some(type_))
+        {
+            Some(type_) => type_.clone(),
+            None => checker.bridge_runtime_value(self.values.get(target)?),
+        };
+        checker
+            .interface_fields_demanded
+            .set(checker.interface_fields_demanded.get() + 1);
+        self.resolved
+            .borrow_mut()
+            .insert(target.to_owned(), type_.clone());
+        Some(type_)
+    }
+
+    fn contains(&self, target: &str) -> bool {
+        self.values.contains_key(target)
     }
 }
 
@@ -691,19 +717,19 @@ impl TypeEnvironment {
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<Typing> {
+    fn lookup(&self, name: &str, checker: &Checker) -> Option<Typing> {
         if let Some(typing) = self.names.get(name) {
             return Some(typing.clone());
         }
         for opened in self.opens.iter().rev() {
-            if let Some(type_) = opened.get(name) {
+            if let Some(type_) = opened.get(name, checker) {
                 return Some(Typing::Mono(type_));
             }
         }
-        self.parent.as_ref()?.lookup(name)
+        self.parent.as_ref()?.lookup(name, checker)
     }
 
-    fn lookup_stable(&self, name: &str) -> Option<Typing> {
+    fn lookup_stable(&self, name: &str, checker: &Checker) -> Option<Typing> {
         if let Some(typing) = self.stable_names.get(name) {
             return Some(typing.clone());
         }
@@ -711,23 +737,18 @@ impl TypeEnvironment {
             return Some(typing.clone());
         }
         for opened in self.opens.iter().rev() {
-            if let Some(type_) = opened.get(name) {
+            if let Some(type_) = opened.get(name, checker) {
                 return Some(Typing::Mono(type_));
             }
         }
-        self.parent.as_ref()?.lookup_stable(name)
+        self.parent.as_ref()?.lookup_stable(name, checker)
     }
 
     fn binding_phase(&self, name: &str) -> Option<Phase> {
         if self.names.contains_key(name) {
             return self.phases.get(name).copied();
         }
-        if self
-            .opens
-            .iter()
-            .rev()
-            .any(|opened| opened.get(name).is_some())
-        {
+        if self.opens.iter().rev().any(|opened| opened.contains(name)) {
             return Some(Phase::Comptime);
         }
         self.parent.as_ref()?.binding_phase(name)
@@ -1356,6 +1377,7 @@ pub struct Checker {
     boundary_materializations: Cell<u64>,
     capture_candidates: Cell<u64>,
     captures_bridged: Cell<u64>,
+    interface_fields_demanded: Cell<u64>,
     solver_worklist_peak: Cell<u64>,
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
@@ -1407,6 +1429,7 @@ impl Checker {
             boundary_materializations: Cell::new(0),
             capture_candidates: Cell::new(0),
             captures_bridged: Cell::new(0),
+            interface_fields_demanded: Cell::new(0),
             solver_worklist_peak: Cell::new(0),
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
@@ -1444,13 +1467,14 @@ impl Checker {
             boundary_materializations: self.boundary_materializations.get(),
             capture_candidates: self.capture_candidates.get(),
             captures_bridged: self.captures_bridged.get(),
+            interface_fields_demanded: self.interface_fields_demanded.get(),
         }
     }
 
     fn work_since(&self, before: WorkSnapshot) -> CompilerWork {
         let after = self.work_snapshot();
         CompilerWork {
-            schema: 2,
+            schema: 3,
             type_nodes: after.type_nodes - before.type_nodes,
             type_interns: after.type_interns - before.type_interns,
             constraints: after.constraints - before.constraints,
@@ -1461,6 +1485,8 @@ impl Checker {
                 - before.boundary_materializations,
             capture_candidates: after.capture_candidates - before.capture_candidates,
             captures_bridged: after.captures_bridged - before.captures_bridged,
+            interface_fields_demanded: after.interface_fields_demanded
+                - before.interface_fields_demanded,
             solver_worklist_peak: self.solver_worklist_peak.get(),
         }
     }
@@ -1591,6 +1617,7 @@ impl Checker {
     }
 
     pub fn begin_request(&self) {
+        self.module_work.borrow_mut().clear();
         let interfaces = self.module_interfaces.borrow();
         self.modules
             .borrow_mut()
@@ -2100,6 +2127,7 @@ impl Checker {
             .borrow()
             .iter()
             .filter(|((module, _), _)| module == path)
+            .filter(|(_, type_)| ownership_uses_expression_type(type_))
             .map(|((_, expression), type_)| (*expression, self.settle(type_.clone(), true)))
             .collect::<HashMap<_, _>>();
         let ownership = crate::ownership::check(
@@ -2146,6 +2174,12 @@ impl Checker {
                 .module_results
                 .borrow_mut()
                 .insert(path.to_owned(), value);
+            if !type_exposes_generative_effect(&checked.result) {
+                self.context
+                    .reusable_module_results
+                    .borrow_mut()
+                    .insert(path.to_owned());
+            }
         }
     }
 
@@ -2838,7 +2872,7 @@ impl Checker {
                 let recursive_bounds = if recursive {
                     names
                         .iter()
-                        .filter_map(|name| match types.lookup(name) {
+                        .filter_map(|name| match types.lookup(name, self) {
                             Some(Typing::Mono(bound)) => Some(bound),
                             _ => None,
                         })
@@ -2902,7 +2936,7 @@ impl Checker {
                 };
                 let inferred_signature = self.reify_runtime_type(&settled_signature);
                 for name in names {
-                    let body = match types.lookup(&name) {
+                    let body = match types.lookup(&name, self) {
                         Some(Typing::Mono(type_)) => type_,
                         Some(Typing::Scheme { body, .. }) => body,
                         None => {
@@ -2941,7 +2975,7 @@ impl Checker {
                 Ok(inferred.effects)
             }
             Declaration::Shadow { name, value, span } => {
-                let previous = types.lookup_stable(&name).ok_or_else(|| {
+                let previous = types.lookup_stable(&name, self).ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_UNBOUND",
                         format!("`{name} := ...` cannot shadow an unbound name."),
@@ -2983,40 +3017,20 @@ impl Checker {
                         span,
                     ));
                 };
-                let inferred_fields = match self.settle(inferred.type_.clone(), true) {
+                let inferred_fields = match inferred.type_ {
                     Type::Record(fields) => fields,
+                    type_ @ Type::Variable(_) => match self.settle(type_, true) {
+                        Type::Record(fields) => fields,
+                        _ => Vec::new().into(),
+                    },
                     _ => Vec::new().into(),
                 };
-                let mut type_positions_by_source = inferred_fields
-                    .iter()
-                    .enumerate()
-                    .map(|(position, (name, _))| (name.clone(), position))
-                    .collect::<HashMap<_, _>>();
-                let mut inferred_fields = inferred_fields.to_vec();
-                let mut type_positions_by_target = BTreeMap::new();
-                let mut value_sources_by_target = BTreeMap::new();
-                for (source, value) in &fields {
-                    let type_position = match type_positions_by_source.get(source) {
-                        Some(position) => *position,
-                        None => {
-                            let position = inferred_fields.len();
-                            inferred_fields
-                                .push((source.clone(), self.bridge_runtime_value(value)));
-                            type_positions_by_source.insert(source.clone(), position);
-                            position
-                        }
-                    };
-                    type_positions_by_target.insert(source.clone(), type_position);
-                    value_sources_by_target.insert(source.clone(), source.clone());
-                }
                 Rc::make_mut(&mut types.opens).push(OpenedTypes {
-                    fields: Rc::new(inferred_fields.to_vec()),
-                    positions_by_target: Rc::new(type_positions_by_target),
+                    inferred: inferred_fields,
+                    values: fields.clone(),
+                    resolved: Rc::new(RefCell::new(HashMap::new())),
                 });
-                values
-                    .opens
-                    .borrow_mut()
-                    .push(OpenedValues::new(fields, value_sources_by_target));
+                values.opens.borrow_mut().push(OpenedValues::new(fields));
                 Ok(inferred.effects)
             }
         }
@@ -3049,6 +3063,7 @@ impl Checker {
                 module.arena.expressions[expression_id.0 as usize],
                 Expression::Apply { .. }
             )
+            && intrinsic_head(module, expression_id) != Some("@import")
         {
             self.expression_types
                 .borrow_mut()
@@ -3087,7 +3102,7 @@ impl Checker {
                 open: false,
             })),
             Expression::Var { name, .. } => {
-                let typing = environment.lookup(&name).ok_or_else(|| {
+                let typing = environment.lookup(&name, self).ok_or_else(|| {
                     if environment.is_forward(&name) {
                         return Diagnostic::new(
                             "BLOT_FORWARD_REFERENCE",
@@ -3448,6 +3463,22 @@ impl Checker {
                             open: false,
                         },
                         effects: argument.effects,
+                    });
+                }
+                if let Some(Type::Function {
+                    deferred: false,
+                    parameter,
+                    effects,
+                    result,
+                }) = applied_literal_import(module, function, dependencies)
+                {
+                    let argument =
+                        self.infer(path, module, argument, environment, values, dependencies)?;
+                    self.constrain(argument.type_, Rc::unwrap_or_clone(parameter), span)?;
+                    return Ok(Inferred {
+                        type_: Rc::unwrap_or_clone(result),
+                        effects: self
+                            .join_effects(argument.effects, Rc::unwrap_or_clone(effects))?,
                     });
                 }
                 if let Some(imported) = literal_import(module, function, argument, dependencies) {
@@ -3828,7 +3859,7 @@ impl Checker {
                     let mut consequence_scope = TypeEnvironment::child(Rc::new(remaining.clone()));
                     if let Some((name, consequence, alternate)) = refinements {
                         let binding_phase = remaining.binding_phase(&name);
-                        let stable = remaining.lookup_stable(&name).ok_or_else(|| {
+                        let stable = remaining.lookup_stable(&name, self).ok_or_else(|| {
                             Diagnostic::new(
                                 "BLOT_RUST_INVARIANT",
                                 format!("A refinement references unbound `{name}`."),
@@ -6140,7 +6171,7 @@ impl Checker {
     ) -> Option<Type> {
         let type_ = match &module.arena.patterns[pattern.0 as usize] {
             Pattern::Wildcard { .. } | Pattern::Name { .. } => self.fresh(),
-            Pattern::Pin { name, .. } => self.instantiate(environment.lookup(name)?),
+            Pattern::Pin { name, .. } => self.instantiate(environment.lookup(name, self)?),
             Pattern::Int { value, .. } => Type::Range {
                 domain: Domain::Int,
                 low: Some(Scalar::Int(value.clone())),
@@ -6300,7 +6331,7 @@ impl Checker {
     ) -> Result<(), Diagnostic> {
         match &module.arena.patterns[pattern.0 as usize] {
             Pattern::Pin { name, span } => {
-                let Some(typing) = environment.lookup(name) else {
+                let Some(typing) = environment.lookup(name, self) else {
                     let code = if environment.is_forward(name) {
                         "BLOT_FORWARD_REFERENCE"
                     } else {
@@ -7733,6 +7764,26 @@ fn contains_function(type_: &Type) -> bool {
     }
 }
 
+fn ownership_uses_expression_type(type_: &Type) -> bool {
+    match type_ {
+        Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
+        Type::Forall { body, .. } => ownership_uses_expression_type(body),
+        Type::Function { .. } | Type::Array(_) => true,
+        Type::Range { .. }
+        | Type::Unit
+        | Type::Record(_)
+        | Type::RecordUpdate { .. }
+        | Type::Region(_)
+        | Type::Scratch(_)
+        | Type::Variant { .. }
+        | Type::Effects(_)
+        | Type::OpenEffects { .. }
+        | Type::Union(_)
+        | Type::Opaque(_)
+        | Type::Bottom => false,
+    }
+}
+
 fn function_result_contains_embedded_function(type_: &Type) -> bool {
     match type_ {
         Type::Forall { body, .. } => function_result_contains_embedded_function(body),
@@ -7760,6 +7811,20 @@ fn literal_import(
         return None;
     };
     dependencies.get(value).cloned()
+}
+
+fn applied_literal_import(
+    module: &Module,
+    function: ExpressionId,
+    dependencies: &BTreeMap<String, Type>,
+) -> Option<Type> {
+    let Expression::Apply {
+        function, argument, ..
+    } = &module.arena.expressions[function.0 as usize]
+    else {
+        return None;
+    };
+    literal_import(module, *function, *argument, dependencies)
 }
 
 fn intrinsic_head(module: &Module, mut expression: ExpressionId) -> Option<&str> {
@@ -7820,7 +7885,10 @@ fn comparison_refinements(
         if left.0 != right.0 {
             return None;
         }
-        let original = checker.settle(checker.instantiate(environment.lookup(&left.0)?), true);
+        let original = checker.settle(
+            checker.instantiate(environment.lookup(&left.0, checker)?),
+            true,
+        );
         return match junction {
             crate::recognise::Junction::And => Some((
                 left.0,
@@ -7845,7 +7913,10 @@ fn comparison_refinements(
         if left.0 != right.0 {
             return None;
         }
-        let original = checker.settle(checker.instantiate(environment.lookup(&left.0)?), true);
+        let original = checker.settle(
+            checker.instantiate(environment.lookup(&left.0, checker)?),
+            true,
+        );
         return match junction {
             crate::recognise::Junction::And => Some((
                 left.0,
@@ -7885,7 +7956,10 @@ fn comparison_refinements(
         }
         _ => return None,
     };
-    let original = checker.settle(checker.instantiate(environment.lookup(&name)?), true);
+    let original = checker.settle(
+        checker.instantiate(environment.lookup(&name, checker)?),
+        true,
+    );
     let accepted = ordering_type(&orderings, &witness);
     let rejected = ordering_type(&complement_orderings(&orderings), &witness);
     Some((
@@ -10055,8 +10129,48 @@ fn show_effects(effects: &Type) -> String {
     }
 }
 
-fn empty_effects(type_: &Type) -> bool {
+pub(crate) fn empty_effects(type_: &Type) -> bool {
     matches!(type_, Type::Bottom) || matches!(type_, Type::Effects(labels) if labels.is_empty())
+}
+
+pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
+    match type_ {
+        Type::Forall { body, .. }
+        | Type::Array(body)
+        | Type::Region(body)
+        | Type::Scratch(body) => type_exposes_generative_effect(body),
+        Type::Function {
+            parameter,
+            effects,
+            result,
+            ..
+        } => {
+            type_exposes_generative_effect(parameter)
+                || type_exposes_generative_effect(effects)
+                || type_exposes_generative_effect(result)
+        }
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
+            .iter()
+            .any(|(_, field)| type_exposes_generative_effect(field)),
+        Type::RecordUpdate { base, fields } => {
+            type_exposes_generative_effect(base)
+                || fields
+                    .iter()
+                    .any(|(_, field)| type_exposes_generative_effect(field))
+        }
+        Type::Effects(labels) => !labels.is_empty(),
+        Type::OpenEffects { labels, tail } => {
+            !labels.is_empty() || type_exposes_generative_effect(tail)
+        }
+        Type::Union(members) => members.iter().any(type_exposes_generative_effect),
+        Type::Opaque(name) => name.starts_with("Effect:"),
+        Type::Variable(_)
+        | Type::Rigid(_)
+        | Type::Range { .. }
+        | Type::Unit
+        | Type::Top
+        | Type::Bottom => false,
+    }
 }
 
 fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
@@ -10210,6 +10324,32 @@ fn flatten_interface_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exposed_effect_identity_prevents_module_result_reuse() {
+        let ordinary = Type::Record(
+            vec![(
+                "identity".to_owned(),
+                Type::Function {
+                    deferred: false,
+                    parameter: Rc::new(Type::Rigid(1)),
+                    effects: Rc::new(Type::Effects(BTreeSet::new())),
+                    result: Rc::new(Type::Rigid(1)),
+                },
+            )]
+            .into(),
+        );
+        let generative = Type::Record(
+            vec![(
+                "Console".to_owned(),
+                Type::Opaque("Effect:7:Console".to_owned()),
+            )]
+            .into(),
+        );
+
+        assert!(!type_exposes_generative_effect(&ordinary));
+        assert!(type_exposes_generative_effect(&generative));
+    }
 
     #[test]
     fn seal_identity_is_canonical_and_carrier_sensitive() {

@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
@@ -10,20 +10,31 @@ use crate::ast::{
 use crate::backend::{ClosedProgram, CompiledModule};
 use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
-    Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_module, run,
+    Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_expression,
+    evaluate_module, evaluate_module_environment, run,
 };
 use crate::frontend::{FrontendState, SyntaxSnapshot};
 use crate::typecheck::{
-    CHECKED_MODULE_CERTIFICATE_SCHEMA, CachedModuleAnalyses, CachedModuleInterface,
-    CheckedModuleCertificate, Checker,
+    CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, empty_effects,
+    type_exposes_generative_effect,
 };
 use crate::value::{OrderedFields, Value, show};
+use crate::value_capsule::ValueCapsule;
+
+const MODULE_SNAPSHOT_SCHEMA: u32 = 2;
 
 #[derive(Deserialize, Serialize)]
 struct ModuleSnapshot {
     schema: u32,
     ast: Module,
     certificate: CheckedModuleCertificate,
+    comptime_environment: Option<ValueCapsule>,
+}
+
+#[derive(Clone)]
+struct PublishedBoundary {
+    id: u64,
+    bytes: Option<Rc<[u8]>>,
 }
 
 pub struct CompilerSession {
@@ -35,7 +46,8 @@ pub struct CompilerSession {
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
     closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
-    published_boundaries: RefCell<HashMap<String, Rc<[u8]>>>,
+    published_boundaries: RefCell<HashMap<String, PublishedBoundary>>,
+    next_boundary_id: Cell<u64>,
     dirty_modules: RefCell<HashSet<String>>,
     invalidation: RefCell<InvalidationTelemetry>,
 }
@@ -83,6 +95,7 @@ impl Default for CompilerSession {
             checker,
             closed_programs: RefCell::new(HashMap::new()),
             published_boundaries: RefCell::new(HashMap::new()),
+            next_boundary_id: Cell::new(0),
             dirty_modules: RefCell::new(HashSet::new()),
             invalidation: RefCell::new(InvalidationTelemetry::default()),
         }
@@ -163,10 +176,10 @@ impl CompilerSession {
     pub fn install_module_snapshot(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let snapshot: ModuleSnapshot = rmp_serde::from_slice(bytes)
             .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
-        if snapshot.schema != CHECKED_MODULE_CERTIFICATE_SCHEMA {
+        if snapshot.schema != MODULE_SNAPSHOT_SCHEMA {
             return Err(format!(
                 "module snapshot for {path} has schema {}, expected {}",
-                snapshot.schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
+                snapshot.schema, MODULE_SNAPSHOT_SCHEMA,
             ));
         }
         snapshot.ast.validate()?;
@@ -177,29 +190,42 @@ impl CompilerSession {
                 "module snapshot for {path} must be dependency-free"
             ));
         }
+        let result = snapshot.ast.result;
         self.install_module(path.to_owned(), snapshot.ast)?;
         self.checker
             .install_certificate(path, snapshot.certificate)?;
-        self.checker.check(path).map_err(|diagnostic| {
+        let checked = self.checker.check(path).map_err(|diagnostic| {
             format!(
                 "module snapshot interface for {path} failed to inflate: {} ({})",
                 diagnostic.message, diagnostic.code,
             )
         })?;
-        self.context
-            .captured_binding_modules
-            .borrow_mut()
-            .insert(path.to_owned());
-        let evaluated = run(evaluate_module(
-            self.context.clone(),
-            path.to_owned(),
-            Value::Unit,
-            Runtime::new(Phase::Comptime, path.to_owned()),
-        ));
-        self.context
-            .captured_binding_modules
-            .borrow_mut()
-            .remove(path);
+        let evaluated = if let Some(capsule) = snapshot.comptime_environment {
+            let environment = capsule.decode(path, &self.context.closure_signatures.borrow())?;
+            run(evaluate_expression(
+                self.context.clone(),
+                Rc::new(path.to_owned()),
+                result,
+                environment,
+                Runtime::new(Phase::Comptime, path.to_owned()),
+            ))
+        } else {
+            self.context
+                .captured_binding_modules
+                .borrow_mut()
+                .insert(path.to_owned());
+            let evaluated = run(evaluate_module(
+                self.context.clone(),
+                path.to_owned(),
+                Value::Unit,
+                Runtime::new(Phase::Comptime, path.to_owned()),
+            ));
+            self.context
+                .captured_binding_modules
+                .borrow_mut()
+                .remove(path);
+            evaluated
+        };
         let value = evaluated.map_err(|diagnostic| {
             format!(
                 "module snapshot evaluation for {path} failed: {} ({})",
@@ -210,8 +236,19 @@ impl CompilerSession {
             .module_results
             .borrow_mut()
             .insert(path.to_owned(), value);
-        self.publish_boundary(path)
-            .map_err(|error| format!("module snapshot boundary for {path} is invalid: {error}"))?;
+        if checked.parameter.is_none()
+            && empty_effects(&checked.effects)
+            && !type_exposes_generative_effect(&checked.result)
+        {
+            self.context
+                .reusable_module_results
+                .borrow_mut()
+                .insert(path.to_owned());
+        }
+        let id = self.allocate_boundary_id()?;
+        self.published_boundaries
+            .borrow_mut()
+            .insert(path.to_owned(), PublishedBoundary { id, bytes: None });
         self.dirty_modules.borrow_mut().remove(path);
         Ok(())
     }
@@ -641,10 +678,43 @@ impl CompilerSession {
             .map(|loaded| loaded.module.as_ref().clone())
             .ok_or_else(|| format!("cannot snapshot unknown module {path}"))?;
         let certificate = self.checker.certificate(path)?;
+        let checked = self.checker.check(path).map_err(|diagnostic| {
+            format!(
+                "cannot snapshot module {path}: {} ({})",
+                diagnostic.message, diagnostic.code
+            )
+        })?;
+        let comptime_environment = if ast.parameter.is_none()
+            && empty_effects(&checked.effects)
+            && !type_exposes_generative_effect(&checked.result)
+        {
+            let environment = match checked.evaluated {
+                Some(environment) => environment,
+                None => {
+                    evaluate_module_environment(
+                        self.context.clone(),
+                        path.to_owned(),
+                        Value::Unit,
+                        Runtime::new(Phase::Comptime, path.to_owned()),
+                    )
+                    .map_err(|diagnostic| {
+                        format!(
+                            "cannot snapshot module {path}: {} ({})",
+                            diagnostic.message, diagnostic.code
+                        )
+                    })?
+                    .1
+                }
+            };
+            ValueCapsule::encode(&environment, path)?
+        } else {
+            None
+        };
         rmp_serde::to_vec(&ModuleSnapshot {
-            schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            schema: MODULE_SNAPSHOT_SCHEMA,
             ast,
             certificate,
+            comptime_environment,
         })
         .map_err(|error| format!("could not encode module snapshot: {error}"))
     }
@@ -798,15 +868,15 @@ impl CompilerSession {
             .unwrap_or_default();
         for (specifier, dependency) in dependencies {
             append_boundary_string(&mut boundary, &specifier);
-            let dependency_boundary = self
+            let dependency_boundary_id = self
                 .published_boundaries
                 .borrow()
                 .get(&dependency)
-                .cloned()
+                .map(|boundary| boundary.id)
                 .ok_or_else(|| {
                     format!("module {path} reached unpublished dependency boundary {dependency}")
                 })?;
-            append_boundary_bytes(&mut boundary, &dependency_boundary);
+            boundary.extend_from_slice(&dependency_boundary_id.to_le_bytes());
         }
         if let Some(value) = self.context.module_results.borrow().get(path) {
             boundary.push(1);
@@ -815,11 +885,32 @@ impl CompilerSession {
             boundary.push(0);
         }
         let bytes = Rc::<[u8]>::from(boundary);
-        let previous = self
-            .published_boundaries
-            .borrow_mut()
-            .insert(path.to_owned(), bytes.clone());
-        Ok(previous.as_deref() != Some(bytes.as_ref()))
+        let mut published_boundaries = self.published_boundaries.borrow_mut();
+        if published_boundaries
+            .get(path)
+            .and_then(|previous| previous.bytes.as_deref())
+            .is_some_and(|previous| previous == bytes.as_ref())
+        {
+            return Ok(false);
+        }
+        let id = self.allocate_boundary_id()?;
+        published_boundaries.insert(
+            path.to_owned(),
+            PublishedBoundary {
+                id,
+                bytes: Some(bytes),
+            },
+        );
+        Ok(true)
+    }
+
+    fn allocate_boundary_id(&self) -> Result<u64, String> {
+        let id =
+            self.next_boundary_id.get().checked_add(1).ok_or_else(|| {
+                "compiler session exhausted module boundary identities".to_owned()
+            })?;
+        self.next_boundary_id.set(id);
+        Ok(id)
     }
 
     fn invalidate_direct_importers(&self, changed: &str) {
@@ -891,6 +982,10 @@ impl CompilerSession {
             .module_results
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
+        self.context
+            .reusable_module_results
+            .borrow_mut()
+            .retain(|path| !invalidated.contains(path));
         self.closed_programs
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
@@ -1805,6 +1900,9 @@ mod tests {
         let bytes = builder
             .module_snapshot(MODULE_PATH)
             .expect("module snapshot should encode");
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        assert!(snapshot.comptime_environment.is_some());
         let mut consumer = CompilerSession::default();
         consumer
             .install_module_snapshot(MODULE_PATH, &bytes)
@@ -1844,6 +1942,33 @@ mod tests {
             consumer.evaluate_module("snapshot:consumer")["display"],
             "(43, 42, \"ok\")"
         );
+    }
+
+    #[test]
+    fn module_snapshot_replays_an_ineligible_private_environment() {
+        const MODULE_PATH: &str = "snapshot:private-effect";
+        let mut builder = CompilerSession::default();
+        builder
+            .add_source(
+                MODULE_PATH.to_owned(),
+                source("const Hidden = @effect { .read = @type.unit -> @type.int; }\nreturn 42\n"),
+            )
+            .expect("module source should load");
+        builder
+            .configure_module(MODULE_PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("module source should configure");
+        let bytes = builder
+            .module_snapshot(MODULE_PATH)
+            .expect("module snapshot should encode");
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        assert!(snapshot.comptime_environment.is_none());
+
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        assert_eq!(consumer.evaluate_module(MODULE_PATH)["display"], "42");
     }
 
     #[test]
@@ -1913,7 +2038,7 @@ mod tests {
         let analysis = session.analyze_module("main.blot");
         assert_eq!(analysis["ok"], true);
         assert_eq!(analysis["targetPreflight"]["supported"], true, "{analysis}");
-        assert_eq!(analysis["work"]["schema"], 2);
+        assert_eq!(analysis["work"]["schema"], 3);
         assert!(
             analysis["work"]["solverWorklistPeak"]
                 .as_u64()
@@ -1928,6 +2053,30 @@ mod tests {
                 .unwrap_or_default()
                 > 0
         );
+
+        let unchanged = session.analyze_module("main.blot");
+        assert_eq!(unchanged["work"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn open_materializes_only_referenced_fields() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(
+                    "open { .used = 1; .unused = fn value => value; }\n\
+                     return used\n",
+                ),
+            )
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert_eq!(analysis["work"]["interfaceFieldsDemanded"], 1);
     }
 
     #[test]
@@ -2210,6 +2359,7 @@ mod tests {
             )
             .expect("root source should configure");
         assert_eq!(session.check_module(root_path)["ok"], true);
+        let dependency_boundary_id = session.published_boundaries.borrow()[dependency_path].id;
 
         session
             .add_source(
@@ -2232,6 +2382,10 @@ mod tests {
         assert_eq!(
             analysis["invalidation"]["invalidatedImporters"],
             serde_json::json!([]),
+        );
+        assert_eq!(
+            session.published_boundaries.borrow()[dependency_path].id,
+            dependency_boundary_id,
         );
     }
 

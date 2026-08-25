@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "controls": {
     "lto": "fat",
     "codegenUnits": 1,
@@ -7,147 +7,147 @@
     "strip": true,
     "stackBytes": 8388608
   },
-  "node": "v24.19.0",
-  "v8": "13.6.233.17-node.51",
+  "node": "v24.12.0",
+  "v8": "13.6.233.17-node.37",
   "results": [
     {
       "optLevel": "s",
-      "artifactBytes": 3606573,
-      "artifactSha256": "155894e707afe722781516400ec0911923d8075febf00c89f329252e7cb8a492",
-      "shippedCompilerPayloadBytes": 3989551,
-      "compileMilliseconds": 8.370209000000614,
-      "instantiateMilliseconds": 0.4344669999991311,
-      "freshCheckMilliseconds": 14.209901000009268,
-      "semanticEditMilliseconds": 0.5565889999998035,
-      "prepareMilliseconds": 4.93351299999631,
-      "compileAfterPrepareMilliseconds": 4.0419699999911245,
+      "artifactBytes": 4095350,
+      "artifactSha256": "f9476ab30fd3b8cc2b67e4249b68574e396d0167b7c901b4a1703e4462559121",
+      "shippedCompilerPayloadBytes": 4507168,
+      "compileMilliseconds": 4.572119000004022,
+      "instantiateMilliseconds": 0.16989900000044145,
+      "freshCheckMilliseconds": 57.50513000000501,
+      "semanticEditMilliseconds": 0.6817450000016834,
+      "prepareMilliseconds": 2.611362999996345,
+      "compileAfterPrepareMilliseconds": 1.999735999997938,
       "soakEdits": 10000,
-      "soakMilliseconds": 532.9126580000011,
-      "memoryPagesBeforeSoak": 133,
-      "memoryPagesAfterSoak": 133,
-      "emittedWasmBytes": 1124,
+      "soakMilliseconds": 498.6192999999985,
+      "memoryPagesBeforeSoak": 249,
+      "memoryPagesAfterSoak": 249,
+      "emittedWasmBytes": 1230,
       "typeScaling": [
         {
           "declarations": 32,
-          "checkMilliseconds": 14.793921000004048,
+          "checkMilliseconds": 8.049385000005714,
           "typeNodes": 325,
           "constraints": 704,
-          "settleVisits": 1252
+          "settleVisits": 1218
         },
         {
           "declarations": 64,
-          "checkMilliseconds": 5.192112000004272,
+          "checkMilliseconds": 3.3836969999974826,
           "typeNodes": 645,
           "constraints": 1408,
-          "settleVisits": 2500
+          "settleVisits": 2434
         },
         {
           "declarations": 128,
-          "checkMilliseconds": 10.648518000001786,
+          "checkMilliseconds": 6.308326999998826,
           "typeNodes": 1285,
           "constraints": 2816,
-          "settleVisits": 4996
+          "settleVisits": 4866
         },
         {
           "declarations": 256,
-          "checkMilliseconds": 18.174083999998402,
+          "checkMilliseconds": 12.810992999999144,
           "typeNodes": 2565,
           "constraints": 5632,
-          "settleVisits": 9988
+          "settleVisits": 9730
         }
       ]
     },
     {
       "optLevel": "2",
-      "artifactBytes": 4706760,
-      "artifactSha256": "b1e02388044fec948ad8a6589b12742b0e8e1d7ed84ba1292a12a90056dd8901",
-      "shippedCompilerPayloadBytes": 5089738,
-      "compileMilliseconds": 10.482465999986744,
-      "instantiateMilliseconds": 0.7643579999858048,
-      "freshCheckMilliseconds": 18.080925999995088,
-      "semanticEditMilliseconds": 0.9736899999843445,
-      "prepareMilliseconds": 6.191200000001118,
-      "compileAfterPrepareMilliseconds": 4.553962000005413,
+      "artifactBytes": 5230881,
+      "artifactSha256": "c5f00d519c072868c1f60e2300573fc80c603d7acb130247df1707b5f6806032",
+      "shippedCompilerPayloadBytes": 5642699,
+      "compileMilliseconds": 8.55171299999347,
+      "instantiateMilliseconds": 0.143249000000651,
+      "freshCheckMilliseconds": 72.56093799999508,
+      "semanticEditMilliseconds": 0.6168160000088392,
+      "prepareMilliseconds": 3.7881349999952363,
+      "compileAfterPrepareMilliseconds": 2.861550999994506,
       "soakEdits": 10000,
-      "soakMilliseconds": 477.6524159999972,
-      "memoryPagesBeforeSoak": 133,
-      "memoryPagesAfterSoak": 133,
-      "emittedWasmBytes": 1124,
+      "soakMilliseconds": 396.1508109999995,
+      "memoryPagesBeforeSoak": 249,
+      "memoryPagesAfterSoak": 249,
+      "emittedWasmBytes": 1230,
       "typeScaling": [
         {
           "declarations": 32,
-          "checkMilliseconds": 24.82916500000283,
+          "checkMilliseconds": 8.362053999997443,
           "typeNodes": 325,
           "constraints": 704,
-          "settleVisits": 1252
+          "settleVisits": 1218
         },
         {
           "declarations": 64,
-          "checkMilliseconds": 6.870450999995228,
+          "checkMilliseconds": 3.0685299999895506,
           "typeNodes": 645,
           "constraints": 1408,
-          "settleVisits": 2500
+          "settleVisits": 2434
         },
         {
           "declarations": 128,
-          "checkMilliseconds": 13.340175999997882,
+          "checkMilliseconds": 6.600317000003997,
           "typeNodes": 1285,
           "constraints": 2816,
-          "settleVisits": 4996
+          "settleVisits": 4866
         },
         {
           "declarations": 256,
-          "checkMilliseconds": 24.379183999990346,
+          "checkMilliseconds": 11.621423000004143,
           "typeNodes": 2565,
           "constraints": 5632,
-          "settleVisits": 9988
+          "settleVisits": 9730
         }
       ]
     },
     {
       "optLevel": "3",
-      "artifactBytes": 4850759,
-      "artifactSha256": "744e42e9db41343dbb406ea180d12e7715b6abf05a701b0bf33e306ef434b0df",
-      "shippedCompilerPayloadBytes": 5233737,
-      "compileMilliseconds": 28.30613800001447,
-      "instantiateMilliseconds": 1.2472479999996722,
-      "freshCheckMilliseconds": 25.856514999992214,
-      "semanticEditMilliseconds": 0.7722910000011325,
-      "prepareMilliseconds": 5.461233000009088,
-      "compileAfterPrepareMilliseconds": 3.9993459999968763,
+      "artifactBytes": 5371184,
+      "artifactSha256": "4cab21a6caed6d881d15bf38dff9c9c4165f6fe1299c2e6c2b150c851a7b83ad",
+      "shippedCompilerPayloadBytes": 5783002,
+      "compileMilliseconds": 5.834372000012081,
+      "instantiateMilliseconds": 0.3863769999879878,
+      "freshCheckMilliseconds": 59.196924999996554,
+      "semanticEditMilliseconds": 0.5936260000162292,
+      "prepareMilliseconds": 5.246766000025673,
+      "compileAfterPrepareMilliseconds": 4.852467999997316,
       "soakEdits": 10000,
-      "soakMilliseconds": 410.08481599998777,
-      "memoryPagesBeforeSoak": 133,
-      "memoryPagesAfterSoak": 133,
-      "emittedWasmBytes": 1124,
+      "soakMilliseconds": 369.9811210000189,
+      "memoryPagesBeforeSoak": 249,
+      "memoryPagesAfterSoak": 249,
+      "emittedWasmBytes": 1230,
       "typeScaling": [
         {
           "declarations": 32,
-          "checkMilliseconds": 17.05757199996151,
+          "checkMilliseconds": 8.748422999982722,
           "typeNodes": 325,
           "constraints": 704,
-          "settleVisits": 1252
+          "settleVisits": 1218
         },
         {
           "declarations": 64,
-          "checkMilliseconds": 5.083459999994375,
+          "checkMilliseconds": 3.2856489999976475,
           "typeNodes": 645,
           "constraints": 1408,
-          "settleVisits": 2500
+          "settleVisits": 2434
         },
         {
           "declarations": 128,
-          "checkMilliseconds": 12.084926999988966,
+          "checkMilliseconds": 7.3706919999967795,
           "typeNodes": 1285,
           "constraints": 2816,
-          "settleVisits": 4996
+          "settleVisits": 4866
         },
         {
           "declarations": 256,
-          "checkMilliseconds": 26.279504999984056,
+          "checkMilliseconds": 13.214944000006653,
           "typeNodes": 2565,
           "constraints": 5632,
-          "settleVisits": 9988
+          "settleVisits": 9730
         }
       ]
     }

@@ -55,6 +55,7 @@ type EvaluatedBindings = HashMap<String, HashMap<(PatternId, ExpressionId, Phase
 pub struct Context {
     pub modules: RefCell<HashMap<String, LoadedModule>>,
     pub module_results: RefCell<HashMap<String, Value>>,
+    pub(crate) reusable_module_results: RefCell<HashSet<String>>,
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
@@ -74,6 +75,7 @@ impl Context {
     pub(crate) fn remove_module_state(&self, path: &str) {
         self.modules.borrow_mut().remove(path);
         self.module_results.borrow_mut().remove(path);
+        self.reusable_module_results.borrow_mut().remove(path);
         self.live_declarations
             .borrow_mut()
             .retain(|(module, _), _| module != path);
@@ -325,7 +327,41 @@ pub fn evaluate_module(
     context: Rc<Context>,
     path: String,
     argument: Value,
+    runtime: Runtime,
+) -> Computation {
+    evaluate_module_with_capture(context, path, argument, runtime, None)
+}
+
+pub fn evaluate_module_environment(
+    context: Rc<Context>,
+    path: String,
+    argument: Value,
+    runtime: Runtime,
+) -> Result<(Value, Environment), Diagnostic> {
+    let captured = Rc::new(RefCell::new(None));
+    let value = run(evaluate_module_with_capture(
+        context,
+        path,
+        argument,
+        runtime,
+        Some(captured.clone()),
+    ))?;
+    let environment = captured.borrow_mut().take().ok_or_else(|| {
+        Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "Module evaluation completed without its compile-time environment.",
+            Span { start: 0, end: 0 },
+        )
+    })?;
+    Ok((value, environment))
+}
+
+fn evaluate_module_with_capture(
+    context: Rc<Context>,
+    path: String,
+    argument: Value,
     mut runtime: Runtime,
+    capture: Option<Rc<RefCell<Option<Environment>>>>,
 ) -> Computation {
     let path = Rc::new(path);
     runtime.module = path.clone();
@@ -365,7 +401,10 @@ pub fn evaluate_module(
         0,
         environment,
         runtime,
-        loaded.module.result,
+        DeclarationTail {
+            result: loaded.module.result,
+            capture,
+        },
     )
 }
 
@@ -724,7 +763,10 @@ pub fn evaluate_expression(
                 0,
                 scope,
                 runtime,
-                *result,
+                DeclarationTail {
+                    result: *result,
+                    capture: None,
+                },
             )
         }
         Expression::Rec { .. } => Computation::error(Diagnostic::new(
@@ -1667,6 +1709,11 @@ fn evaluate_dynamic_if(
     })
 }
 
+struct DeclarationTail {
+    result: ExpressionId,
+    capture: Option<Rc<RefCell<Option<Environment>>>>,
+}
+
 fn evaluate_declarations(
     context: Rc<Context>,
     module_path: Rc<String>,
@@ -1674,10 +1721,13 @@ fn evaluate_declarations(
     index: usize,
     environment: Environment,
     runtime: Runtime,
-    result: ExpressionId,
+    tail: DeclarationTail,
 ) -> Computation {
     let Some(declaration_id) = declarations.get(index).copied() else {
-        return evaluate_expression(context, module_path, result, environment, runtime);
+        if let Some(capture) = tail.capture {
+            *capture.borrow_mut() = Some(environment.clone());
+        }
+        return evaluate_expression(context, module_path, tail.result, environment, runtime);
     };
     let declaration = match module_declaration(&context, &module_path, declaration_id) {
         Ok(declaration) => declaration,
@@ -1696,7 +1746,7 @@ fn evaluate_declarations(
             index + 1,
             next_environment,
             next_runtime,
-            result,
+            tail,
         )
     };
     match declaration {
@@ -1802,14 +1852,10 @@ fn evaluate_declarations(
                             span,
                         ));
                     };
-                    let mut sources_by_target = BTreeMap::new();
-                    for source in fields.keys() {
-                        sources_by_target.insert(source.clone(), source.clone());
-                    }
                     open_environment
                         .opens
                         .borrow_mut()
-                        .push(OpenedValues::new(fields, sources_by_target));
+                        .push(OpenedValues::new(fields));
                     continue_with()
                 },
             )
@@ -1984,11 +2030,15 @@ fn apply_with_expected(
 ) -> Computation {
     match function {
         Value::ModuleClosure { module } => {
+            let reusable = matches!(argument, Value::Unit)
+                && context.reusable_module_results.borrow().contains(&module);
+            if reusable && let Some(value) = context.module_results.borrow().get(&module).cloned() {
+                return Computation::value(value);
+            }
             // A cached module result is a definition-level value. Reusing it
-            // across import expressions would merge generative identities that
-            // belong to distinct written occurrences. Re-evaluate the module
-            // under a stable occurrence stack instead; repeated compiler reads
-            // of the same occurrence still recover the same effect atoms.
+            // across import expressions is valid only when the closed interface
+            // proves that no generative identity is observable. Otherwise,
+            // re-evaluate under the written occurrence's stable instance stack.
             let module_runtime = enter_module_instance(runtime, &module, span);
             evaluate_module(context, module, argument, module_runtime)
         }
@@ -2105,7 +2155,7 @@ fn apply_with_expected(
                         parameter,
                         body,
                         deferred: false,
-                        environment: scope.parent.clone().expect("closure environment"),
+                        environment: scope.parent.borrow().clone().expect("closure environment"),
                         self_name: Some(name),
                         imports: None,
                         signature: signature.clone(),
@@ -3064,7 +3114,7 @@ fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
             if let Some(value) = current.type_substitutions.borrow().get(&variable) {
                 return Some(value.clone());
             }
-            scope = current.parent.clone();
+            scope = current.parent.borrow().clone();
         }
         None
     }
@@ -3501,6 +3551,32 @@ mod tests {
             first_id,
             effect_id_for_instance(&context, second, effect_span)
         );
+    }
+
+    #[test]
+    fn deterministic_nullary_module_uses_its_resident_result() {
+        let context = Rc::new(Context::default());
+        context
+            .module_results
+            .borrow_mut()
+            .insert("dependency.blot".to_owned(), Value::Int(42.into()));
+        context
+            .reusable_module_results
+            .borrow_mut()
+            .insert("dependency.blot".to_owned());
+
+        let result = run(apply(
+            context,
+            Value::ModuleClosure {
+                module: "dependency.blot".to_owned(),
+            },
+            Value::Unit,
+            Span { start: 1, end: 2 },
+            Runtime::new(Phase::Comptime, "root.blot".to_owned()),
+        ))
+        .expect("resident module result should evaluate");
+
+        assert!(matches!(result, Value::Int(value) if value == 42.into()));
     }
 
     #[test]

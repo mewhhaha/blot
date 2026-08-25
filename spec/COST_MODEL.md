@@ -117,11 +117,13 @@ an internal counter or profile. The reproducible boundary and current evidence
 live in
 [`experiments/type-scaling/README.md`](../experiments/type-scaling/README.md).
 
-Resident analysis schema 2 reports deterministic counters for unique interned
+Resident analysis schema 3 reports deterministic counters for unique interned
 type nodes, recursive interning attempts, constraints, settle/freshen/union
 visits, boundary materializations, closure free-name candidates, values actually
-bridged, and peak pending solver worklist items. These counters are process
-observations, not certificates and not ABI facts. The scaling gate counts
+bridged, opened interface fields actually demanded, and peak pending solver
+worklist items. These counters are process observations for the current semantic
+request, not accumulated history, certificates, or ABI facts. A request that
+reuses a checked revision reports no work record. The scaling gate counts
 semantic decisions—constraints, boundary materializations, and capture
 selection—separately from recursive graph visits. The latter remain visible in
 the report because a shared constant-time visit may still reveal a
@@ -145,6 +147,14 @@ Compile-time evaluation can dominate these bounds because it executes source
 programs. Its budget and measured reductions are reported separately from
 structural compiler traversal.
 
+A resident deterministic nullary module result is evaluated once per semantic
+revision when its closed interface exposes no generative effect identity.
+Importers then share that result by structural reference; reopening a large
+module must not replay its declarations or copy every exported field.
+Installing its persistent snapshot decodes each lexical environment once and
+evaluates only the module's result expression over that environment. It does not
+replay the declaration sequence or duplicate a closure signature per value.
+
 For a resident module `m`, let `A_m` be the size of the canonical phase input
 for that module and `d_m` its number of direct dependency/include edges. Once
 child revisions are known, constructing `m`'s recursive revision identity should
@@ -154,6 +164,11 @@ make parents repeatedly copy transitive key material; on chains it repeats each
 descendant in every ancestor and on diamonds it repeats shared subgraphs per
 path. That cost carries no semantic information and is therefore duplicate
 compiler work.
+
+Published semantic boundaries follow the same rule inside a resident session.
+The producing module compares its complete canonical bytes, but a parent stores
+only a collision-free fixed-size session identity for each direct dependency.
+No parent copies the dependency's serialized type or compile-time value graph.
 
 For reachable closure values with total inspected summary-body size `B`,
 deriving relational summaries is `O(B)` per fresh value graph and memoized

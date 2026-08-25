@@ -135,7 +135,7 @@ pub struct Env {
     pub opens: RefCell<Vec<OpenedValues>>,
     pub signatures: RefCell<BTreeMap<String, Value>>,
     pub type_substitutions: RefCell<BTreeMap<u32, Value>>,
-    pub parent: Option<Environment>,
+    pub parent: RefCell<Option<Environment>>,
 }
 
 pub fn child_env(parent: Option<Environment>) -> Environment {
@@ -144,7 +144,7 @@ pub fn child_env(parent: Option<Environment>) -> Environment {
         opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
         type_substitutions: RefCell::new(BTreeMap::new()),
-        parent,
+        parent: RefCell::new(parent),
     })
 }
 
@@ -154,7 +154,7 @@ pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> 
         if let Some(value) = current.signatures.borrow().get(name) {
             return Some(value.clone());
         }
-        scope = current.parent.clone();
+        scope = current.parent.borrow().clone();
     }
     None
 }
@@ -170,7 +170,7 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
                 return Some(value.clone());
             }
         }
-        scope = current.parent.clone();
+        scope = current.parent.borrow().clone();
     }
     None
 }
@@ -178,26 +178,19 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
 #[derive(Clone, Debug)]
 pub struct OpenedValues {
     fields: OrderedFields,
-    sources_by_target: Rc<BTreeMap<String, String>>,
 }
 
 impl OpenedValues {
-    pub fn new(fields: OrderedFields, sources_by_target: BTreeMap<String, String>) -> Self {
-        Self {
-            fields,
-            sources_by_target: Rc::new(sources_by_target),
-        }
+    pub fn new(fields: OrderedFields) -> Self {
+        Self { fields }
     }
 
     pub fn get(&self, target: &str) -> Option<&Value> {
-        let source = self.sources_by_target.get(target)?;
-        self.fields.get(source)
+        self.fields.get(target)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Value)> {
-        self.sources_by_target
-            .iter()
-            .filter_map(|(target, source)| self.fields.get(source).map(|value| (target, value)))
+    pub(crate) fn fields(&self) -> &OrderedFields {
+        &self.fields
     }
 }
 

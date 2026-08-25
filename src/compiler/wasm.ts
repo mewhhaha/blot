@@ -257,7 +257,7 @@ export interface CompilerSpecializationFact {
 }
 
 export interface CompilerWork {
-  readonly schema: 2;
+  readonly schema: 3;
   readonly typeNodes: number;
   readonly typeInterns: number;
   readonly constraints: number;
@@ -267,6 +267,7 @@ export interface CompilerWork {
   readonly boundaryMaterializations: number;
   readonly captureCandidates: number;
   readonly capturesBridged: number;
+  readonly interfaceFieldsDemanded: number;
   readonly solverWorklistPeak: number;
 }
 

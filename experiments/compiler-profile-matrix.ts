@@ -91,12 +91,22 @@ async function buildProfile(
   const compiler = await CompilerWasm.load(owned);
   const handle = compiler.createCompilerSession();
   const path = `/profile-${optLevel}.blot`;
+  const preludePath = "snapshot:prelude";
   try {
     const freshStart = performance.now();
-    const added = compiler.addCompilerSessionModule(handle, path, "return 1\n");
+    compiler.installCompilerSessionModuleSnapshot(
+      handle,
+      preludePath,
+      preludeSnapshot,
+    );
+    const added = compiler.addCompilerSessionModule(
+      handle,
+      path,
+      profileSource(1),
+    );
     if (!added.ok) throw new Error(`profile ${optLevel} source was rejected`);
     compiler.configureCompilerSessionModule(handle, path, {
-      imports: {},
+      imports: { "blot:prelude": preludePath },
       includes: {},
     });
     const checked = compiler.checkCompilerSessionModule(handle, path);
@@ -107,7 +117,7 @@ async function buildProfile(
     const edited = compiler.addCompilerSessionModule(
       handle,
       path,
-      "return 2\n",
+      profileSource(2),
     );
     if (!edited.ok) throw new Error(`profile ${optLevel} edit was rejected`);
     const editedCheck = compiler.checkCompilerSessionModule(handle, path);
@@ -128,7 +138,7 @@ async function buildProfile(
     const memoryPagesBeforeSoak = compiler.memoryPages();
     const soakStart = performance.now();
     for (let edit = 0; edit < soakEdits; edit += 1) {
-      const source = `return 2\n// profile soak ${edit}\n`;
+      const source = `${profileSource(2)}// profile soak ${edit}\n`;
       const result = compiler.addCompilerSessionModule(handle, path, source);
       if (!result.ok) throw new Error(`profile ${optLevel} soak source failed`);
       const check = compiler.checkCompilerSessionModule(handle, path);
@@ -197,6 +207,10 @@ async function buildProfile(
   }
 }
 
+function profileSource(result: number): string {
+  return `open import "blot:prelude"\n\nreturn ${result}\n`;
+}
+
 function scalingSource(declarations: number): string {
   const lines = ["let value0 = 0"];
   for (let index = 1; index <= declarations; index += 1) {
@@ -221,7 +235,7 @@ async function main(): Promise<void> {
     results.push(await buildProfile(profile, soakEdits));
   }
   const report = {
-    schema: 1,
+    schema: 2,
     controls: {
       lto: "fat",
       codegenUnits: 1,

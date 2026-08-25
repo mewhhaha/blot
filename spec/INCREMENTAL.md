@@ -107,6 +107,16 @@ request-local invalidation report lists dirty and checked modules, changed and
 unchanged boundaries, invalidated importers, and reused artifacts. Telemetry is
 an observation and never enters a semantic key or certificate.
 
+Within one Rust session, a collision-free monotonic `BoundaryId` is the
+fixed-size digest of a published boundary. The producing module compares its
+complete canonical bytes before retaining an existing identity; a parent stores
+only each direct dependency's identity. These identities never cross a session
+or enter a persistent certificate. If a boundary changes and later returns to
+earlier bytes, assigning a fresh identity may conservatively recheck importers.
+Installing an immutable module snapshot mints its initial identity directly;
+replacing that snapshot with source therefore always publishes a changed
+boundary, even when the replacement is observationally equal.
+
 This is the transitive reverse-dependency invalidation required for every phase
 that can observe a changed edge: an unchanged sealed boundary proves that the
 phase cannot observe the private change and stops its closure. Unrelated modules
@@ -154,10 +164,11 @@ resolved expression identity. Replacing the module invalidates every liveness
 entry before evaluation can observe another AST.
 
 An in-process checker may stop reverse propagation after rechecking a changed
-module only when a sealed boundary fingerprint is unchanged. That fingerprint
-contains the closed type/effect boundary, relational-summary schema and facts,
+module only when a sealed boundary fingerprint is unchanged. The canonical
+bytes compared by the producing module contain the closed type/effect boundary,
+relational-summary schema and facts,
 every checked live source node that can constrain an importer, includes, capsule
-input, and dependency fingerprints. Dead source may be omitted only by a
+input, and fixed-size dependency identities. Dead source may be omitted only by a
 separate proof that it cannot affect inference, evaluation, diagnostics, or a
 published fact. Cache publication is transactional: failure publishes no
 replacement and the failed revision cannot consult the previous boundary as
@@ -238,6 +249,11 @@ A specialization capsule may contain deterministic compile-time values, closed
 source closures, residual Core, and closed representation choices. Its key
 includes every explicit input the staged computation observed.
 
+A resident result for a nullary module with an empty checked effect row is such
+a capsule when its closed result type exposes no generative effect identity.
+Importing that module may reuse the result directly. Effect-bearing results keep
+the complete written module-instance occurrence and are reevaluated.
+
 Ordinary effects retain complete generative occurrence identity. Seals retain
 canonical applicative inputs. A staged result containing process-local mutable
 state, unresolved polymorphism, live proof values, or unvalidated private
@@ -266,6 +282,11 @@ schema, and semantic identity before exposing an artifact. A source-backed cache
 may fall back to ordinary compilation after validation failure. A compiler-
 distributed snapshot instead reports corrupt distribution when its authority is
 the distribution itself.
+
+The compiler host seeds the resolved graph's prelude leaf from the validated
+snapshot AST and pins that leaf to the compiler instance. It does not reparse a
+source twin merely to rediscover the snapshot's dependency-free graph. Source-
+backed formatting and editor requests remain ordinary syntax consumers.
 
 Registry capsules remain package-controlled inputs. A package hash proves only
 unchanged transport. It does not prove that a claimed interface follows from its

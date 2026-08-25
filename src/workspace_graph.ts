@@ -42,17 +42,28 @@ export class WorkspaceGraph {
   readonly #overlays = new Map<string, OverlayRevision>();
   readonly #dirty = new Set<string>();
   readonly #roots = new Set<string>();
+  readonly #pinnedPaths = new Set<string>();
   readonly #inspect: SourceInspector | undefined;
   #overlaySequence = 0;
 
-  constructor(inspect?: SourceInspector) {
+  constructor(
+    inspect?: SourceInspector,
+    pinnedModules: readonly Loaded[] = [],
+  ) {
     this.#inspect = inspect;
+    for (const loaded of pinnedModules) {
+      this.#loaded.set(loaded.path, loaded);
+      this.#pinnedPaths.add(loaded.path);
+    }
   }
 
   async refresh(path: string): Promise<Loaded> {
     const absolute = resolve(path);
     this.#roots.add(absolute);
-    await refreshLoadedModules(this.#loaded, new Set(this.#overlays.keys()));
+    await refreshLoadedModules(
+      this.#loaded,
+      new Set([...this.#overlays.keys(), ...this.#pinnedPaths]),
+    );
     return await this.#loadCurrent(absolute);
   }
 

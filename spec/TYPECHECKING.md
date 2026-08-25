@@ -605,6 +605,15 @@ records and arrays use the induction hypothesis per member; closures use lexical
 closure plus alpha-renaming of their quantified schemes. A stale dependency or a
 free mutable variable makes the capsule invalid rather than widening its answer.
 
+The module-snapshot representation assigns identities to lexical environments,
+serializes their parent and value edges once, and reconstructs all environment
+shells before filling those edges. A module-local closure stores a local marker
+rather than the producer's path, so installation restores the consumer's module
+identity. Closure signatures come from the separately validated checked-module
+certificate rather than being duplicated on every closure value. Mutable
+runtime Stores, continuations, residual values, and generative effects cannot
+enter this capsule.
+
 The cache key is the loader's module-revision identity together with every
 generative declaration identity observed in the closed type graph. Today the
 latter are effect labels. A source, include, or transitive dependency edit
@@ -612,6 +621,12 @@ replaces the loader identity; reevaluating a generative declaration replaces its
 declaration identity. Either change misses the cache. This conservative rule is
 equivalent to stable serialized declaration IDs, while permitting the in-process
 evaluator to retain fresh numeric brands.
+
+For a resident nullary module with an empty checked effect row, the evaluator
+may return its retained compile-time result directly when the closed result type
+contains no ordinary or host effect identity. This is the zero-generative-key
+case of the same capsule rule. An exposed effect value or non-empty nested
+effect row requires evaluation under the importing occurrence.
 
 The in-process representation may retain AST and compile-time value identities
 instead of encoding bytes. It must nevertheless enforce the same boundary by
@@ -849,10 +864,11 @@ quantifier and reconstructs an ordinary checker type. Consequently no mutable
 bound edge crosses compilations, and two cache hits are alpha-equivalent but
 share no generated rigid identity.
 
-Encoding structurally interns equal flat nodes across module results,
-application types, and closure signatures. The certificate therefore pays once
-for repeated type structure; interning changes neither identity scope nor the
-decoded type graph.
+Encoding structurally interns equal flat nodes across module results, runtime
+application types, and closure signatures. Compile-time-only imports retain
+their type for request-local analysis but do not enter the Runtime-HIR
+application certificate. The certificate therefore pays once for repeated type
+structure; interning changes neither identity scope nor the decoded type graph.
 
 A resident checker may retain the expanded `CheckedModule` after that encoding
 gate succeeds. Its types contain no mutable inference variables, its quantified
@@ -867,10 +883,13 @@ source graph. Replacing a source module or changing its resolved imports or
 included contents first invalidates only that module's private facts. A
 successful recheck closes and alpha-canonicalizes the public parameter, result,
 and effect types into a versioned binary boundary, then appends the canonical
-compile-time result and ordered direct-dependency boundaries. Equal bytes retain
-importer interfaces; different bytes dirty direct importers. Repeating this rule
-is equivalent to the dependency fingerprint required by capsule coherence above
-while allowing propagation to stop at an observationally equal boundary.
+compile-time result and the fixed-size session identities of ordered
+direct-dependency boundaries. The producing module compares its complete
+canonical bytes; equal bytes retain its identity and importer interfaces, while
+different bytes receive a fresh identity and dirty direct importers. Repeating
+this rule is equivalent to the dependency fingerprint required by capsule
+coherence above while allowing propagation to stop at an observationally equal
+boundary.
 
 Ownership and safety results are cached at the same revision boundary only for
 nullary modules. Ownership is a function of the AST. Safety additionally reads

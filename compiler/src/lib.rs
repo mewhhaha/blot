@@ -22,6 +22,7 @@ mod session;
 mod source;
 mod typecheck;
 mod value;
+mod value_capsule;
 
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};

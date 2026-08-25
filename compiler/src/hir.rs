@@ -2878,7 +2878,7 @@ impl ResidualTrace {
                     .entry(*variable)
                     .or_insert_with(|| type_.clone());
             }
-            scope = current.parent.clone();
+            scope = current.parent.borrow().clone();
         }
         loop {
             let mut progress = false;

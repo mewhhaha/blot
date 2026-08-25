@@ -3,7 +3,33 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { load } from "./load.ts";
 import { WorkspaceGraph } from "./workspace_graph.ts";
+
+test("a pinned module is not reread from disk", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-pinned-"));
+  const dependency = join(directory, "dependency.blot");
+  const root = join(directory, "root.blot");
+  try {
+    await writeFile(dependency, "return 1\n");
+    const pinned = await load(dependency, new Map());
+    await rm(dependency);
+    await writeFile(
+      root,
+      'const dependency = import "./dependency.blot"\nreturn dependency\n',
+    );
+    const graph = new WorkspaceGraph(undefined, [pinned]);
+
+    const loaded = await graph.refresh(root);
+    assert.equal(loaded.dependencies.get("./dependency.blot"), pinned);
+    assert.equal(
+      (await graph.refresh(root)).dependencies.get("./dependency.blot"),
+      pinned,
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
 
 test("workspace overlays persist and reveal the latest disk revision on close", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-workspace-overlay-"));
