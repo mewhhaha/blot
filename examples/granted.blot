@@ -19,15 +19,15 @@ const Console = @effect { .write = Text -> Unit; }
 const to_host =
   {
     .write = fn (message, ?resume) => do:
-      <- init.print message
-      result <- resume ()
+      use init.print message
+      use result <- resume ()
       return result
     ;
   }
 
 const report = fn () => do:
-  <- Console.write "compiled"
-  <- Console.write "linked"
+  use Console.write "compiled"
+  use Console.write "linked"
   return 42
 
 return @handle (Console, report, to_host)

@@ -92,7 +92,7 @@ while changing its type.
 `rec`/`case` recursion, `break;` becomes loop-local control, and early `return`
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the nearest module or explicit `do` boundary. A standalone `if` becomes an ordinary
-conditional over those results, and `x <- e` explicitly sequences the already
+conditional over those results, and `use x <- e` explicitly sequences the already
 applied expression `e`, all during CST lowering. Two-argument `@handle (effect, handler)` calls become computation
 transformers, and `|>` composition saturates them to ordinary three-argument
 `@handle` calls before inference. Nothing downstream of surface elaboration

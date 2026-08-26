@@ -17,8 +17,8 @@ const quicksort = fn (?values, direction) => do:
         return left <= right
     )
 
-dynamic <- Source.value 0
-direction <- Source.value 1
+use dynamic <- Source.value 0
+use direction <- Source.value 1
 let values = [dynamic, 7, 3, 8, 2, 6, 1, 5]
 let sorted = quicksort (?values, direction)
 let a = Array.expect_get ((&sorted), 0)

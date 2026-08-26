@@ -4,18 +4,18 @@ import { formatSource } from "./formatter.ts";
 
 Deno.test("formatting indents nested conditionals within calls", async () => {
   const source = `const remove_residence = fn tile => do:
-  present <- Residences.has tile
+  use present <- Residences.has tile
   if present > 0:
-    burning <- ResidenceBurning.get_or (tile, 0)
-    population <- Population.get_or (editor_entity, 0)
-    burning_count <- BurningCount.get_or (editor_entity, 0)
-    <- Population.set (
+    use burning <- ResidenceBurning.get_or (tile, 0)
+    use population <- Population.get_or (editor_entity, 0)
+    use burning_count <- BurningCount.get_or (editor_entity, 0)
+    use Population.set (
       editor_entity,
       case population > 0 of
         #True => population - 1
         #False => 0
     )
-    <- BurningCount.set (
+    use BurningCount.set (
       editor_entity,
       case burning > 0 of
         #True => case burning_count > 0 of
@@ -24,7 +24,7 @@ Deno.test("formatting indents nested conditionals within calls", async () => {
 
         #False => burning_count
     )
-    <- Residences.remove tile
+    use Residences.remove tile
 
   return ()
 return remove_residence
@@ -36,18 +36,18 @@ return remove_residence
   assertEquals(
     formatted.source,
     `const remove_residence = fn tile => do:
-  present <- Residences.has tile
+  use present <- Residences.has tile
   if present > 0:
-    burning <- ResidenceBurning.get_or (tile, 0)
-    population <- Population.get_or (editor_entity, 0)
-    burning_count <- BurningCount.get_or (editor_entity, 0)
-    <- Population.set (
+    use burning <- ResidenceBurning.get_or (tile, 0)
+    use population <- Population.get_or (editor_entity, 0)
+    use burning_count <- BurningCount.get_or (editor_entity, 0)
+    use Population.set (
       editor_entity,
       case population > 0 of
         #True => population - 1
         #False => 0
     )
-    <- BurningCount.set (
+    use BurningCount.set (
       editor_entity,
       case burning > 0 of
         #True => case burning_count > 0 of
@@ -56,7 +56,7 @@ return remove_residence
 
         #False => burning_count
     )
-    <- Residences.remove tile
+    use Residences.remove tile
 
   return ()
 return remove_residence
@@ -403,7 +403,7 @@ return (values, pair)
 
 Deno.test("formatting removes parentheses around a tuple lambda argument", async () => {
   const source = `let load = fn count => do:
-  store <- fold (
+  use store <- fold (
   upto (0, count),
   @array.empty,
   (fn (store, id) => do:
@@ -417,7 +417,7 @@ return load
   await assertStableFormatting(
     source,
     `let load = fn count => do:
-  store <- fold (
+  use store <- fold (
     upto (0, count),
     @array.empty,
     fn (store, id) => do:
@@ -431,10 +431,10 @@ return load
 
 Deno.test("formatting aligns a vertical call delimiter with its expression", async () => {
   const source = `let draw = fn values => do:
-  <- each (
+  use each (
   values,
   (fn value => do:
-    <- visit value
+    use visit value
   )
   )
 return draw
@@ -443,10 +443,10 @@ return draw
   await assertStableFormatting(
     source,
     `let draw = fn values => do:
-  <- each (
+  use each (
     values,
     fn value => do:
-      <- visit value
+      use visit value
   )
 return draw
 `,
@@ -506,20 +506,20 @@ return 1 != 2
 Deno.test("formatting separates a completed statement suite", async () => {
   await assertStableFormatting(
     `let update = fn generation => do:
-  current <- Generation.current ()
+  use current <- Generation.current ()
   if current != generation:
-    transforms <- load_transforms ()
-    models <- load_models ()
+    use transforms <- load_transforms ()
+    use models <- load_models ()
     generation := current
   transforms := advance transforms
   return transforms
 return update
 `,
     `let update = fn generation => do:
-  current <- Generation.current ()
+  use current <- Generation.current ()
   if current != generation:
-    transforms <- load_transforms ()
-    models <- load_models ()
+    use transforms <- load_transforms ()
+    use models <- load_models ()
     generation := current
 
   transforms := advance transforms
@@ -560,23 +560,23 @@ return value
   );
 });
 
-Deno.test("formatting prefers leading discard sequencing", async () => {
-  const sugared = `<- perform_work ()
+Deno.test("formatting prefers use without a discarded binding", async () => {
+  const canonical = `use perform_work ()
 return ()
 `;
-  const explicit = `_ <- perform_work ()
+  const explicit = `use _ <- perform_work ()
 return ()
 `;
   assertEquals(
-    semanticTree(await parse(sugared)),
+    semanticTree(await parse(canonical)),
     semanticTree(await parse(explicit)),
   );
-  assertEquals(await formatSource(sugared), { ok: true, source: sugared });
-  assertEquals(await formatSource(explicit), { ok: true, source: sugared });
+  assertEquals(await formatSource(canonical), { ok: true, source: canonical });
+  assertEquals(await formatSource(explicit), { ok: true, source: canonical });
 });
 
 Deno.test("formatting preserves sequencing patterns", async () => {
-  const source = `(left, right) <- read_pair ()
+  const source = `use (left, right) <- read_pair ()
 return left + right
 `;
   assertEquals(await formatSource(source), { ok: true, source });
@@ -696,7 +696,7 @@ Deno.test("formatting joins a short layout-significant continuation", async () =
   const source = `const sum = fn (left, right) => left
   + right
 if sum (1, 2) == 3:
-  <- effect ()
+  use effect ()
 
 return ()
 `;
@@ -706,7 +706,7 @@ return ()
     formatted.source,
     `const sum = fn (left, right) => left + right
 if sum (1, 2) == 3:
-  <- effect ()
+  use effect ()
 
 return ()
 `,

@@ -5,7 +5,7 @@
 // to one primitive; performing an operation is an ordinary call; a handler is
 // a shape; and `@handle` is a function.
 //
-// `x <- expression` is the sequencing form. A nullary effect value is forced
+// `use x <- expression` is the sequencing form. A nullary effect value is forced
 // with `()`, while an already-applied expression is sequenced as written.
 //
 // The row is inferred and it is also writable. `A -> B ~ { Console }` is what a
@@ -26,7 +26,7 @@ const Counter =
     .next = Unit -> Text;
   }
 
-// Reading from an effect, which is what `<-` is for.
+// Reading from an effect, which is what `use` is for.
 const Terminal =
   @effect {
     .read = Unit -> Text;
@@ -34,13 +34,13 @@ const Terminal =
 
 let ask :: Unit -> Text ~ { Terminal }
 let ask = fn () => do:
-  answer <- Terminal.read ()
+  use answer <- Terminal.read ()
   return answer <> "!"
 
 let answering =
   {
     .read = fn ((), ?resume) => do:
-      answer <- resume "42"
+      use answer <- resume "42"
       return answer
     ;
     .return = fn value => value;
@@ -50,8 +50,8 @@ let answering =
 // thing the printer would: the body may perform `Console` and nothing else.
 let greet :: Unit -> Text ~ { Console }
 let greet = fn () => do:
-  <- Console.write "hello"
-  <- Console.write "world"
+  use Console.write "hello"
+  use Console.write "world"
   return "done"
 
 // A handler is a shape: one field per operation taking `(argument, ?resume)`,
@@ -63,7 +63,7 @@ let greet = fn () => do:
 let collecting =
   {
     .write = fn (message, ?resume) => do:
-      rest <- resume ()
+      use rest <- resume ()
       return @text.concat (@text.concat message "|") rest
     ;
     .return = fn value => value;
@@ -72,7 +72,7 @@ let collecting =
 let counting =
   {
     .write = fn (_, ?resume) => do:
-      rest <- resume ()
+      use rest <- resume ()
       return @int.add 1 rest
     ;
     .return = fn _ => 0;
@@ -81,7 +81,7 @@ let counting =
 let passing =
   {
     .write = fn (_, ?resume) => do:
-      value <- resume ()
+      use value <- resume ()
       return value
     ;
     .return = fn value => value;

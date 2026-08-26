@@ -78,10 +78,10 @@ exclude a return, specified trap, or divergence.
 
 A source pure position admits an application only after its final row settles to
 the empty row. Elaboration still schedules the call through this computation
-rule and binds the returned value. Surface `<-` admits a non-empty row and is
-also the explicit sequencing form for a suspended nullary effect value. Such a
-value is applied to unit exactly once; an already applied computation is not
-applied again.
+rule and binds the returned value. Surface `use` admits a non-empty row and is
+the explicit sequencing form for a suspended nullary effect value. Such a value
+is applied to unit exactly once; an already applied computation is not applied
+again.
 
 ## 3. Demand and pure declarations
 

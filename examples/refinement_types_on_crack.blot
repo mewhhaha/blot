@@ -34,23 +34,23 @@ let rendered =
 const Tick = @effect { .next = Unit -> Int; }
 
 let apply = fn callback => fn value => do:
-  result <- callback value
+  use result <- callback value
   return result
 let add_tick = fn value => do:
-  tick <- Tick.next ()
+  use tick <- Tick.next ()
   return value + tick
 
 let ticking =
   {
     .next = fn ((), ?resume) => do:
-      result <- resume 2
+      use result <- resume 2
       return result
     ;
     .return = fn value => value;
   }
 
 let apply_tick = fn () => do:
-  result <- apply add_tick 40
+  use result <- apply add_tick 40
   return result
 
 let effect_result =

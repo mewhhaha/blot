@@ -23,11 +23,11 @@ let deferred = fn () => consume (!ticket)
 let settled = deferred ()
 
 // Aggregate ownership is structural. The constructor carries the closure's
-// obligation until matching transfers it into `use`.
+// obligation until matching transfers it into `callback`.
 let !key = 40
 let boxed = #Held (fn () => consume (!key))
 let held = case boxed of
-  #Held use => use ()
+  #Held callback => callback ()
 
 // Record fields retain distinct paths. Moving one owned closure leaves its
 // sibling live, while the partially moved record itself is no longer usable.

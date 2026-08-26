@@ -52,20 +52,20 @@ let update = fn game => {
 }
 
 let render = fn game => do:
-  <- R.frame $ fn draw => do:
-    <- draw.mesh (
+  use R.frame $ fn draw => do:
+    use draw.mesh (
       game.player.position,
       game.player.angle,
       game.player.scale,
       game.player.colour
     )
-    <- draw.mesh (
+    use draw.mesh (
       game.rival.position,
       game.rival.angle,
       game.rival.scale,
       game.rival.colour
     )
-    <- draw.sprite (
+    use draw.sprite (
       game.beacon.position,
       game.beacon.scale,
       game.beacon.texture
@@ -96,12 +96,12 @@ let game =
   }
 let frames = 0
 for ever:
-  remaining <- Host.frame ()
+  use remaining <- Host.frame ()
   if remaining <= 0:
     break
 
   game := update game
-  <- render game
+  use render game
   frames := frames + 1
 
 return frames

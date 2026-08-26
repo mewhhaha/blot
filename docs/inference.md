@@ -58,7 +58,7 @@ const Console = @effect { .write = Text -> Unit; }
 const Clock = @effect { .now = Unit -> Int; }
 
 let greet = fn name =>
-  result <- Console.write name
+  use result <- Console.write name
   return result
 // Text -> () ~ { Console }
 let quiet = fn n => @int.add n 1            // Int -> Int
@@ -71,8 +71,8 @@ variable — and it is what makes a wrapper effect-polymorphic without saying so
 
 ```blot
 let logged = fn f => fn x =>
-  <- Console.write "call"
-  result <- f x
+  use Console.write "call"
+  use result <- f x
   return result
 // ('a -> 'b ~ { e }) -> 'a -> 'b ~ { Console, e }
 ```
@@ -94,7 +94,7 @@ proximity.
 An effect's type comes from _bridging its value_:
 `const Console = @effect {...}` is evaluated at compile time, and the resulting
 effect becomes a record of functions whose rows carry it. That is the whole
-mechanism. Blot needs no `perform` or effect declaration form; `<-` is the
+mechanism. Blot needs no `perform` or effect declaration form; `use` is the
 explicit point where an effectful expression is sequenced into its scope.
 
 `@handle` names the effect it discharges, so the row arithmetic is real:

@@ -228,8 +228,8 @@ if c:                    // conditional control flow
 if let p = x else:       // bind p or leave through the else branch
   return fallback
 name := expr             // shadow a name while preserving its type
-name <- expr             // sequence an effect and bind its result
-<- expr                  // sequence an effect and discard its result
+use name <- expr          // sequence an effect and bind its result
+use expr                  // sequence an effect and discard its result
 return expr              // exit the nearest function, `do`, or module
 ```
 
@@ -275,10 +275,10 @@ explicitly:
 
 ```blot
 let label = fn () =>
-  <- text "Count: "
+  use text "Count: "
 let save = fn () =>
-  <- Button { .label = "Save"; .disabled = (); } []
-<- div { .class = "counter"; .hidden = hidden; } [label, save]
+  use Button { .label = "Save"; .disabled = (); } []
+use div { .class = "counter"; .hidden = hidden; } [label, save]
 ```
 
 The component decides whether and when to execute child computations. Property
@@ -515,15 +515,15 @@ with a signature-local tail such as
 those positions without granting authority to construct or handle the effects it
 carries.
 
-`x <- expression` sequences one. A nullary effect value is forced with `()`, so
-it can be stored before it is executed; `let` remains a pure definition:
+`use x <- expression` sequences one. A nullary effect value is forced with `()`,
+so it can be stored before it is executed; `let` remains a pure definition:
 
 ```blot
 const Terminal = @effect { .read = Unit -> Text; }
 
 let ask = fn () =>
   let effect = Terminal.read
-  answer <- effect
+  use answer <- effect
   return answer <> "!"
 ```
 
@@ -531,12 +531,12 @@ let ask = fn () =>
 const Console = @effect { .write = Text -> Unit; }
 
 let report = fn () =>
-  <- Console.write "one"
+  use Console.write "one"
   return "done"
 
 let joining = {
   .write = fn (message, ?resume) =>
-    rest <- resume ()
+    use rest <- resume ()
     return message ++ rest
   ;
   .return = fn value => value;
@@ -573,7 +573,7 @@ is the program's declared interface rather than something left unhandled:
 ```blot
 const Console = @effect.host { .write = Text -> Unit; }
 let report = fn () =>
-  result <- Console.write "compiled"
+  use result <- Console.write "compiled"
   return result
 // () -> () ~ { Console }
 ```
@@ -587,8 +587,8 @@ module with init
 
 let printing = {
   .write = fn (message, resume) =>
-    <- init.print message     // opaque; the program can only call it
-    result <- resume ()
+    use init.print message     // opaque; the program can only call it
+    use result <- resume ()
     return result
   ;
   .return = fn value => value;

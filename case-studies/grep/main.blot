@@ -17,13 +17,13 @@ const Console =
   }
 
 let count = 0
-pattern <- Arguments.pattern ()
-line_count <- File.line_count ()
+use pattern <- Arguments.pattern ()
+use line_count <- File.line_count ()
 for index in Iter.range (0, line_count):
-  line <- File.line index
+  use line <- File.line index
   let matching = Text.contains line pattern
   if matching:
-    <- Console.write line
+    use Console.write line
 
   count := case matching of
     #True => count + 1

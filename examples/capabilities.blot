@@ -20,8 +20,8 @@ const Console =
 const to_host =
   {
     .write = fn (message, ?resume) => do:
-      <- init.print message
-      result <- resume ()
+      use init.print message
+      use result <- resume ()
       return result
     ;
     .return = fn value => value;
@@ -30,14 +30,14 @@ const to_host =
 // The same computation, discharged two different ways. Nothing in `report`
 // mentions which.
 const report = fn () => do:
-  <- Console.write "compiled"
-  <- Console.write "linked"
+  use Console.write "compiled"
+  use Console.write "linked"
   return "ok"
 
 const to_memory =
   {
     .write = fn (message, ?resume) => do:
-      rest <- resume ()
+      use rest <- resume ()
       return @text.concat message rest
     ;
     .return = fn _ => "";

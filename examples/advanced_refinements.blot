@@ -19,9 +19,9 @@ const Transition = #Closed Int -> #Open Int ~ { Audit }
 
 let advance :: Transition
 let advance = fn !state => do:
-  result <- case state of
+  use result <- case state of
     #Closed value => do:
-      <- Audit.record "open"
+      use Audit.record "open"
       return #Open value
   return result
 

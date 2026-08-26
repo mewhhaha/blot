@@ -11,7 +11,8 @@
 ; Scoping is what keeps `.const` a member and `const` a keyword.
 
 (module_header
-  "module" @keyword.control.import)
+  "module" @keyword.control.import
+  "with" @keyword.control.import)
 
 (operator_section
   "operators" @keyword)
@@ -20,16 +21,25 @@
   associativity: _ @keyword.storage.modifier)
 
 (binding
-  kind: _ @keyword.storage.type)
+  kind: _ @keyword.storage.type
+  recursive: _? @keyword.storage.modifier)
 
 (signature
-  kind: _ @keyword.storage.type)
+  kind: _ @keyword.storage.type
+  recursive: _? @keyword.storage.modifier)
+
+(sequencing
+  "use" @keyword.control)
 
 (result
   "return" @keyword.control.return)
 
 (opening
   "open" @keyword.control.import)
+
+(import_expression
+  "import" @keyword.control.import
+  "with"? @keyword.control.import)
 
 (iteration
   "for" @keyword.control.repeat)
@@ -39,9 +49,6 @@
 
 (breaking
   "break" @keyword.control.return)
-
-
-
 
 (conditional_statement
   "if" @keyword.control.conditional)
@@ -60,16 +67,11 @@
   "case" @keyword.control.exception
   "of" @keyword.control.exception)
 
-
+(do_block
+  phase: _ @keyword.control)
 
 (lambda_parameter
   "fn" @keyword.function)
-
-(prefix_operator
-  [
-    "rec"
-    "comptime"
-  ] @keyword.storage.modifier)
 
 ; A constructor is a TYPE_IDENT behind `#`. Types are values in blot, so the
 ; generated `(TYPE_IDENT) @type` is right for the bare form; this narrows the

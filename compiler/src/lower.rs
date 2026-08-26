@@ -487,28 +487,28 @@ fn lower_declaration(
         "rebinding" => {
             let pattern = lower_pattern(cst, required(cst, rule, "pattern")?, arena)?;
             let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
-            if token_text(cst, required(cst, rule, "arrow")?)? == ":=" {
-                let Pattern::Name {
-                    name,
-                    qualifier: Qualifier::None,
-                    ..
-                } = arena.patterns[pattern.0 as usize].clone()
-                else {
-                    return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
-                };
-                return Ok(arena.declaration(Declaration::Shadow { name, value, span }));
-            }
-            Ok(arena.declaration(Declaration::Binding {
-                kind: DeclarationKind::Effect,
-                tags: Vec::new(),
-                pattern,
-                value,
-                span,
-            }))
+            let Pattern::Name {
+                name,
+                qualifier: Qualifier::None,
+                ..
+            } = arena.patterns[pattern.0 as usize].clone()
+            else {
+                return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
+            };
+            Ok(arena.declaration(Declaration::Shadow { name, value, span }))
         }
         "sequencing" => {
-            let value = lower_value(cst, required(cst, rule, "value")?, context, arena)?;
-            let pattern = arena.pattern(Pattern::Wildcard { span });
+            let value_cursor = cst.field(rule, "value")?;
+            let mut head_context = context.clone();
+            head_context.pattern_head = value_cursor.is_some();
+            let head = lower_value(cst, required(cst, rule, "head")?, &head_context, arena)?;
+            let (pattern, value) = match value_cursor {
+                Some(value) => (
+                    pattern_from_expression(head, arena)?,
+                    lower_value(cst, value, context, arena)?,
+                ),
+                None => (arena.pattern(Pattern::Wildcard { span }), head),
+            };
             Ok(arena.declaration(Declaration::Binding {
                 kind: DeclarationKind::Effect,
                 tags: Vec::new(),
@@ -541,7 +541,7 @@ fn lower_declaration(
             }
             let nested = nested_statement_lists(cst, rule)?;
             let flattened = nested.iter().flatten().copied().collect::<Vec<_>>();
-            let rebound = rebound_names(cst, &flattened)?;
+            let rebound = rebound_names(cst, &flattened, context)?;
             let mut branches = Vec::new();
             branches.push(Branch {
                 condition: lower_expression(
@@ -1007,7 +1007,7 @@ fn lower_control_statement(
 
     let nested = nested_statement_lists(cst, rule)?;
     let flattened = nested.iter().flatten().copied().collect::<Vec<_>>();
-    let rebound = rebound_names(cst, &flattened)?;
+    let rebound = rebound_names(cst, &flattened, context)?;
     let branch_continue = if remaining.is_empty() {
         continue_value
     } else {
@@ -1208,7 +1208,7 @@ fn lower_control_loop(
 ) -> Result<LoweredControlLoop, String> {
     let span = cst.span(Cursor::Rule(rule))?;
     let statements = statement_suite(cst, rule, "body")?;
-    let carried = rebound_names(cst, &statements)?;
+    let carried = rebound_names(cst, &statements, context)?;
     let constructors = ControlConstructors {
         return_constructor: synthetic_constructor("LoopReturn", span),
         continue_constructor: synthetic_constructor("LoopContinue", span),
@@ -1318,7 +1318,7 @@ fn lower_iteration(
             span,
         }));
     }
-    let carried = rebound_names(cst, &statements)?;
+    let carried = rebound_names(cst, &statements, context)?;
     let effectful = statements_contain_effect(cst, &statements)?;
     let drawn = cst.field(rule, "drawn")?;
     let mut head_context = context.clone();
@@ -2038,10 +2038,7 @@ fn statements_can_continue(cst: &CompactCst<'_>, statements: &[Cursor]) -> Resul
 fn statements_contain_effect(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "sequencing"
-            || (cst.rule_name(statement)? == "rebinding"
-                && token_text(cst, required(cst, statement, "arrow")?)? == "<-")
-        {
+        if cst.rule_name(statement)? == "sequencing" {
             return Ok(true);
         }
         for nested in nested_statement_lists(cst, statement)? {
@@ -2077,9 +2074,13 @@ fn nested_statement_lists(
     Ok(nested)
 }
 
-fn rebound_names(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<Vec<String>, String> {
+fn rebound_names(
+    cst: &CompactCst<'_>,
+    statements: &[Cursor],
+    context: &LoweringContext<'_>,
+) -> Result<Vec<String>, String> {
     let mut rebound = Vec::new();
-    collect_rebound_names(cst, statements, &[], &mut rebound)?;
+    collect_rebound_names(cst, statements, &[], &mut rebound, context)?;
     Ok(rebound)
 }
 
@@ -2088,13 +2089,12 @@ fn collect_rebound_names(
     statements: &[Cursor],
     outer_shadowed: &[String],
     rebound: &mut Vec<String>,
+    context: &LoweringContext<'_>,
 ) -> Result<(), String> {
     let mut shadowed = outer_shadowed.to_owned();
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "rebinding"
-            && token_text(cst, required(cst, statement, "arrow")?)? == ":="
-        {
+        if cst.rule_name(statement)? == "rebinding" {
             let Some(name) = unqualified_rebinding_name(cst, statement)? else {
                 return Err("BLOT_BAD_REBINDING_TARGET: `:=` requires one unqualified name. Use `let` to bind a pattern.".to_owned());
             };
@@ -2103,17 +2103,25 @@ fn collect_rebound_names(
             }
             continue;
         }
-        if cst.rule_name(statement)? == "rebinding"
-            && token_text(cst, required(cst, statement, "arrow")?)? == "<-"
-        {
+        if cst.rule_name(statement)? == "sequencing" && cst.field(statement, "value")?.is_some() {
+            let mut pattern_context = context.clone();
+            pattern_context.pattern_head = true;
+            let mut patterns = AstArena::default();
+            let head = lower_value(
+                cst,
+                required(cst, statement, "head")?,
+                &pattern_context,
+                &mut patterns,
+            )?;
+            let pattern = pattern_from_expression(head, &mut patterns)?;
             let mut names = Vec::new();
-            pattern_names_from_cst(cst, required(cst, statement, "pattern")?, &mut names)?;
+            pattern_names(pattern, &patterns, &mut names);
             shadowed.extend(names);
             continue;
         }
         if cst.rule_name(statement)? != "iteration" {
             for nested in nested_statement_lists(cst, statement)? {
-                collect_rebound_names(cst, &nested, &shadowed, rebound)?;
+                collect_rebound_names(cst, &nested, &shadowed, rebound, context)?;
             }
         }
         if cst.rule_name(statement)? != "binding" {
@@ -2213,6 +2221,33 @@ fn pattern_names_from_cst(
         _ => {}
     }
     Ok(())
+}
+
+fn pattern_names(pattern: PatternId, arena: &AstArena, names: &mut Vec<String>) {
+    match &arena.patterns[pattern.0 as usize] {
+        Pattern::Name { name, .. } => names.push(name.clone()),
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+            for element in elements {
+                pattern_names(*element, arena, names);
+            }
+        }
+        Pattern::Constructor { payload, .. } => {
+            if let Some(payload) = payload {
+                pattern_names(*payload, arena, names);
+            }
+        }
+        Pattern::Shape { fields, .. } => {
+            for field in fields {
+                pattern_names(field.pattern, arena, names);
+            }
+        }
+        Pattern::Wildcard { .. }
+        | Pattern::Pin { .. }
+        | Pattern::Int { .. }
+        | Pattern::Float { .. }
+        | Pattern::Text { .. }
+        | Pattern::Unit { .. } => {}
+    }
 }
 
 fn lower_pattern(

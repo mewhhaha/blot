@@ -108,12 +108,12 @@ let advance = fn ts => E.each_1 (
 // carries its whole field set across a module boundary and the renderer has no
 // business knowing that a transform of this game's also has a spin.
 let render = fn (transforms, models) => do:
-  <- R.frame $ fn draw => do:
-      <- E.visit_2 (
+  use R.frame $ fn draw => do:
+      use E.visit_2 (
           transforms,
           models,
           fn (transform, model) => do:
-            <- case model.kind == KIND_MESH of
+            use case model.kind == KIND_MESH of
               #True => draw.mesh (
                   transform.position, transform.angle, transform.scale, model.colour
                 )
@@ -136,12 +136,12 @@ let render = fn (transforms, models) => do:
 
 let load_transforms :: Unit -> Store Transform ~ { Assets }
 let load_transforms = fn () => do:
-  count <- Assets.count ()
+  use count <- Assets.count ()
   // The empty array starts polymorphic; this one requirement makes the
   // component store concrete without a separate declaration.
   let store = @satisfies Array.empty (Store Transform)
   for id in Iter.range (0, count):
-    entry <- Assets.entry id
+    use entry <- Assets.entry id
     store := @array.push store $ Some {
       .position = R.point (entry.x, entry.y, entry.z);
       .angle = 0;
@@ -153,10 +153,10 @@ let load_transforms = fn () => do:
 
 let load_models :: Unit -> Store Model ~ { Assets }
 let load_models = fn () => do:
-  count <- Assets.count ()
+  use count <- Assets.count ()
   let store = @satisfies Array.empty (Store Model)
   for id in Iter.range (0, count):
-    entry <- Assets.entry id
+    use entry <- Assets.entry id
     store := @array.push store $ Some { .kind = entry.kind; .colour = entry.colour; }
 
   return store
@@ -166,26 +166,26 @@ let load_models = fn () => do:
 // The two stores and the generation are the accumulator, so this is the world
 // and the fold at once. Adding a component means adding a name.
 
-transforms <- load_transforms ()
-models <- load_models ()
-generation <- Assets.generation ()
+use transforms <- load_transforms ()
+use models <- load_models ()
+use generation <- Assets.generation ()
 let frames = 0
 
 for ever:
-  remaining <- Host.frame ()
+  use remaining <- Host.frame ()
   if remaining <= 0:
     break
 
   // Hot reload. The host bumps its generation when a watched file changes, and
   // the world is rebuilt from the new scene; nothing else has to know.
-  current <- Assets.generation ()
+  use current <- Assets.generation ()
   if current != generation:
-    transforms <- load_transforms ()
-    models <- load_models ()
+    use transforms <- load_transforms ()
+    use models <- load_models ()
     generation := current
 
   transforms := advance transforms
-  <- render (transforms, models)
+  use render (transforms, models)
   frames := frames + 1
 
 return frames

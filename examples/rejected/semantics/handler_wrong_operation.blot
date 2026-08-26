@@ -7,10 +7,10 @@ open import "blot:prelude"
 const Console = @effect { .write = Text -> Unit; }
 let handler =
   { .wrote = fn (m, ?resume) => do:
-    result <- resume ()
+    use result <- resume ()
     return result
   ; .return = fn v => v; }
 let work = fn () => do:
-  result <- Console.write "x"
+  use result <- Console.write "x"
   return result
 return @handle (Console, work, handler)

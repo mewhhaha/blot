@@ -1,0 +1,38 @@
+// Concurrency is an effect protocol. This handler deliberately interprets it
+// sequentially: a real scheduler can implement the same operations by retaining
+// suspended one-shot continuations, without adding concurrency syntax.
+
+open import "blot:prelude"
+
+const Concurrent =
+  @effect {
+    .spawn = (Unit -> Int) -> { .run = Unit -> Int; };
+    .await = { .run = Unit -> Int; } -> Int;
+    .yield = Unit -> Unit;
+  }
+
+let program = fn () => do:
+  use task <- Concurrent.spawn (fn () => 40)
+  use Concurrent.yield ()
+  use value <- Concurrent.await task
+  return value + 2
+
+let sequential =
+  {
+    .spawn = fn (task, ?resume) => do:
+      use result <- resume { .run = task; }
+      return result
+    ;
+    .await = fn (task, ?resume) => do:
+      let value = task.run ()
+      use result <- resume value
+      return result
+    ;
+    .yield = fn ((), ?resume) => do:
+      use result <- resume ()
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+return @handle (Concurrent, program, sequential)

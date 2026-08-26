@@ -19,9 +19,9 @@ const Console =
 // Nothing here says "effectful". The row is inferred, and `report` comes out as
 // `() -> () ~ { Console }` — an interface, not a leak.
 let report = fn () => do:
-  <- Console.write "compiled"
-  <- Console.write "linked"
-  <- Console.write "done"
+  use Console.write "compiled"
+  use Console.write "linked"
+  use Console.write "done"
 
-result <- report ()
+use result <- report ()
 return result

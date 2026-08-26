@@ -432,7 +432,7 @@ Deno.test("an unused effect result offers an explicit discard action", async () 
   const service = new LanguageService();
   const uri = "untitled:unused-effect-result.blot";
   const source = `let run = fn () => do:
-  ignored <- perform_work ()
+  use ignored <- perform_work ()
   return ()
 return run
 `;
@@ -445,7 +445,7 @@ return run
     const action = actions.find((candidate) =>
       candidate.title === "Discard unused effect result explicitly"
     );
-    assertEquals(action?.edit.documentChanges[0].edits[0]?.newText, "<-");
+    assertEquals(action?.edit.documentChanges[0].edits[0]?.newText, "");
   } finally {
     await service.destroy();
   }

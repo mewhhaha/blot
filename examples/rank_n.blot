@@ -1,9 +1,10 @@
 open import "blot:prelude"
 
-let use :: @forall (fn T => T -> T) -> { .number = Int; .text = Text; }
-let use = fn identity => {
+let apply_identity ::
+  @forall (fn T => T -> T) -> { .number = Int; .text = Text; }
+let apply_identity = fn identity => {
   .number = identity 42;
   .text = identity "forty-two";
 }
 let identity = fn value => value
-return use identity
+return apply_identity identity

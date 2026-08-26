@@ -145,7 +145,7 @@ let rec update_all = fn (entries, index, base) =>
         #Some updated => update_all (updated, index + 1, base)
         #None => entries
 
-dynamic <- Source.value 0
+use dynamic <- Source.value 0
 let entries = [${entries(size, "dynamic")}]
 let updated = update_all (entries, 0, dynamic)
 ${checksumSource(size, "updated")}
@@ -176,7 +176,7 @@ let rec update_all = fn (!entries, keys, index, base) =>
     let (updated, previous) = replace_keep ((!entries), key, base + index)
     return update_all (!updated, keys, index + 1, base)
 
-dynamic <- Source.value 0
+use dynamic <- Source.value 0
 let entries = OrderedTextMap.copy [${entries(size, "dynamic")}]
 let keys = [${keys(size)}]
 let updated = update_all (!entries, keys, 0, dynamic)

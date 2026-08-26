@@ -724,11 +724,11 @@
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3540
+      "lines": 3575
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3296
+      "lines": 3331
     },
     {
       "path": "src/prelude/prelude.blot",
@@ -736,7 +736,7 @@
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 2755
+      "lines": 2753
     },
     {
       "path": "compiler/src/primitives.rs",

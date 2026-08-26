@@ -68,7 +68,7 @@ await runCommand("deno", [
   "run",
   "--allow-read",
   "--allow-write",
-  "@mewhhaha/baba/cli",
+  "npm:@jsr/mewhhaha__baba@9.0.0/cli",
   "grammar.baba",
   "--out",
   grammarDirectory,
@@ -98,6 +98,8 @@ await runCommand("deno", [
 // this patch rather than the patch itself.
 const RESERVED_TOKENS = [
   "module",
+  "with",
+  "import",
   "operators",
   "infixl",
   "infixr",
@@ -106,19 +108,24 @@ const RESERVED_TOKENS = [
   "let",
   "const",
   "return",
+  "use",
   "if",
   "else",
   "case",
   "of",
   "rec",
-  "comptime",
   "open",
   "for",
   "in",
   "break",
+  "do",
+  "compdo",
   "fn",
   "=",
   "=>",
+  ":=",
+  "<-",
+  "::",
 ];
 
 const grammarJsPath = join(grammarDirectory, "grammar.js");
@@ -158,16 +165,19 @@ let editorGrammar = `${
   },
 ${grammarJs.slice(cut)}`
   .replace(/^\s*LAYOUT_(?:NEWLINE|INDENT|DEDENT):.*\n/gm, "");
-const elementBodyStart =
-  'field("body_start", $.LAYOUT_NEWLINE), $.LAYOUT_INDENT';
-if (!editorGrammar.includes(elementBodyStart)) {
-  throw new Error("grammar.js has no element body layout sequence");
+
+// Baba emits a nullable `program` behind a synthetic `source_file` rule.
+// Tree-sitter permits a nullable start rule, but not a nullable rule reached
+// from that start, so make Blot's declared root the first rule directly.
+const sourceFileRule = "    source_file: $ => $.program,\n";
+const programRule = editorGrammar.match(/^[ ]{4}program:.*\n/m)?.[0];
+if (!editorGrammar.includes(sourceFileRule) || programRule === undefined) {
+  throw new Error("grammar.js has no generated source_file/program root pair");
 }
-// The external scanner recognizes and consumes the suite's physical newline
-// while producing INDENT. Requiring NEWLINE first would make it classify
-// arbitrary child values as statement starts before it knows this is an
-// element body.
-editorGrammar = editorGrammar.replace(elementBodyStart, "$.LAYOUT_INDENT");
+editorGrammar = editorGrammar
+  .replace(sourceFileRule, "")
+  .replace(programRule, "")
+  .replace("  rules: {\n", `  rules: {\n${programRule}`);
 await Deno.writeTextFile(
   grammarJsPath,
   editorGrammar,
@@ -217,7 +227,6 @@ const repositoryQueries = join(repository, "queries");
 const highlights = [
   await Deno.readTextFile(join(generatedQueries, "generated-highlights.scm")),
   await Deno.readTextFile(join(repositoryQueries, "keywords.scm")),
-  await Deno.readTextFile(join(repositoryQueries, "elements.scm")),
   await Deno.readTextFile(join(repositoryQueries, "calls.scm")),
 ].join("\n");
 

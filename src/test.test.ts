@@ -87,7 +87,7 @@ Deno.test("a test file cannot perform ambient initialization effects", async () 
   const path = await sourceFile(
     `const Console = @effect.host { .write = Text -> Unit; }
 @[test] let isolated = fn () => ()
-_ <- Console.write "initializing"
+use Console.write "initializing"
 return ()
 `,
   );

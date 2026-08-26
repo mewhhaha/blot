@@ -169,7 +169,6 @@ export const currentCompactFieldNames = [
   "alternative",
   "alternatives",
   "arguments",
-  "arrow",
   "associativity",
   "body",
   "condition",

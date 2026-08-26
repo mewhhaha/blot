@@ -6,12 +6,12 @@ const Terminal =
     .write = Text -> Unit;
   }
 
-<- Terminal.write "What is your name?"
-name <- Terminal.read_line ()
+use Terminal.write "What is your name?"
+use name <- Terminal.read_line ()
 
 if text_eq (name, ""):
-  <- Terminal.write "Hello, stranger."
+  use Terminal.write "Hello, stranger."
   return ()
 
-result <- Terminal.write (Text.append "Hello, " name)
+use result <- Terminal.write (Text.append "Hello, " name)
 return result

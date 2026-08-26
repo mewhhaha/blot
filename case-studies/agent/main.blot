@@ -15,14 +15,14 @@ let transcript = ""
 let turns = 0
 
 for ever:
-  <- Terminal.write "You:"
-  prompt <- Terminal.read_line ()
+  use Terminal.write "You:"
+  use prompt <- Terminal.read_line ()
   if text_eq (prompt, ""):
     break
 
   let request = transcript <> "\nUser: " <> prompt <> "\nAssistant:"
-  reply <- Model.complete request
-  <- Terminal.write (Text.append "Agent: " reply)
+  use reply <- Model.complete request
+  use Terminal.write (Text.append "Agent: " reply)
   transcript := request <> " " <> reply
   turns := turns + 1
 

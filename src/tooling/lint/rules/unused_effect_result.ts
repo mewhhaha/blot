@@ -33,7 +33,7 @@ function reportUnusedResults(
     if (declaration.tag !== "binding" || declaration.kind !== "effect") {
       continue;
     }
-    if (!context.hasConcreteOrigin(declaration, "rebinding")) continue;
+    if (!context.hasConcreteOrigin(declaration, "sequencing")) continue;
     if (
       declaration.pattern.tag !== "name" || declaration.pattern.name === "_"
     ) {
@@ -53,12 +53,12 @@ function reportUnusedResults(
     if (prefix === null) continue;
     context.report({
       message:
-        `The result of this effect is never read; sequence it with a leading \`<-\`.`,
+        `The result of this effect is never read; omit the binding after \`use\`.`,
       span: prefix.name,
       fix: context.fix(
         prefix.binding,
         "Discard unused effect result explicitly",
-        "<-",
+        "",
       ),
     });
   }
@@ -81,16 +81,19 @@ function effectPrefix(
     declaration.span.start,
     declaration.value.span.start,
   );
-  const match = /^([A-Za-z_][A-Za-z0-9_]*)[ \t]*<-/.exec(prefix);
+  const match = /^use[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*<-[ \t]*/.exec(
+    prefix,
+  );
   if (match === null) return null;
+  const nameStart = declaration.span.start + match[0].indexOf(match[1]);
   return {
     name: {
-      start: declaration.span.start,
-      end: declaration.span.start + match[1].length,
+      start: nameStart,
+      end: nameStart + match[1].length,
     },
     binding: {
-      start: declaration.span.start,
-      end: declaration.span.start + match[0].length,
+      start: nameStart,
+      end: declaration.value.span.start,
     },
   };
 }

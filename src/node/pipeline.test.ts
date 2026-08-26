@@ -313,7 +313,7 @@ let choose = fn condition => fn ~fallback => case condition of
 
 let run :: Int -> Int
 let run = fn flag => do:
-  value <- choose (flag != 0) (init.read ())
+  use value <- choose (flag != 0) (init.read ())
   return value
 
 return { .default = run; }
@@ -447,7 +447,7 @@ test("effectful top-level work is never replayed across runtime fields", async (
   try {
     await writeFile(
       path,
-      "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
+      "module with init\n\nuse value <- init.read ()\nreturn { .first = value; .second = value; }\n",
     );
     await assert.rejects(
       compiler.compile(path),
@@ -486,7 +486,7 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
   try {
     await writeFile(
       path,
-      'module with init\n\nopen import "blot:prelude"\n\nvalue <- init.read ()\n<- init.observe (F64.of_int value)\nreturn ()\n',
+      'module with init\n\nopen import "blot:prelude"\n\nuse value <- init.read ()\nuse init.observe (F64.of_int value)\nreturn ()\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);

@@ -33,7 +33,7 @@ const quicksort_owned = fn (!values, before_or_equal) => do:
   let bounds = Slice.whole (&values)
   return sort (!values, bounds)
 
-dynamic <- Source.value 0
+use dynamic <- Source.value 0
 let values = Slice.copy [dynamic, 4, 7, 3, 8, 2, 6, 1, 5]
 let sorted_region =
   quicksort_owned (

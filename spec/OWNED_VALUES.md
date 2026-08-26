@@ -188,7 +188,7 @@ callback cannot discharge the requirement.
 
 The result must be exposed immediately because the qualified pattern is the
 finite proof of where each successor resides. A state fold can therefore write
-`?next <- step (?current, value)` without declaring an ownership type for
+`use ?next <- step (?current, value)` without declaring an ownership type for
 `step`. Returning or storing an opaque owned callback result remains rejected.
 This keeps the relation language small, decidable, and separate from
 biunification while covering folds, work lists, and divide-and-conquer drivers.

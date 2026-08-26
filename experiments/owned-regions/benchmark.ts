@@ -32,7 +32,7 @@ try {
   );
   const ownedPrefix = ownedTemplate.slice(
     0,
-    ownedTemplate.indexOf("dynamic <-"),
+    ownedTemplate.indexOf("use dynamic <-"),
   );
   const measurements: Measurement[] = [];
   for (const size of sizes) {
@@ -153,7 +153,7 @@ async function measure(
 }
 
 function ownedSource(prefix: string, values: readonly number[]): string {
-  return `${prefix}dynamic <- Source.value 0
+  return `${prefix}use dynamic <- Source.value 0
 let values = Slice.copy [dynamic, ${values.slice(1).join(", ")}]
 let sorted_region = quicksort_owned (
   (!values),

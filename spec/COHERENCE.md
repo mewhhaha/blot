@@ -121,7 +121,7 @@ a specified trap.
 A source pure position such as the right side of `let` may contain an
 application only after its final row settles to empty. Elaboration still
 schedules that call through the ordinary Core computation relation and binds its
-returned value. `<-` admits a non-empty row and is also the explicit sequencing
+returned value. `use` admits a non-empty row and is also the explicit sequencing
 form for a suspended nullary effect value. No pass may switch between a
 pure-call semantics and a computation-call semantics based on an optimization
 result.

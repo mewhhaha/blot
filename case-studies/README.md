@@ -81,12 +81,12 @@ with `update game`, renders it, and repeats:
 
 ```blot
 for ever:
-  remaining <- Host.frame ()
+  use remaining <- Host.frame ()
   if remaining <= 0:
     break
 
   game := update game
-  <- render game
+  use render game
 ```
 
 Run it with `deno task case-study game-loop [frames] [ortho]`. The two entry
@@ -143,18 +143,18 @@ body's `:=` names are its accumulator, so the frame loop _is_ the world:
 
 ```blot
 for ever:
-  remaining <- Host.frame ()
+  use remaining <- Host.frame ()
   if remaining <= 0:
     break
 
-  current <- Assets.generation ()
+  use current <- Assets.generation ()
   if current != generation:
-    transforms <- load_transforms ()
-    models <- load_models ()
+    use transforms <- load_transforms ()
+    use models <- load_models ()
     generation := current
 
   transforms := advance transforms
-  _ <- render (transforms, models)
+  use render (transforms, models)
 ```
 
 A system that does not rebind a name provably cannot affect it — the property an

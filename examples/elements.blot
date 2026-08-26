@@ -11,17 +11,17 @@ const Draw =
   }
 
 let element = fn name => fn _properties => fn children => do:
-  <- Draw.write ("<" <> name <> ">")
+  use Draw.write ("<" <> name <> ">")
   for child in Iter.items children:
-    <- child
+    use child
 
-  <- Draw.write ("</" <> name <> ">")
+  use Draw.write ("</" <> name <> ">")
   return name
 
 let Render =
   {
     .text = fn text => do:
-      <- Draw.write text
+      use Draw.write text
     ;
     .div = element "div";
     .icon = element "icon";
@@ -45,35 +45,35 @@ let Button = fn properties => fn children => do:
   let order = case properties.order of
     () => ""
     value => " data-order=" <> Text.of_int value
-  <- Draw.write ("<button" <> disabled <> order <> ">")
-  <- text properties.label
+  use Draw.write ("<button" <> disabled <> order <> ">")
+  use text properties.label
   for child in Iter.items children:
-    <- child
+    use child
 
-  <- Draw.write "</button>"
+  use Draw.write "</button>"
 
 let view = fn () => do:
   let count = fn () => do:
-    <- text "Count: "
+    use text "Count: "
 
   let save = fn () => do:
-    <- Button {
+    use Button {
       .label = "Save";
       .disabled = ();
       .order = ();
     } []
 
   let delete = fn () => do:
-    <- Button {
+    use Button {
       .label = "Delete";
       .disabled = #True;
       .order = 2;
     } []
 
   let glyph = fn () => do:
-    <- icon {} []
+    use icon {} []
 
-  root <- div
+  use root <- div
     {
       .class = "counter";
       .hidden = #False;
@@ -84,7 +84,7 @@ let view = fn () => do:
 let collecting =
   {
     .write = fn (fragment, ?resume) => do:
-      rest <- resume ()
+      use rest <- resume ()
       return fragment <> rest
     ;
     .return = fn _ => "";
@@ -93,7 +93,7 @@ let collecting =
 return @handle (
   Draw,
   (fn () => do:
-    <- view ()
+    use view ()
   ),
   collecting
 )

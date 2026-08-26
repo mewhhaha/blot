@@ -188,7 +188,7 @@ return case Slice.split ((!whole), 1) of
 Deno.test("dynamic Slice split conserves authority on success and failure", async () => {
   const source = `open import "blot:prelude"
 const Source = @effect.host { .offset = Int -> Int; }
-at <- Source.offset 0
+use at <- Source.offset 0
 let whole = Slice.copy [4, 5, 6]
 let restored = case Slice.split ((!whole), at) of
   #Split (!left, !right, !rejoin) => Slice.join ((!rejoin), (!left), (!right))
@@ -232,8 +232,8 @@ Deno.test("dynamic refined array take and split return plain tuples", async () =
   for (const case_ of cases) {
     const source = `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; .index = Int -> Int; }
-value <- Source.value 0
-at <- Source.index 0
+use value <- Source.value 0
+use at <- Source.index 0
 let values = [value, 20, 30]
 if at >= 0 && at < Array.length values:
   let decomposed = ${case_.call}
@@ -267,7 +267,7 @@ else:
 Deno.test("direct recursive functions close over dynamic values", async () => {
   const source = `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
-offset <- Source.value 0
+use offset <- Source.value 0
 let rec add_depth :: Int -> Int
 let rec add_depth = fn depth => do:
   if depth <= 0:
@@ -296,7 +296,7 @@ Deno.test("Slice copy is elided only for proven private Stores", async () => {
   const source = (owned: boolean) =>
     `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
-x <- Source.value 0
+use x <- Source.value 0
 ${owned ? "let !candidate" : "let candidate"} = @array.set [x, 2, 3] 1 2
 let region = Slice.copy ${owned ? "(!candidate)" : "candidate"}
 let frozen = Slice.freeze (!region)

@@ -96,11 +96,11 @@ return choose
 Deno.test("an else suite with work after its conditional stays nested", async () => {
   const source = `let choose = fn () => do:
   if first:
-    _ <- one ()
+    use one ()
   else:
     if second:
-      _ <- two ()
-    _ <- finish ()
+      use two ()
+    use finish ()
   return ()
 return choose
 `;
@@ -192,7 +192,7 @@ return (updated, previous_length)
     name: "an unread effect result is explicitly discarded",
     code: "BLOT_LINT_UNUSED_EFFECT_RESULT",
     source: `let run = fn () => do:
-  ignored <- perform_work ()
+  use ignored <- perform_work ()
   return ()
 return run
 `,
@@ -383,7 +383,7 @@ return ()
 Deno.test("an effect result used after a statement suite is not unused", async () => {
   const source = `let value = ()
 if refresh:
-  value <- reload ()
+  use value <- reload ()
 return value
 `;
   const parsed = await parseConcrete(source);
@@ -446,7 +446,7 @@ Deno.test("rule visitors cover effect rows and structural interfaces", async () 
   const source = `const Console = @effect { .write = Unit -> Unit; }
 const Host = @effect.host { .write = Unit -> Unit; }
 let run = fn () => do:
-  value <- Console.write ()
+  use value <- Console.write ()
   return value
 let composed = run
   |> @handle (Host, host_handler)

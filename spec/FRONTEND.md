@@ -178,7 +178,7 @@ Surface elaboration lowers rich control to the smaller Core owned by
 - every function application becomes a Core computation;
 - a pure source position admits an applied computation only after its row
   settles empty;
-- `x <- c` becomes a bind;
+- `use x <- c` becomes a bind, while `use c` binds the result to a wildcard;
 - sequencing a suspended nullary effect value applies it to unit once;
 - loops become recursion and cases with explicit accumulator transfer;
 - statement `return` and `break` become compiler-local control results before

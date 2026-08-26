@@ -102,7 +102,7 @@ entirely foldable.
 open import "blot:prelude"
 const Source = @effect.host { .value = Unit -> Int; };
 let get_x = fn v => v.x;
-n <- Source.value ();
+use n <- Source.value ();
 return get_x { .x = n; .y = 0; }
 ```
 

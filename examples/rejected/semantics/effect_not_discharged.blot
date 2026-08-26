@@ -9,14 +9,14 @@ const Clock = @effect { .now = Unit -> Int; }
 
 let logging =
   { .write = fn (m, ?resume) => do:
-    result <- resume ()
+    use result <- resume ()
     return result
   ; .return = fn v => v; }
 
 let stamped = fn () => do:
-  <- Console.write "start"
-  time <- Clock.now ()
+  use Console.write "start"
+  use time <- Clock.now ()
   return time
 
-result <- @handle (Console, stamped, logging)
+use result <- @handle (Console, stamped, logging)
 return result

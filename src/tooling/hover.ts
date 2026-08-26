@@ -642,6 +642,8 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   prefix: "This retired keyword described a prefix operator.",
   let: "Binds a runtime value in the current scope.",
   const: "Evaluates and binds a compile-time value.",
+  use:
+    "Sequences an effectful computation and optionally binds its produced result.",
   return: "Supplies the result of the nearest module or explicit `do` scope.",
   if:
     "Selects a branch; a standalone suite inherits its surrounding control targets.",
@@ -673,7 +675,7 @@ const PUNCTUATION_DOCUMENTATION: Readonly<Record<string, string>> = {
   "::": "Associates a repeated binding header with its signature.",
   ":=": "Rebinds an existing name while preserving its stable type.",
   "<-":
-    "Executes an effect value. `name <- effect` binds its result; leading `<- effect` discards it. A nullary effect value is forced with `()`.",
+    "Separates the optional result pattern from the computation in a `use` statement.",
   "=>": "Separates a function parameter or case pattern from its body.",
   ":": "Introduces an indentation-delimited statement or branch suite.",
   "...": "Spreads the members or elements of the following value.",

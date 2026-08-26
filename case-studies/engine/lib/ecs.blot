@@ -70,7 +70,7 @@ const each_2 = fn (left, right, step) => do:
 // a tuple scrutinee, a renderer's join stays two `case`s.
 const visit_2 = fn (left, right, visit) => do:
   for id in Iter.range (0, count left):
-    <- case at (left, id) of
+    use case at (left, id) of
       #Some a => case at (right, id) of
         #Some b => visit (a, b)
         #None => ()

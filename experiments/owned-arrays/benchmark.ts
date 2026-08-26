@@ -216,8 +216,8 @@ const rec checksum = fn (values, index, total) => do:
     let value = Array.expect_get ((&values), index)
     return checksum (values, index + 1, total + (index + 1) * value)
 
-dynamic <- Source.value 0
-direction <- Source.value 1
+use dynamic <- Source.value 0
+use direction <- Source.value 1
 let values = [dynamic, ${values.slice(1).join(", ")}]
 let sorted = ${sorted}
 return checksum (sorted, 0, 0)

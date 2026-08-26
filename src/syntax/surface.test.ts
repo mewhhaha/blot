@@ -65,7 +65,7 @@ return value
 Deno.test("effect sequencing binds an ordinary pattern", async () => {
   const parsed = await parse(
     `const Pair = @effect { .read = Unit -> (Int, Int); }
-(left, right) <- Pair.read ()
+use (left, right) <- Pair.read ()
 left := right
 return left
 `,
@@ -82,6 +82,22 @@ return left
     binding.pattern.elements.map((element) => element.tag),
     ["name", "name"],
   );
+});
+
+Deno.test("effect sequencing can discard its result", async () => {
+  const parsed = await parse(
+    `const Console = @effect { .write = Text -> Unit; }
+use Console.write "hello"
+return ()
+`,
+  );
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const binding = parsed.module.declarations[1];
+  assert(binding !== undefined && binding.tag === "binding");
+  if (binding === undefined || binding.tag !== "binding") return;
+  assertEquals(binding.kind, "effect");
+  assertEquals(binding.pattern.tag, "wildcard");
 });
 
 Deno.test("stable rebinding still requires one unqualified name", async () => {

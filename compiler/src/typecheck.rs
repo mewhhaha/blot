@@ -2887,7 +2887,7 @@ impl Checker {
                     .map_err(|_| {
                         Diagnostic::new(
                             "BLOT_UNSEQUENCED_EFFECT",
-                            "A declaration value performs an effect. Sequence it with `name <- expression;` instead.",
+                            "A declaration value performs an effect. Sequence it with `use name <- expression;` instead.",
                             span,
                         )
                     })?;

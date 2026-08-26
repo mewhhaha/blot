@@ -117,15 +117,10 @@ function visitStatement(
     const value = cursorField(rule, "value");
     if (value !== null) visitCursor(value, scope, validation);
     const pattern = cursorField(rule, "pattern");
-    const arrow = tokenText(cursorField(rule, "arrow"));
-    if (pattern === null || arrow === null) return;
-    if (arrow === "<-") {
-      bindNames(scope, boundPatternNames(pattern));
-      return;
-    }
+    if (pattern === null) return;
     const name = unqualifiedPatternName(pattern);
     if (name === null) return;
-    if (arrow === ":=" && visible(scope, name) && !rebindable(scope, name)) {
+    if (visible(scope, name) && !rebindable(scope, name)) {
       validation.diagnostics.push({
         code: "BLOT_REBINDING_FRAME",
         message:
@@ -133,6 +128,18 @@ function visitStatement(
         span: rule.span,
       });
     }
+    return;
+  }
+
+  if (rule.name === "sequencing") {
+    const value = cursorField(rule, "value");
+    const head = cursorField(rule, "head");
+    if (value === null) {
+      if (head !== null) visitCursor(head, scope, validation);
+      return;
+    }
+    visitCursor(value, scope, validation);
+    if (head !== null) bindNames(scope, boundExpressionNames(head));
     return;
   }
 

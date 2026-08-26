@@ -4,7 +4,7 @@
 open import "blot:prelude"
 
 let handler = fn ?resume => do:
-  first <- resume 1
-  second <- resume 2
+  use first <- resume 1
+  use second <- resume 2
   return @int.add first second
 return handler (fn n => n)

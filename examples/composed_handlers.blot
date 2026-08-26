@@ -10,29 +10,29 @@ const Clock = @effect { .now = Unit -> Int; }
 const Random = @effect { .add = Int -> Int; }
 
 let program = fn () => do:
-  input <- Terminal.read ()
-  time <- Clock.now ()
-  result <- Random.add (input + time)
+  use input <- Terminal.read ()
+  use time <- Clock.now ()
+  use result <- Random.add (input + time)
   return result
 
 let fake_terminal =
   {
     .read = fn ((), !resume) => do:
-      result <- resume 10
+      use result <- resume 10
       return result
     ;
   }
 let fake_clock =
   {
     .now = fn ((), !resume) => do:
-      result <- resume 20
+      use result <- resume 20
       return result
     ;
   }
 let fake_random =
   {
     .add = fn (value, !resume) => do:
-      result <- resume (value + 12)
+      use result <- resume (value + 12)
       return result
     ;
   }
@@ -43,8 +43,8 @@ let handled =
     |> @handle (Clock, fake_clock)
     |> @handle (Random, fake_random)
 
-result <- handled
-discarded <- handled
+use result <- handled
+use discarded <- handled
 
 return {
   .named = result;

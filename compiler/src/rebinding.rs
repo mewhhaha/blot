@@ -143,18 +143,10 @@ fn visit_statement(
             .map(|cursor| token_text(cst, cursor))
             .transpose()?
             .flatten();
-        let arrow = field(cst, rule_id, "arrow")?
-            .map(|cursor| token_text(cst, cursor))
-            .transpose()?
-            .flatten();
-        let (Some(name), Some(arrow)) = (name, arrow) else {
+        let Some(name) = name else {
             return Ok(());
         };
-        if arrow == "<-" {
-            bind_names(scope, vec![name]);
-            return Ok(());
-        }
-        if arrow == ":=" && visible(scope, &name) && !rebindable(scope, &name) {
+        if visible(scope, &name) && !rebindable(scope, &name) {
             validation.diagnostics.push(Diagnostic::new(
                 "BLOT_REBINDING_FRAME",
                 format!(
@@ -162,6 +154,22 @@ fn visit_statement(
                 ),
                 cst.span(Cursor::Rule(rule_id))?,
             ));
+        }
+        return Ok(());
+    }
+
+    if name == "sequencing" {
+        let head = field(cst, rule_id, "head")?;
+        let value = field(cst, rule_id, "value")?;
+        if let Some(value) = value {
+            visit_cursor(cst, value, scope, validation)?;
+            if let Some(head) = head {
+                bind_names(scope, bound_expression_names(cst, head)?);
+            }
+            return Ok(());
+        }
+        if let Some(head) = head {
+            visit_cursor(cst, head, scope, validation)?;
         }
         return Ok(());
     }

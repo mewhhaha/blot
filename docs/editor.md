@@ -133,8 +133,8 @@ ownership prefixes, and requires a parseable action for each.
 Effects and structural interfaces need no parallel lint AST. An effect, its
 written row, and `Empty`, `Length`, `Semigroup`, or `Monoid` are ordinary
 expressions, so the same expression visitor reaches all of them. Effect
-declarations remain sequenced: when a `<-` result is unread, the action changes
-the binding to leading `<-` instead of deleting the effect. Interface
+declarations remain sequenced: when a `use pattern <-` result is unread, the
+action removes the binding instead of deleting the effect. Interface
 implementations remain explicitly scoped values. The linter does not replace a
 primitive with an interface member merely because their inferred types agree,
 since a same-typed shadowed member may have different behavior.
@@ -172,7 +172,9 @@ patches one into the generated `grammar.js`. Field names keep working, because
 
 `scripts/check_grammar.ts` is the reason to trust that patch rather than the
 patch itself: it runs every accepted program and every syntax rejection through
-both parsers and fails if they ever disagree.
+both parsers and fails if they ever disagree. It also checks the assembled
+highlight query against `editor/highlights.blot`, where statement `use` must be
+a keyword while `.use` remains a member.
 
 ```bash
 just grammar-check

@@ -276,7 +276,7 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
   let near = fn z => is_less (F32.cmp z NEAR)
   let behind = near za || near zb || near zc || near zd
   let hidden = is_greater (F32.cmp outward ZERO)
-  <- case behind || hidden of
+  use case behind || hidden of
     #True => ()
     #False => do:
       // Pixels, and the last place a float exists in this function. `Canvas` is
@@ -296,13 +296,13 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
         F32.truncate
           (F32.mul (F32x4.sum (F32x4.of (za, zb, zc, zd))) (lane 250.0))
       let shade = shade_of normal
-      <- Canvas.tri {
+      use Canvas.tri {
         .ax = pa.x; .ay = pa.y;
         .bx = pb.x; .by = pb.y;
         .cx = pc.x; .cy = pc.y;
         .depth = depth; .shade = shade; .colour = colour;
       }
-      <- Canvas.tri {
+      use Canvas.tri {
         .ax = pa.x; .ay = pa.y;
         .bx = pc.x; .by = pc.y;
         .cx = pd.x; .cy = pd.y;
@@ -313,10 +313,10 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
 // path — an application that wants a second shape adds geometry here rather
 // than a second renderer.
 const draw_mesh = fn (position, angle, scale, colour, camera) => do:
-  <- each (
+  use each (
       faces,
       fn face => do:
-        <- draw_face (position, angle, scale, colour, camera, face)
+        use draw_face (position, angle, scale, colour, camera, face)
     )
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
@@ -325,14 +325,14 @@ const draw_mesh = fn (position, angle, scale, colour, camera) => do:
 const draw_sprite = fn (position, scale, texture, camera) => do:
   let view = to_view (position, camera)
   let depth = F32x4.z view
-  <- case is_less (F32.cmp depth NEAR) of
+  use case is_less (F32.cmp depth NEAR) of
     #True => ()
     #False => do:
       let point = to_screen (view, camera)
       let size = case camera.lens == 0 of
         #True => F32.div (F32.mul scale FOCAL) depth
         #False => F32.mul scale camera.zoom
-      <- Canvas.sprite {
+      use Canvas.sprite {
         .x = F32.truncate (F32x4.x point);
         .y = F32.truncate (F32x4.y point);
         .size = F32.truncate size;
@@ -356,11 +356,11 @@ let frame ::
     .sprite = (F32x4, F32, Text) -> Unit ~ { Canvas };
   } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint => do:
-  <- Canvas.clear ()
-  yaw <- View.yaw ()
-  pitch <- View.pitch ()
-  distance <- View.distance ()
-  lens <- View.lens ()
+  use Canvas.clear ()
+  use yaw <- View.yaw ()
+  use pitch <- View.pitch ()
+  use distance <- View.distance ()
+  use lens <- View.lens ()
   let camera =
     camera_of (
       yaw,
@@ -368,15 +368,15 @@ let frame = fn paint => do:
       unit distance,
       lens
     )
-  <- paint {
+  use paint {
     .mesh = (fn (position, angle, scale, colour) => do:
-      <- draw_mesh (position, angle, scale, colour, camera)
+      use draw_mesh (position, angle, scale, colour, camera)
     );
     .sprite = (fn (position, scale, texture) => do:
-      <- draw_sprite (position, scale, texture, camera)
+      use draw_sprite (position, scale, texture, camera)
     );
   }
-  <- Canvas.present ()
+  use Canvas.present ()
 
 // `Canvas` and `View` are not exported. An effect is a compile-time value and a
 // module's exported record is a runtime one, so a capability cannot be handed

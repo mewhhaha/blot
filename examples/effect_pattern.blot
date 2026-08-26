@@ -5,7 +5,7 @@ open import "blot:prelude"
 const Pair = @effect { .read = Unit -> (Int, Int); }
 
 let sum = fn () => do:
-  (left, right) <- Pair.read ()
+  use (left, right) <- Pair.read ()
   return left + right
 
 let supplying =

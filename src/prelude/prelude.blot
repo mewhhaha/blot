@@ -264,12 +264,12 @@ const text_scalars = fn text => {
 }
 
 const rec text_split_from = fn (text, separator, start, parts) => do:
-  result <- case text_find_from (text, separator, start) of
+  use result <- case text_find_from (text, separator, start) of
     #Some found => do:
       let piece = case text_slice (text, start, found) of
         #Some value => value
         #None => @panic "Text.split produced invalid scalar bounds"
-      continued <- text_split_from (
+      use continued <- text_split_from (
         text,
         separator,
         found + @text.len separator,
@@ -400,16 +400,16 @@ const fold ::
 const fold = fn (&values, state, step) => do:
   let rec go =
     fn (index, current) => do:
-      result <- case array_get (values, index) of
+      use result <- case array_get (values, index) of
         #Some value => do:
-          next <- step (current, value)
-          continued <- go (@int.add index 1, next)
+          use next <- step (current, value)
+          use continued <- go (@int.add index 1, next)
           return continued
 
         #None => current
       return result
 
-  result <- go (0, state)
+  use result <- go (0, state)
   return result
 
 const array_append = fn left => fn right => do:
@@ -1495,11 +1495,11 @@ const Arena =
   }
 
 const each = fn (values, visit) => do:
-  result <- fold (
+  use result <- fold (
     values,
     (),
     fn (_, value) => do:
-      <- visit value
+      use visit value
   )
   return result
 

@@ -98,10 +98,10 @@ The prelude snapshot contains its AST and checked certificate, including closure
 facts. Installing it inflates those facts and deterministically reconstructs the
 module value without reintroducing a second type checker.
 
-Sequenced effect results obey the value restriction. `name <- computation` binds
-one monomorphic runtime value, so later uses refine the same result and, for an
-entry-module capability, its host signature. Pure `let` and `const` retain
-ordinary generalization.
+Sequenced effect results obey the value restriction. `use name <- computation`
+binds one monomorphic runtime value, so later uses refine the same result and,
+for an entry-module capability, its host signature. Pure `let` and `const`
+retain ordinary generalization.
 
 Canonical `@satisfies` requirements remain representation evidence during
 residual evaluation. This matters for an empty collection: `[T]` determines a

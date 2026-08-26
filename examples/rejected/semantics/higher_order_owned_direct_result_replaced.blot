@@ -1,7 +1,7 @@
 open import "blot:prelude"
 
 const carry = fn transition => fn ?state => do:
-  ?next <- transition (?state)
+  use ?next <- transition (?state)
   return next
 
 const replace = fn ?state => [1, 2, 3]

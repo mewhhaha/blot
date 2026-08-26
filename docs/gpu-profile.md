@@ -19,14 +19,14 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     120 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     123 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
 | `islandCount`               |      68 | one island for every grammar rule                  |
-| `islandStates`              |     403 |                                                    |
-| `islandTransitions`         |     415 |                                                    |
+| `islandStates`              |     405 |                                                    |
+| `islandTransitions`         |     417 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 604,500 | immutable device table                             |
-| `packedBytes`               | 472,598 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 612,360 | immutable device table                             |
+| `packedBytes`               | 478,100 | version-3 runtime section                          |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
@@ -145,14 +145,12 @@ island states, thirty-one island transitions, 69,228 dense-transition bytes, and
 scratch factors increase from 27 to 31. Lexer states, contraction rounds, and
 parallel long-region admission are unchanged.
 
-Leading discard sequencing adds the exact `<- expression` statement. Its `<-`
-first token is disjoint from every declaration and statement alternative, so it
-needs no parser resolution. The rule adds one island, six island states, five
-island transitions, 14,496 dense-transition bytes, and 10,549 packed bytes.
-Lexer states, candidate multiplicity, contraction rounds, and parallel
-long-region admission are unchanged. Allowing the same leading discard in a
-bounded handler-composition step adds one island transition and 84 packed bytes;
-all other counters remain unchanged.
+The retired leading discard spelling added the exact `<- expression` statement.
+Its `<-` first token was disjoint from every declaration and statement
+alternative, so it needed no parser resolution. The rule added one island, six
+island states, five island transitions, 14,496 dense-transition bytes, and
+10,549 packed bytes. Lexer states, candidate multiplicity, contraction rounds,
+and parallel long-region admission were unchanged.
 
 Making each element child a value adds one island, three island states, two
 island transitions, 9,888 dense-transition bytes, and 7,136 packed bytes. The
@@ -244,13 +242,15 @@ tag field in the binding semantic recipe raises `maxConstraintsPerNode` from 3
 to 4; dense transitions grow by 15,936 bytes and the packed plan by 12,783 bytes
 in total.
 
-`<-` cost two more lexer states and two island states. Splitting it into its own
-declaration alternative was a shift/reduce conflict on IDENT against `:=`, so
-`rebinding` remains one factored rule. Extending its target from a name to an
-ordinary binding pattern moved maximum candidate multiplicity from 22 to 24,
-while removing one island state, three island transitions, 1,476 dense table
-bytes, and 1,113 packed bytes. Lowering keeps `:=` restricted to one unqualified
-name. No parser resolution was added.
+Replacing `pattern <- expression` and leading `<- expression` with
+`use pattern <- expression` and `use expression` separates sequencing from
+stable rebinding on the first token. The value-shaped head is reclassified as a
+pattern only when `<-` follows, so the change adds no island and leaves maximum
+candidate multiplicity at 24. The `use` keyword adds three lexer states, two
+island states, two island transitions, 7,860 dense table bytes, and 5,502 packed
+bytes. The summary scratch factor increases from 24 to 25; contraction rounds,
+the other scratch factors, the root loop, and parallel long-region admission are
+unchanged. No parser resolution was added.
 
 The former `for ... do ... end` form cost three lexer states and forty-six
 island states on top of that, again with the multiplicity and contraction bounds

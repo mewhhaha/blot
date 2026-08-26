@@ -1999,8 +1999,8 @@ mod tests {
     use crate::ast::{AstArena, Expression, ResultEffects, Span};
     use crate::eval::{ApplicationSite, apply};
 
-    const TOP_LEVEL_FAULT_SOURCE: &str = "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"snapshot\"\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .action = action; .origin = @shape.get (@type.members Extended) \"origin\"; }\u{e000}\n";
-    const CLOSURE_LOCAL_FAULT_SOURCE: &str = "let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  const Extended = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members Extended) \"origin\"\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\n";
+    const TOP_LEVEL_FAULT_SOURCE: &str = "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"snapshot\"\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return { .action = action; .origin = @shape.get (@type.members Extended) \"origin\"; }\u{e000}\n";
+    const CLOSURE_LOCAL_FAULT_SOURCE: &str = "let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  const Extended = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members Extended) \"origin\"\n  use result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\n";
     const CLOSURE_PROVENANCE_SOURCE: &str = "const make = fn captured => fn constructor => constructor { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
 
     fn snapshot_from_source(path: &str, text: &str) -> Vec<u8> {
@@ -2449,7 +2449,7 @@ mod tests {
         const PATH: &str = "snapshot:analysis-parity";
         let snapshot = snapshot_from_source(
             PATH,
-            "const apply = fn function => function 1\n\u{e000}let first = apply (fn value => value)\n\u{e000}let second = apply (fn value => { .value = value; })\n\u{e000}let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .first = first; .second = second; .signature = @type.reflect (@type.of action); }\u{e000}\n",
+            "const apply = fn function => function 1\n\u{e000}let first = apply (fn value => value)\n\u{e000}let second = apply (fn value => { .value = value; })\n\u{e000}let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  use result <- Fault.raise ()\n  return result\n\u{e000}return { .first = first; .second = second; .signature = @type.reflect (@type.of action); }\u{e000}\n",
         );
 
         let mut fresh = CompilerSession::default();
@@ -2892,7 +2892,7 @@ mod tests {
             .add_source(
                 PATH.to_owned(),
                 source(
-                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
                 ),
             )
             .expect("consumer source should load");
@@ -2933,7 +2933,7 @@ mod tests {
             .add_source(
                 "effect-extension-consumer.blot".to_owned(),
                 source(
-                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\u{e000}\n",
                 ),
             )
             .expect("consumer source should load");
@@ -2960,7 +2960,7 @@ mod tests {
             .add_source(
                 LIBRARY_PATH.to_owned(),
                 source(
-                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  result <- Fault.raise ()\n  return result\n\u{e000}return { .Fault = Fault; .action = action; }\u{e000}\n",
+                    "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return { .Fault = Fault; .action = action; }\u{e000}\n",
                 ),
             )
             .expect("effect library source should load");
@@ -3480,7 +3480,7 @@ mod tests {
             .add_source(
                 "main.blot".to_owned(),
                 source(
-                    "module with init\n\nvalue <- init.read ()\nreturn { .first = value; .second = value; }\n",
+                    "module with init\n\nuse value <- init.read ()\nreturn { .first = value; .second = value; }\n",
                 ),
             )
             .expect("source should load");
@@ -3513,7 +3513,7 @@ mod tests {
             .add_source(
                 "main.blot".to_owned(),
                 source(
-                    "module with init\n\nvalue <- init.read ()\n<- init.observe (@int.add value 1)\nreturn ()\n",
+                    "module with init\n\nuse value <- init.read ()\nuse init.observe (@int.add value 1)\nreturn ()\n",
                 ),
             )
             .expect("source should load");

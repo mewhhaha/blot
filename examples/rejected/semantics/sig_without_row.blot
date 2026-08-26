@@ -16,6 +16,6 @@ const Console =
 
 let notify :: Text -> Unit
 let notify = fn message => do:
-  result <- Console.write message
+  use result <- Console.write message
   return result
 return notify

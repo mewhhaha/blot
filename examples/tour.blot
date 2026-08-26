@@ -83,14 +83,14 @@ for ever:
 const Console = @effect { .write = Text -> Unit; }
 
 let report = fn () => do:
-  <- Console.write "one"
-  <- Console.write "two"
+  use Console.write "one"
+  use Console.write "two"
   return "done"
 
 let joining =
   {
     .write = fn (message, ?resume) => do:
-      rest <- resume ()
+      use rest <- resume ()
       return message <> rest
     ;
     .return = fn value => value;
@@ -101,8 +101,8 @@ let joining =
 let printing =
   {
     .write = fn (message, ?resume) => do:
-      <- init.print message
-      result <- resume ()
+      use init.print message
+      use result <- resume ()
       return result
     ;
     .return = fn value => value;

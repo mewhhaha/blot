@@ -122,7 +122,7 @@ interface Context {
   } | null;
   readonly returnScope: boolean;
   readonly escapeBoundary: "none" | "value-condition";
-  /** Reclassifies `^name` before fixity while lowering a `for ... in` head. */
+  /** Reclassifies `^name` before fixity in a pattern-shaped value head. */
   readonly patternHead: boolean;
 }
 
@@ -229,11 +229,7 @@ function statementsContainReturn(cursors: readonly Cursor[]): boolean {
 function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
-    if (
-      rule.name === "sequencing" ||
-      (rule.name === "rebinding" &&
-        tokenOf(required(rule, "arrow")).text === "<-")
-    ) {
+    if (rule.name === "sequencing") {
       return true;
     }
     for (const nested of nestedStatementLists(rule)) {
@@ -553,7 +549,7 @@ function lowerControlOutcome(
     // to ride across the rejoin, or the statements after the conditional read
     // the value from before it — which is how a rebinding under `if c:`
     // inside a `for` silently counted nothing.
-    const rebound = reboundNames(nestedStatementLists(rule).flat());
+    const rebound = reboundNames(nestedStatementLists(rule).flat(), context);
     let branchContinue: Expr = loopState(rebound, rule.span);
     let branchConstructors = constructors;
     let branchContext = context;
@@ -1223,15 +1219,18 @@ function loopFiltering(rule: Rule, binder: Pattern | null): boolean {
  * a possibly new type and must not escape its branch — a name bound only when a
  * condition happened to hold is exactly what must not leak.
  *
- * Which is why a `let`, `const`, or `<-` binding earlier in the stream takes
- * the name out of the running. After `current <- Counter.read ()`, the name
- * denotes that local, so `current := current - 1` rebinds the local and has
- * nothing to hand outward — carrying it would publish a value the outer
- * binding never held. The shadow reaches the statements after the binding and
- * into the blocks nested in them, and stops at the end of the stream that
- * introduced it.
+ * Which is why a `let`, `const`, or `use pattern <- value` binding earlier in
+ * the stream takes the name out of the running. After
+ * `use current <- Counter.read ()`, the name denotes that local, so
+ * `current := current - 1` rebinds the local and has nothing to hand outward —
+ * carrying it would publish a value the outer binding never held. The shadow
+ * reaches the statements after the binding and into the blocks nested in them,
+ * and stops at the end of the stream that introduced it.
  */
-function reboundNames(statements: readonly Cursor[]): readonly string[] {
+function reboundNames(
+  statements: readonly Cursor[],
+  context: Context,
+): readonly string[] {
   const rebound: string[] = [];
   const visit = (
     cursors: readonly Cursor[],
@@ -1240,10 +1239,7 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
     const shadowed = new Set(outer);
     for (const cursor of cursors) {
       const declaration = statementRule(cursor);
-      if (
-        declaration.name === "rebinding" &&
-        tokenOf(required(declaration, "arrow")).text === ":="
-      ) {
+      if (declaration.name === "rebinding") {
         const pattern = lowerPattern(
           asRule(field(declaration, "pattern"), "pattern"),
         );
@@ -1258,12 +1254,13 @@ function reboundNames(statements: readonly Cursor[]): readonly string[] {
         if (!shadowed.has(name) && !rebound.includes(name)) rebound.push(name);
         continue;
       }
-      if (
-        declaration.name === "rebinding" &&
-        tokenOf(required(declaration, "arrow")).text === "<-"
-      ) {
-        const pattern = lowerPattern(
-          asRule(field(declaration, "pattern"), "pattern"),
+      if (declaration.name === "sequencing") {
+        if (field(declaration, "value") === null) continue;
+        const pattern = patternFromExpr(
+          lowerValue(
+            asRule(field(declaration, "head"), "value"),
+            { ...context, patternHead: true },
+          ),
         );
         for (const name of patternNames(pattern)) shadowed.add(name);
         continue;
@@ -1314,7 +1311,7 @@ function lowerControlLoop(
   context: Context,
 ): LoweredControlLoop {
   const statements = statementSuite(rule, "body");
-  const carried = carriedNames(statements);
+  const carried = carriedNames(statements, context);
   const constructors: ControlConstructors = {
     return: syntheticConstructor("LoopReturn", rule.span),
     continue: syntheticConstructor("LoopContinue", rule.span),
@@ -1587,7 +1584,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         span: rule.span,
       };
     }
-    const carried = carriedNames(statements);
+    const carried = carriedNames(statements, context);
     const drawn = field(rule, "drawn");
     const head = lowerValue(
       asRule(field(rule, "head"), "value"),
@@ -1662,7 +1659,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     // `let`, which introduces a name, but not for `:=`, which hands an existing
     // one back — so a statement conditional can compute, and a `:=` inside one
     // is not silently dropped.
-    const rebound = reboundNames(nestedStatementLists(rule).flat());
+    const rebound = reboundNames(nestedStatementLists(rule).flat(), context);
     const branches: Branch[] = [{
       condition: lowerExpression(
         asRule(field(body, "condition"), "condition"),
@@ -1754,15 +1751,26 @@ function lowerDecl(rule: Rule, context: Context): Decl {
   if (rule.name === "rebinding") {
     const pattern = lowerPattern(asRule(field(rule, "pattern"), "pattern"));
     const value = lowerValue(asRule(field(rule, "value"), "value"), context);
-    if (tokenOf(required(rule, "arrow")).text === ":=") {
-      if (pattern.tag !== "name" || pattern.qualifier !== "none") {
-        fail(
-          "BLOT_BAD_REBINDING_TARGET",
-          "`:=` requires one unqualified name. Use `let` to bind a pattern.",
-          rule.span,
-        );
-      }
-      return { tag: "shadow", name: pattern.name, value, span: rule.span };
+    if (pattern.tag !== "name" || pattern.qualifier !== "none") {
+      fail(
+        "BLOT_BAD_REBINDING_TARGET",
+        "`:=` requires one unqualified name. Use `let` to bind a pattern.",
+        rule.span,
+      );
+    }
+    return { tag: "shadow", name: pattern.name, value, span: rule.span };
+  }
+  if (rule.name === "sequencing") {
+    const valueCursor = field(rule, "value");
+    const head = lowerValue(
+      asRule(field(rule, "head"), "value"),
+      valueCursor === null ? context : { ...context, patternHead: true },
+    );
+    let pattern: Pattern = { tag: "wildcard", span: rule.span };
+    let value = head;
+    if (valueCursor !== null) {
+      pattern = patternFromExpr(head);
+      value = lowerValue(asRule(valueCursor, "value"), context);
     }
     // The effect declaration is the forcing boundary. Type-directed
     // elaboration applies a nullary effect value once and otherwise sequences
@@ -1773,16 +1781,6 @@ function lowerDecl(rule: Rule, context: Context): Decl {
       tags: [],
       pattern,
       value,
-      span: rule.span,
-    };
-  }
-  if (rule.name === "sequencing") {
-    return {
-      tag: "binding",
-      kind: "effect",
-      tags: [],
-      pattern: { tag: "wildcard", span: rule.span },
-      value: lowerValue(asRule(field(rule, "value"), "value"), context),
       span: rule.span,
     };
   }

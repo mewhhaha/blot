@@ -13,6 +13,6 @@
 open import "blot:prelude"
 
 let helper = fn x => x + 1
-const use = fn y => helper y
+const apply_helper = fn y => helper y
 
-return use 1
+return apply_helper 1

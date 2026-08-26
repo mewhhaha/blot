@@ -60,13 +60,13 @@ The reserved words are:
 
 ```text
 module with import
-let const return
+let const return use
 if else case of rec open
 for in break do compdo fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
-`.else`, `.Int`, and `.0` are all ordinary projections.
+`.use`, `.else`, `.Int`, and `.0` are all ordinary projections.
 
 ### 2.2 Literals
 
@@ -602,11 +602,12 @@ let x = x
 x := update x
 ```
 
-Function parameters, `let`/`const` bindings, names bound by `<-`, loop binders,
-and successful `if let` binders introduce names in their frame. `open` does not
-start a rebinding lineage; use `let` first when an opened name should be
-rebound. In a curried function every arrow is a closure boundary, so an inner
-closure must likewise start a local lineage before rebinding an outer parameter.
+Function parameters, `let`/`const` bindings, names bound by `use pattern <-`,
+loop binders, and successful `if let` binders introduce names in their frame.
+`open` does not start a rebinding lineage; use `let` first when an opened name
+should be rebound. In a curried function every arrow is a closure boundary, so
+an inner closure must likewise start a local lineage before rebinding an outer
+parameter.
 
 The old and new types must constrain each other after singleton integer and text
 literals are widened to their stable domains. The previous polymorphic scheme is
@@ -620,21 +621,21 @@ of the inner loop instead.
 ### 4.5 Effect sequencing
 
 ```blot
-pattern <- expression
-<- expression
+use pattern <- expression
+use expression
 ```
 
-This is the only declaration form that admits an effectful expression. It binds
-an ordinary binding pattern and executes the effect value on its right exactly
-once. The pattern has the same matching and ownership rules as a `let` pattern;
-a mismatch is an error, and every name it contains starts a local rebinding
-lineage. The leading form discards the result and is exactly equivalent to
-`_ <- expression`; it is sequencing syntax, not a prefix operator. The formatter
-uses the leading form as the canonical spelling.
+This is the only declaration form that admits an effectful expression. The form
+with `<-` binds an ordinary binding pattern and executes the effect value on its
+right exactly once. The pattern has the same matching and ownership rules as a
+`let` pattern; a mismatch is an error, and every name it contains starts a local
+rebinding lineage. Omitting the pattern and `<-` discards the result and is
+exactly equivalent to `use _ <- expression`. The formatter uses `use expression`
+as the canonical discard spelling.
 
 ```blot
-(status, body) <- Http.fetch request
-#Some value <- Cache.lookup key
+use (status, body) <- Http.fetch request
+use #Some value <- Cache.lookup key
 ```
 
 An effect value has the erased representation `Unit -> A ~ E`. Sequencing it
@@ -644,24 +645,24 @@ and executed later:
 ```blot
 const Clock = @effect { .now = Unit -> Int; }
 let effect = Clock.now
-time <- effect
+use time <- effect
 ```
 
 An already-applied expression that performs while it is evaluated remains valid
-on the right of `<-`; its result is bound directly. A projected nullary
-operation is itself an effect value, so `time <- Clock.now` and
-`time <- Clock.now ()` have the same result and effect row.
+on the right of `use pattern <-`; its result is bound directly. A projected
+nullary operation is itself an effect value, so `use time <- Clock.now` and
+`use time <- Clock.now ()` have the same result and effect row.
 
-The result bound by `<-` is monomorphic. Later uses refine that one runtime
-value, including the inferred result type of an entry-module capability; an
-effectful computation is never generalized into a reusable polymorphic value.
+The result bound by `use pattern <-` is monomorphic. Later uses refine that one
+runtime value, including the inferred result type of an entry-module capability;
+an effectful computation is never generalized into a reusable polymorphic value.
 
 `let`, `const`, `:=`, `open`, and function results written without a block are
 pure value positions. The expression in `return value` is a tail computation of
 its current module or explicit `do` scope and may contribute effects to that
 scope. Pure `let` bindings may be reordered, inlined, or discarded when their
 values are not demanded; sequencing an effect before the tail therefore requires
-`<-` even when its result is ignored.
+`use` even when its result is ignored.
 
 ### 4.6 Components are ordinary functions
 
@@ -672,7 +673,7 @@ computations:
 ```blot
 let component = fn properties => fn children =>
   for child in Iter.items children:
-    <- child
+    use child
 
   return properties
 ```
@@ -683,13 +684,13 @@ function, record, array, and effect rules as the rest of the language:
 
 ```blot
 let label = fn () =>
-  <- text "Count: "
+  use text "Count: "
 
 let button = fn () =>
-  <- Button { .label = "Save"; .disabled = (); } []
+  use Button { .label = "Save"; .disabled = (); } []
 
 let view = fn () =>
-  <- div { .class = "counter"; } [label, button]
+  use div { .class = "counter"; } [label, button]
 ```
 
 There is no special closed property-row rule, implicit child suspension,
@@ -801,7 +802,7 @@ is evaluated before its argument; collection and record members are evaluated in
 source order. Before a block runs, lexical liveness removes unused pure
 definitions. Every remaining pure declaration evaluates exactly once in source
 order before the block result; Blot does not force it at first use and does not
-allocate a run-time thunk. `<-` declarations are always live and retain source
+allocate a run-time thunk. `use` declarations are always live and retain source
 order. Reordering a live definition is valid only when its trap and divergence
 behavior is proved unchanged.
 
@@ -1418,7 +1419,7 @@ An effectful `case` remains a value expression. Select the effectful branch and
 sequence the selected expression once at the surrounding scope:
 
 ```blot
-<- case choice of
+use case choice of
   1 => first_effect ()
   _ => other_effect ()
 ```
@@ -2495,7 +2496,7 @@ Console.write "hello"
 ```
 
 There is no `perform` keyword. Calling an operation produces an effectful
-expression; `<-` sequences it into the surrounding inferred row.
+expression; `use` sequences it into the surrounding inferred row.
 
 An ordinary effect must be discharged before the module boundary. A host effect
 declared with `@effect.host` may reach the boundary; its operations become typed
@@ -2506,7 +2507,7 @@ WebAssembly imports and therefore constitute part of the module interface.
 ```blot
 let logging = {
   .write = fn (message, ?resume) =>
-    rest <- resume ()
+    use rest <- resume ()
     return message <> rest
   ;
   .return = fn value => value;
@@ -2534,14 +2535,14 @@ continuation:
 ```blot
 let cancelling = {
   .write = fn (_, !resume) =>
-    <- Continuation.cancel resume
+    use Continuation.cancel resume
     return replacement
   ;
 }
 ```
 
 `Continuation.cancel resume` consumes the one-shot continuation without running
-the suspended computation. It is operational: it must be integrated by `<-`,
+the suspended computation. It is operational: it must be integrated by `use`,
 cannot be stored as a first-class function, and accepts only a named affine or
 linear binding proved to be the resume parameter of a statically known handler.
 An alias of that same immutable binding retains the proof. Resuming or
@@ -2567,7 +2568,7 @@ let handled = program
 ```
 
 Each step produces another nullary computation, so `handled` is a computation
-like `program` and is executed by sequencing it with `<-`. Composition performs
+like `program` and is executed by sequencing it with `use`. Composition performs
 nothing on its own, and a composed computation may be executed more than once.
 
 A piped step lowers during CST lowering to the ordinary three-argument `@handle`
@@ -2615,7 +2616,7 @@ let map_logged ::
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
 let map_logged = fn callback => fn value =>
-  <- Console.write "call"
+  use Console.write "call"
   return callback value
 ```
 
@@ -3017,7 +3018,7 @@ loop body does not repeat the source-level test or perform another lookup:
 
 ```blot
 for (index, value) in Iter.indexed xs:
-  <- visit (index, value)
+  use visit (index, value)
 ```
 
 ### 13.3.1 Applying a requirement
@@ -3538,7 +3539,7 @@ for ever:
 
 let report = fn () =>
   let text = describe #Ready <> Text.of_int attempts
-  <- Console.write text
+  use Console.write text
   return text
 
 return {

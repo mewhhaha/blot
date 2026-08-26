@@ -1,0 +1,3 @@
+let record = { .use = 42; }
+use record.use
+return record.use

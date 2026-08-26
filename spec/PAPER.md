@@ -193,7 +193,7 @@ the selected branch. A deferred argument has one affine demand controlled by the
 callee; known deferred applications specialize to ordinary residual control and
 do not introduce a general run-time thunk representation.
 
-Surface `x <- c` is explicit sequencing. A suspended nullary effect value is
+Surface `use x <- c` is explicit sequencing. A suspended nullary effect value is
 applied to unit exactly once; an already applied computation is not applied
 again.
 

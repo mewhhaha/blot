@@ -26,6 +26,10 @@ static void skip(TSLexer *lexer) {
 // whitespace without hiding a real layout boundary.
 static bool starts_layout_entry(TSLexer *lexer) {
   if (lexer->lookahead == '<') return true;
+  if (lexer->lookahead == '@') {
+    lexer->advance(lexer, false);
+    return lexer->lookahead == '[';
+  }
 
   bool parenthesized_lambda = false;
   if (lexer->lookahead == '(') {
@@ -57,7 +61,8 @@ static bool starts_layout_entry(TSLexer *lexer) {
 
   const bool statement_keyword = strcmp(word, "let") == 0 ||
     strcmp(word, "const") == 0 ||
-    strcmp(word, "return") == 0 || strcmp(word, "for") == 0 ||
+    strcmp(word, "return") == 0 || strcmp(word, "use") == 0 ||
+    strcmp(word, "for") == 0 ||
     strcmp(word, "break") == 0 || strcmp(word, "open") == 0 ||
     strcmp(word, "if") == 0;
   if (statement_keyword) return true;

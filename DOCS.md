@@ -15,7 +15,7 @@ The short version is:
 - use `case` to explain data and statement `if` to explain control;
 - prefer `for` for ordinary iteration and treat its `:=` names as the
   accumulator;
-- sequence effects with `<-`, even when their result is discarded;
+- sequence effects with `use`, even when their result is discarded;
 - pass interface implementations explicitly;
 - use operators and prelude functions in application code, leaving `@`
   primitives at implementation boundaries; and
@@ -34,7 +34,7 @@ Inside a function, code should read like an imperative procedure:
 
 ```blot
 let publish = fn source => do:
-  values <- source.read ()
+  use values <- source.read ()
   let values = filter (values, fn value => value >= 0)
   let values = map (values, normalize)
 
@@ -43,7 +43,7 @@ let publish = fn source => do:
     total := total + value
 
   let report = render { .values = values; .total = total; }
-  <- source.write report
+  use source.write report
   return report
 ```
 
@@ -53,7 +53,7 @@ Read it from top to bottom without mentally expanding combinators.
 
 The implementation is still functional. Every `let` and `:=` introduces a new
 immutable binding, `for` lowers to a fold, branches produce values, and effects
-are explicit in `<-`. Nothing mutates an earlier value.
+are explicit in `use`. Nothing mutates an earlier value.
 
 Compose at the larger scale. Functions take values and return values; modules
 execute in source order from an optional input to one returned value:
@@ -72,10 +72,10 @@ let summarize = fn values => do:
   return { .values = values; .total = total; }
 
 let run = fn source => do:
-  values <- source.read ()
+  use values <- source.read ()
   let values = prepare values
   let summary = summarize values
-  <- source.write (render summary)
+  use source.write (render summary)
   return summary
 ```
 
@@ -236,7 +236,7 @@ Shadow by default when each step replaces the previous representation of the
 same domain value:
 
 ```blot
-values <- Source.values ()
+use values <- Source.values ()
 let values = filter (values, fn value => value >= 0)
 let values = map (values, fn value => value * 2)
 return values
@@ -404,7 +404,7 @@ A statement `if` may omit `else` when the false path naturally continues:
 
 ```blot
 if trace:
-  <- Console.write "starting"
+  use Console.write "starting"
 
 return run ()
 ```
@@ -576,23 +576,23 @@ const Console = @effect {
 }
 ```
 
-Bind an effect result with `<-`:
+Bind an effect result with `use pattern <-`:
 
 ```blot
-time <- Clock.now ()
+use time <- Clock.now ()
 ```
 
 Discard an effect result with the statement spelling:
 
 ```blot
-<- Console.write "starting"
+use Console.write "starting"
 ```
 
-This is preferred to `_ <- ...`: the source says directly that the result is not
-used.
+This is preferred to `use _ <- ...`: the source says directly that the result is
+not used.
 
 Do not rely on a pure `let` for ordering. If an operation must happen before the
-next operation, place it in the statement stream with `<-`.
+next operation, place it in the statement stream with `use`.
 
 Write effectful callbacks with the effect row in the signature when the boundary
 matters:
@@ -600,7 +600,7 @@ matters:
 ```blot
 let report :: Text -> Unit ~ { Console }
 let report = fn text => do:
-  <- Console.write text
+  use Console.write text
   return ()
 ```
 
@@ -880,8 +880,8 @@ scope before the surrounding flow resumes:
 
 ```blot
 if current != generation:
-  transforms <- load_transforms ()
-  models <- load_models ()
+  use transforms <- load_transforms ()
+  use models <- load_models ()
   generation := current
 
 transforms := advance transforms
@@ -891,11 +891,11 @@ Keep a collection or call on one line when it fits. Once it does not, put its
 elements or arguments vertically and indent inside every delimiter:
 
 ```blot
-store <- fold (
+use store <- fold (
   upto (0, count),
   Array.empty,
   fn (state, id) => do:
-    entry <- Assets.entry id
+    use entry <- Assets.entry id
     return E.attach (
       state,
       {
@@ -907,7 +907,7 @@ store <- fold (
 ```
 
 The closing delimiter returns to the indentation of the expression that opened
-it, and the contents sit one level deeper. Sequencing with `<-` does not shift
+it, and the contents sit one level deeper. Sequencing with `use` does not shift
 the delimiter; it remains part of that expression's line. Nested vertical
 delimiters should not collapse into an ambiguous wall of equally indented `)`.
 

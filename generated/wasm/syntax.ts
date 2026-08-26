@@ -145,6 +145,7 @@ export type LiteralKind =
   | "["
   | "]"
   | ":="
+  | "use"
   | "<-"
   | "for"
   | "case"
@@ -397,7 +398,6 @@ export interface DeclarationTagCursor extends RuleCursorBase<"declaration_tag"> 
 }
 
 export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
-  field(name: "arrow"): TokenCursor<"literal", ":="> | TokenCursor<"literal", "<-">;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "value"): ValueCursor;
   field(name: string): CursorFieldValue | undefined;
@@ -405,7 +405,8 @@ export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
 }
 
 export interface SequencingCursor extends RuleCursorBase<"sequencing"> {
-  field(name: "value"): ValueCursor;
+  field(name: "head"): ValueCursor;
+  field(name: "value"): ValueCursor | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }

@@ -739,27 +739,32 @@ function preferDiscardSequencing(
   source: string,
   concrete: ConcreteRule,
 ): string {
-  const bindings: ConcreteRule[] = [];
-  collectRules(concrete, "rebinding", bindings);
-  const discardedNames = bindings.flatMap((binding) => {
-    const pattern = directRule(binding, "binding_pattern");
-    const arrow = directToken(binding, "<-");
+  const statements: ConcreteRule[] = [];
+  collectRules(concrete, "sequencing", statements);
+  const discardedBindings = statements.flatMap((statement) => {
+    const use = directToken(statement, "use");
+    const pattern = directRules(statement, "value")[0] ?? null;
+    const arrow = directToken(statement, "<-");
     if (
-      pattern === null || arrow === null ||
+      use === null || pattern === null || arrow === null ||
       source.slice(pattern.span.start, pattern.span.end).trim() !== "_" ||
+      use.span.end > pattern.span.start ||
       pattern.span.end > arrow.span.start
     ) {
+      return [];
+    }
+    if (!/^[ \t]*$/.test(source.slice(use.span.end, pattern.span.start))) {
       return [];
     }
     if (!/^[ \t]*$/.test(source.slice(pattern.span.end, arrow.span.start))) {
       return [];
     }
-    return [{ start: pattern.span.start, end: arrow.span.start }];
+    return [{ start: use.span.end, end: arrow.span.end }];
   }).sort((left, right) => right.start - left.start);
 
   let preferred = source;
-  for (const discardedName of discardedNames) {
-    preferred = replaceSpan(preferred, discardedName, "");
+  for (const discardedBinding of discardedBindings) {
+    preferred = replaceSpan(preferred, discardedBinding, "");
   }
   return preferred;
 }
