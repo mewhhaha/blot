@@ -156,10 +156,10 @@ spread. At that boundary the producer materializes the static prefix as a fresh
 Store, then appends the spread operand with a `store.length` / `store.read` /
 `store.grow` loop. Later elements and spreads append to the produced Store in
 source order; empty spreads perform zero loop iterations. Every grow is
-persistent unless a separate ownership certificate grants destructive reuse,
-so none of the spread operands is mutated. The typechecker has already proved a
-single element representation; a mismatch while constructing these operations
-is an `InvariantFailure`.
+persistent unless a separate ownership certificate grants destructive reuse, so
+none of the spread operands is mutated. The typechecker has already proved a
+single element representation; a mismatch while constructing these operations is
+an `InvariantFailure`.
 
 Borrowed reads never grant Store ownership. Splits and joins consume exact
 family, root, footprint, and produced-value lineage. Equal-looking intervals or
@@ -275,6 +275,17 @@ Integer arithmetic, memory operations, and host calls use the source or ABI
 behavior selected by their validated Runtime-HIR operation. A convenient Wasm
 instruction is not permission to change overflow, bounds, NaN, evaluation-order,
 or ownership semantics.
+
+Store and Scratch elements use a private memory layout distinct from public ABI
+layout. Fixed-width SIMD vectors and masks occupy 16-byte-aligned, 16-byte slots
+and are transferred with `v128.load` and `v128.store`; this private layout does
+not admit a vector at an export or host-effect boundary.
+
+Runtime-HIR schema 5 represents a float shuffle with two vector operands
+followed by four dominating `integer-32` constant operands in `0..7`. Emission
+expands each float-lane selector to four byte selectors for one `i8x16.shuffle`
+instruction. Float masks reduce with `i32x4.all_true` and `v128.any_true`;
+integer vector operations select the matching 32-, 16-, or 8-bit SIMD opcode.
 
 ## 10. Correctness relation
 

@@ -1128,10 +1128,10 @@ per Lemma 6. Compile-time records and effects opened into scope remain immutable
 open frames under Lemma 7. Record storage and effect-operation aliases retain
 their source values and target indices between the evaluator and checker, so
 opening a large module does not clone every recursive value and type merely to
-establish aliases. Scheme instantiation
-memoises generalized variable replacements within one freshening while
-allocating distinct replacements for separate instantiations. Neither change
-alters the lattice or lets mutable inference state cross a module boundary.
+establish aliases. Scheme instantiation memoises generalized variable
+replacements within one freshening while allocating distinct replacements for
+separate instantiations. Neither change alters the lattice or lets mutable
+inference state cross a module boundary.
 
 The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache

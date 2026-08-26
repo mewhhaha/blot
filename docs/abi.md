@@ -141,7 +141,7 @@ provided by the module. They allocate nested buffers with the module's
 `cabi_realloc`. The module consumes and releases those buffers before the
 enclosing synchronous export call completes.
 
-`cabi_realloc` accepts alignments 1, 2, 4, and 8. A zero new size releases a
+`cabi_realloc` accepts alignments 1, 2, 4, 8, and 16. A zero new size releases a
 nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
 boolean, variant discriminant, or array length traps.
 
@@ -202,17 +202,21 @@ outstanding result: the matching `cabi_post_*` restores the call's allocation
 checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
 another export, and double post-return trap.
 
-Runtime HIR schema 4 retains private `indirect` roots introduced by schema 3 for
+Runtime HIR schema 5 retains private `indirect` roots introduced by schema 3 for
 positive recursive algebraic values. Their targets live in the current export
 call's scratch arena and recursive edges are memory32 pointers. ABI 1 defines no
 caller encoding for such a root: it is admitted only as an internal value whose
 eventual public observation has a supported non-recursive type. Public-layout
 construction rejects any signature that exposes it.
 
-Schema 4 also represents private Scratch values as a memory32 pointer,
-initialized length, and capacity. Scratch has no ABI 1 caller encoding and is
-rejected in public signatures and initialized public aggregates; only a finished
-Array may cross the boundary.
+Schema 5 also retains private Scratch values as a memory32 pointer, initialized
+length, and capacity. Scratch has no ABI 1 caller encoding and is rejected in
+public signatures and initialized public aggregates; only a finished Array may
+cross the boundary.
+
+Schema 5 adds residual float-vector shuffle operations. Their immediate lane
+selectors are represented by four dominating private `integer-32` constants;
+this changes no public ABI layout because vectors and masks remain private.
 
 Multiple input paths are prepared independently and their admitted Runtime HIR
 modules form one stable target batch. Blot sends their generic Wasm plans

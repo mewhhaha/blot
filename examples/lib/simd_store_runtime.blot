@@ -1,0 +1,15 @@
+open import "blot:prelude"
+
+const Source =
+  @effect.host {
+    .lane = Unit -> Int;
+  }
+
+use lane <- Source.lane ()
+let vectors = [F32x4.splat (F32.of_int lane)]
+
+let first = 0
+for vector in Iter.items vectors:
+  first := F32.truncate (F32x4.x vector)
+
+return first

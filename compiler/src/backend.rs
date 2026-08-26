@@ -81,6 +81,7 @@ struct PublicLayout {
 enum AbiType {
     Unit,
     InternalPointer,
+    Vector128,
     #[serde(rename = "signed-integer-64")]
     SignedInteger64,
     #[serde(rename = "float-32")]
@@ -514,14 +515,24 @@ fn canonical_type(
     type_id: usize,
     resolving: &mut Vec<usize>,
 ) -> Result<AbiType, String> {
-    runtime_layout_type(module, type_id, resolving, false)
+    runtime_layout_type(module, type_id, resolving, LayoutScope::Public)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LayoutScope {
+    Public,
+    Internal,
+}
+
+fn internal_memory_type(module: &RuntimeModule, type_id: usize) -> Result<AbiType, String> {
+    runtime_layout_type(module, type_id, &mut Vec::new(), LayoutScope::Internal)
 }
 
 fn runtime_layout_type(
     module: &RuntimeModule,
     type_id: usize,
     resolving: &mut Vec<usize>,
-    admit_indirect: bool,
+    scope: LayoutScope,
 ) -> Result<AbiType, String> {
     if resolving.contains(&type_id) {
         return Err(format!(
@@ -558,10 +569,10 @@ fn runtime_layout_type(
                 module,
                 *element_type,
                 resolving,
-                admit_indirect,
+                scope,
             )?),
         },
-        RuntimeType::Scratch { .. } if admit_indirect => AbiType::Record {
+        RuntimeType::Scratch { .. } if scope == LayoutScope::Internal => AbiType::Record {
             fields: ["0", "1", "2"]
                 .into_iter()
                 .map(|name| AbiField {
@@ -576,7 +587,7 @@ fn runtime_layout_type(
                 module.source
             ));
         }
-        RuntimeType::Indirect { .. } if admit_indirect => AbiType::InternalPointer,
+        RuntimeType::Indirect { .. } if scope == LayoutScope::Internal => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
                 "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 1",
@@ -598,12 +609,7 @@ fn runtime_layout_type(
                     .map(|field| {
                         Ok(AbiField {
                             name: field.name,
-                            type_: runtime_layout_type(
-                                module,
-                                field.type_id,
-                                resolving,
-                                admit_indirect,
-                            )?,
+                            type_: runtime_layout_type(module, field.type_id, resolving, scope)?,
                         })
                     })
                     .collect::<Result<_, String>>()?,
@@ -611,19 +617,15 @@ fn runtime_layout_type(
         }
         RuntimeType::Sum { cases, .. } => {
             let mut cases = cases.clone();
-            if !admit_indirect {
+            if scope == LayoutScope::Public {
                 cases.sort_by(|left, right| left.name.cmp(&right.name));
             }
             AbiType::Variant {
                 cases: cases
                     .into_iter()
                     .map(|case_| {
-                        let payload = runtime_layout_type(
-                            module,
-                            case_.payload_type,
-                            resolving,
-                            admit_indirect,
-                        )?;
+                        let payload =
+                            runtime_layout_type(module, case_.payload_type, resolving, scope)?;
                         let payload = if matches!(payload, AbiType::Unit) {
                             None
                         } else {
@@ -646,9 +648,12 @@ fn runtime_layout_type(
                 module,
                 *representation_type,
                 resolving,
-                admit_indirect,
+                scope,
             )?),
         },
+        RuntimeType::Vector { .. } | RuntimeType::Mask { .. } if scope == LayoutScope::Internal => {
+            AbiType::Vector128
+        }
         RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => {
             return Err(format!(
                 "{}: SIMD type {type_id} cannot cross the Blot ABI",
@@ -671,6 +676,7 @@ fn flattened_type(type_: &AbiType) -> Vec<ValType> {
     match type_ {
         AbiType::Unit => Vec::new(),
         AbiType::InternalPointer => vec![ValType::I32],
+        AbiType::Vector128 => vec![ValType::V128],
         AbiType::SignedInteger64 => vec![ValType::I64],
         AbiType::Float32 => vec![ValType::F32],
         AbiType::Float64 => vec![ValType::F64],
@@ -1956,7 +1962,7 @@ fn emit_dynamic_operation(
                     module.source
                 ));
             };
-            let target_layout = runtime_layout_type(module, *target_type, &mut Vec::new(), true)?;
+            let target_layout = internal_memory_type(module, *target_type)?;
             let layout = memory_layout(&target_layout);
             let value = locals_for(module, value_locals, operation.operands[0])?;
             instructions
@@ -2001,7 +2007,7 @@ fn emit_dynamic_operation(
                     module.source
                 ));
             }
-            let target_layout = runtime_layout_type(module, *target_type, &mut Vec::new(), true)?;
+            let target_layout = internal_memory_type(module, *target_type)?;
             let pointer = locals_for(module, value_locals, operation.operands[0])?;
             emit_load_canonical_result(instructions, &target_layout, result, pointer[0], 0)?;
         }
@@ -2034,7 +2040,7 @@ fn emit_dynamic_operation(
             let store = locals_for(module, value_locals, operation.operands[0])?;
             let index = locals_for(module, value_locals, operation.operands[1])?;
             let element_type_id = *element_type;
-            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
             instructions
                 .local_get(index[0])
@@ -2062,7 +2068,7 @@ fn emit_dynamic_operation(
             let length = locals_for(module, value_locals, operation.operands[0])?;
             let initial = locals_for(module, value_locals, operation.operands[1])?;
             let element_type_id = *element_type;
-            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
             let maximum_length = u32::MAX
                 .checked_div(element_layout.size)
@@ -2139,7 +2145,7 @@ fn emit_dynamic_operation(
             let index = locals_for(module, value_locals, operation.operands[1])?;
             let value = locals_for(module, value_locals, operation.operands[2])?;
             let element_type_id = *element_type;
-            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
             if operation.update == Some("persistent") {
                 instructions
@@ -2206,7 +2212,7 @@ fn emit_dynamic_operation(
             let store = locals_for(module, value_locals, operation.operands[0])?;
             let value = locals_for(module, value_locals, operation.operands[1])?;
             let element_type_id = *element_type;
-            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
             instructions
                 .local_get(store[1])
@@ -2275,7 +2281,7 @@ fn emit_dynamic_operation(
                 ));
             };
             let capacity = locals_for(module, value_locals, operation.operands[0])?;
-            let element_type = canonical_type(module, *element_type, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, *element_type)?;
             let element_layout = memory_layout(&element_type);
             let maximum_length = u32::MAX
                 .checked_div(element_layout.size)
@@ -2322,7 +2328,7 @@ fn emit_dynamic_operation(
             let scratch = locals_for(module, value_locals, operation.operands[0])?;
             let value = locals_for(module, value_locals, operation.operands[1])?;
             let element_type_id = *element_type;
-            let element_type = canonical_type(module, element_type_id, &mut Vec::new())?;
+            let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
             let maximum_length = u32::MAX
                 .checked_div(element_layout.size)
@@ -3139,6 +3145,66 @@ fn emit_dynamic_vector_operation(
                     .local_get(operands[0])
                     .v128_bitselect();
             }
+            Some("shuffle") => {
+                if operation.operands.len() != 6 {
+                    return Err(format!(
+                        "{}: dynamic f32x4 shuffle has {} operands",
+                        module.source,
+                        operation.operands.len()
+                    ));
+                }
+                let selectors = operation.operands[2..]
+                    .iter()
+                    .map(|selector| {
+                        let defining = function
+                            .blocks
+                            .iter()
+                            .flat_map(|block| &block.operations)
+                            .find(|candidate| candidate.result == *selector)
+                            .ok_or_else(|| {
+                                format!(
+                                    "{}: f32x4 shuffle selector {selector} has no definition",
+                                    module.source
+                                )
+                            })?;
+                        let Some(WireConstant::SignedInteger32(selector)) = defining.value else {
+                            return Err(format!(
+                                "{}: f32x4 shuffle selector {selector} is not constant",
+                                module.source
+                            ));
+                        };
+                        u8::try_from(selector).map_err(|_| {
+                            format!(
+                                "{}: f32x4 shuffle selector {selector} is outside 0..7",
+                                module.source
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut lanes = [0_u8; 16];
+                for (destination, selector) in selectors.into_iter().enumerate() {
+                    if selector > 7 {
+                        return Err(format!(
+                            "{}: f32x4 shuffle selector {selector} is outside 0..7",
+                            module.source
+                        ));
+                    }
+                    let source = selector * 4;
+                    for byte in 0..4 {
+                        lanes[destination * 4 + byte] = source + byte as u8;
+                    }
+                }
+                instructions
+                    .local_get(operands[0])
+                    .local_get(operands[1])
+                    .i8x16_shuffle(lanes);
+            }
+            Some("mask-all") => {
+                instructions.local_get(operands[0]).i32x4_all_true();
+            }
+            Some("mask-any") => {
+                instructions.local_get(operands[0]).v128_any_true();
+            }
             Some("sum") => {
                 instructions
                     .local_get(operands[0])
@@ -3163,14 +3229,25 @@ fn emit_dynamic_vector_operation(
         instructions.local_set(result);
         return Ok(());
     }
-    if element != "integer-32" || lanes != 4 {
-        return Err(format!(
-            "{}: dynamic {element}x{lanes} operation is not emitted yet",
-            module.source
-        ));
-    }
+    let integer_shape = match (element, lanes) {
+        ("integer-32", 4) => IntegerVectorShape::I32x4,
+        ("integer-16", 8) => IntegerVectorShape::I16x8,
+        ("integer-8", 16) => IntegerVectorShape::I8x16,
+        _ => {
+            return Err(format!(
+                "{}: dynamic {element}x{lanes} operation is not emitted yet",
+                module.source
+            ));
+        }
+    };
     match operation.operator {
         Some("make") => {
+            if !matches!(integer_shape, IntegerVectorShape::I32x4) {
+                return Err(format!(
+                    "{}: dynamic {element}x{lanes} construction is not defined",
+                    module.source
+                ));
+            }
             instructions.local_get(operands[0]).i32x4_splat();
             for (lane, operand) in operands.iter().enumerate().skip(1) {
                 instructions
@@ -3179,15 +3256,32 @@ fn emit_dynamic_vector_operation(
             }
         }
         Some("splat") => {
-            instructions.local_get(operands[0]).i32x4_splat();
+            instructions.local_get(operands[0]);
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_splat(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_splat(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_splat(),
+            };
         }
         Some("extract") => {
+            if !matches!(integer_shape, IntegerVectorShape::I32x4) {
+                return Err(format!(
+                    "{}: dynamic {element}x{lanes} extraction is not defined",
+                    module.source
+                ));
+            }
             let lane = operation
                 .lane
                 .ok_or_else(|| format!("{}: vector extract omitted its lane", module.source))?;
             instructions.local_get(operands[0]).i32x4_extract_lane(lane);
         }
         Some("replace") => {
+            if !matches!(integer_shape, IntegerVectorShape::I32x4) {
+                return Err(format!(
+                    "{}: dynamic {element}x{lanes} replacement is not defined",
+                    module.source
+                ));
+            }
             let lane = operation
                 .lane
                 .ok_or_else(|| format!("{}: vector replace omitted its lane", module.source))?;
@@ -3198,15 +3292,32 @@ fn emit_dynamic_vector_operation(
         }
         Some("add") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_add();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_add(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_add(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_add(),
+            };
         }
         Some("subtract") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_sub();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_sub(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_sub(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_sub(),
+            };
         }
         Some("multiply") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_mul();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_mul(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_mul(),
+                IntegerVectorShape::I8x16 => {
+                    return Err(format!(
+                        "{}: dynamic integer-8x16 multiplication is not defined",
+                        module.source
+                    ));
+                }
+            };
         }
         Some("bit-and") => {
             emit_local_pair(instructions, &operands);
@@ -3225,71 +3336,139 @@ fn emit_dynamic_vector_operation(
         }
         Some("shift-left") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_shl();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_shl(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_shl(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_shl(),
+            };
         }
         Some("shift-right-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_shr_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_shr_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_shr_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_shr_s(),
+            };
         }
         Some("shift-right-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_shr_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_shr_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_shr_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_shr_u(),
+            };
         }
         Some("equal") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_eq();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_eq(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_eq(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_eq(),
+            };
         }
         Some("not-equal") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_ne();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_ne(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_ne(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_ne(),
+            };
         }
         Some("less-than-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_lt_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_lt_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_lt_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_lt_s(),
+            };
         }
         Some("less-than-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_lt_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_lt_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_lt_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_lt_u(),
+            };
         }
         Some("greater-than-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_gt_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_gt_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_gt_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_gt_s(),
+            };
         }
         Some("greater-than-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_gt_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_gt_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_gt_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_gt_u(),
+            };
         }
         Some("less-than-or-equal-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_le_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_le_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_le_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_le_s(),
+            };
         }
         Some("less-than-or-equal-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_le_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_le_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_le_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_le_u(),
+            };
         }
         Some("greater-than-or-equal-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_ge_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_ge_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_ge_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_ge_s(),
+            };
         }
         Some("greater-than-or-equal-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_ge_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_ge_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_ge_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_ge_u(),
+            };
         }
         Some("minimum-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_min_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_min_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_min_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_min_s(),
+            };
         }
         Some("minimum-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_min_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_min_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_min_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_min_u(),
+            };
         }
         Some("maximum-signed") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_max_s();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_max_s(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_max_s(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_max_s(),
+            };
         }
         Some("maximum-unsigned") => {
             emit_local_pair(instructions, &operands);
-            instructions.i32x4_max_u();
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_max_u(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_max_u(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_max_u(),
+            };
         }
         Some("select") => {
             instructions
@@ -3299,23 +3478,40 @@ fn emit_dynamic_vector_operation(
                 .v128_bitselect();
         }
         Some("mask-bitmask") => {
-            instructions.local_get(operands[0]).i32x4_bitmask();
+            instructions.local_get(operands[0]);
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_bitmask(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_bitmask(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_bitmask(),
+            };
         }
         Some("mask-all") => {
-            instructions.local_get(operands[0]).i32x4_all_true();
+            instructions.local_get(operands[0]);
+            match integer_shape {
+                IntegerVectorShape::I32x4 => instructions.i32x4_all_true(),
+                IntegerVectorShape::I16x8 => instructions.i16x8_all_true(),
+                IntegerVectorShape::I8x16 => instructions.i8x16_all_true(),
+            };
         }
         Some("mask-any") => {
             instructions.local_get(operands[0]).v128_any_true();
         }
         operator => {
             return Err(format!(
-                "{}: dynamic i32x4 operator {operator:?} is not emitted yet",
-                module.source
+                "{}: dynamic {element}x{lanes} operator {operator:?} is not emitted yet",
+                module.source,
             ));
         }
     }
     instructions.local_set(result);
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum IntegerVectorShape {
+    I32x4,
+    I16x8,
+    I8x16,
 }
 
 fn emit_local_pair(instructions: &mut InstructionSink<'_>, operands: &[u32]) {
@@ -3699,6 +3895,17 @@ fn emit_load_canonical_result(
                 .local_set(destination[0]);
             Ok(1)
         }
+        AbiType::Vector128 => {
+            instructions
+                .local_get(pointer)
+                .v128_load(wasm_encoder::MemArg {
+                    offset: u64::from(offset),
+                    align: 4,
+                    memory_index: 0,
+                })
+                .local_set(destination[0]);
+            Ok(1)
+        }
         AbiType::SignedInteger64 => {
             instructions
                 .local_get(pointer)
@@ -3853,8 +4060,11 @@ fn emit_store_public_result(
             | RuntimeType::Float64
             | RuntimeType::Boolean
             | RuntimeType::Text
-            | RuntimeType::Store { .. },
+            | RuntimeType::Store { .. }
+            | RuntimeType::Vector { .. }
+            | RuntimeType::Mask { .. },
             AbiType::Unit
+            | AbiType::Vector128
             | AbiType::SignedInteger64
             | AbiType::Float32
             | AbiType::Float64
@@ -4026,6 +4236,13 @@ fn emit_store_canonical_result(
                 .local_get(pointer)
                 .local_get(source[*flat_index])
                 .i32_store(memory_argument(offset, 2));
+            *flat_index += 1;
+        }
+        AbiType::Vector128 => {
+            instructions
+                .local_get(pointer)
+                .local_get(source[*flat_index])
+                .v128_store(memory_argument(offset, 4));
             *flat_index += 1;
         }
         AbiType::SignedInteger64 => {
@@ -4862,7 +5079,7 @@ fn realloc_function() -> Function {
         .i32_const(1)
         .i32_ge_s()
         .local_get(2)
-        .i32_const(8)
+        .i32_const(16)
         .i32_le_s()
         .i32_and()
         .local_get(2)
@@ -5026,6 +5243,7 @@ fn abi_kind(type_: &AbiType) -> &'static str {
     match type_ {
         AbiType::Unit => "unit",
         AbiType::InternalPointer => "internal-pointer",
+        AbiType::Vector128 => "vector-128",
         AbiType::SignedInteger64 => "signed-integer-64",
         AbiType::Float32 => "float-32",
         AbiType::Float64 => "float-64",
@@ -5067,6 +5285,10 @@ fn memory_layout(type_: &AbiType) -> MemoryLayout {
         AbiType::InternalPointer => MemoryLayout {
             alignment: 4,
             size: 4,
+        },
+        AbiType::Vector128 => MemoryLayout {
+            alignment: 16,
+            size: 16,
         },
         AbiType::Boolean => MemoryLayout {
             alignment: 1,
@@ -5201,6 +5423,24 @@ mod tests {
     }
 
     #[test]
+    fn branch_hint_inspection_accepts_simd_operators() {
+        let mut function = Function::new(Vec::new());
+        function
+            .instructions()
+            .f32_const(Ieee32::new(0))
+            .f32x4_splat()
+            .drop()
+            .i32_const(0)
+            .if_(BlockType::Empty)
+            .unreachable()
+            .end()
+            .end();
+
+        let hints = cold_trap_branch_hints(&function).expect("SIMD function should parse");
+        assert_eq!(hints.len(), 1);
+    }
+
+    #[test]
     fn entry_cycle_with_acyclic_body_is_a_structured_loop() {
         let function = runtime_function(vec![
             conditional_block(0, 1, 2),
@@ -5272,10 +5512,80 @@ mod tests {
         };
 
         assert!(canonical_type(&module, 2, &mut Vec::new()).is_err());
-        let internal = runtime_layout_type(&module, 2, &mut Vec::new(), true)
+        let internal = internal_memory_type(&module, 2)
             .expect("Scratch needs a private layout inside indirect carriers");
         assert_eq!(flattened_type(&internal), vec![ValType::I32; 3]);
         assert_eq!(memory_layout(&internal).size, 12);
+    }
+
+    #[test]
+    fn simd_store_elements_have_private_memory_layout() {
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "simd-store-layout-test".to_owned(),
+            types: vec![
+                RuntimeType::Unit,
+                RuntimeType::Vector {
+                    element: "float-32",
+                    lanes: 4,
+                },
+                RuntimeType::Store { element_type: 1 },
+            ],
+            signatures: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        let Err(error) = canonical_type(&module, 2, &mut Vec::new()) else {
+            panic!("a SIMD Store acquired a public ABI layout");
+        };
+        assert!(error.contains("SIMD type"));
+
+        let internal = internal_memory_type(&module, 1)
+            .expect("SIMD Store elements need an internal memory layout");
+        assert_eq!(flattened_type(&internal), vec![ValType::V128]);
+        assert_eq!(memory_layout(&internal).alignment, 16);
+        assert_eq!(memory_layout(&internal).size, 16);
+    }
+
+    #[test]
+    fn simd_memory_layout_emits_vector_loads_and_stores() {
+        let mut function = Function::new([(1, ValType::I32), (2, ValType::V128)]);
+        let mut instructions = function.instructions();
+        let mut flat_index = 0;
+        emit_store_canonical_result(
+            &mut instructions,
+            &AbiType::Vector128,
+            &[1],
+            &mut flat_index,
+            0,
+            0,
+        )
+        .expect("SIMD Store element should emit");
+        emit_load_canonical_result(&mut instructions, &AbiType::Vector128, &[2], 0, 0)
+            .expect("SIMD Store read should emit");
+        instructions.end();
+        drop(instructions);
+
+        let body = function.into_raw_body();
+        let operators = FunctionBody::new(BinaryReader::new(&body, 0))
+            .get_operators_reader()
+            .expect("SIMD memory function should parse")
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("SIMD memory operators should parse");
+        assert!(
+            operators
+                .iter()
+                .any(|operator| matches!(operator, Operator::V128Store { .. }))
+        );
+        assert!(
+            operators
+                .iter()
+                .any(|operator| matches!(operator, Operator::V128Load { .. }))
+        );
     }
 
     #[test]

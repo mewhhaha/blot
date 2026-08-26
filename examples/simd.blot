@@ -8,22 +8,12 @@
 // This is the other half. Every vector below descends from a block the
 // compiler cannot run, so nothing may fold it away and the whole chain has to
 // survive to the arithmetic, comparison, select, shuffle, extracts, and
-// horizontal sum. `backend.test.ts` compiles this file and reads those opcodes
-// back out of the bytes, which is the only thing that distinguishes an emitted
-// instruction from an answer the evaluator already knew.
+// horizontal sum. The compiler session tests compile this file and read those
+// opcodes back out of the bytes, which is the only thing that distinguishes an
+// emitted instruction from an answer the evaluator already knew.
 
 open import "blot:prelude"
 
-const Console =
-  @effect.host {
-    .write = Text -> Unit;
-  }
-
-// The write is what makes this resist folding. Its answer belongs to the host,
-// so the comptime evaluator has to stop at the block rather than run it, and
-// the four lanes it gathers become a value the running program builds. The
-// same `F32x4.of` written at the top level would be a constant vector before
-// the backend saw a lane, and so would everything computed from it.
 // Four lane-wise operations, chained. Each one consumes the register the last
 // one produced, so a vector is never rebuilt in between — that is the property
 // the opcode assertions are really about, and a chain is the only way to state
@@ -36,44 +26,38 @@ let normalize = fn input => do:
   let centered = F32x4.sub scaled gain
   return F32x4.div centered (F32x4.splat (F32.of_int 2))
 
-use normalized <- normalize (do:
-  use Console.write "sampling"
-  return F32x4.of (
-    F32.of_int 1,
-    F32.of_int 2,
-    F32.of_int 3,
-    F32.of_int 4
-    )
-)
+let sample :: Int -> Int
+let sample = fn seed => do:
+  let normalized = normalize (F32x4.of (
+    F32.of_int seed,
+    F32.of_int (seed + 1),
+    F32.of_int (seed + 2),
+    F32.of_int (seed + 3)
+  ))
+  let gain = F32x4.splat (F32.of_int 10)
+  let selected = F32x4.select (F32x4.less normalized gain) gain normalized
+  let exact = F32x4.select (F32x4.equal selected selected) selected gain
+  let shuffled = F32x4.shuffle (exact, normalized, 0, 5, 2, 7)
+  let swizzled = F32x4.swizzle (exact, 3, 2, 1, 0)
 
-let gain :: F32x4
-let gain = F32x4.splat (F32.of_int 10)
+  // Every intermediate lane is a whole number a single-precision float holds
+  // exactly, so the interpreter, the GPU evaluator, and the emitted Wasm agree
+  // on these truncations without rounding entering into it.
+  let first = F32.truncate (F32x4.x normalized)
+  let second = F32.truncate (F32x4.y normalized)
+  let last = F32.truncate (F32x4.w normalized)
+  // A horizontal sum is one instruction sequence over the register rather
+  // than the four extracts and three adds a program would have to write.
+  let total = F32.truncate (F32x4.sum normalized)
+  let energy = F32.truncate (F32x4.dot normalized gain)
+  let shuffled_total = F32.truncate (F32x4.sum shuffled)
+  let swizzled_total = F32.truncate (F32x4.sum swizzled)
+  let all_score = case F32x4.all (F32x4.less gain normalized) of
+    #True => 1
+    #False => 0
+  let any_score = case F32x4.any (F32x4.less gain normalized) of
+    #True => 1
+    #False => 0
+  return first + second + last + total + energy + shuffled_total + swizzled_total + all_score + any_score
 
-let selected :: F32x4
-let selected = F32x4.select (F32x4.less normalized gain) gain normalized
-
-let exact :: F32x4
-let exact = F32x4.select (F32x4.equal selected selected) selected gain
-
-let shuffled :: F32x4
-let shuffled = F32x4.shuffle (exact, normalized, 0, 5, 2, 7)
-
-// Every intermediate lane is a whole number a single-precision float holds
-// exactly, so the interpreter, the GPU evaluator, and the emitted Wasm agree on
-// the truncations below without rounding entering into it. A disagreement here
-// is a lowering bug and never a last-bit one.
-//
-// Scalars may cross the canonical boundary directly. This example converts to
-// integers so its answers remain compact and obvious; `F32x4` itself stays an
-// internal register value and cannot be exported.
-return {
-  .first = F32.truncate (F32x4.x normalized);
-  .second = F32.truncate (F32x4.y normalized);
-  .last = F32.truncate (F32x4.w normalized);
-  // A horizontal sum is one instruction sequence over the register rather than
-  // the four extracts and three adds a program would have to write, which is
-  // why `sum` is a primitive where `dot` is prelude source over it.
-  .total = F32.truncate (F32x4.sum normalized);
-  .energy = F32.truncate (F32x4.dot normalized gain);
-  .shuffled = F32.truncate (F32x4.sum shuffled);
-  }
+return { .default = sample; .example = sample 1; }

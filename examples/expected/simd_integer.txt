@@ -1,1 +1,1 @@
-{ .wide = 10; .selected = -8; .words = 255; .bytes = 65535; .wrapped = 65535; }
+{ .default = <function>; .example = 131327; }

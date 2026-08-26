@@ -366,10 +366,11 @@ remove the worker.
   lazy boundary still boxes, because a heap value must outlive the native worker
   that produced it. The instructions are in the artifact and this is one of the
   programs that put them there, as is `examples/simd.blot`, which takes a lane
-  from a host effect so that it cannot fold the way `examples/vectors.blot`
-  does.
+  from its exported function argument so that it cannot fold the way
+  `examples/vectors.blot` does. The renderer also compares four view depths
+  together and reduces the resulting mask for its near-plane test.
 
-Four more were true when this was written and are not now. The engine has not
+Three more were true when this was written and are not now. The engine has not
 been rewritten to take them:
 
 - **An effect row can be written now** (`LANGUAGE.md` §12.4). Not one effectful
@@ -384,9 +385,3 @@ been rewritten to take them:
 - **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`
   and `f64` at the ABI (`docs/abi.md`), so `Assets.entry` carries thousandths
   and `Canvas.tri` carries pixels by history rather than by necessity.
-- **There is a lane-wise comparison and a shuffle.** `F32x4.less`,
-  `F32x4.equal`, `F32x4.select`, `F32x4.shuffle`, and `F32x4.swizzle` are
-  prelude source over `@f32x4.*`, and `F32x4Mask` is the type the comparisons
-  produce. The near test is still four `F32x4.z` extracts and four scalar
-  compares, and the comment in `lib/render.blot` still says there is no
-  lane-wise comparison; both are the port, not the language.

@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import {
   type BlotRuntimeModule,
+  type BlotRuntimeOperation,
   runtimeLayoutWitness,
   validateBlotRuntimeModule,
 } from "./hir.ts";
@@ -134,6 +135,17 @@ function acceptedModule(): BlotRuntimeModule {
 
 Deno.test("Blot Runtime HIR accepts typed control flow and declared effects", () => {
   validateBlotRuntimeModule(acceptedModule());
+});
+
+Deno.test("Runtime HIR accepts F32x4 shuffle with constant lane selectors", () => {
+  validateBlotRuntimeModule(shuffleModule(7));
+});
+
+Deno.test("Runtime HIR rejects an F32x4 shuffle selector outside both inputs", () => {
+  assertThrows(
+    () => validateBlotRuntimeModule(shuffleModule(8)),
+    /selector 9 must be a dominating integer-32 constant from 0 through 7/,
+  );
 });
 
 Deno.test("Runtime HIR derives a closed Store layout witness", () => {
@@ -525,6 +537,66 @@ function scratchModule(): BlotRuntimeModule {
         }],
         terminator: { kind: "return", value: 4, span },
       }],
+    }, ...module.functions.slice(1)],
+  };
+}
+
+function shuffleModule(lastSelector: number): BlotRuntimeModule {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const shuffleOperations: BlotRuntimeOperation[] = [
+    {
+      kind: "constant",
+      result: 4,
+      type: 4,
+      operands: [],
+      ownership: "plain",
+      value: 1.0,
+      span,
+    },
+    {
+      kind: "vector",
+      operator: "splat",
+      result: 5,
+      type: 5,
+      operands: [4],
+      ownership: "plain",
+      span,
+    },
+    ...[0, 1, 6, lastSelector].map((selector, index) => ({
+      kind: "constant" as const,
+      result: 6 + index,
+      type: 6,
+      operands: [],
+      ownership: "plain" as const,
+      value: selector,
+      span,
+    })),
+    {
+      kind: "vector",
+      operator: "shuffle",
+      result: 10,
+      type: 5,
+      operands: [5, 5, 6, 7, 8, 9],
+      ownership: "plain",
+      span,
+    },
+  ];
+  return {
+    ...module,
+    types: [
+      ...module.types,
+      { kind: "float-32" },
+      { kind: "vector", element: "float-32", lanes: 4 },
+      { kind: "integer-32" },
+    ],
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, ...shuffleOperations],
+      }, ...main.blocks.slice(1)],
     }, ...module.functions.slice(1)],
   };
 }

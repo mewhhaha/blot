@@ -53,7 +53,7 @@ writes at `length`, increments it, and grows only when `length = capacity`.
 `finish` projects `(pointer,length)` to Store. `recycle` maps Store
 `(pointer,length)` to Scratch `(pointer,0,length)`.
 
-Runtime-HIR schema 4 validates the type and four runtime operations. Scratch is
+Runtime-HIR schema 5 retains the type and four runtime operations. Scratch is
 never encoded by Blot Core Wasm ABI 1. Checked-module certificate schema 10
 records Scratch roots and their structural result lineage; linearity remains
 outside the type lattice.

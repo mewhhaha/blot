@@ -893,6 +893,16 @@ pub fn run_primitive(
         "@f32x4.less" => vector_compare(arguments, span, name, |left, right| left < right),
         "@f32x4.select" => vector_select(arguments, span),
         "@f32x4.shuffle" => vector_shuffle(arguments, span),
+        "@f32x4.mask_all" => Ok(Value::Int(BigInt::from(
+            vector_mask(&arguments[0], span, name)?
+                .iter()
+                .all(|lane| *lane),
+        ))),
+        "@f32x4.mask_any" => Ok(Value::Int(BigInt::from(
+            vector_mask(&arguments[0], span, name)?
+                .iter()
+                .any(|lane| *lane),
+        ))),
         "@f32x4.sum" => Ok(Value::Float32(
             vector(&arguments[0], span, name)?.iter().copied().sum(),
         )),

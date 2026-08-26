@@ -2,7 +2,7 @@
   "protocol": {
     "compilerHostAbi": 3,
     "checkedModuleCertificate": 13,
-    "runtimeHir": 4
+    "runtimeHir": 5
   },
   "operators": [
     {
@@ -357,6 +357,8 @@
     "@f32x4.div",
     "@f32x4.eq",
     "@f32x4.less",
+    "@f32x4.mask_all",
+    "@f32x4.mask_any",
     "@f32x4.mul",
     "@f32x4.of",
     "@f32x4.select",
@@ -708,7 +710,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9484
+      "lines": 9517
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -716,11 +718,11 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 5428
+      "lines": 5738
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 4592
+      "lines": 4707
     },
     {
       "path": "compiler/src/eval.rs",
@@ -736,7 +738,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3148
+      "lines": 3150
     },
     {
       "path": "src/syntax/lower.ts",
@@ -744,11 +746,15 @@
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2119
+      "lines": 2129
     },
     {
       "path": "compiler/src/value.rs",
       "lines": 1502
+    },
+    {
+      "path": "src/runtime/hir.ts",
+      "lines": 1417
     },
     {
       "path": "src/language_service.ts",
@@ -757,10 +763,6 @@
     {
       "path": "compiler/src/safety.rs",
       "lines": 1393
-    },
-    {
-      "path": "src/runtime/hir.ts",
-      "lines": 1362
     }
   ]
 }

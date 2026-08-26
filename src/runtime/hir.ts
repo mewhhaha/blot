@@ -135,6 +135,7 @@ export type BlotRuntimeOperation =
         | "greater-than"
         | "greater-than-or-equal"
         | "select"
+        | "shuffle"
         | "absolute"
         | "negate"
         | "square-root"
@@ -940,6 +941,60 @@ function validateOperation(
 ): void {
   if (operation.kind.startsWith("scratch.")) {
     validateScratchOperation(module, function_, operation, values);
+  }
+  if (operation.kind === "vector" && operation.operator === "shuffle") {
+    if (operation.operands.length !== 6) {
+      throw new TypeError(
+        `${module.source}: vector shuffle ${function_.name}:${operation.result} requires two vectors and four selectors; received ${operation.operands.length} operands`,
+      );
+    }
+    const resultType = module.types[operation.type];
+    const vectorOperands = operation.operands.slice(0, 2).map((operand) => {
+      const definition = values.get(operand);
+      if (definition === undefined) {
+        throw new TypeError(
+          `${module.source}: vector shuffle ${function_.name}:${operation.result} uses undefined vector ${operand}`,
+        );
+      }
+      return module.types[definition.type];
+    });
+    if (
+      resultType.kind !== "vector" ||
+      resultType.element !== "float-32" ||
+      resultType.lanes !== 4 ||
+      vectorOperands.some((type) =>
+        type.kind !== "vector" ||
+        type.element !== "float-32" ||
+        type.lanes !== 4
+      )
+    ) {
+      throw new TypeError(
+        `${module.source}: vector shuffle ${function_.name}:${operation.result} requires F32x4 operands and result`,
+      );
+    }
+    for (const selector of operation.operands.slice(2)) {
+      const definition = values.get(selector);
+      if (definition === undefined) {
+        throw new TypeError(
+          `${module.source}: vector shuffle ${function_.name}:${operation.result} uses undefined selector ${selector}`,
+        );
+      }
+      const selectorType = module.types[definition.type];
+      const definingOperation = function_.blocks[definition.block]
+        .operations[definition.operation];
+      if (
+        selectorType.kind !== "integer-32" ||
+        definingOperation?.kind !== "constant" ||
+        typeof definingOperation.value !== "number" ||
+        !Number.isInteger(definingOperation.value) ||
+        definingOperation.value < 0 ||
+        definingOperation.value > 7
+      ) {
+        throw new TypeError(
+          `${module.source}: vector shuffle ${function_.name}:${operation.result} selector ${selector} must be a dominating integer-32 constant from 0 through 7`,
+        );
+      }
+    }
   }
   if (operation.kind === "call.direct" || operation.kind === "closure.make") {
     requireFunction(

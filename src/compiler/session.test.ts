@@ -25,6 +25,50 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
   }
 });
 
+test("runtime SIMD arrays execute through private Store memory", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/lib/simd_store_runtime.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+      {
+        "blot:host/Source": {
+          lane: () => 7n,
+        },
+      },
+    );
+    const run = instantiated.instance.exports["blot:default"];
+    assert.equal(typeof run, "function");
+    assert.equal((run as () => bigint)(), 7n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("residual float and integer SIMD examples execute", async () => {
+  const compiler = await Compiler.create();
+  try {
+    for (
+      const [path, input, expected] of [
+        ["examples/simd.blot", 1n, 3162n],
+        ["examples/simd_integer.blot", 5n, 131327n],
+      ] as const
+    ) {
+      const artifact = await compiler.compile(path);
+      const instantiated = await WebAssembly.instantiate(
+        Uint8Array.from(artifact.wasm) as BufferSource,
+      );
+      const run = instantiated.instance.exports["blot:default"];
+      assert.equal(typeof run, "function");
+      assert.equal((run as (input: bigint) => bigint)(input), expected);
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("unsupported lowering remains a target refusal after checking", async () => {
   const compiler = await Compiler.create();
   try {

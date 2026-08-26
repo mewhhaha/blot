@@ -53,7 +53,7 @@ The owned-until-shared rules and explicit copy boundary are specified in
 
 ## 4. Runtime certificate
 
-Runtime-HIR schema 4 retains the schema-3 `reuse: "checked"` certificate on a
+Runtime-HIR schema 5 retains the schema-3 `reuse: "checked"` certificate on a
 discharged materialized function. The independent validator repeats the local
 operation check. The emitter never consults the function bit to select an update
 strategy: each Store operation must still carry its own checked `owned-reuse`

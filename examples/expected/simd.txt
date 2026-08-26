@@ -1,2 +1,1 @@
-sampling
-{ .first = 50; .second = 55; .last = 65; .total = 230; .energy = 2300; .shuffled = 230; }
+{ .default = <function>; .example = 3162; }

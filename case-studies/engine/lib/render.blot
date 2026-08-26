@@ -282,15 +282,14 @@ const draw_face = fn (position, angle, scale, color, camera, face) => do:
   // camera. Comparing against the box's centre rather than the face's own is
   // exact enough for convex geometry and costs one subtract and one dot.
   let outward = F32x4.dot normal (F32x4.sub position camera.eye)
-  // The four view depths, read once. There is no lane-wise comparison, so the
-  // near test wants them as scalars — and having them as scalars is what lets
-  // the depth below be one more vector rather than three adds.
+  // The four view depths share one register. The comparison produces a mask,
+  // and `any` decides whether one corner crossed the near plane.
   let za = F32x4.z a
   let zb = F32x4.z b
   let zc = F32x4.z c
   let zd = F32x4.z d
-  let near = fn z => is_less (F32.cmp z NEAR)
-  let behind = near za || near zb || near zc || near zd
+  let depths = F32x4.of (za, zb, zc, zd)
+  let behind = F32x4.any (F32x4.less depths (F32x4.splat NEAR))
   let hidden = is_greater (F32.cmp outward ZERO)
   use case behind || hidden of
     #True => ()
@@ -310,7 +309,7 @@ const draw_face = fn (position, angle, scale, color, camera, face) => do:
       // constant — a quarter of a thousand — after the horizontal sum.
       let depth =
         F32.truncate
-          (F32.mul (F32x4.sum (F32x4.of (za, zb, zc, zd))) (lane 250.0))
+          (F32.mul (F32x4.sum depths) (lane 250.0))
       let shade = shade_of normal
       use Canvas.tri {
         .ax = pa.x; .ay = pa.y;

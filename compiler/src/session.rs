@@ -4330,7 +4330,119 @@ mod tests {
     }
 
     #[test]
-    fn compositional_game_loop_prepares_runtime_hir() {
+    fn residual_simd_examples_emit_native_vector_operators() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let prelude_snapshot = snapshot_from_source(
+                    "prelude.blot",
+                    include_str!("../../src/prelude/prelude.blot"),
+                );
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                for (path, text) in [
+                    ("simd.blot", include_str!("../../examples/simd.blot")),
+                    (
+                        "simd_integer.blot",
+                        include_str!("../../examples/simd_integer.blot"),
+                    ),
+                ] {
+                    session
+                        .add_source(path.to_owned(), source(text))
+                        .expect("SIMD example should load");
+                    session
+                        .configure_module(
+                            path,
+                            BTreeMap::from([(
+                                "blot:prelude".to_owned(),
+                                "prelude.blot".to_owned(),
+                            )]),
+                            BTreeMap::new(),
+                        )
+                        .expect("SIMD example should configure");
+                }
+
+                let float = session
+                    .compile_module("simd.blot")
+                    .expect("float SIMD example should emit Wasm");
+                let integer = session
+                    .compile_module("simd_integer.blot")
+                    .expect("integer SIMD example should emit Wasm");
+
+                let operator_names = |wasm: &[u8]| {
+                    let mut names = Vec::new();
+                    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+                        let wasmparser::Payload::CodeSectionEntry(body) =
+                            payload.expect("emitted Wasm should parse")
+                        else {
+                            continue;
+                        };
+                        for operator in body
+                            .get_operators_reader()
+                            .expect("function operators should parse")
+                        {
+                            let name = format!("{:?}", operator.expect("operator should parse"));
+                            names.push(name);
+                        }
+                    }
+                    names
+                };
+                let float_operators = operator_names(&float.wasm);
+                for required in [
+                    "F32x4Add",
+                    "F32x4Sub",
+                    "F32x4Mul",
+                    "F32x4Div",
+                    "F32x4Lt",
+                    "F32x4Eq",
+                    "V128Bitselect",
+                    "I8x16Shuffle",
+                    "I32x4AllTrue",
+                    "V128AnyTrue",
+                ] {
+                    assert!(
+                        float_operators
+                            .iter()
+                            .any(|name| name.starts_with(required)),
+                        "float SIMD example omitted {required}: {float_operators:?}"
+                    );
+                }
+                assert!(
+                    float_operators
+                        .iter()
+                        .filter(|name| name.starts_with("I8x16Shuffle"))
+                        .count()
+                        >= 2,
+                    "float SIMD example omitted shuffle or swizzle: {float_operators:?}"
+                );
+                let integer_operators = operator_names(&integer.wasm);
+                for required in [
+                    "I32x4Shl",
+                    "I32x4MaxS",
+                    "I16x8Add",
+                    "I16x8LtS",
+                    "I16x8Bitmask",
+                    "I8x16Add",
+                    "I8x16LtS",
+                    "I8x16Bitmask",
+                ] {
+                    assert!(
+                        integer_operators
+                            .iter()
+                            .any(|name| name.starts_with(required)),
+                        "integer SIMD example omitted {required}: {integer_operators:?}"
+                    );
+                }
+            })
+            .expect("SIMD test thread should start")
+            .join()
+            .expect("SIMD test thread should finish");
+    }
+
+    #[test]
+    fn compositional_game_loop_prepares_and_emits_wasm() {
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
             .spawn(|| {
@@ -4401,6 +4513,9 @@ mod tests {
                 let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
 
                 assert_eq!(prepared["ok"], true, "{prepared}");
+                session
+                    .compile_module("case-studies/engine/game_loop.blot")
+                    .expect("game loop should emit Wasm");
             })
             .expect("game loop test thread should start")
             .join()

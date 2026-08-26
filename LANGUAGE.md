@@ -151,12 +151,12 @@ reports it as `#Opaque` (§13.4), and `Reflect.refines` therefore answers
 
 Lane comparisons produce separate opaque `F32x4Mask`, `I32x4Mask`, `I16x8Mask`,
 and `I8x16Mask` types. A mask is accepted only by the matching vector namespace.
-Integer `mask_bits` returns bit (i) for lane (i), while `all` and `any` reduce
-the mask to `Bool`. Masks have no lane projection or module-boundary layout.
-`F32x4.shuffle` selects four constant lanes from two vectors; `F32x4.swizzle` is
-the one-vector spelling. Lane selectors are integers in `0..7` for shuffle and
-`0..3` for swizzle, and must be known while compiling so they can become the
-instruction immediate.
+Every namespace provides `all` and `any` reductions to `Bool`; integer
+`mask_bits` additionally returns bit (i) for lane (i). Masks have no lane
+projection or module-boundary layout. `F32x4.shuffle` selects four constant
+lanes from two vectors; `F32x4.swizzle` is the one-vector spelling. Lane
+selectors are integers in `0..7` for shuffle and `0..3` for swizzle, and must be
+known while compiling so they can become the instruction immediate.
 
 `I32x4.lane vector selector` selects a lane whose integer selector is in `0..3`
 and known at compile time. A singleton integer type alone is insufficient: the
@@ -2737,6 +2737,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@f32x4.less`                               | lane-wise less-than mask                             |
 | `@f32x4.select`                             | choose lanes from two vectors by mask                |
 | `@f32x4.shuffle`                            | four constant lanes selected from two vectors        |
+| `@f32x4.mask_{all,any}`                     | reduce a float comparison mask                       |
 | `@f32x4.sum`                                | add the four lanes together                          |
 | `@f32x4.x`                                  | read lane zero, and `.y`, `.z`, `.w` for the rest    |
 | `@i32x4.of`                                 | gather four checked `I32` lanes                      |
@@ -2749,6 +2750,8 @@ Everything not listed here belongs in source, normally the prelude.
 | `@i{8,16,32}xN.{shl,shr_s,shr_u}`           | lane-wise shifts by a scalar amount                  |
 | `@i{8,16,32}xN.{eq,lt_s,lt_u}`              | lane comparison producing its mask                   |
 | `@i32x4.{ne,gt_s,gt_u,le_s,le_u,ge_s,ge_u}` | remaining comparisons                                |
+| `@i{8,16}xN.ne`                             | lane-wise inequality                                 |
+| `@i{8,16}xN.{gt,le,ge}_{s,u}`               | remaining ordered comparisons                        |
 | `@i{8,16,32}xN.{min_s,min_u,max_s,max_u}`   | lane-wise extrema                                    |
 | `@i{8,16,32}xN.select`                      | select lanes from two vectors by matching mask       |
 | `@i{8,16,32}xN.mask_{bitmask,all,any}`      | reduce a matching mask                               |

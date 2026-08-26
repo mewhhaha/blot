@@ -1596,6 +1596,27 @@ impl ResidualTrace {
             let value = self.simd_operation("splat", vector_type, vec![value.id], span, None);
             return self.symbolic_value(value, span);
         }
+        if operation == "shuffle" {
+            let left = self.lower_value(&arguments[0], span)?;
+            let right = self.lower_value(&arguments[1], span)?;
+            let mut operands = vec![left.id, right.id];
+            for selector in &arguments[2..] {
+                let Value::Int(selector) = selector else {
+                    return Err(hir_error("A SIMD shuffle selector is not an integer."));
+                };
+                let selector = u8::try_from(selector.clone())
+                    .map_err(|_| hir_error("A SIMD shuffle selector is outside 0..7."))?;
+                if selector > 7 {
+                    return Err(hir_error("A SIMD shuffle selector is outside 0..7."));
+                }
+                operands.push(
+                    self.constant(WireConstant::SignedInteger32(i32::from(selector)), 2, span)
+                        .id,
+                );
+            }
+            let value = self.simd_operation("shuffle", vector_type, operands, span, None);
+            return self.symbolic_value(value, span);
+        }
         if let Some(lane) = ["x", "y", "z", "w"]
             .iter()
             .position(|candidate| candidate == &operation)
@@ -1619,6 +1640,8 @@ impl ResidualTrace {
             "eq" => ("equal", mask_type),
             "less" => ("less-than", mask_type),
             "select" => ("select", vector_type),
+            "mask_all" => ("mask-all", 2),
+            "mask_any" => ("mask-any", 2),
             "sum" => ("sum", self.insert_type("float-32", RuntimeType::Float32)),
             _ => {
                 return Err(Diagnostic::new(
@@ -1633,6 +1656,16 @@ impl ResidualTrace {
             .map(|argument| self.lower_value(argument, span).map(|value| value.id))
             .collect::<Result<Vec<_>, _>>()?;
         let value = self.simd_operation(operator, result_type, operands, span, None);
+        if matches!(operation, "mask_all" | "mask_any") {
+            let integer_type = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+            let extended = self.convert_operation(
+                "signed-integer-32-to-signed-integer-64",
+                integer_type,
+                value.id,
+                span,
+            );
+            return self.symbolic_value(extended, span);
+        }
         self.symbolic_value(value, span)
     }
 

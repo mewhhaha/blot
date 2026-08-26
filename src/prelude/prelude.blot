@@ -1664,6 +1664,8 @@ const F32x4Operations =
     .equal = @f32x4.eq;
     .less = @f32x4.less;
     .select = @f32x4.select;
+    .all = fn mask => is_equal (@int.cmp (@f32x4.mask_all mask) 1);
+    .any = fn mask => is_equal (@int.cmp (@f32x4.mask_any mask) 1);
     .shuffle = fn (left, right, lane0, lane1, lane2, lane3) => do:
       return @f32x4.shuffle left right lane0 lane1 lane2 lane3
     ;

@@ -381,6 +381,15 @@ Emission uses the overflow, bounds, NaN, order, ownership, and host-call
 behavior selected by the validated Runtime-HIR operation rather than incidental
 target instruction behavior.
 
+An emission pass that reparses encoded function bodies for metadata must admit
+every WebAssembly feature used by those bodies. Metadata inspection cannot
+refuse an operator that the emitter selected for the validated module.
+
+The Runtime-HIR producer records each schema-5 float-shuffle selector as a
+dominating `integer-32` constant operand. The emitter treats a missing,
+non-constant, or out-of-range selector as an invariant failure rather than
+performing target-side type inference.
+
 ## 13. Failure classes
 
 ### 13.1 SourceDiagnostic

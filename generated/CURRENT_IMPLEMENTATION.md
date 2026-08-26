@@ -9,7 +9,7 @@
 | Emitter | `rust-wasm-encoder` |
 | Compiler-host ABI | 3 |
 | Checked-module certificate | 13 |
-| Runtime HIR | 4 |
+| Runtime HIR | 5 |
 | Public ABI | 1.0 |
 
 ## Supported public values
