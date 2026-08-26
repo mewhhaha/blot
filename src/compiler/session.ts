@@ -236,12 +236,18 @@ export class Compiler implements CompilerHost {
           ]);
           const manifest = decodeCompilerArtifactManifest(manifestSource);
           const digest = await sha256(prelude);
-          await verifyCompilerArtifactIntegrity(compilerBytes, manifest, {
-            hostAbi: COMPILER_HOST_ABI_VERSION,
-            preludeSha256: digest,
-          });
+          const validation = verifyCompilerArtifactIntegrity(
+            compilerBytes,
+            manifest,
+            {
+              hostAbi: COMPILER_HOST_ABI_VERSION,
+              preludeSha256: digest,
+            },
+          );
+          const compilation = CompilerWasm.compile(compilerBytes);
+          const [, module] = await Promise.all([validation, compilation]);
           return {
-            module: await CompilerWasm.compile(compilerBytes),
+            module,
             preludeSnapshot: prelude,
             preludeSnapshotDigest: digest,
           };

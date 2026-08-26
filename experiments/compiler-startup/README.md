@@ -23,6 +23,11 @@ adjusted process estimate not accounted for by the child's semantic timer,
 including Node startup, module loading, and result transport. It is an
 operational boundary rather than compiler work.
 
+Artifact authentication and Wasm compilation begin together because neither
+depends on the other's result. Their individual phases therefore overlap;
+`artifact-authenticate-and-compile` records their combined elapsed boundary.
+Instantiation begins only after both have completed successfully.
+
 Prelude AST export and decode run after the semantic boundary and are also
 reported as individual phases because syntax consumers may request them.
 Ordinary semantic compilation leaves that host AST unmaterialized and therefore

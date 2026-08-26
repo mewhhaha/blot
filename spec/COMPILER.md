@@ -84,9 +84,10 @@ fresh Wasm state and creates a fresh semantic session; compile-time
 environments, module revisions, generative identities, diagnostics, and
 artifacts are never shared through the code cache. A custom compiler/snapshot
 pair does not enter the bundled cache. On that production load path, the host
-checks the Wasm header, authenticated digest, manifest, ABI, and prelude
-identity before compiling. Wasm compilation performs structural validation once;
-the host does not parse the complete binary once with `WebAssembly.validate` and
+may check the Wasm header, authenticated digest, manifest, ABI, and prelude
+identity concurrently with Wasm compilation. Both must succeed before
+instantiation. Wasm compilation performs structural validation once; the host
+does not parse the complete binary once with `WebAssembly.validate` and
 immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.

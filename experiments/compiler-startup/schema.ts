@@ -1,10 +1,11 @@
-export const compilerStartupSchema = 3 as const;
+export const compilerStartupSchema = 4 as const;
 
 export const compilerStartupPhases = [
   "process-bootstrap-and-module-load",
   "bundle-read",
   "artifact-validation",
   "wasm-compile",
+  "artifact-authenticate-and-compile",
   "wasm-instantiate",
   "session-create",
   "snapshot-install",

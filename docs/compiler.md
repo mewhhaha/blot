@@ -84,8 +84,9 @@ manifest is schema version 2 and binds the bytes to:
 - a deterministic digest of every Rust compiler input;
 - the pinned Rust toolchain and Git provenance.
 
-`Compiler.create()` requires the Wasm, manifest, and prelude snapshot and
-validates the byte digest, host ABI, and prelude digest before instantiation. It
+`Compiler.create()` requires the Wasm, manifest, and prelude snapshot. It may
+authenticate the byte digest, host ABI, and prelude digest concurrently with
+structural Wasm compilation, but both must succeed before instantiation. It
 never invokes Cargo and never falls back to TypeScript. A custom Wasm passed to
 `Compiler.create` must include its matching prelude snapshot; that explicit pair
 is a caller-owned trusted distribution.
