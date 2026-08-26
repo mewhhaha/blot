@@ -1,10 +1,10 @@
 // A traditional game loop over one explicit game-state record.
 //
 // Unlike `main.blot`, this program has no entity-component stores and no
-// systems. Its three objects are ordinary named fields, `update` returns the
-// next game state, and `render` reads that state. The `for` loop carries the
-// state between frames, which is the functional form of the familiar
-// initialize / update / render loop.
+// systems. Its objects live in ordinary arrays, `update` returns the next game
+// state, and `render` reads that state. The `for` loop carries the state between
+// frames, which is the functional form of the familiar initialize / update /
+// render loop.
 
 open import "blot:prelude"
 
@@ -16,84 +16,133 @@ const Host =
     .frame = Unit -> Int;
   }
 
-const Actor =
+const MeshDraft =
   {
     .position = F32x4;
     .angle = Int;
     .spin = Int;
     .scale = F32;
-    .colour = Text;
+    .color = R.Color;
   }
+const Mesh = { .id = Int; ...MeshDraft; }
+
+const SpriteDraft =
+  {
+    .position = F32x4;
+    .scale = F32;
+    .texture = Text;
+  }
+const Sprite = { .id = Int; ...SpriteDraft; }
 
 const Game =
   {
-    .player = Actor;
-    .rival = Actor;
-    .beacon = { .position = F32x4; .scale = F32; .texture = Text; };
+    .meshes = [Mesh];
+    .sprites = [Sprite];
+  }
+
+const GameSetup =
+  {
+    .next_id = Int;
+    .meshes = [Mesh];
+    .sprites = [Sprite];
+  }
+
+let empty_setup :: GameSetup
+let empty_setup = { .next_id = 0; .meshes = []; .sprites = []; }
+
+const GameBuilder =
+  @effect {
+    .mesh = MeshDraft -> Unit;
+    .sprite = SpriteDraft -> Unit;
+  }
+
+let build_game = fn scene => do:
+  // A clause resumes to obtain the transformation for the remaining
+  // declarations, then puts its own object into the setup first. IDs and arrays
+  // therefore follow source order even though handlers unwind from the end.
+  let building =
+    {
+      .mesh = fn (mesh, ?resume) => do:
+        use continue <- resume ()
+        return fn setup => continue {
+          .next_id = setup.next_id + 1;
+          .meshes = [
+            ...setup.meshes,
+            Shape.update mesh { .id = setup.next_id; }
+          ];
+          .sprites = setup.sprites;
+        }
+      ;
+      .sprite = fn (sprite, ?resume) => do:
+        use continue <- resume ()
+        return fn setup => continue {
+          .next_id = setup.next_id + 1;
+          .meshes = setup.meshes;
+          .sprites = [
+            ...setup.sprites,
+            Shape.update sprite { .id = setup.next_id; }
+          ];
+        }
+      ;
+      .return = fn () => fn setup => setup;
+    }
+  let populate = @handle (GameBuilder, scene, building)
+  let setup = populate empty_setup
+  return {
+    .meshes = setup.meshes;
+    .sprites = setup.sprites;
   }
 
 let update :: Game -> Game
-let update = fn game => {
-  .player = {
-    .position = game.player.position;
-    .angle = (game.player.angle + game.player.spin) % M.turn;
-    .spin = game.player.spin;
-    .scale = game.player.scale;
-    .colour = game.player.colour;
-  };
-  .rival = {
-    .position = game.rival.position;
-    .angle = (game.rival.angle + game.rival.spin) % M.turn;
-    .spin = game.rival.spin;
-    .scale = game.rival.scale;
-    .colour = game.rival.colour;
-  };
-  .beacon = game.beacon;
-}
+let update = fn game => do:
+  let meshes = @satisfies Array.empty [Mesh]
+  for mesh in Iter.items game.meshes:
+    meshes := [
+      ...meshes,
+      Shape.update mesh {
+        .angle = (mesh.angle + mesh.spin) % M.turn;
+      }
+    ]
+
+  return {
+    .meshes = meshes;
+    .sprites = game.sprites;
+  }
 
 let render = fn game => do:
   use R.frame $ fn draw => do:
-    use draw.mesh (
-      game.player.position,
-      game.player.angle,
-      game.player.scale,
-      game.player.colour
-    )
-    use draw.mesh (
-      game.rival.position,
-      game.rival.angle,
-      game.rival.scale,
-      game.rival.colour
-    )
-    use draw.sprite (
-      game.beacon.position,
-      game.beacon.scale,
-      game.beacon.texture
-    )
+    for mesh in Iter.items game.meshes:
+      use draw.mesh mesh
+
+    for sprite in Iter.items game.sprites:
+      use draw.sprite sprite
+
+let player_blue = R.rgb (126, 224, 255)
+let rival_coral = R.rgb (255, 139, 132)
 
 let game :: Game
 let game =
-  {
-    .player = {
+  build_game $ fn () => do:
+    open GameBuilder
+    use mesh {
       .position = R.point (-1800, 0, 0);
       .angle = 0;
       .spin = 2;
       .scale = R.unit 1400;
-      .colour = "#7ee0ff";
-    };
-    .rival = {
+      .color = player_blue;
+    }
+    use mesh {
       .position = R.point (1800, 0, 0);
       .angle = 0;
       .spin = -3;
       .scale = R.unit 1100;
-      .colour = "#ff8b84";
-    };
-    .beacon = {
+      .color = rival_coral;
+    }
+    use sprite {
       .position = R.point (0, 1800, 0);
       .scale = R.unit 900;
       .texture = "ring";
-    };
-  }
+    }
 let frames = 0
 for ever:
   use remaining <- Host.frame ()

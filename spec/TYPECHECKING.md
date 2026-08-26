@@ -57,6 +57,17 @@ time and requires `R` to bridge to `canonical(A)`, then checks `e` against `A`.
 Any difference in `k`, the presence of `rec`, or `x` is a source diagnostic
 before either declaration contributes a binding.
 
+Each `_` expression identity inside `R` evaluates to its own temporary rigid
+type value. Immediately after bridging, elaboration replaces exactly those
+rigids with distinct fresh inference variables before checking `e`; quantified
+rigids created by `@forall` are not replaced. The settled variable is recorded
+as the expression-type fact for the hole's source span, so editor analysis reads
+the same solution as the signature check instead of inferring the binding a
+second time. Signature evaluation carries the same identity map when it later
+attaches requirements to evaluator closures. The map is scoped to the source
+module and expression identities of `R`, so `_` in any other value remains an
+unbound name.
+
 ## 1. Type algebra
 
 Let labels range over interned field, constructor, and effect names. Let scalar
@@ -284,11 +295,13 @@ unchanged parent. Both representations retain the same inference-variable
 identities into the one solver graph; structural sharing changes only how the
 name-to-type mapping is stored and introduces no new typing effect.
 
-### Lemma 7: an open frame is equivalent to eager field insertion
+### Lemma 7: an open frame is equivalent to eager member insertion
 
-Let `open(F, mu)` contain immutable fields `F` and an injective target-to-source
-mapping `mu`. Assume every target in `mu` is absent from the preceding lexical
-environment. Define lookup through the frame by:
+Let `open(F, mu)` contain immutable compile-time members `F` and an injective
+target-to-source mapping `mu`. For a record these are its fields. For an effect
+they are operation values pairing each declared operation name with the same
+generative effect atom. Assume every target in `mu` is absent from the preceding
+lexical environment. Define lookup through the frame by:
 
 ```txt
 lookup(open(F, mu) :: Gamma, x) = F[mu(x)]  when x in dom(mu)
@@ -583,6 +596,16 @@ An unsettled top or bottom position in a residual signature reifies as a fresh
 representation hole, never as runtime `Unit`. The call site's checked expression
 type, a structural ownership result, or the private recursive-representation
 rule must close that hole before ordinary first-order use.
+
+The synthetic recursive closure emitted for `for` has the representation
+signature of its type-preserving `:=` accumulator. A `RecordUpdate` relationship
+retained by source inference is therefore projected to its base representation
+inside that synthetic signature: the back edge has already proved that the
+updated value has the accumulator's stable type. The closed signature is
+available through the same module-and-body resolver used for installed
+certificate signatures and is memoized on first demand. Runtime lowering does
+not reconstruct it, and a missing `Arrow` after successful checking is an
+invariant failure.
 
 If an ordinary statically known application still settles to top or bottom, the
 checker infers the selected nonrecursive closure once against the actual
@@ -1003,6 +1026,14 @@ importer substitutes its concrete argument authority through that defining
 pattern. This is interface transport of the same ownership judgement, not
 re-inference and not trust attached to an exported name.
 
+Immutable function aliases and record projections preserve the closure's
+defining module and body identity, so they select the same ownership contract as
+the original closure. When a polymorphic Store parameter is instantiated, the
+call site's checked argument type also settles whether its element authority is
+shareable; this refinement changes neither the source Array type nor the
+certificate. Consequently direct, aliased, and record-member calls consume or
+share the same concrete Store authority without recognizing an exported name.
+
 The checked declaration signature remains authoritative across compile-time
 re-evaluation; a provisional inferred closure type cannot replace it before
 ownership certification. A recursive Array result is a checked ownership fixed
@@ -1093,10 +1124,11 @@ allocator around every right-union candidate. Its rollback tests include a
 candidate that mutates a nested variable before failing.
 
 Lexical environments in the Rust checker use persistent copy-on-write maps, as
-per Lemma 6. Compile-time records opened into scope remain immutable open frames
-under Lemma 7; their ordered field storage and target indices are shared between
-the evaluator and checker, so importing a large module does not clone every
-recursive value and type merely to establish aliases. Scheme instantiation
+per Lemma 6. Compile-time records and effects opened into scope remain immutable
+open frames under Lemma 7. Record storage and effect-operation aliases retain
+their source values and target indices between the evaluator and checker, so
+opening a large module does not clone every recursive value and type merely to
+establish aliases. Scheme instantiation
 memoises generalized variable replacements within one freshening while
 allocating distinct replacements for separate instantiations. Neither change
 alters the lattice or lets mutable inference state cross a module boundary.

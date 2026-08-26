@@ -2181,6 +2181,12 @@ fn walk_apply(
     let callee = walk(function, scope, analysis, Use::Project);
     let (parameter, input, result, callback_requirements, defining_module) =
         function_contract(function, &callee, scope, analysis);
+    let input = analysis
+        .expression_types
+        .get(&argument)
+        .map_or(input.clone(), |argument_type| {
+            specialize_store_parameter_shareability(&input, argument_type)
+        });
     let contract_module = defining_module.as_deref().unwrap_or(analysis.module);
     let opaque_callback = if parameter.is_none() {
         expression_parameter_source(function, scope, analysis)
@@ -3032,6 +3038,55 @@ fn imported_function_contract(
         contract.callback_requirements,
         Some(defining_module),
     ))
+}
+
+fn specialize_store_parameter_shareability(produced: &Produced, type_: &Type) -> Produced {
+    match (produced, type_) {
+        (produced, Type::Forall { body, .. }) => {
+            specialize_store_parameter_shareability(produced, body)
+        }
+        (Produced::StoreParameter { source, path, .. }, Type::Array(element)) => {
+            Produced::StoreParameter {
+                source: *source,
+                path: path.clone(),
+                shareable: !type_may_carry_ownership(element),
+            }
+        }
+        (Produced::Sequence(values), Type::Record(fields)) => Produced::Sequence(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    fields
+                        .iter()
+                        .find(|(name, _)| name == &index.to_string())
+                        .map_or_else(
+                            || value.clone(),
+                            |(_, type_)| specialize_store_parameter_shareability(value, type_),
+                        )
+                })
+                .collect(),
+        ),
+        (Produced::Shape(values), Type::Record(fields)) => Produced::Shape(
+            values
+                .iter()
+                .map(|(name, value)| {
+                    let value = fields.iter().find(|(field, _)| field == name).map_or_else(
+                        || value.clone(),
+                        |(_, type_)| specialize_store_parameter_shareability(value, type_),
+                    );
+                    (name.clone(), value)
+                })
+                .collect(),
+        ),
+        (Produced::Many(values), _) => Produced::Many(
+            values
+                .iter()
+                .map(|value| specialize_store_parameter_shareability(value, type_))
+                .collect(),
+        ),
+        _ => produced.clone(),
+    }
 }
 
 fn substitute_parameters(
@@ -5182,6 +5237,12 @@ fn parameter_accepts_ownership(input: &Produced, argument: &Produced) -> bool {
         return true;
     }
     match (input, argument) {
+        (
+            Produced::StoreParameter {
+                shareable: true, ..
+            },
+            Produced::SharedStore,
+        ) => true,
         (
             Produced::StoreParameter { .. },
             Produced::Store(_)

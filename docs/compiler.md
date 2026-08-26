@@ -182,6 +182,36 @@ for agent. The primary improvement was 43.7%; its independent runs improved by
 43.7%, 45.7%, and 42.6%, with no significant measured-boundary regression above
 5%.
 
+On 2026-08-26, three independent 31-sample startup runs held the compiler
+artifact and source graph constant while replacing copied WebCrypto hashing with
+Node's native SHA-256 path. Starting Wasm compilation before the synchronous
+digest preserved overlap and reduced the pooled authentication-and-compilation
+median from 7.172 to 5.383 ms. The semantic-core startup median moved from
+54.836 to 52.441 ms; the adjusted process median moved from 125.899 to 122.415
+ms and remained within process-level noise. No compiler work or observation
+changed.
+
+The same run tested two deeper generic snapshot changes while keeping the
+prelude an ordinary module. Storing the already-evaluated module result grew the
+snapshot from 412,736 to 429,540 bytes and made both alternating 31-sample runs
+slower: snapshot installation moved from 30.133 and 30.308 ms to 31.549 and
+30.820 ms. Memoizing monomorphic nodes while inflating the snapshot's shared
+type arena produced mixed sub-millisecond movement with no repeatable semantic
+startup improvement. Neither change is retained; the distributed snapshot
+continues to store the ordinary module's AST, checked certificate, and
+compile-time environment.
+
+A following three-pair, 31-sample comparison retained demand-loaded private type
+facts. Snapshot installation now inflates only the module boundary and reifies
+expression types and closure signatures when evaluation first requests them. The
+three target medians improved by 11.1%, 14.0%, and 10.5%; the pooled
+snapshot-install median fell from 31.123 to 27.174 ms. The pooled semantic-core
+median fell from 53.696 to 49.163 ms, and the adjusted process median fell from
+124.705 to 115.068 ms. The compiler artifact grew by 12,300 bytes and the
+snapshot by 19 bytes. No public observation changed, and no measured boundary
+showed a repeatable regression above 5%. Because this generic cache change
+cleared the target gate, the more invasive snapshot-AST codec was not pursued.
+
 ## CI boundary
 
 CI builds the compiler bundle once with the pinned toolchain, uploads those

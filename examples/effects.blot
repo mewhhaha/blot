@@ -32,6 +32,10 @@ const Terminal =
     .read = Unit -> Text;
   }
 
+// Opening an effect introduces its operations as immutable aliases. Each alias
+// still carries Console's generative identity.
+open Console
+
 let ask :: Unit -> Text ~ { Terminal }
 let ask = fn () => do:
   use answer <- Terminal.read ()
@@ -50,8 +54,8 @@ let answering =
 // thing the printer would: the body may perform `Console` and nothing else.
 let greet :: Unit -> Text ~ { Console }
 let greet = fn () => do:
-  use Console.write "hello"
-  use Console.write "world"
+  use write "hello"
+  use write "world"
   return "done"
 
 // A handler is a shape: one field per operation taking `(argument, ?resume)`,

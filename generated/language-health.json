@@ -240,7 +240,10 @@
     "BLOT_LINEAR_PATTERN_DISCARDS",
     "BLOT_LINEAR_RESULT_ESCAPES",
     "BLOT_LINEAR_SHAPE_SPREAD",
+    "BLOT_LINT_BOOLEAN_IDENTITY_CONDITIONAL",
+    "BLOT_LINT_EMPTY_ARRAY_APPEND",
     "BLOT_LINT_GUARD_SHAPED_CASE",
+    "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES",
     "BLOT_LINT_IF_CHAIN",
     "BLOT_LINT_NESTED_IF_CHAIN",
     "BLOT_LINT_NOOP_REBINDING",
@@ -248,6 +251,7 @@
     "BLOT_LINT_PERSISTENT_ARRAY_COPY",
     "BLOT_LINT_PROVED_ARRAY_LOOKUP",
     "BLOT_LINT_QUADRATIC_ARRAY_APPEND",
+    "BLOT_LINT_SINGLETON_ARRAY_APPEND",
     "BLOT_LINT_SPECIALIZATION_COUNT",
     "BLOT_LINT_TEST_CHOSEN_NAME",
     "BLOT_LINT_TEST_SURFACE_COVERAGE",
@@ -700,15 +704,15 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 11324
+      "lines": 11604
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9306
+      "lines": 9484
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 5767
+      "lines": 5828
     },
     {
       "path": "compiler/src/backend.rs",
@@ -716,11 +720,11 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 4399
+      "lines": 4592
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 4314
+      "lines": 4525
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -744,7 +748,11 @@
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1481
+      "lines": 1502
+    },
+    {
+      "path": "src/language_service.ts",
+      "lines": 1414
     },
     {
       "path": "compiler/src/safety.rs",
@@ -753,10 +761,6 @@
     {
       "path": "src/runtime/hir.ts",
       "lines": 1362
-    },
-    {
-      "path": "compiler/src/value_capsule.rs",
-      "lines": 1308
     }
   ]
 }

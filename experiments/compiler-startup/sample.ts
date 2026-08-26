@@ -53,6 +53,10 @@ const bundle = await measured("bundle-read", async () => {
 const [, module] = await measured(
   "artifact-authenticate-and-compile",
   () => {
+    const compilation = measured(
+      "wasm-compile",
+      () => CompilerWasm.compile(bundle.wasm),
+    );
     const validation = measured("artifact-validation", async () => {
       const manifest = decodeCompilerArtifactManifest(bundle.manifestSource);
       await verifyCompilerArtifactIntegrity(bundle.wasm, manifest, {
@@ -60,10 +64,6 @@ const [, module] = await measured(
         preludeSha256: await sha256(bundle.preludeSnapshot),
       });
     });
-    const compilation = measured(
-      "wasm-compile",
-      () => CompilerWasm.compile(bundle.wasm),
-    );
     return Promise.all([validation, compilation]);
   },
 );

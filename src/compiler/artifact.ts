@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 
 export const compilerArtifactSchema = "blot-rust-compiler-artifact";
@@ -128,11 +129,8 @@ export async function verifyCompilerArtifactIntegrity(
   }
 }
 
-export async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+export function sha256(bytes: Uint8Array): Promise<string> {
+  return Promise.resolve(createHash("sha256").update(bytes).digest("hex"));
 }
 
 function requireWasm(bytes: Uint8Array): void {

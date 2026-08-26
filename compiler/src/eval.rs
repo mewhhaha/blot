@@ -12,9 +12,17 @@ use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
     ClosureAlternative, Domain as ValueDomain, Environment, OpenedValues, OrderedFields, Resume,
     RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup,
-    lookup_signature, show, tuple,
+    lookup_signature, opened_members, show, tuple,
 };
 use crate::value_capsule::ValueCapsule;
+
+pub(crate) type RuntimeTypeResolver = Rc<dyn Fn(ExpressionId) -> Option<Value>>;
+
+#[derive(Clone)]
+struct SignatureHoles {
+    module: Rc<String>,
+    expressions: HashMap<ExpressionId, u32>,
+}
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IncludedFile {
@@ -301,7 +309,9 @@ pub struct Context {
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
     pub(crate) captured_binding_modules: RefCell<HashSet<String>>,
     pub(crate) expression_types: RefCell<HashMap<(String, ExpressionId), Value>>,
+    pub(crate) expression_type_resolvers: RefCell<HashMap<String, RuntimeTypeResolver>>,
     pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
+    pub(crate) closure_signature_resolvers: RefCell<HashMap<String, RuntimeTypeResolver>>,
     pub(crate) recursive_closures: RefCell<HashSet<(String, ExpressionId)>>,
     pub(crate) ownership_contracts:
         RefCell<HashMap<(String, ExpressionId), crate::ownership::OwnershipContract>>,
@@ -312,6 +322,40 @@ pub struct Context {
 }
 
 impl Context {
+    pub(crate) fn expression_type(&self, module: &str, expression: ExpressionId) -> Option<Value> {
+        let key = (module.to_owned(), expression);
+        if let Some(type_) = self.expression_types.borrow().get(&key).cloned() {
+            return Some(type_);
+        }
+        let resolver = self
+            .expression_type_resolvers
+            .borrow()
+            .get(module)
+            .cloned()?;
+        let type_ = resolver(expression)?;
+        self.expression_types
+            .borrow_mut()
+            .insert(key, type_.clone());
+        Some(type_)
+    }
+
+    pub(crate) fn closure_signature(&self, module: &str, body: ExpressionId) -> Option<Value> {
+        let key = (module.to_owned(), body);
+        if let Some(signature) = self.closure_signatures.borrow().get(&key).cloned() {
+            return Some(signature);
+        }
+        let resolver = self
+            .closure_signature_resolvers
+            .borrow()
+            .get(module)
+            .cloned()?;
+        let signature = resolver(body)?;
+        self.closure_signatures
+            .borrow_mut()
+            .insert(key, signature.clone());
+        Some(signature)
+    }
+
     pub(crate) fn snapshot_staging(&self, path: &str) -> Self {
         let replaced = HashSet::from([path.to_owned()]);
         let removed_effects = self.effect_ids_referencing(&replaced);
@@ -386,12 +430,29 @@ impl Context {
         self.expression_types
             .borrow_mut()
             .extend(staged.expression_types.borrow_mut().drain());
+        self.expression_type_resolvers.borrow_mut().remove(path);
+        if let Some(resolver) = staged.expression_type_resolvers.borrow().get(path).cloned() {
+            self.expression_type_resolvers
+                .borrow_mut()
+                .insert(path.to_owned(), resolver);
+        }
         self.closure_signatures
             .borrow_mut()
             .retain(|(module, _), _| module != path);
         self.closure_signatures
             .borrow_mut()
             .extend(staged.closure_signatures.borrow_mut().drain());
+        self.closure_signature_resolvers.borrow_mut().remove(path);
+        if let Some(resolver) = staged
+            .closure_signature_resolvers
+            .borrow()
+            .get(path)
+            .cloned()
+        {
+            self.closure_signature_resolvers
+                .borrow_mut()
+                .insert(path.to_owned(), resolver);
+        }
         self.recursive_closures
             .borrow_mut()
             .retain(|(module, _)| module != path);
@@ -427,9 +488,11 @@ impl Context {
         self.expression_types
             .borrow_mut()
             .retain(|(module, _), _| module != path);
+        self.expression_type_resolvers.borrow_mut().remove(path);
         self.closure_signatures
             .borrow_mut()
             .retain(|(module, _), _| module != path);
+        self.closure_signature_resolvers.borrow_mut().remove(path);
         self.recursive_closures
             .borrow_mut()
             .retain(|(module, _)| module != path);
@@ -556,7 +619,7 @@ impl Context {
             .retain(|id, _| !removed.contains(id));
     }
 
-    fn type_variable(&self) -> u32 {
+    pub(crate) fn type_variable(&self) -> u32 {
         let id = self.next_type_variable.get() + 1;
         self.next_type_variable.set(id);
         id
@@ -591,6 +654,7 @@ pub struct Runtime {
     pub limit: i64,
     pub module: Rc<String>,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
+    signature_holes: Option<Rc<SignatureHoles>>,
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
 }
@@ -598,7 +662,7 @@ pub struct Runtime {
 struct ArrayProgress {
     elements: Vec<crate::ast::ArrayElement>,
     index: usize,
-    values: Vec<Value>,
+    array: Value,
     span: Span,
 }
 
@@ -625,6 +689,7 @@ impl Runtime {
             limit,
             module: Rc::new(module),
             residual: None,
+            signature_holes: None,
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
         }
@@ -640,6 +705,15 @@ impl Runtime {
         runtime
     }
 
+    pub(crate) fn signature(mut self, holes: HashMap<ExpressionId, u32>) -> Self {
+        self.phase = Phase::Comptime;
+        self.signature_holes = Some(Rc::new(SignatureHoles {
+            module: self.module.clone(),
+            expressions: holes,
+        }));
+        self
+    }
+
     fn comptime(&self) -> Self {
         Self {
             phase: Phase::Comptime,
@@ -647,6 +721,7 @@ impl Runtime {
             limit: self.limit,
             module: self.module.clone(),
             residual: self.residual.clone(),
+            signature_holes: self.signature_holes.clone(),
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
         }
@@ -894,6 +969,15 @@ pub fn evaluate_expression(
         );
     }
 
+    let signature_hole = runtime
+        .signature_holes
+        .as_ref()
+        .filter(|holes| holes.module == module_path)
+        .and_then(|holes| holes.expressions.get(&expression_id))
+        .copied();
+    if let Some(variable) = signature_hole {
+        return Computation::value(Value::TypeVariable(variable));
+    }
     let origin = module_path.clone();
     let computation = match expression {
         Expression::Int { value, .. } => {
@@ -979,10 +1063,8 @@ pub fn evaluate_expression(
                 Err(error) => return Computation::error(error),
             };
             let expected_result = context
-                .expression_types
-                .borrow()
-                .get(&(module_path.as_ref().clone(), expression_id))
-                .map(|type_| substitute_signature(type_, &environment));
+                .expression_type(module_path.as_str(), expression_id)
+                .map(|type_| substitute_signature(&type_, &environment));
             let function = *function;
             let argument = *argument;
             let argument_context = context.clone();
@@ -1063,10 +1145,7 @@ pub fn evaluate_expression(
             ..
         } => {
             let signature = context
-                .closure_signatures
-                .borrow()
-                .get(&(module_path.as_ref().clone(), *body))
-                .cloned()
+                .closure_signature(module_path.as_str(), *body)
                 .map(Box::new);
             Computation::value(Value::Closure {
                 module: module_path,
@@ -1102,7 +1181,7 @@ pub fn evaluate_expression(
             ArrayProgress {
                 elements: elements.clone(),
                 index: 0,
-                values: Vec::new(),
+                array: Value::Array(Vec::new()),
                 span,
             },
         ),
@@ -1877,7 +1956,7 @@ fn evaluate_array(
     progress: ArrayProgress,
 ) -> Computation {
     let Some(element) = progress.elements.get(progress.index).cloned() else {
-        return Computation::value(Value::Array(progress.values));
+        return Computation::value(progress.array);
     };
     let next_context = context.clone();
     let next_module = module_path.clone();
@@ -1885,23 +1964,59 @@ fn evaluate_array(
     let next_runtime = runtime.clone();
     evaluate_expression(context, module_path, element.value, environment, runtime).and_then(
         move |value| {
-            let mut values = progress.values;
-            if element.spread {
-                let spread = match value {
-                    Value::Array(spread) => spread,
-                    Value::EmptyArray { .. } => Vec::new(),
-                    _ => {
+            let array = match (progress.array, element.spread, value) {
+                (Value::Array(mut values), false, value) => {
+                    values.push(value);
+                    Value::Array(values)
+                }
+                (Value::Array(mut values), true, Value::Array(spread)) => {
+                    values.extend(spread);
+                    Value::Array(values)
+                }
+                (array, true, Value::EmptyArray { .. }) => array,
+                (mut array, true, Value::Array(spread)) => {
+                    let Some(trace) = next_runtime.residual.as_ref() else {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            "A runtime array accumulator has no residual trace.",
+                            progress.span,
+                        ));
+                    };
+                    for value in spread {
+                        array = match trace.borrow_mut().append_array_element(
+                            &array,
+                            &value,
+                            progress.span,
+                        ) {
+                            Ok(array) => array,
+                            Err(error) => return Computation::error(error),
+                        };
+                    }
+                    array
+                }
+                (array, spread, value) => {
+                    let Some(trace) = next_runtime.residual.as_ref() else {
                         return Computation::error(Diagnostic::new(
                             "BLOT_TYPE",
                             format!("`...` spreads an array, found {}.", show(&value)),
                             progress.span,
                         ));
+                    };
+                    let lowered = if spread {
+                        trace
+                            .borrow_mut()
+                            .append_array_spread(&array, &value, progress.span)
+                    } else {
+                        trace
+                            .borrow_mut()
+                            .append_array_element(&array, &value, progress.span)
+                    };
+                    match lowered {
+                        Ok(array) => array,
+                        Err(error) => return Computation::error(error),
                     }
-                };
-                values.extend(spread);
-            } else {
-                values.push(value);
-            }
+                }
+            };
             evaluate_array(
                 next_context,
                 next_module,
@@ -1910,7 +2025,7 @@ fn evaluate_array(
                 ArrayProgress {
                     elements: progress.elements,
                     index: progress.index + 1,
-                    values,
+                    array,
                     span: progress.span,
                 },
             )
@@ -2188,15 +2303,29 @@ fn evaluate_declarations(
     };
     match declaration {
         Declaration::Signature { name, value, .. } => {
+            let module = match module(&context, &module_path) {
+                Ok(module) => module,
+                Err(error) => return Computation::error(error),
+            };
+            let signature_holes = signature_hole_expressions(&module, value)
+                .into_iter()
+                .map(|expression| (expression, context.type_variable()))
+                .collect();
             let signature_environment = environment.clone();
-            evaluate_expression(context, module_path, value, environment, runtime.comptime())
-                .and_then(move |signature| {
-                    signature_environment
-                        .signatures
-                        .borrow_mut()
-                        .insert(name, signature);
-                    continue_with()
-                })
+            evaluate_expression(
+                context,
+                module_path,
+                value,
+                environment,
+                runtime.signature(signature_holes),
+            )
+            .and_then(move |signature| {
+                signature_environment
+                    .signatures
+                    .borrow_mut()
+                    .insert(name, signature);
+                continue_with()
+            })
         }
         Declaration::Binding {
             kind,
@@ -2282,10 +2411,13 @@ fn evaluate_declarations(
             let open_environment = environment.clone();
             evaluate_expression(context, module_path, value, environment, runtime).and_then(
                 move |value| {
-                    let Value::Shape(fields) = value else {
+                    let Some(fields) = opened_members(&value) else {
                         return Computation::error(Diagnostic::new(
                             "BLOT_CANNOT_OPEN",
-                            format!("`open` spreads a record, found {}.", show(&value)),
+                            format!(
+                                "`open` requires a compile-time record or effect, found {}.",
+                                show(&value)
+                            ),
                             span,
                         ));
                     };
@@ -2536,7 +2668,7 @@ fn apply_with_expected(
                     &module,
                     loaded.module.as_ref(),
                     &imported_revision,
-                    &context.closure_signatures.borrow(),
+                    context.as_ref(),
                     module_runtime.module_instances.as_ref(),
                     &module_runtime.effect_scope,
                 ) {
@@ -2621,11 +2753,7 @@ fn apply_with_expected(
             let recursive_signature = self_name
                 .as_deref()
                 .and_then(|name| lookup_signature(&environment, name));
-            let inferred_signature = context
-                .closure_signatures
-                .borrow()
-                .get(&(closure_module.as_ref().clone(), body))
-                .cloned();
+            let inferred_signature = context.closure_signature(closure_module.as_str(), body);
             let signature = signature
                 .or_else(|| recursive_signature.map(Box::new))
                 .or_else(|| inferred_signature.map(Box::new));
@@ -3586,6 +3714,89 @@ fn declaration_span(declaration: &Declaration) -> Span {
         | Declaration::Shadow { span, .. }
         | Declaration::Open { span, .. } => *span,
     }
+}
+
+pub(crate) fn signature_hole_expressions(
+    module: &Module,
+    expression: ExpressionId,
+) -> Vec<ExpressionId> {
+    fn collect(module: &Module, expression: ExpressionId, holes: &mut Vec<ExpressionId>) {
+        match &module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } if name == "_" => holes.push(expression),
+            Expression::Apply {
+                function, argument, ..
+            } => {
+                collect(module, *function, holes);
+                collect(module, *argument, holes);
+            }
+            Expression::Field { target, .. } => collect(module, *target, holes),
+            Expression::Lambda { body, .. }
+            | Expression::Rec { lambda: body, .. }
+            | Expression::Comptime { body, .. } => collect(module, *body, holes),
+            Expression::Array { elements, .. } => {
+                for element in elements {
+                    collect(module, element.value, holes);
+                }
+            }
+            Expression::Tuple { elements, .. } => {
+                for element in elements {
+                    collect(module, *element, holes);
+                }
+            }
+            Expression::Shape { members, .. } => {
+                for member in members {
+                    let value = match member {
+                        ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
+                    };
+                    collect(module, value, holes);
+                }
+            }
+            Expression::If {
+                branches, fallback, ..
+            } => {
+                for branch in branches {
+                    collect(module, branch.condition, holes);
+                    collect(module, branch.consequence, holes);
+                }
+                if let Some(fallback) = fallback {
+                    collect(module, *fallback, holes);
+                }
+            }
+            Expression::Case { target, arms, .. } => {
+                collect(module, *target, holes);
+                for arm in arms {
+                    collect(module, arm.body, holes);
+                }
+            }
+            Expression::Block {
+                declarations,
+                result,
+                ..
+            } => {
+                for declaration in declarations {
+                    let value = match &module.arena.declarations[declaration.0 as usize] {
+                        Declaration::Signature { value, .. }
+                        | Declaration::Binding { value, .. }
+                        | Declaration::Shadow { value, .. }
+                        | Declaration::Open { value, .. } => *value,
+                    };
+                    collect(module, value, holes);
+                }
+                collect(module, *result, holes);
+            }
+            Expression::Var { .. }
+            | Expression::Int { .. }
+            | Expression::Float { .. }
+            | Expression::Text { .. }
+            | Expression::Unit { .. }
+            | Expression::Intrinsic { .. }
+            | Expression::Tag { .. } => {}
+        }
+    }
+
+    let mut holes = Vec::new();
+    collect(module, expression, &mut holes);
+    holes
 }
 
 pub(crate) fn live_declarations_for(

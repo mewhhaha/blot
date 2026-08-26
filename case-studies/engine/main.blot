@@ -53,7 +53,8 @@ const Assets =
       .x = Int; .y = Int; .z = Int;
       .scale = Int;
       .spin = Int;
-      .colour = Text;
+      .color = R.Color;
+      .texture = Text;
     };
   }
 
@@ -80,7 +81,7 @@ const Transform =
     .spin = Int;
     .scale = F32;
   }
-const Model = { .kind = Int; .colour = Text; }
+const Model = { .kind = Int; .color = R.Color; .texture = Text; }
 
 // --- systems ----------------------------------------------------------------
 
@@ -103,10 +104,9 @@ let advance = fn ts => E.each_1 (
 // what grants the authority; nothing hands over the name.
 //
 // The renderer opens the frame and hands back the two brushes it has; which
-// entity gets which is the scene format's question, so it is answered here. A
-// brush takes placement and a colour rather than a component, because a record
-// carries its whole field set across a module boundary and the renderer has no
-// business knowing that a transform of this game's also has a spin.
+// entity gets which is the scene format's question, so it is answered here.
+// Each brush takes one renderable record. The game assembles that view from its
+// components, and the renderer checks only the fields its path reads.
 let render = fn (transforms, models) => do:
   use R.frame $ fn draw => do:
       use E.visit_2 (
@@ -114,15 +114,18 @@ let render = fn (transforms, models) => do:
           models,
           fn (transform, model) => do:
             use case model.kind == KIND_MESH of
-              #True => draw.mesh (
-                  transform.position, transform.angle, transform.scale, model.colour
-                )
+              #True => draw.mesh {
+                .position = transform.position;
+                .angle = transform.angle;
+                .scale = transform.scale;
+                .color = model.color;
+              }
 
-              #False => draw.sprite (
-                  transform.position,
-                  transform.scale,
-                  model.colour
-                )
+              #False => draw.sprite {
+                .position = transform.position;
+                .scale = transform.scale;
+                .texture = model.texture;
+              }
         )
 
 // --- loading ----------------------------------------------------------------
@@ -157,7 +160,11 @@ let load_models = fn () => do:
   let store = @satisfies Array.empty (Store Model)
   for id in Iter.range (0, count):
     use entry <- Assets.entry id
-    store := @array.push store $ Some { .kind = entry.kind; .colour = entry.colour; }
+    store := @array.push store $ Some {
+      .kind = entry.kind;
+      .color = entry.color;
+      .texture = entry.texture;
+    }
 
   return store
 

@@ -50,7 +50,9 @@ function visitDeclarations(
   let scope = new Map(initialScope);
   const recursive = recursiveGroups(declarations);
   const visitedMembers = new Set<Decl>();
-  for (const declaration of declarations) {
+  for (let index = 0; index < declarations.length; index += 1) {
+    const declaration = declarations[index];
+    if (declaration === undefined) continue;
     if (visitedMembers.has(declaration)) continue;
     const group = recursive.get(declaration);
     if (group !== undefined) {
@@ -79,7 +81,28 @@ function visitDeclarations(
       continue;
     }
     visitExpression(declaration.value, source, scope, references);
-    if (declaration.tag === "signature") continue;
+    if (declaration.tag === "signature") {
+      const following = declarations[index + 1];
+      if (
+        following?.tag === "binding" && following.pattern.tag === "name" &&
+        following.pattern.name === declaration.name
+      ) {
+        const signatureName = identifierSpan(
+          declaration.span,
+          declaration.name,
+          source,
+        );
+        const bindingName = identifierSpan(
+          following.pattern.span,
+          following.pattern.name,
+          source,
+        );
+        if (signatureName !== null && bindingName !== null) {
+          references.push({ span: signatureName, definition: bindingName });
+        }
+      }
+      continue;
+    }
     if (declaration.tag === "open") continue;
     if (declaration.tag === "shadow") {
       const span = identifierSpan(declaration.span, declaration.name, source);
@@ -94,6 +117,41 @@ function visitDeclarations(
     scope = bindPattern(declaration.pattern, source, scope, references);
   }
   return scope;
+}
+
+export function fieldDefinitionAt(
+  module: Module,
+  source: string,
+  offset: number,
+): Span | null {
+  const field = fieldExpressionAt(module, source, offset);
+  if (field === null || field.target.tag !== "var") return null;
+  const target = definitionAt(module, source, field.target.span.start);
+  if (target === null) return null;
+  const declaration = declarationInSequence(
+    module.declarations,
+    source,
+    target,
+  );
+  if (declaration === null) return null;
+  return attachedMemberDefinition(declaration.value, field.name, source);
+}
+
+export function signatureTypeAt(
+  module: Module,
+  source: string,
+  offset: number,
+): Expr | null {
+  const definition = definitionAt(module, source, offset);
+  if (definition === null) return null;
+  return signatureForDefinition(module.declarations, source, definition);
+}
+
+export function signatureTypeContaining(
+  module: Module,
+  offset: number,
+): Expr | null {
+  return containingSignature(module.declarations, offset);
 }
 
 function bindPattern(
@@ -256,6 +314,259 @@ function visitExpression(
     default:
       return;
   }
+}
+
+function fieldExpressionAt(
+  module: Module,
+  source: string,
+  offset: number,
+): Extract<Expr, { readonly tag: "field" }> | null {
+  const matches: Array<Extract<Expr, { readonly tag: "field" }>> = [];
+  const visit = (expression: Expr): void => {
+    if (offset < expression.span.start || offset >= expression.span.end) return;
+    if (expression.tag === "field") {
+      const name = fieldNameSpan(expression, source);
+      if (name !== null && offset >= name.start && offset < name.end) {
+        matches.push(expression);
+      }
+    }
+    visitExpressionValues(expression, visit);
+  };
+  for (const declaration of module.declarations) visit(declaration.value);
+  visit(module.result);
+  matches.sort((left, right) =>
+    (left.span.end - left.span.start) - (right.span.end - right.span.start)
+  );
+  const match = matches[0];
+  if (match === undefined) return null;
+  return match;
+}
+
+function fieldNameSpan(
+  expression: Extract<Expr, { readonly tag: "field" }>,
+  source: string,
+): Span | null {
+  const suffix = source.slice(expression.target.span.end, expression.span.end);
+  const relative = suffix.lastIndexOf(expression.name);
+  if (relative < 0) return null;
+  const start = expression.target.span.end + relative;
+  return { start, end: start + expression.name.length };
+}
+
+function declarationInSequence(
+  declarations: readonly Decl[],
+  source: string,
+  definition: Span,
+): Decl | null {
+  for (const declaration of declarations) {
+    if (declarationDefines(declaration, source, definition)) return declaration;
+    const nested = declarationInExpression(
+      declaration.value,
+      source,
+      definition,
+    );
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+function declarationInExpression(
+  expression: Expr,
+  source: string,
+  definition: Span,
+): Decl | null {
+  if (expression.tag === "block") {
+    const declaration = declarationInSequence(
+      expression.declarations,
+      source,
+      definition,
+    );
+    if (declaration !== null) return declaration;
+  }
+  let found: Decl | null = null;
+  visitExpressionValues(expression, (child) => {
+    if (found !== null) return;
+    found = declarationInExpression(child, source, definition);
+  });
+  return found;
+}
+
+function declarationDefines(
+  declaration: Decl,
+  source: string,
+  definition: Span,
+): boolean {
+  if (declaration.tag === "shadow") {
+    const name = identifierSpan(declaration.span, declaration.name, source);
+    return sameSpan(name, definition);
+  }
+  if (declaration.tag !== "binding") return false;
+  let found = false;
+  visitBoundNames(declaration.pattern, source, (_name, span) => {
+    if (sameSpan(span, definition)) found = true;
+  });
+  return found;
+}
+
+function attachedMemberDefinition(
+  expression: Expr,
+  name: string,
+  source: string,
+): Span | null {
+  if (expression.tag === "shape") {
+    for (const member of expression.members) {
+      if (member.tag !== "field" || member.name !== name) continue;
+      const prefix = source.slice(
+        expression.span.start,
+        member.value.span.start,
+      );
+      const relative = prefix.lastIndexOf(`.${name}`);
+      if (relative < 0) return null;
+      const start = expression.span.start + relative + 1;
+      return { start, end: start + name.length };
+    }
+    return null;
+  }
+  if (
+    expression.tag !== "apply" || expression.arg.tag !== "shape" ||
+    expression.fn.tag !== "apply" || expression.fn.fn.tag !== "var" ||
+    expression.fn.fn.name !== "attach"
+  ) return null;
+  const attached = attachedMemberDefinition(expression.arg, name, source);
+  if (attached !== null) return attached;
+  return attachedMemberDefinition(expression.fn.arg, name, source);
+}
+
+function signatureForDefinition(
+  declarations: readonly Decl[],
+  source: string,
+  definition: Span,
+): Expr | null {
+  for (let index = 0; index < declarations.length; index += 1) {
+    const declaration = declarations[index];
+    if (declaration === undefined) continue;
+    if (declarationDefines(declaration, source, definition)) {
+      const signature = declarations[index - 1];
+      if (
+        signature?.tag === "signature" && declaration.tag === "binding" &&
+        declaration.pattern.tag === "name" &&
+        signature.name === declaration.pattern.name
+      ) return signature.value;
+      return null;
+    }
+    const nested = signatureInExpression(declaration.value, source, definition);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+function signatureInExpression(
+  expression: Expr,
+  source: string,
+  definition: Span,
+): Expr | null {
+  if (expression.tag === "block") {
+    const signature = signatureForDefinition(
+      expression.declarations,
+      source,
+      definition,
+    );
+    if (signature !== null) return signature;
+  }
+  let found: Expr | null = null;
+  visitExpressionValues(expression, (child) => {
+    if (found !== null) return;
+    found = signatureInExpression(child, source, definition);
+  });
+  return found;
+}
+
+function containingSignature(
+  declarations: readonly Decl[],
+  offset: number,
+): Expr | null {
+  for (const declaration of declarations) {
+    if (
+      declaration.tag === "signature" &&
+      offset >= declaration.value.span.start &&
+      offset < declaration.value.span.end
+    ) return declaration.value;
+    const nested = containingSignatureInExpression(declaration.value, offset);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+function containingSignatureInExpression(
+  expression: Expr,
+  offset: number,
+): Expr | null {
+  if (expression.tag === "block") {
+    const signature = containingSignature(expression.declarations, offset);
+    if (signature !== null) return signature;
+  }
+  let found: Expr | null = null;
+  visitExpressionValues(expression, (child) => {
+    if (found !== null) return;
+    found = containingSignatureInExpression(child, offset);
+  });
+  return found;
+}
+
+function visitExpressionValues(
+  expression: Expr,
+  visit: (expression: Expr) => void,
+): void {
+  switch (expression.tag) {
+    case "apply":
+      visit(expression.fn);
+      visit(expression.arg);
+      return;
+    case "field":
+      visit(expression.target);
+      return;
+    case "lambda":
+      visit(expression.body);
+      return;
+    case "rec":
+      visit(expression.lambda);
+      return;
+    case "comptime":
+      visit(expression.body);
+      return;
+    case "tuple":
+      for (const element of expression.elements) visit(element);
+      return;
+    case "array":
+      for (const element of expression.elements) visit(element.value);
+      return;
+    case "shape":
+      for (const member of expression.members) visit(member.value);
+      return;
+    case "if":
+      for (const branch of expression.branches) {
+        visit(branch.condition);
+        visit(branch.consequence);
+      }
+      if (expression.fallback !== null) visit(expression.fallback);
+      return;
+    case "case":
+      visit(expression.target);
+      for (const arm of expression.arms) visit(arm.body);
+      return;
+    case "block":
+      for (const declaration of expression.declarations) {
+        visit(declaration.value);
+      }
+      visit(expression.result);
+      return;
+    default:
+      return;
+  }
+}
+
+function sameSpan(left: Span | null, right: Span): boolean {
+  return left !== null && left.start === right.start && left.end === right.end;
 }
 
 export function identifierSpan(

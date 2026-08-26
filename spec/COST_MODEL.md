@@ -194,8 +194,12 @@ instead of paying for an incomplete or recursively sized fingerprint.
 The snapshot's immutable flat-type arena is validated in place and moved into
 the installed interface. A snapshot revision uses its manifest-validated digest
 directly, so installation does not serialize the AST merely to compute the
-source-inspection digest. Quantified identities are still freshened when the
-closed interface is inflated.
+source-inspection digest. Installation inflates the result, effects, and
+optional parameter that form the public boundary. A private expression type or
+closure signature is inflated, freshened, reified, and memoized only when
+evaluation first requests that source-expression fact. Snapshot installation
+therefore does not recursively expand private facts that the installed
+computation never observes.
 
 For a resident module `m`, let `A_m` be the size of the canonical phase input
 for that module and `d_m` its number of direct dependency/include edges. Once

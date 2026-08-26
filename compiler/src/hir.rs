@@ -4111,6 +4111,103 @@ impl ResidualTrace {
         Ok(lowered)
     }
 
+    pub(crate) fn append_array_element(
+        &mut self,
+        array: &Value,
+        element: &Value,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let store = self.lower_value(array, span)?;
+        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "A residual array element was appended to a non-Store value.",
+                span,
+            ));
+        };
+        let element = self.lower_value(element, span)?;
+        if element.type_id != element_type {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                format!(
+                    "A typechecked residual array mixed element representations {} and {}.",
+                    element_type, element.type_id
+                ),
+                span,
+            ));
+        }
+        let store = self.array_operation(
+            "store.grow",
+            store.type_id,
+            vec![store.id, element.id],
+            span,
+            Some("persistent"),
+        );
+        Ok(Value::Runtime(store))
+    }
+
+    pub(crate) fn append_array_spread(
+        &mut self,
+        array: &Value,
+        spread: &Value,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let source = self.lower_value(spread, span)?;
+        let RuntimeType::Store { element_type } = self.types[source.type_id] else {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "A typechecked residual array spread lowered to a non-Store value.",
+                span,
+            ));
+        };
+        let mut output = match array {
+            Value::Array(elements) => {
+                let mut output =
+                    self.array_operation("store.empty", source.type_id, Vec::new(), span, None);
+                for element in elements {
+                    let lowered = self.lower_value(element, span)?;
+                    if lowered.type_id != element_type {
+                        return Err(Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            format!(
+                                "A typechecked residual array prefix mixed element representations {} and {}.",
+                                element_type, lowered.type_id
+                            ),
+                            span,
+                        ));
+                    }
+                    output = self.array_operation(
+                        "store.grow",
+                        source.type_id,
+                        vec![output.id, lowered.id],
+                        span,
+                        Some("persistent"),
+                    );
+                }
+                output
+            }
+            _ => {
+                let output = self.lower_value(array, span)?;
+                if output.type_id != source.type_id {
+                    return Err(Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        format!(
+                            "A typechecked residual array spread mixed Store representations {} and {}.",
+                            output.type_id, source.type_id
+                        ),
+                        span,
+                    ));
+                }
+                output
+            }
+        };
+        let integer = self.region_integer_type();
+        let start = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
+        let end = self.operation("store.length", integer, vec![source.id], span, None);
+        output = self.append_store_range(&source, &start, &end, &output, span)?;
+        Ok(Value::Runtime(output))
+    }
+
     fn lower_sum_member(
         &mut self,
         value: &Value,
@@ -8886,6 +8983,87 @@ mod tests {
                 .iter()
                 .any(|kind| kind.contains("take") || kind.contains("split"))
         );
+    }
+
+    #[test]
+    fn runtime_array_spreads_copy_empty_one_and_many_stores_in_source_order() {
+        let mut trace = ResidualTrace::new("array-spread-test.blot");
+        let span = crate::ast::Span { start: 3, end: 7 };
+        let integer = trace.region_integer_type();
+        let store_type = trace.insert_type(
+            "spread-integer-store",
+            RuntimeType::Store {
+                element_type: integer,
+            },
+        );
+        let empty = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
+        let mut one = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
+        let twenty = trace.constant(
+            WireConstant::SignedInteger64("20".to_owned()),
+            integer,
+            span,
+        );
+        one = trace.array_operation(
+            "store.grow",
+            store_type,
+            vec![one.id, twenty.id],
+            span,
+            Some("persistent"),
+        );
+        let mut many = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
+        for value in ["30", "40"] {
+            let value = trace.constant(
+                WireConstant::SignedInteger64(value.to_owned()),
+                integer,
+                span,
+            );
+            many = trace.array_operation(
+                "store.grow",
+                store_type,
+                vec![many.id, value.id],
+                span,
+                Some("persistent"),
+            );
+        }
+        let source_ids = [one.id, empty.id, many.id];
+        let mut combined = trace
+            .append_array_spread(
+                &Value::Array(vec![Value::Int(10.into())]),
+                &Value::Runtime(one),
+                span,
+            )
+            .expect("a static prefix and one-element spread should lower");
+        combined = trace
+            .append_array_element(&combined, &Value::Int(25.into()), span)
+            .expect("an element between spreads should lower");
+        combined = trace
+            .append_array_spread(&combined, &Value::Runtime(empty), span)
+            .expect("an empty spread should lower");
+        combined = trace
+            .append_array_spread(&combined, &Value::Runtime(many), span)
+            .expect("a later many-element spread should lower");
+        trace
+            .append_array_element(&combined, &Value::Int(50.into()), span)
+            .expect("a static suffix should lower");
+
+        let copied_sources = trace
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.kind == "store.read")
+            .map(|operation| operation.operands[0])
+            .collect::<Vec<_>>();
+        assert_eq!(copied_sources, source_ids);
+        let copied_source_ids = source_ids.into_iter().collect::<HashSet<_>>();
+        for operation in trace
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.kind == "store.grow")
+        {
+            assert_eq!(operation.update, Some("persistent"));
+            assert!(!copied_source_ids.contains(&operation.operands[0]));
+        }
     }
 
     #[test]

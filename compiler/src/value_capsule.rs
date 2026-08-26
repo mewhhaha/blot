@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{DeclarationId, Expression, ExpressionId, Module, PatternId, Span};
 use crate::eval::{
-    ApplicationRoot, ApplicationSite, ClosureApplication, CompilerApplication, EffectScope,
-    ModuleInstanceScope, ModuleInstanceSite, ModuleRevision, RecognitionProbe,
+    ApplicationRoot, ApplicationSite, ClosureApplication, CompilerApplication, Context,
+    EffectScope, ModuleInstanceScope, ModuleInstanceSite, ModuleRevision, RecognitionProbe,
 };
 use crate::value::{Domain, Environment, OpenedValues, OrderedFields, Value, child_env};
 
@@ -236,7 +236,7 @@ impl ValueCapsule {
         module_path: &str,
         module: &Module,
         module_revision: &ModuleRevision,
-        closure_signatures: &HashMap<(String, ExpressionId), Value>,
+        context: &Context,
         base_module_instances: &ModuleInstanceScope,
         base_effect_scope: &Rc<EffectScope>,
     ) -> Result<Environment, String> {
@@ -288,7 +288,7 @@ impl ValueCapsule {
                             &provenance,
                             module_path,
                             module,
-                            closure_signatures,
+                            context,
                         )?,
                     ))
                 })
@@ -303,7 +303,7 @@ impl ValueCapsule {
                         &provenance,
                         module_path,
                         module,
-                        closure_signatures,
+                        context,
                     )?))
                 })
                 .collect::<Result<_, String>>()?;
@@ -319,7 +319,7 @@ impl ValueCapsule {
                             &provenance,
                             module_path,
                             module,
-                            closure_signatures,
+                            context,
                         )?,
                     ))
                 })
@@ -915,7 +915,7 @@ fn decode_fields(
     provenance: &CapsuleDecodeProvenance,
     module_path: &str,
     module: &Module,
-    closure_signatures: &HashMap<(String, ExpressionId), Value>,
+    context: &Context,
 ) -> Result<OrderedFields, String> {
     fields
         .iter()
@@ -928,7 +928,7 @@ fn decode_fields(
                     provenance,
                     module_path,
                     module,
-                    closure_signatures,
+                    context,
                 )?,
             ))
         })
@@ -941,7 +941,7 @@ fn decode_values(
     provenance: &CapsuleDecodeProvenance,
     module_path: &str,
     module: &Module,
-    closure_signatures: &HashMap<(String, ExpressionId), Value>,
+    context: &Context,
 ) -> Result<Vec<Value>, String> {
     values
         .iter()
@@ -952,7 +952,7 @@ fn decode_values(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )
         })
         .collect()
@@ -964,7 +964,7 @@ fn decode_value(
     provenance: &CapsuleDecodeProvenance,
     module_path: &str,
     module: &Module,
-    closure_signatures: &HashMap<(String, ExpressionId), Value>,
+    context: &Context,
 ) -> Result<Value, String> {
     Ok(match value {
         CapsuleValue::Int(value) => Value::Int(value.clone()),
@@ -988,7 +988,7 @@ fn decode_value(
             provenance,
             module_path,
             module,
-            closure_signatures,
+            context,
         )?),
         CapsuleValue::Array(values) => Value::Array(decode_values(
             values,
@@ -996,7 +996,7 @@ fn decode_value(
             provenance,
             module_path,
             module,
-            closure_signatures,
+            context,
         )?),
         CapsuleValue::RegionType(element) => Value::RegionType(Box::new(decode_value(
             element,
@@ -1004,7 +1004,7 @@ fn decode_value(
             provenance,
             module_path,
             module,
-            closure_signatures,
+            context,
         )?)),
         CapsuleValue::ScratchType(element) => Value::ScratchType(Box::new(decode_value(
             element,
@@ -1012,7 +1012,7 @@ fn decode_value(
             provenance,
             module_path,
             module,
-            closure_signatures,
+            context,
         )?)),
         CapsuleValue::DeferredScratch { capacity } => Value::DeferredScratch {
             capacity: Box::new(decode_value(
@@ -1021,7 +1021,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
         },
         CapsuleValue::EmptyArray { element } => Value::EmptyArray {
@@ -1031,7 +1031,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
         },
         CapsuleValue::Tag { name, payload } => Value::Tag {
@@ -1045,7 +1045,7 @@ fn decode_value(
                         provenance,
                         module_path,
                         module,
-                        closure_signatures,
+                        context,
                     )
                     .map(Box::new)
                 })
@@ -1097,9 +1097,8 @@ fn decode_value(
                     })?,
                 self_name: self_name.clone(),
                 imports: imports.clone(),
-                signature: closure_signatures
-                    .get(&(closure_module, *body))
-                    .cloned()
+                signature: context
+                    .closure_signature(&closure_module, *body)
                     .map(Box::new),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
@@ -1117,7 +1116,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?,
         },
         CapsuleValue::Primitive {
@@ -1134,7 +1133,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?,
         },
         CapsuleValue::Range { low, high, domain } => Value::Range {
@@ -1144,7 +1143,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
             high: Box::new(decode_value(
                 high,
@@ -1152,7 +1151,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
             domain: domain.map(decode_domain).transpose()?,
         },
@@ -1162,7 +1161,7 @@ fn decode_value(
             provenance,
             module_path,
             module,
-            closure_signatures,
+            context,
         )?),
         CapsuleValue::Unbounded => Value::Unbounded,
         CapsuleValue::Arrow {
@@ -1179,7 +1178,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
             codomain: Box::new(decode_value(
                 codomain,
@@ -1187,7 +1186,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
             effects: decode_values(
                 effects,
@@ -1195,7 +1194,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?,
             effect_tail: *effect_tail,
         },
@@ -1208,7 +1207,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
         },
         CapsuleValue::Extended { inner, members } => Value::Extended {
@@ -1218,7 +1217,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
             members: decode_fields(
                 members,
@@ -1226,7 +1225,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?,
         },
         CapsuleValue::Sealed { name, inner } => Value::Sealed {
@@ -1237,7 +1236,7 @@ fn decode_value(
                 provenance,
                 module_path,
                 module,
-                closure_signatures,
+                context,
             )?),
         },
         CapsuleValue::OpaqueType(name) if name.starts_with("Effect:") => {

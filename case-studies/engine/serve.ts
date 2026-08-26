@@ -20,6 +20,12 @@ const port = 8321;
 
 const session = await Compiler.create();
 
+interface Color {
+  readonly red: number;
+  readonly green: number;
+  readonly blue: number;
+}
+
 interface Entity {
   readonly kind: number;
   readonly x: number;
@@ -27,7 +33,8 @@ interface Entity {
   readonly z: number;
   readonly scale: number;
   readonly spin: number;
-  readonly colour: string;
+  readonly color: Color;
+  readonly texture: string;
 }
 
 /**
@@ -45,24 +52,54 @@ async function readScene(): Promise<readonly Entity[]> {
   const text = await Deno.readTextFile(new URL("assets/scene.json", root));
   const parsed = JSON.parse(text);
   const entities = Array.isArray(parsed.entities) ? parsed.entities : [];
-  return entities.map((entity: Record<string, unknown>): Entity => {
-    const mesh = entity.kind !== "sprite";
-    return {
-      kind: mesh ? 0 : 1,
-      x: fixed(entity.x),
-      y: fixed(entity.y),
-      z: fixed(entity.z),
-      scale: fixed(entity.scale),
-      // A spin is an angle step per frame, and angles are whole units of 1/256
-      // of a turn — so this one is not scaled.
-      spin: typeof entity.spin === "number" ? Math.round(entity.spin) : 0,
-      // A mesh names a colour and a sprite names a texture; both are one string
-      // to the guest, which never interprets it.
-      colour: mesh
-        ? String(entity.colour ?? "#888888")
-        : String(entity.texture ?? "spark"),
-    };
-  });
+  return entities.map(
+    (entity: Record<string, unknown>, index: number): Entity => {
+      const mesh = entity.kind !== "sprite";
+      let color: Color = { red: 0, green: 0, blue: 0 };
+      if (mesh) {
+        const sourceColor = entity.color;
+        if (
+          typeof sourceColor !== "object" || sourceColor === null ||
+          Array.isArray(sourceColor)
+        ) {
+          throw new Error(`scene entity ${index} has no RGB color record`);
+        }
+        const channel = (name: keyof Color): number => {
+          const value = (sourceColor as Record<string, unknown>)[name];
+          if (
+            !Number.isInteger(value) || Number(value) < 0 || Number(value) > 255
+          ) {
+            throw new Error(
+              `scene entity ${index} color.${name} is not an integer from 0 through 255: ${value}`,
+            );
+          }
+          return Number(value);
+        };
+        color = {
+          red: channel("red"),
+          green: channel("green"),
+          blue: channel("blue"),
+        };
+      }
+      let texture = "";
+      if (!mesh) {
+        texture = "spark";
+        if (typeof entity.texture === "string") texture = entity.texture;
+      }
+      return {
+        kind: mesh ? 0 : 1,
+        x: fixed(entity.x),
+        y: fixed(entity.y),
+        z: fixed(entity.z),
+        scale: fixed(entity.scale),
+        // A spin is an angle step per frame, and angles are whole units of 1/256
+        // of a turn — so this one is not scaled.
+        spin: typeof entity.spin === "number" ? Math.round(entity.spin) : 0,
+        color,
+        texture,
+      };
+    },
+  );
 }
 
 interface Bundle {

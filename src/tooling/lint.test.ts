@@ -115,6 +115,35 @@ return choose
   );
 });
 
+Deno.test("an identical-branch rewrite still evaluates its condition", async () => {
+  const source = `let flag = #True
+if flag:
+  return 1
+else:
+  return 1
+`;
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES"),
+    `let flag = #True
+let _ = flag
+return 1
+`,
+  );
+});
+
+Deno.test("an empty left append returns the right array", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return Array.append [] values
+`,
+      "BLOT_LINT_EMPTY_ARRAY_APPEND",
+    ),
+    `return values
+`,
+  );
+});
+
 const RULE_CASES: readonly {
   readonly name: string;
   readonly code: string;
@@ -155,6 +184,26 @@ return unwrap
 `,
   },
   {
+    name: "a Boolean identity conditional returns its condition directly",
+    code: "BLOT_LINT_BOOLEAN_IDENTITY_CONDITIONAL",
+    source: `let flag = #True
+if flag:
+  return #True
+else:
+  return #False
+`,
+  },
+  {
+    name: "identical conditional branches collapse to their shared value",
+    code: "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES",
+    source: `let flag = #True
+if flag:
+  return 1
+else:
+  return 1
+`,
+  },
+  {
     name: "a singleton append in a fold is quadratic",
     code: "BLOT_LINT_QUADRATIC_ARRAY_APPEND",
     source: `let copy = fn values => fold (
@@ -163,6 +212,18 @@ return unwrap
   fn (state, value) => Array.append state [value]
 )
 return copy
+`,
+  },
+  {
+    name: "a singleton append outside a fold pushes directly",
+    code: "BLOT_LINT_SINGLETON_ARRAY_APPEND",
+    source: `return Array.append values [next]
+`,
+  },
+  {
+    name: "an empty append returns the other array",
+    code: "BLOT_LINT_EMPTY_ARRAY_APPEND",
+    source: `return Array.append values []
 `,
   },
   {

@@ -27,17 +27,26 @@ just lsp
 ```
 
 Go-to-definition resolves local bindings, lambda parameters, case patterns,
-rebindings, and their shadowing. An explicit source import field and a name from
-an `open import` follow the compiler's resolved source path and canonical export
-shape to the exported binding. Package capsules, generated names, and dynamic
-record fields without a stable source location remain non-navigable.
+rebindings, signature headers, source-declared shape fields, and their
+shadowing. An explicit source import field and a name from an `open import`
+follow the compiler's resolved source path and canonical export shape to the
+exported binding. Go-to-type-definition follows the ordinary value references in
+a binding's explicit signature; a compound signature may therefore lead to more
+than one source-defined type value. An inferred structural type has no erased
+alias to recover and remains non-navigable. Package capsules, generated names,
+compiler-provided attached members, and dynamic record fields without a stable
+source location remain non-navigable.
 
 The LSP also publishes local references and safe local rename, workspace symbols
 for open documents, local-name/field/constructor completion, inferred signature
-help, current surface-keyword completion, and selective top-level type,
-specialization, and target-status inlay hints. Rename refuses invalid
-identifiers and does not claim that a generated or dynamic name has a stable
-source location. These features use the same resident analysis and syntax
+help, current surface-keyword completion, and inferred types beside explicit `_`
+holes in signature values. Values without signatures offer a code action that
+inserts a matching `let`, `let rec`, `const`, or `const rec` header with a hole;
+a header whose kind, recursion marker, or name disagrees with its following
+binding offers an action that corrects the header without changing its type
+value. Ordinary inferred values stay free of inlay annotations. Rename refuses
+invalid identifiers and does not claim that a generated or dynamic name has a
+stable source location. These features use the same resident analysis and syntax
 revision as diagnostics and hover.
 
 LSP requests run through an explicit host queue. `$/cancelRequest` removes work
@@ -105,8 +114,9 @@ The default correctness and readability rules report:
 - discarded value conditionals better written as statement suites and
   Option-shaped terminal matches that can become `if let` guards;
 - singleton `Array.append` calls inside folds, retained aliases that force a
-  persistent array update to copy, and total array lookups that can become
-  proved direct accesses;
+  persistent array update to copy, singleton appends better expressed as
+  `Array.push`, empty appends, and total array lookups that can become proved
+  direct accesses;
 - explicit calls with an active conventional infix or prefix operator spelling;
   and
 - functions whose Rust checker reports several runtime representations,
@@ -122,8 +132,12 @@ editor's code-action menu. Rewrites that need compiler evidence are different:
 the server checks the rewritten open-document revision. It only publishes a
 direct array access when that check supplies the required bounds proof, and it
 only calls a self-rebinding a no-op when removing it preserves the public type
-and effect row. Statement `if` suites remain control flow rather than value
-conditionals and do not receive value-conditional rules.
+and effect row. Boolean, identical-branch, and array-cost rewrites likewise stay
+hidden when the rewritten program changes that checked interface. Statement `if`
+suites that transfer control are not treated as discarded value conditionals;
+terminal suites can still collapse when both returned values make the control
+flow redundant. That collapse evaluates the original condition before returning
+the shared value, preserving deferred demands and traps.
 
 Operator spelling is checked against the complete fixed operator table. The
 default-rule test enumerates every infix and prefix target, including function

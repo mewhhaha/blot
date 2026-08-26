@@ -153,7 +153,10 @@ A source signature lowers to a distinct, non-binding declaration containing its
 `let` or `const` kind, `rec` marker, name, and compile-time requirement. Before
 checking a block, the compiler requires the next declaration to be a binding
 with exactly the same kind, recursion marker, and single name. The signature
-does not enter lexical scope or split an adjacent recursive group.
+does not enter lexical scope or split an adjacent recursive group. An `_` inside
+its requirement retains its source expression identity for the checker to
+elaborate as a signature hole; it is not resolved as a lexical read and no
+parallel type grammar is introduced.
 
 ## 6. Name resolution and hygiene
 

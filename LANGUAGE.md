@@ -574,6 +574,13 @@ A signature:
 - must evaluate at compile time; and
 - must evaluate to a value that can be interpreted as a type.
 
+Within a signature value, `_` denotes a fresh inferred type for that occurrence.
+The following binding constrains the hole exactly as it constrains an explicitly
+written signature type. Separate `_` occurrences are independent, so a function
+may leave only its parameter, only its result, or both for inference. A
+signature hole is confined to that signature evaluation; it introduces neither a
+value binding nor an implicit type namespace.
+
 The binding's inferred type must be a subtype of the signature. A signature
 constrains a binding; it does not introduce a name or evaluate at runtime.
 
@@ -699,15 +706,23 @@ configuration can encode that policy in its ordinary API; record calls otherwise
 keep structural width subtyping. `examples/elements.blot` retains its historical
 name as the corpus comparison for this element-free spelling.
 
-### 4.7 Opening a record
+### 4.7 Opening compile-time members
 
 ```blot
-open record
+open value
 ```
 
-The opened value must be a compile-time record. Every field enters scope under
-its existing name. Opening introduces ordinary lexical bindings and can shadow
-bindings from an outer scope.
+The opened value must be a compile-time record or effect. Every record field, or
+every operation of an effect, enters scope under its existing name. Opening an
+effect creates immutable aliases of its operations; it does not create another
+effect identity. Opening introduces ordinary lexical bindings and can shadow
+bindings from an outer scope:
+
+```blot
+const Console = @effect { .write = Text -> Unit; }
+open Console
+use write "hello"
+```
 
 Selective binding and renaming use an ordinary record pattern, which leaves
 unlisted fields out of scope:
@@ -760,8 +775,9 @@ A shape pattern is width-subtyping: additional fields in the value are
 permitted. `.x;` is shorthand for `.x = x;`. Tuple and array patterns require
 exact arity or length.
 
-`_` lexes as an ordinary lower-case identifier and is reclassified as a wildcard
-during lowering.
+`_` lexes as an ordinary lower-case identifier. It is reclassified as a wildcard
+in a pattern and as an inference hole in a signature value (§4.3). It does not
+denote a value in any other expression.
 
 `^name` is a pinned-value pattern. It reads the binding already in lexical
 scope, compares the matched value with it, and binds nothing; in particular, it

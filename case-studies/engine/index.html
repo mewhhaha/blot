@@ -182,12 +182,11 @@
     // depth. Sorting them is the host's job — the same split a depth buffer
     // makes, and the reason the guest never needs one.
     let draws = [];
-    const shade = (colour, amount) => {
-      const n = parseInt(colour.slice(1), 16);
+    const shade = (color, amount) => {
       const f = Math.max(0, Math.min(255, amount)) / 255;
-      const r = Math.round(((n >> 16) & 255) * f);
-      const g = Math.round(((n >> 8) & 255) * f);
-      const b = Math.round((n & 255) * f);
+      const r = Math.round(color.red * f);
+      const g = Math.round(color.green * f);
+      const b = Math.round(color.blue * f);
       return `rgb(${r},${g},${b})`;
     };
 
@@ -197,7 +196,7 @@
       const sorted = draws.slice().sort((a, b) => b.depth - a.depth);
       for (const item of sorted) {
         if (item.kind === "tri") {
-          context.fillStyle = shade(item.colour, item.shade);
+          context.fillStyle = shade(item.color, item.shade);
           context.beginPath();
           context.moveTo(item.ax, item.ay);
           context.lineTo(item.bx, item.by);

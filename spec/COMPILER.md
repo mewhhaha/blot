@@ -475,13 +475,17 @@ compile-time environment graph. Its schema is independent of the
 checked-interface schema; decoding validates environment references and parent
 acyclicity, remaps module-local closure provenance to the installed path,
 requires every closure's parameter, body, and evaluation mode to match one
-lambda in the installed AST, and obtains closure signatures from the checked
-certificate. Because installable snapshots are dependency-free, an external
-module reference is invalid. The bundled host reaches this decoder only after
-validating the snapshot digest against the compiler artifact manifest. Supplying
-a custom compiler/snapshot pair explicitly makes that distribution the caller's
-trust boundary; neither registry capsules nor ordinary graph deltas can invoke
-this path. Unsupported process-local or generative values make the environment
+lambda in the installed AST, and obtains each closure signature on demand from
+the checked certificate's validated flat arena. The resident context memoizes
+the reified signature under its exact module and closure-body identity. Freshly
+checked modules publish the same resolver over their closed residual signatures,
+so eager attachment and later residual evaluation observe one contract. Because
+installable snapshots are dependency-free, an external module reference is
+invalid. The bundled host reaches this decoder only after validating the
+snapshot digest against the compiler artifact manifest. Supplying a custom
+compiler/snapshot pair explicitly makes that distribution the caller's trust
+boundary; neither registry capsules nor ordinary graph deltas can invoke this
+path. Unsupported process-local or generative values make the environment
 ineligible rather than weakening the cache boundary. A captured closure retains
 its complete application and module-instance provenance. Encoding accepts only
 provenance rooted in the snapshot module's current semantic revision; decoding

@@ -236,6 +236,7 @@ export class Compiler implements CompilerHost {
           ]);
           const manifest = decodeCompilerArtifactManifest(manifestSource);
           const digest = await sha256(prelude);
+          const compilation = CompilerWasm.compile(compilerBytes);
           const validation = verifyCompilerArtifactIntegrity(
             compilerBytes,
             manifest,
@@ -244,7 +245,6 @@ export class Compiler implements CompilerHost {
               preludeSha256: digest,
             },
           );
-          const compilation = CompilerWasm.compile(compilerBytes);
           const [, module] = await Promise.all([validation, compilation]);
           return {
             module,

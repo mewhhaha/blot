@@ -151,6 +151,16 @@ replayed ownership certificate proves:
 The target write is related to construction of a fresh source result. It does
 not retroactively make source aliases mutable.
 
+A residual array literal remains a static `Array` value until its first runtime
+spread. At that boundary the producer materializes the static prefix as a fresh
+Store, then appends the spread operand with a `store.length` / `store.read` /
+`store.grow` loop. Later elements and spreads append to the produced Store in
+source order; empty spreads perform zero loop iterations. Every grow is
+persistent unless a separate ownership certificate grants destructive reuse,
+so none of the spread operands is mutated. The typechecker has already proved a
+single element representation; a mismatch while constructing these operations
+is an `InvariantFailure`.
+
 Borrowed reads never grant Store ownership. Splits and joins consume exact
 family, root, footprint, and produced-value lineage. Equal-looking intervals or
 roots are not interchangeable.

@@ -26,6 +26,22 @@ open import "blot:prelude"
 
 const M = import "./math.blot"
 
+// Residual host and loop signatures admit integer carriers, not narrowed range
+// types. The constructor still requires U8 inputs, and scene hosts enforce the
+// same range before returning a color.
+const Color = {
+  .red = Int;
+  .green = Int;
+  .blue = Int;
+}
+
+const rgb :: (U8, U8, U8) -> Color
+const rgb = fn (red, green, blue) => {
+  .red = red;
+  .green = green;
+  .blue = blue;
+}
+
 // There is one float token in the grammar and it reads as an `F64`, so every
 // single-precision constant below is a narrowing the module wrote down.
 const lane = F32.of_float
@@ -55,7 +71,7 @@ const Canvas =
     .cx = Int; .cy = Int;
     .depth = Int;
     .shade = Int;
-    .colour = Text;
+    .color = Color;
     } -> Unit;
     // A 2D texture, always square to the screen. Under an orthographic lens this
     // is a plain sprite; under a perspective one it is a billboard, and the only
@@ -232,7 +248,7 @@ const camera_of = fn (yaw, pitch, distance, lens) => do:
 // --- drawing ----------------------------------------------------------------
 
 // How lit a face is: its world normal against the light, clamped, widened to
-// the 0..255 the host multiplies the colour by. The dot product is what the
+// the 0..255 the host multiplies the color by. The dot product is what the
 // four lanes are for — one multiply and one horizontal sum.
 const shade_of = fn normal => do:
   let dot = F32x4.dot normal LIGHT
@@ -244,7 +260,7 @@ const shade_of = fn normal => do:
 // One face of one box: place its corners, project them, and hand the host two
 // triangles. A face pointing away, or crossing the near plane, is dropped
 // before either triangle is built.
-const draw_face = fn (position, angle, scale, colour, camera, face) => do:
+const draw_face = fn (position, angle, scale, color, camera, face) => do:
   // Every corner of a box turns by the same angle, so the rows are built once
   // here rather than once per corner.
   let rotation = rotation_of angle
@@ -300,23 +316,23 @@ const draw_face = fn (position, angle, scale, colour, camera, face) => do:
         .ax = pa.x; .ay = pa.y;
         .bx = pb.x; .by = pb.y;
         .cx = pc.x; .cy = pc.y;
-        .depth = depth; .shade = shade; .colour = colour;
+        .depth = depth; .shade = shade; .color = color;
       }
       use Canvas.tri {
         .ax = pa.x; .ay = pa.y;
         .bx = pc.x; .by = pc.y;
         .cx = pd.x; .cy = pd.y;
-        .depth = depth; .shade = shade; .colour = colour;
+        .depth = depth; .shade = shade; .color = color;
       }
 
 // A box. Six faces, each culled on its own, which is the whole of the mesh
 // path — an application that wants a second shape adds geometry here rather
 // than a second renderer.
-const draw_mesh = fn (position, angle, scale, colour, camera) => do:
+const draw_mesh = fn (position, angle, scale, color, camera) => do:
   use each (
       faces,
       fn face => do:
-        use draw_face (position, angle, scale, colour, camera, face)
+        use draw_face (position, angle, scale, color, camera, face)
     )
 
 // A 2D texture placed in the 3D world. Its size divides by depth under a
@@ -352,8 +368,17 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
 // can only do while the record does not leave.
 let frame ::
   ({
-    .mesh = (F32x4, Int, F32, Text) -> Unit ~ { Canvas };
-    .sprite = (F32x4, F32, Text) -> Unit ~ { Canvas };
+    .mesh = {
+      .position = F32x4;
+      .angle = Int;
+      .scale = F32;
+      .color = Color;
+    } -> Unit ~ { Canvas };
+    .sprite = {
+      .position = F32x4;
+      .scale = F32;
+      .texture = Text;
+    } -> Unit ~ { Canvas };
   } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
 let frame = fn paint => do:
   use Canvas.clear ()
@@ -369,11 +394,22 @@ let frame = fn paint => do:
       lens
     )
   use paint {
-    .mesh = (fn (position, angle, scale, colour) => do:
-      use draw_mesh (position, angle, scale, colour, camera)
+    .mesh = (fn mesh => do:
+      use draw_mesh (
+        mesh.position,
+        mesh.angle,
+        mesh.scale,
+        mesh.color,
+        camera
+      )
     );
-    .sprite = (fn (position, scale, texture) => do:
-      use draw_sprite (position, scale, texture, camera)
+    .sprite = (fn sprite => do:
+      use draw_sprite (
+        sprite.position,
+        sprite.scale,
+        sprite.texture,
+        camera
+      )
     );
   }
   use Canvas.present ()
@@ -383,6 +419,8 @@ let frame = fn paint => do:
 // out — and it does not need to be, because importing this module is already
 // what puts `Canvas` and `View` in the importer's effect row.
 return {
+  .Color = Color;
+  .rgb = rgb;
   .unit = unit;
   .point = point;
   .frame = frame;

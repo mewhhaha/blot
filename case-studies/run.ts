@@ -24,6 +24,12 @@ type Study =
     readonly lens: number;
   };
 
+interface Color {
+  readonly red: number;
+  readonly green: number;
+  readonly blue: number;
+}
+
 class GuestMemory {
   #instance: WebAssembly.Instance | null = null;
 
@@ -192,8 +198,42 @@ if (study.kind === "grep") {
   const parsed = JSON.parse(sceneText);
   const fixed = (value: unknown) =>
     typeof value === "number" ? Math.round(value * ONE) : 0;
-  const scene = (parsed.entities as Record<string, unknown>[]).map((entity) => {
+  const scene = (parsed.entities as Record<string, unknown>[]).map((
+    entity,
+    index,
+  ) => {
     const mesh = entity.kind !== "sprite";
+    let color: Color = { red: 0, green: 0, blue: 0 };
+    if (mesh) {
+      const sourceColor = entity.color;
+      if (
+        typeof sourceColor !== "object" || sourceColor === null ||
+        Array.isArray(sourceColor)
+      ) {
+        throw new Error(`scene entity ${index} has no RGB color record`);
+      }
+      const channel = (name: keyof Color): number => {
+        const value = (sourceColor as Record<string, unknown>)[name];
+        if (
+          !Number.isInteger(value) || Number(value) < 0 || Number(value) > 255
+        ) {
+          throw new Error(
+            `scene entity ${index} color.${name} is not an integer from 0 through 255: ${value}`,
+          );
+        }
+        return Number(value);
+      };
+      color = {
+        red: channel("red"),
+        green: channel("green"),
+        blue: channel("blue"),
+      };
+    }
+    let texture = "";
+    if (!mesh) {
+      texture = "spark";
+      if (typeof entity.texture === "string") texture = entity.texture;
+    }
     return {
       kind: mesh ? 0 : 1,
       x: fixed(entity.x),
@@ -201,9 +241,8 @@ if (study.kind === "grep") {
       z: fixed(entity.z),
       scale: fixed(entity.scale),
       spin: typeof entity.spin === "number" ? Math.round(entity.spin) : 0,
-      colour: mesh
-        ? String(entity.colour ?? "#888888")
-        : String(entity.texture ?? "spark"),
+      color,
+      texture,
     };
   });
 
@@ -270,8 +309,9 @@ if (study.kind === "grep") {
         ay: bigint,
         bx: bigint,
         by: bigint,
-        _colourPointer: number,
-        _colourLength: number,
+        _colorBlue: bigint,
+        _colorGreen: bigint,
+        _colorRed: bigint,
         cx: bigint,
         cy: bigint,
         depth: bigint,
@@ -359,13 +399,16 @@ if (study.kind === "grep") {
       count: () => BigInt(scene.length),
       entry(id: bigint, resultPointer: number) {
         const entity = scene[Number(id)];
-        guest.writeText(resultPointer, entity.colour);
-        guest.writeInt64(resultPointer + 8, entity.kind);
-        guest.writeInt64(resultPointer + 16, entity.scale);
-        guest.writeInt64(resultPointer + 24, entity.spin);
-        guest.writeInt64(resultPointer + 32, entity.x);
-        guest.writeInt64(resultPointer + 40, entity.y);
-        guest.writeInt64(resultPointer + 48, entity.z);
+        guest.writeInt64(resultPointer, entity.color.blue);
+        guest.writeInt64(resultPointer + 8, entity.color.green);
+        guest.writeInt64(resultPointer + 16, entity.color.red);
+        guest.writeInt64(resultPointer + 24, entity.kind);
+        guest.writeInt64(resultPointer + 32, entity.scale);
+        guest.writeInt64(resultPointer + 40, entity.spin);
+        guest.writeText(resultPointer + 48, entity.texture);
+        guest.writeInt64(resultPointer + 56, entity.x);
+        guest.writeInt64(resultPointer + 64, entity.y);
+        guest.writeInt64(resultPointer + 72, entity.z);
       },
     },
 

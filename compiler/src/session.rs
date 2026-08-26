@@ -280,7 +280,7 @@ impl CompilerSession {
                     path,
                     module.as_ref(),
                     &module_revision,
-                    &staged_context.closure_signatures.borrow(),
+                    staged_context.as_ref(),
                     &base_module_instances,
                     &base_effect_scope,
                 )?;
@@ -1113,9 +1113,17 @@ impl CompilerSession {
             .borrow_mut()
             .retain(|(path, _), _| !invalidated.contains(path));
         self.context
+            .expression_type_resolvers
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
+        self.context
             .closure_signatures
             .borrow_mut()
             .retain(|(path, _), _| !invalidated.contains(path));
+        self.context
+            .closure_signature_resolvers
+            .borrow_mut()
+            .retain(|path, _| !invalidated.contains(path));
         self.context
             .recursive_closures
             .borrow_mut()
@@ -3044,6 +3052,39 @@ mod tests {
     }
 
     #[test]
+    fn opening_an_effect_exposes_operations_with_the_same_identity() {
+        const PATH: &str = "opened-effect.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(concat!(
+                    "const Console = @effect { .write = @type.int -> @type.unit; }\n",
+                    "open Console\n",
+                    "let work = fn () => do:\n",
+                    "  use write 7\n",
+                    "  return 5\n",
+                    "let adding = {\n",
+                    "  .write = fn (number, ?resume) => do:\n",
+                    "    use rest <- resume ()\n",
+                    "    return @int.add number rest\n",
+                    "  ;\n",
+                    "  .return = fn value => value;\n",
+                    "}\n",
+                    "return @handle (Console, work, adding)\n",
+                )),
+            )
+            .expect("opened effect source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("opened effect source should configure");
+
+        let checked = session.check_module(PATH);
+        assert_eq!(checked["ok"], true, "{checked}");
+        assert_eq!(session.evaluate_module(PATH)["display"], "12");
+    }
+
+    #[test]
     fn administrative_reevaluation_recovers_the_same_effect_identity() {
         const PATH: &str = "effect-reevaluation-provenance.blot";
         let mut session = CompilerSession::default();
@@ -4212,6 +4253,158 @@ mod tests {
             .expect("collect test thread should start")
             .join()
             .expect("collect test thread should finish");
+    }
+
+    #[test]
+    fn array_iterator_alias_consumes_a_runtime_array() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let prelude_snapshot = snapshot_from_source(
+                    "prelude.blot",
+                    include_str!("../../src/prelude/prelude.blot"),
+                );
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(
+                        "main.blot".to_owned(),
+                        source(concat!(
+                            "open import \"blot:prelude\"\n",
+                            "let rebuild :: { .values = [Int]; } -> [Int]\n",
+                            "let rebuild = fn input => do:\n",
+                            "  let rebuilt = @satisfies Array.empty [Int]\n",
+                            "  for value in Iter.items input.values:\n",
+                            "    rebuilt := [...rebuilt, value]\n",
+                            "  return rebuilt\n",
+                            "return { .rebuild = rebuild; }\n",
+                        )),
+                    )
+                    .expect("source should load");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("source should configure");
+
+                let checked = session.check_module("main.blot");
+
+                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+                let prepared = session.prepare_runtime_hir("main.blot");
+                assert_eq!(prepared["ok"], true, "{prepared}");
+            })
+            .expect("array iterator test thread should start")
+            .join()
+            .expect("array iterator test thread should finish");
+    }
+
+    #[test]
+    fn runtime_array_spreads_keep_prefix_suffix_and_source_arrays() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(concat!(
+                    "let combine :: { .first = [@type.int]; .second = [@type.int]; } -> ",
+                    "{ .combined = [@type.int]; .first = [@type.int]; .second = [@type.int]; }\n",
+                    "let combine = fn input => {\n",
+                    "  .combined = [0, ...input.first, 1, ...[], ...input.second, 2, 3];\n",
+                    "  .first = input.first;\n",
+                    "  .second = input.second;\n",
+                    "}\n",
+                    "return { .combine = combine; }\n",
+                )),
+            )
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let prepared = session.prepare_runtime_hir("main.blot");
+
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    }
+
+    #[test]
+    fn compositional_game_loop_prepares_runtime_hir() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let prelude_snapshot = snapshot_from_source(
+                    "prelude.blot",
+                    include_str!("../../src/prelude/prelude.blot"),
+                );
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                for (path, text) in [
+                    (
+                        "case-studies/engine/lib/math.blot",
+                        include_str!("../../case-studies/engine/lib/math.blot"),
+                    ),
+                    (
+                        "case-studies/engine/lib/render.blot",
+                        include_str!("../../case-studies/engine/lib/render.blot"),
+                    ),
+                    (
+                        "case-studies/engine/game_loop.blot",
+                        include_str!("../../case-studies/engine/game_loop.blot"),
+                    ),
+                ] {
+                    session
+                        .add_source(path.to_owned(), source(text))
+                        .expect("engine source should load");
+                }
+                session
+                    .configure_module(
+                        "case-studies/engine/lib/math.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("math should configure");
+                session
+                    .configure_module(
+                        "case-studies/engine/lib/render.blot",
+                        BTreeMap::from([
+                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                            (
+                                "./math.blot".to_owned(),
+                                "case-studies/engine/lib/math.blot".to_owned(),
+                            ),
+                        ]),
+                        BTreeMap::new(),
+                    )
+                    .expect("render should configure");
+                session
+                    .configure_module(
+                        "case-studies/engine/game_loop.blot",
+                        BTreeMap::from([
+                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                            (
+                                "./lib/math.blot".to_owned(),
+                                "case-studies/engine/lib/math.blot".to_owned(),
+                            ),
+                            (
+                                "./lib/render.blot".to_owned(),
+                                "case-studies/engine/lib/render.blot".to_owned(),
+                            ),
+                        ]),
+                        BTreeMap::new(),
+                    )
+                    .expect("game loop should configure");
+
+                let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
+
+                assert_eq!(prepared["ok"], true, "{prepared}");
+            })
+            .expect("game loop test thread should start")
+            .join()
+            .expect("game loop test thread should finish");
     }
 
     #[test]

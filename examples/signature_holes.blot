@@ -1,0 +1,12 @@
+// A signature may leave independent positions for the binding to infer. The
+// holes remain explicit source constraints rather than ambient type variables.
+
+open import "blot:prelude"
+
+let increment :: _ -> _
+let increment = fn value => value + 1
+
+let answer :: _
+let answer = increment 41
+
+return answer

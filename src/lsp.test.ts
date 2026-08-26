@@ -13,7 +13,13 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
         textDocument: {
           uri,
           version: 1,
-          text: `return Int.rem 5 2
+          text: `open import "blot:prelude"
+let remainder :: _
+let remainder = Int.rem 5 2
+const Result = Int
+let typed :: Result
+let typed = 1
+return remainder
 `,
         },
       },
@@ -25,8 +31,8 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
       params: {
         textDocument: { uri },
         range: {
-          start: { line: 0, character: 7 },
-          end: { line: 0, character: 18 },
+          start: { line: 2, character: 16 },
+          end: { line: 2, character: 27 },
         },
         context: { diagnostics: [] },
       },
@@ -37,7 +43,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
       method: "textDocument/hover",
       params: {
         textDocument: { uri },
-        position: { line: 0, character: 8 },
+        position: { line: 2, character: 17 },
       },
     },
     {
@@ -46,7 +52,28 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
       method: "textDocument/completion",
       params: {
         textDocument: { uri },
-        position: { line: 0, character: 7 },
+        position: { line: 6, character: 7 },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "textDocument/inlayHint",
+      params: {
+        textDocument: { uri },
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 6, character: 16 },
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 8,
+      method: "textDocument/typeDefinition",
+      params: {
+        textDocument: { uri },
+        position: { line: 5, character: 5 },
       },
     },
     {
@@ -55,7 +82,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
       method: "textDocument/hover",
       params: {
         textDocument: { uri },
-        position: { line: 0, character: 8 },
+        position: { line: 2, character: 17 },
       },
     },
     {
@@ -116,6 +143,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
   };
   assertEquals(initialize.result.capabilities.codeActionProvider, true);
   assertEquals(initialize.result.capabilities.hoverProvider, true);
+  assertEquals(initialize.result.capabilities.typeDefinitionProvider, true);
   assertEquals(initialize.result.capabilities.referencesProvider, true);
   assertEquals(initialize.result.capabilities.inlayHintProvider, true);
   const codeAction = responses.find((response) => response.id === 2) as {
@@ -131,6 +159,36 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
     completion.result.some((item) => item.label === "return"),
     true,
   );
+  const inlayHints = responses.find((response) => response.id === 7) as {
+    readonly result: readonly {
+      readonly position: { readonly line: number; readonly character: number };
+      readonly label: string;
+      readonly kind: number;
+      readonly tooltip: string;
+    }[];
+  };
+  assertEquals(inlayHints.result, [{
+    position: { line: 1, character: 18 },
+    label: ": Int",
+    kind: 1,
+    tooltip: "Compiler-inferred signature hole",
+  }]);
+  const typeDefinition = responses.find((response) => response.id === 8) as {
+    readonly result: readonly {
+      readonly uri: string;
+      readonly range: {
+        readonly start: { readonly line: number; readonly character: number };
+        readonly end: { readonly line: number; readonly character: number };
+      };
+    }[];
+  };
+  assertEquals(typeDefinition.result, [{
+    uri,
+    range: {
+      start: { line: 3, character: 6 },
+      end: { line: 3, character: 12 },
+    },
+  }]);
   const cancelled = responses.find((response) => response.id === 6) as {
     readonly error: { readonly code: number };
   };

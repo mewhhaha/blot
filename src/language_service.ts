@@ -9,9 +9,15 @@ import {
 import { BlotError } from "./diagnostic.ts";
 import type { Diagnostic } from "./diagnostic.ts";
 import { LoadError, resolvePath } from "./load.ts";
-import type { Expr, Module, Pattern, Span } from "./syntax/ast.ts";
+import type { Decl, Expr, Module, Pattern, Span } from "./syntax/ast.ts";
 import { parse } from "./syntax/parse.ts";
-import { definitionAt } from "./tooling/definition.ts";
+import {
+  definitionAt,
+  fieldDefinitionAt,
+  identifierSpan,
+  signatureTypeAt,
+  signatureTypeContaining,
+} from "./tooling/definition.ts";
 import { formatSource } from "./tooling/formatter.ts";
 import { hoverAt } from "./tooling/hover.ts";
 import { lineAtOffset, sourceLineStarts } from "./tooling/formatter.ts";
@@ -302,6 +308,80 @@ export class LanguageService {
         },
       });
     }
+    let lineEnding = "\n";
+    if (document.source.includes("\r\n")) lineEnding = "\r\n";
+    const signatureFacts = signatureEditorFacts(parsed.module);
+    for (const correction of signatureFacts.corrections) {
+      if (
+        requestedEnd < correction.signatureSpan.start ||
+        requestedStart > correction.signatureSpan.end
+      ) continue;
+      const signaturePrefix = document.source.slice(
+        correction.signatureSpan.start,
+        correction.valueSpan.start,
+      );
+      const delimiter = signaturePrefix.indexOf("::");
+      if (delimiter < 0) {
+        throw new Error(
+          `signature at ${correction.signatureSpan.start} has no :: delimiter`,
+        );
+      }
+      let recursive = "";
+      if (correction.recursive) recursive = " rec";
+      const header = `${correction.kind}${recursive} ${correction.name}`;
+      actions.push({
+        title: `Match signature header to \`${header}\``,
+        kind: "quickfix",
+        diagnostics: [],
+        edit: {
+          documentChanges: [{
+            textDocument: { uri, version: document.version },
+            edits: [{
+              range: rangeOf(document.source, {
+                start: correction.signatureSpan.start,
+                end: correction.signatureSpan.start + delimiter,
+              }),
+              newText: `${header} `,
+            }],
+          }],
+        },
+      });
+    }
+    for (const binding of signatureFacts.bindings) {
+      if (binding.hasSignature) continue;
+      if (
+        requestedEnd < binding.declarationSpan.start ||
+        requestedStart > binding.declarationSpan.end
+      ) continue;
+      const lineStart = document.source.lastIndexOf(
+        "\n",
+        binding.declarationSpan.start - 1,
+      ) + 1;
+      const indentation = document.source.slice(
+        lineStart,
+        binding.declarationSpan.start,
+      );
+      let recursive = "";
+      if (binding.recursive) recursive = " rec";
+      actions.push({
+        title: `Add inferred signature hole for \`${binding.name}\``,
+        kind: "quickfix",
+        diagnostics: [],
+        edit: {
+          documentChanges: [{
+            textDocument: { uri, version: document.version },
+            edits: [{
+              range: rangeOf(document.source, {
+                start: lineStart,
+                end: lineStart,
+              }),
+              newText:
+                `${indentation}${binding.kind}${recursive} ${binding.name} :: _${lineEnding}`,
+            }],
+          }],
+        },
+      });
+    }
     return actions;
   }
 
@@ -320,6 +400,8 @@ export class LanguageService {
     const offset = offsetAtPosition(document.source, position);
     const span = definitionAt(parsed.module, document.source, offset);
     if (span !== null) return { uri, range: rangeOf(document.source, span) };
+    const field = fieldDefinitionAt(parsed.module, document.source, offset);
+    if (field !== null) return { uri, range: rangeOf(document.source, field) };
     for (
       const imported of importReferencesAt(
         parsed.module,
@@ -335,6 +417,43 @@ export class LanguageService {
       if (target !== null) return target;
     }
     return null;
+  }
+
+  async typeDefinition(
+    uri: string,
+    position: Position,
+  ): Promise<readonly Location[]> {
+    const document = this.#requiredDocument(uri);
+    let parsed: CompilerSyntaxSnapshot;
+    try {
+      parsed = await this.#syntaxRevision(uri, document);
+    } catch (error) {
+      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      throw error;
+    }
+    const offset = offsetAtPosition(document.source, position);
+    if (signatureTypeContaining(parsed.module, offset) !== null) {
+      const selected = await this.definition(uri, position);
+      if (selected === null) return [];
+      return [selected];
+    }
+    const type = signatureTypeAt(parsed.module, document.source, offset);
+    if (type === null) return [];
+    const locations: Location[] = [];
+    const seen = new Set<string>();
+    for (const reference of typeReferenceSpans(type, document.source)) {
+      const location = await this.definition(
+        uri,
+        positionAtOffset(document.source, reference.start),
+      );
+      if (location === null) continue;
+      const key =
+        `${location.uri}:${location.range.start.line}:${location.range.start.character}:${location.range.end.line}:${location.range.end.character}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      locations.push(location);
+    }
+    return locations;
   }
 
   async hover(uri: string, position: Position): Promise<Hover | null> {
@@ -470,39 +589,15 @@ export class LanguageService {
       end = offsetAtPosition(document.source, range.end);
     }
     const hints: InlayHint[] = [];
-    for (const binding of moduleBindings(parsed.module)) {
-      if (binding.span.end < start || binding.span.start > end) continue;
-      const type = typeForSpan(analysis, binding.valueSpan);
+    for (const hole of signatureEditorFacts(parsed.module).holes) {
+      if (hole.span.end < start || hole.span.start > end) continue;
+      const type = typeForSpan(analysis, hole.span);
       if (type === null) continue;
       hints.push({
-        position: positionAtOffset(document.source, binding.span.end),
+        position: positionAtOffset(document.source, hole.span.end),
         label: `: ${type}`,
         kind: 1,
-        tooltip: "Compiler-inferred top-level type",
-      });
-    }
-    for (const fact of analysis.specializations) {
-      if (fact.binding.span.end < start || fact.binding.span.start > end) {
-        continue;
-      }
-      hints.push({
-        position: positionAtOffset(document.source, fact.binding.span.end),
-        label: ` ×${fact.specializationCount}`,
-        kind: 2,
-        tooltip: "Compiler-confirmed runtime representations",
-        paddingLeft: true,
-      });
-    }
-    if (!analysis.targetPreflight.supported && start === 0) {
-      let tooltip: string | undefined;
-      if (analysis.targetPreflight.unsupportedComponent !== null) {
-        tooltip = analysis.targetPreflight.unsupportedComponent;
-      }
-      hints.push({
-        position: { line: 0, character: 0 },
-        label: "target unsupported",
-        kind: 2,
-        tooltip,
+        tooltip: "Compiler-inferred signature hole",
       });
     }
     return hints;
@@ -798,6 +893,109 @@ interface BindingInfo {
   readonly function: boolean;
 }
 
+interface SignatureBindingInfo {
+  readonly name: string;
+  readonly declarationSpan: Span;
+  readonly kind: "let" | "const";
+  readonly recursive: boolean;
+  readonly hasSignature: boolean;
+}
+
+interface SignatureCorrectionInfo {
+  readonly name: string;
+  readonly signatureSpan: Span;
+  readonly valueSpan: Span;
+  readonly kind: "let" | "const";
+  readonly recursive: boolean;
+}
+
+interface SignatureEditorFacts {
+  readonly holes: readonly Extract<Expr, { readonly tag: "var" }>[];
+  readonly bindings: readonly SignatureBindingInfo[];
+  readonly corrections: readonly SignatureCorrectionInfo[];
+}
+
+function signatureEditorFacts(module: Module): SignatureEditorFacts {
+  const signatureHoles = new Map<
+    number,
+    Extract<Expr, { readonly tag: "var" }>
+  >();
+  const bindings: SignatureBindingInfo[] = [];
+  const corrections: SignatureCorrectionInfo[] = [];
+
+  function collectSignatureHoles(expression: Expr): void {
+    if (expression.tag === "var" && expression.name === "_") {
+      signatureHoles.set(expression.span.start, expression);
+    }
+    visitExpressionChildren(expression, collectSignatureHoles);
+  }
+
+  function inspectExpression(expression: Expr): void {
+    if (expression.tag === "block") {
+      inspectDeclarations(expression.declarations);
+      inspectExpression(expression.result);
+      return;
+    }
+    visitExpressionChildren(expression, inspectExpression);
+  }
+
+  function inspectDeclarations(declarations: readonly Decl[]): void {
+    for (let index = 0; index < declarations.length; index += 1) {
+      const declaration = declarations[index];
+      if (declaration === undefined) continue;
+      if (declaration.tag === "signature") {
+        collectSignatureHoles(declaration.value);
+        inspectExpression(declaration.value);
+        const following = declarations[index + 1];
+        if (
+          following !== undefined &&
+          following.tag === "binding" &&
+          (following.kind === "let" || following.kind === "const") &&
+          following.pattern.tag === "name"
+        ) {
+          const recursive = following.value.tag === "rec";
+          if (
+            declaration.kind !== following.kind ||
+            declaration.recursive !== recursive ||
+            declaration.name !== following.pattern.name
+          ) {
+            corrections.push({
+              name: following.pattern.name,
+              signatureSpan: declaration.span,
+              valueSpan: declaration.value.span,
+              kind: following.kind,
+              recursive,
+            });
+          }
+        }
+        continue;
+      }
+      if (
+        declaration.tag === "binding" &&
+        (declaration.kind === "let" || declaration.kind === "const") &&
+        declaration.pattern.tag === "name"
+      ) {
+        const previous = declarations[index - 1];
+        const recursive = declaration.value.tag === "rec";
+        const hasSignature = previous !== undefined &&
+          previous.tag === "signature";
+        bindings.push({
+          name: declaration.pattern.name,
+          declarationSpan: declaration.span,
+          kind: declaration.kind,
+          recursive,
+          hasSignature,
+        });
+      }
+      inspectExpression(declaration.value);
+    }
+  }
+
+  inspectDeclarations(module.declarations);
+  inspectExpression(module.result);
+  return { holes: [...signatureHoles.values()], bindings, corrections };
+}
+
 function moduleBindings(module: Module): readonly BindingInfo[] {
   const bindings: BindingInfo[] = [];
   for (const declaration of module.declarations) {
@@ -973,6 +1171,25 @@ function visitExpressionChildren(
     case "tag":
       return;
   }
+}
+
+function typeReferenceSpans(type: Expr, source: string): readonly Span[] {
+  const references: Span[] = [];
+  const visit = (expression: Expr): void => {
+    if (expression.tag === "var") {
+      const span = identifierSpan(expression.span, expression.name, source);
+      if (span !== null) references.push(span);
+      return;
+    }
+    if (expression.tag === "field") {
+      const span = fieldIdentifierSpan(expression, source);
+      if (span !== null) references.push(span);
+      return;
+    }
+    visitExpressionChildren(expression, visit);
+  };
+  visit(type);
+  return references;
 }
 
 function arrowParameters(type: string): readonly string[] {

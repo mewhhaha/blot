@@ -175,6 +175,27 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
     None
 }
 
+pub(crate) fn opened_members(value: &Value) -> Option<OrderedFields> {
+    match value {
+        Value::Shape(fields) => Some(fields.clone()),
+        Value::Effect { operations, .. } => Some(
+            operations
+                .keys()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        Value::Operation {
+                            effect: Box::new(value.clone()),
+                            name: name.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OpenedValues {
     fields: OrderedFields,

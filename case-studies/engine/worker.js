@@ -56,7 +56,7 @@ const imports = {
     // A record parameter arrives flattened in *canonical* field order, which is
     // alphabetical and not the order the program wrote them. `docs/abi.md` is
     // the authority; getting this wrong silently transposes the geometry.
-    tri(ax, ay, bx, by, colourPointer, colourLength, cx, cy, depth, shade) {
+    tri(ax, ay, bx, by, colorBlue, colorGreen, colorRed, cx, cy, depth, shade) {
       batch.push({
         kind: "tri",
         ax: Number(ax),
@@ -67,7 +67,11 @@ const imports = {
         cy: Number(cy),
         depth: Number(depth),
         shade: Number(shade),
-        colour: readText(colourPointer, colourLength),
+        color: {
+          red: Number(colorRed),
+          green: Number(colorGreen),
+          blue: Number(colorBlue),
+        },
       });
     },
     sprite(depth, size, texturePointer, textureLength, x, y) {
@@ -97,16 +101,20 @@ const imports = {
     count: () => BigInt(scene.length),
     entry(id, resultPointer) {
       const entity = scene[Number(id)];
-      // Canonical order again: colour, kind, scale, spin, x, y, z. The text
-      // field is written through the result pointer, the numbers follow it.
+      // Canonical order again: color.blue, color.green, color.red, kind, scale,
+      // spin, texture, x, y, z. Nested records flatten in their own canonical
+      // field order.
       const view = new DataView(instance.exports.memory.buffer);
-      writeText(resultPointer, entity.colour);
-      view.setBigInt64(resultPointer + 8, BigInt(entity.kind), true);
-      view.setBigInt64(resultPointer + 16, BigInt(entity.scale), true);
-      view.setBigInt64(resultPointer + 24, BigInt(entity.spin), true);
-      view.setBigInt64(resultPointer + 32, BigInt(entity.x), true);
-      view.setBigInt64(resultPointer + 40, BigInt(entity.y), true);
-      view.setBigInt64(resultPointer + 48, BigInt(entity.z), true);
+      view.setBigInt64(resultPointer, BigInt(entity.color.blue), true);
+      view.setBigInt64(resultPointer + 8, BigInt(entity.color.green), true);
+      view.setBigInt64(resultPointer + 16, BigInt(entity.color.red), true);
+      view.setBigInt64(resultPointer + 24, BigInt(entity.kind), true);
+      view.setBigInt64(resultPointer + 32, BigInt(entity.scale), true);
+      view.setBigInt64(resultPointer + 40, BigInt(entity.spin), true);
+      writeText(resultPointer + 48, entity.texture);
+      view.setBigInt64(resultPointer + 56, BigInt(entity.x), true);
+      view.setBigInt64(resultPointer + 64, BigInt(entity.y), true);
+      view.setBigInt64(resultPointer + 72, BigInt(entity.z), true);
     },
   },
 

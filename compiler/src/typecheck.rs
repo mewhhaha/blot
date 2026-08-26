@@ -17,10 +17,12 @@ use crate::diagnostic::Diagnostic;
 use crate::eval::{
     ApplicationSite, CompilerApplication, Context, Phase, Runtime, apply, closure_free_names,
     evaluate_binding, evaluate_expression, force_effect_value, match_pattern, run,
+    signature_hole_expressions,
 };
 use crate::value::{
     Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, OrderedFields, Value,
-    attach_signature, child_env, closure_signature, lookup, reusable_across_module_instances,
+    attach_signature, child_env, closure_signature, lookup, opened_members,
+    reusable_across_module_instances,
 };
 
 type VariableId = u32;
@@ -166,6 +168,61 @@ pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) 
             base: Rc::new(base),
             fields: updates,
         },
+    }
+}
+
+// A lowered `for` can retain `RecordUpdate` relationships while its `:=`
+// accumulator has already proved that every back edge preserves the base type.
+// Runtime specialization needs that stable representation variable, not the
+// source-level field refinement layered over it.
+fn stable_loop_signature(type_: Type) -> Type {
+    match type_ {
+        Type::RecordUpdate { base, .. } => stable_loop_signature(Rc::unwrap_or_clone(base)),
+        Type::Forall { variables, body } => Type::Forall {
+            variables,
+            body: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(body))),
+        },
+        Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => Type::Function {
+            deferred,
+            parameter: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(parameter))),
+            effects: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(effects))),
+            result: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(result))),
+        },
+        Type::Record(fields) => Type::Record(
+            fields
+                .into_iter()
+                .map(|(name, type_)| (name, stable_loop_signature(type_)))
+                .collect(),
+        ),
+        Type::Array(element) => {
+            Type::Array(Rc::new(stable_loop_signature(Rc::unwrap_or_clone(element))))
+        }
+        Type::Region(element) => {
+            Type::Region(Rc::new(stable_loop_signature(Rc::unwrap_or_clone(element))))
+        }
+        Type::Scratch(element) => {
+            Type::Scratch(Rc::new(stable_loop_signature(Rc::unwrap_or_clone(element))))
+        }
+        Type::Variant { cases, open } => Type::Variant {
+            cases: cases
+                .into_iter()
+                .map(|(name, type_)| (name, stable_loop_signature(type_)))
+                .collect(),
+            open,
+        },
+        Type::OpenEffects { labels, tail } => Type::OpenEffects {
+            labels,
+            tail: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(tail))),
+        },
+        Type::Union(members) => {
+            Type::Union(members.into_iter().map(stable_loop_signature).collect())
+        }
+        type_ => type_,
     }
 }
 
@@ -1387,8 +1444,8 @@ pub struct Checker {
     solver_worklist_peak: Cell<u64>,
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
-    next_skolem: Cell<VariableId>,
-    next_representation_hole: Cell<VariableId>,
+    next_skolem: Rc<Cell<VariableId>>,
+    next_representation_hole: Rc<Cell<VariableId>>,
     level: Cell<u32>,
     phase: Cell<Phase>,
     specialization_depth: Cell<u32>,
@@ -1439,8 +1496,8 @@ impl Checker {
             solver_worklist_peak: Cell::new(0),
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
-            next_skolem: Cell::new(0x8000_0000),
-            next_representation_hole: Cell::new(u32::MAX),
+            next_skolem: Rc::new(Cell::new(0x8000_0000)),
+            next_representation_hole: Rc::new(Cell::new(u32::MAX)),
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
@@ -1647,6 +1704,9 @@ impl Checker {
                 diagnostic.message, diagnostic.code
             )
         })?;
+        if let Some(interface) = self.module_interfaces.borrow().get(path) {
+            return Ok(interface.certificate());
+        }
         let interface = match CachedModuleInterface::from_checked(&checked) {
             Some(interface) => interface,
             None => {
@@ -2140,16 +2200,49 @@ impl Checker {
             .insert(path.to_owned(), analyses.ownership_facts.clone());
         analyses.ownership?;
         analyses.safety?;
+        let synthetic_recursive_bodies = loaded
+            .module
+            .arena
+            .declarations
+            .iter()
+            .filter_map(|declaration| {
+                let Declaration::Binding { pattern, value, .. } = declaration else {
+                    return None;
+                };
+                let Pattern::Name { name, .. } = &loaded.module.arena.patterns[pattern.0 as usize]
+                else {
+                    return None;
+                };
+                if name != "go$" {
+                    return None;
+                }
+                let Expression::Rec { lambda, .. } =
+                    loaded.module.arena.expressions[value.0 as usize]
+                else {
+                    return None;
+                };
+                let Expression::Lambda { body, .. } =
+                    loaded.module.arena.expressions[lambda.0 as usize]
+                else {
+                    return None;
+                };
+                Some(body)
+            })
+            .collect::<HashSet<_>>();
         let mut analyzed_closure_signatures = self
             .closure_types_for_path(path)
             .into_iter()
             .map(|(body, type_)| {
-                let (signature, type_recursive) = self.residual_signature_analysis(type_.clone());
+                let (mut signature, type_recursive) =
+                    self.residual_signature_analysis(type_.clone());
                 let recursive = type_recursive
                     || self
                         .recursive_closure_bodies
                         .borrow()
                         .contains(&(path.to_owned(), body));
+                if synthetic_recursive_bodies.contains(&body) {
+                    signature = stable_loop_signature(signature);
+                }
                 (body, signature, recursive)
             })
             .collect::<Vec<_>>();
@@ -2192,6 +2285,26 @@ impl Checker {
             .closure_signatures
             .borrow_mut()
             .extend(reified_closure_signatures);
+        let signature_types = Rc::new(
+            closure_signatures
+                .iter()
+                .cloned()
+                .collect::<HashMap<_, _>>(),
+        );
+        let context = Rc::downgrade(&self.context);
+        let next_representation_hole = self.next_representation_hole.clone();
+        let resolver: crate::eval::RuntimeTypeResolver = Rc::new(move |body| {
+            let signature = signature_types.get(&body)?;
+            let context = context.upgrade()?;
+            let mut next_hole = next_representation_hole.get();
+            let signature = reify_type_with_holes(&context, signature, &mut next_hole);
+            next_representation_hole.set(next_hole);
+            signature
+        });
+        self.context
+            .closure_signature_resolvers
+            .borrow_mut()
+            .insert(path.to_owned(), resolver);
         self.context.recursive_closures.borrow_mut().extend(
             recursive_closures
                 .iter()
@@ -2321,40 +2434,68 @@ impl Checker {
 
     fn inflate_interface(&self, path: &str, cached: CachedModuleInterface) -> CheckedModule {
         let mut rigids = HashMap::new();
-        let expression_types = cached
+        let expression_type_ids = cached
             .expression_types
             .iter()
-            .map(|(expression, type_)| {
-                (
-                    *expression,
-                    self.inflate_interface_type(&cached.types, *type_, &mut rigids),
-                )
-            })
-            .collect::<Vec<_>>();
-        let closure_signatures = cached
-            .closure_signatures
-            .iter()
-            .map(|(body, signature)| {
-                (
-                    *body,
-                    self.inflate_interface_type(&cached.types, *signature, &mut rigids),
-                )
-            })
-            .collect::<Vec<_>>();
+            .copied()
+            .collect::<HashMap<_, _>>();
+        let expression_types = Rc::new(expression_type_ids);
+        let expression_type_arena = cached.types.clone();
+        let next_skolem = self.next_skolem.clone();
+        let next_representation_hole = self.next_representation_hole.clone();
+        let context = Rc::downgrade(&self.context);
+        let resolver: crate::eval::RuntimeTypeResolver = Rc::new(move |expression| {
+            let type_ = *expression_types.get(&expression)?;
+            let mut rigids = HashMap::new();
+            let type_ =
+                Self::inflate_cached_type(&expression_type_arena, type_, &mut rigids, &next_skolem);
+            let context = context.upgrade()?;
+            let mut next_hole = next_representation_hole.get();
+            let value = reify_type_with_holes(&context, &type_, &mut next_hole);
+            next_representation_hole.set(next_hole);
+            value
+        });
         self.context
             .expression_types
             .borrow_mut()
-            .extend(expression_types.iter().filter_map(|(expression, type_)| {
-                self.reify_runtime_type(type_)
-                    .map(|type_| ((path.to_owned(), *expression), type_))
-            }));
+            .retain(|(module, _), _| module != path);
+        self.context
+            .expression_type_resolvers
+            .borrow_mut()
+            .insert(path.to_owned(), resolver);
+        let closure_signature_ids = cached
+            .closure_signatures
+            .iter()
+            .copied()
+            .collect::<HashMap<_, _>>();
+        let closure_signatures = Rc::new(closure_signature_ids);
+        let closure_signature_arena = cached.types.clone();
+        let next_skolem = self.next_skolem.clone();
+        let next_representation_hole = self.next_representation_hole.clone();
+        let context = Rc::downgrade(&self.context);
+        let resolver: crate::eval::RuntimeTypeResolver = Rc::new(move |body| {
+            let signature = *closure_signatures.get(&body)?;
+            let mut rigids = HashMap::new();
+            let signature = Self::inflate_cached_type(
+                &closure_signature_arena,
+                signature,
+                &mut rigids,
+                &next_skolem,
+            );
+            let context = context.upgrade()?;
+            let mut next_hole = next_representation_hole.get();
+            let value = reify_type_with_holes(&context, &signature, &mut next_hole);
+            next_representation_hole.set(next_hole);
+            value
+        });
         self.context
             .closure_signatures
             .borrow_mut()
-            .extend(closure_signatures.iter().filter_map(|(body, type_)| {
-                self.reify_runtime_type(type_)
-                    .map(|signature| ((path.to_owned(), *body), signature))
-            }));
+            .retain(|(module, _), _| module != path);
+        self.context
+            .closure_signature_resolvers
+            .borrow_mut()
+            .insert(path.to_owned(), resolver);
         self.context.recursive_closures.borrow_mut().extend(
             cached
                 .recursive_closures
@@ -2374,8 +2515,8 @@ impl Checker {
                 self.inflate_interface_type(&cached.types, parameter, &mut rigids)
             }),
             evaluated: cached.evaluated,
-            expression_types,
-            closure_signatures,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
             recursive_closures: cached.recursive_closures,
             ownership_contracts: cached.ownership_contracts,
         }
@@ -2387,18 +2528,27 @@ impl Checker {
         type_: FlatTypeId,
         rigids: &mut HashMap<VariableId, VariableId>,
     ) -> Type {
+        Self::inflate_cached_type(arena, type_, rigids, &self.next_skolem)
+    }
+
+    fn inflate_cached_type(
+        arena: &FlatTypeArena,
+        type_: FlatTypeId,
+        rigids: &mut HashMap<VariableId, VariableId>,
+        next_skolem: &Cell<VariableId>,
+    ) -> Type {
         match arena.node(type_) {
             FlatTypeNode::Rigid(id) => Type::Rigid(*rigids.get(id).unwrap_or(id)),
             FlatTypeNode::Forall { variables, body } => {
                 let mut fresh_variables = Vec::with_capacity(variables.len());
                 let mut previous = Vec::with_capacity(variables.len());
                 for variable in variables {
-                    let fresh = self.next_skolem.get();
-                    self.next_skolem.set(fresh + 1);
+                    let fresh = next_skolem.get();
+                    next_skolem.set(fresh + 1);
                     previous.push((*variable, rigids.insert(*variable, fresh)));
                     fresh_variables.push(fresh);
                 }
-                let body = self.inflate_interface_type(arena, *body, rigids);
+                let body = Self::inflate_cached_type(arena, *body, rigids, next_skolem);
                 for (variable, prior) in previous {
                     match prior {
                         Some(prior) => {
@@ -2421,9 +2571,24 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred: *deferred,
-                parameter: Rc::new(self.inflate_interface_type(arena, *parameter, rigids)),
-                effects: Rc::new(self.inflate_interface_type(arena, *effects, rigids)),
-                result: Rc::new(self.inflate_interface_type(arena, *result, rigids)),
+                parameter: Rc::new(Self::inflate_cached_type(
+                    arena,
+                    *parameter,
+                    rigids,
+                    next_skolem,
+                )),
+                effects: Rc::new(Self::inflate_cached_type(
+                    arena,
+                    *effects,
+                    rigids,
+                    next_skolem,
+                )),
+                result: Rc::new(Self::inflate_cached_type(
+                    arena,
+                    *result,
+                    rigids,
+                    next_skolem,
+                )),
             },
             FlatTypeNode::Record(fields) => Type::Record(
                 fields
@@ -2431,39 +2596,48 @@ impl Checker {
                     .map(|(name, type_)| {
                         (
                             name.clone(),
-                            self.inflate_interface_type(arena, *type_, rigids),
+                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
                         )
                     })
                     .collect(),
             ),
             FlatTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
-                base: Rc::new(self.inflate_interface_type(arena, *base, rigids)),
+                base: Rc::new(Self::inflate_cached_type(arena, *base, rigids, next_skolem)),
                 fields: fields
                     .iter()
                     .map(|(name, type_)| {
                         (
                             name.clone(),
-                            self.inflate_interface_type(arena, *type_, rigids),
+                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
                         )
                     })
                     .collect(),
             },
-            FlatTypeNode::Array(element) => Type::Array(Rc::new(
-                self.inflate_interface_type(arena, *element, rigids),
-            )),
-            FlatTypeNode::Region(element) => Type::Region(Rc::new(
-                self.inflate_interface_type(arena, *element, rigids),
-            )),
-            FlatTypeNode::Scratch(element) => Type::Scratch(Rc::new(
-                self.inflate_interface_type(arena, *element, rigids),
-            )),
+            FlatTypeNode::Array(element) => Type::Array(Rc::new(Self::inflate_cached_type(
+                arena,
+                *element,
+                rigids,
+                next_skolem,
+            ))),
+            FlatTypeNode::Region(element) => Type::Region(Rc::new(Self::inflate_cached_type(
+                arena,
+                *element,
+                rigids,
+                next_skolem,
+            ))),
+            FlatTypeNode::Scratch(element) => Type::Scratch(Rc::new(Self::inflate_cached_type(
+                arena,
+                *element,
+                rigids,
+                next_skolem,
+            ))),
             FlatTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
                     .map(|(name, type_)| {
                         (
                             name.clone(),
-                            self.inflate_interface_type(arena, *type_, rigids),
+                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
                         )
                     })
                     .collect(),
@@ -2472,7 +2646,7 @@ impl Checker {
             FlatTypeNode::Union(members) => Type::Union(
                 members
                     .iter()
-                    .map(|member| self.inflate_interface_type(arena, *member, rigids))
+                    .map(|member| Self::inflate_cached_type(arena, *member, rigids, next_skolem))
                     .collect(),
             ),
             FlatTypeNode::Range { domain, low, high } => Type::Range {
@@ -2484,7 +2658,7 @@ impl Checker {
             FlatTypeNode::Effects(labels) => Type::Effects(labels.clone()),
             FlatTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels: labels.clone(),
-                tail: Rc::new(self.inflate_interface_type(arena, *tail, rigids)),
+                tail: Rc::new(Self::inflate_cached_type(arena, *tail, rigids, next_skolem)),
             },
             FlatTypeNode::Opaque(name) => Type::Opaque(name.clone()),
             FlatTypeNode::Top => Type::Top,
@@ -2728,14 +2902,46 @@ impl Checker {
             Declaration::Signature {
                 name, value, span, ..
             } => {
-                let signature_value = self.evaluate(path, value, values, Phase::Comptime)?;
-                let Requirement::Type(signature) = self.requirement(signature_value) else {
+                let holes = signature_hole_expressions(module, value);
+                let hole_values = holes
+                    .iter()
+                    .map(|expression| (*expression, self.context.type_variable()))
+                    .collect::<HashMap<_, _>>();
+                let signature_value = run(evaluate_expression(
+                    self.context.clone(),
+                    Rc::new(path.to_owned()),
+                    value,
+                    values.clone(),
+                    Runtime::new(Phase::Comptime, path.to_owned()).signature(hole_values.clone()),
+                ))?;
+                let Requirement::Type(mut signature) = self.requirement(signature_value) else {
                     return Err(Diagnostic::new(
                         "BLOT_SIGNATURE_NOT_A_TYPE",
                         format!("The signature for `{name}` is not a type value."),
                         span,
                     ));
                 };
+                let replacements = holes
+                    .iter()
+                    .map(|expression| {
+                        let variable = hole_values
+                            .get(expression)
+                            .expect("every signature hole must have a type value");
+                        (*variable, self.fresh())
+                    })
+                    .collect::<HashMap<_, _>>();
+                signature = substitute_rigid(signature, &replacements);
+                for expression in holes {
+                    let variable = hole_values
+                        .get(&expression)
+                        .expect("every signature hole must have a type value");
+                    let hole = replacements
+                        .get(variable)
+                        .expect("every signature hole must have an inference variable");
+                    self.analysis_expression_types
+                        .borrow_mut()
+                        .insert((path.to_owned(), expression), hole.clone());
+                }
                 if let Some(unrepresentable) = unrepresentable_integer(&signature) {
                     return Err(Diagnostic::new(
                         "BLOT_UNREPRESENTABLE_INTEGER",
@@ -3148,20 +3354,47 @@ impl Checker {
             Declaration::Open { value, span } => {
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
-                let Value::Shape(fields) = opened else {
+                let Some(fields) = opened_members(&opened) else {
                     return Err(Diagnostic::new(
                         "BLOT_CANNOT_OPEN",
-                        "`open` requires a compile-time record.",
+                        "`open` requires a compile-time record or effect.",
                         span,
                     ));
                 };
-                let inferred_fields = match inferred.type_ {
-                    Type::Record(fields) => fields,
-                    type_ @ Type::Variable(_) => match self.settle(type_, true) {
+                let inferred_fields = match &opened {
+                    Value::Effect {
+                        id,
+                        name,
+                        operations,
+                        host,
+                    } => operations
+                        .iter()
+                        .map(|(operation, signature)| {
+                            let mut type_ = self.bridge(signature).ok_or_else(|| {
+                                Diagnostic::new(
+                                    "BLOT_TYPE_ERROR",
+                                    format!(
+                                        "Effect operation `{operation}` must have a function type."
+                                    ),
+                                    span,
+                                )
+                            })?;
+                            add_function_effect(
+                                &mut type_,
+                                format!("{}:{id}:{name}", if *host { "host" } else { "effect" }),
+                            );
+                            Ok((operation.clone(), type_))
+                        })
+                        .collect::<Result<Vec<_>, Diagnostic>>()?
+                        .into(),
+                    _ => match inferred.type_ {
                         Type::Record(fields) => fields,
+                        type_ @ Type::Variable(_) => match self.settle(type_, true) {
+                            Type::Record(fields) => fields,
+                            _ => Vec::new().into(),
+                        },
                         _ => Vec::new().into(),
                     },
-                    _ => Vec::new().into(),
                 };
                 Rc::make_mut(&mut types.opens).push(OpenedTypes {
                     inferred: inferred_fields,
@@ -10786,6 +11019,53 @@ mod tests {
         assert_ne!(first_variables, second_variables);
         assert!(matches!(*first_body, Type::Rigid(id) if id == first_variables[0]));
         assert!(matches!(*second_body, Type::Rigid(id) if id == second_variables[0]));
+    }
+
+    #[test]
+    fn cached_private_type_facts_are_reified_on_demand() {
+        let checked = CheckedModule {
+            result: Type::Unit,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: vec![(ExpressionId(7), Type::Unit)],
+            closure_signatures: vec![(ExpressionId(8), Type::Unit)],
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+        };
+        let cached = CachedModuleInterface::from_checked(&checked)
+            .expect("a closed interface should be cacheable");
+        let context = Rc::new(Context::default());
+        let checker = Checker::new(context.clone());
+
+        let inflated = checker.inflate_interface("cached", cached.clone());
+
+        assert!(inflated.expression_types.is_empty());
+        assert!(inflated.closure_signatures.is_empty());
+        assert!(context.expression_types.borrow().is_empty());
+        assert!(context.closure_signatures.borrow().is_empty());
+        assert!(matches!(
+            context.expression_type("cached", ExpressionId(7)),
+            Some(Value::Unit)
+        ));
+        assert!(matches!(
+            context.closure_signature("cached", ExpressionId(8)),
+            Some(Value::Unit)
+        ));
+
+        checker
+            .module_interfaces
+            .borrow_mut()
+            .insert("cached".to_owned(), cached);
+        checker
+            .modules
+            .borrow_mut()
+            .insert("cached".to_owned(), Ok(inflated));
+        let certificate = checker
+            .certificate("cached")
+            .expect("the cached certificate should remain complete");
+        assert_eq!(certificate.expression_types.len(), 1);
+        assert_eq!(certificate.closure_signatures.len(), 1);
     }
 
     #[test]

@@ -119,13 +119,14 @@ Deno.test("inference-centered editor features share one resident revision", asyn
   const source = `open import "blot:prelude"
 let add :: Int -> Int -> Int
 let add = fn left => fn right => left
+let answer :: _
 let answer = add 20 22
 return answer
 `;
   try {
     service.open(uri, source, 1);
     const completion = await service.completion(uri, {
-      line: 4,
+      line: 5,
       character: 7,
     });
     assert(completion.some((item) => item.label === "add"));
@@ -140,14 +141,19 @@ return answer
     }
 
     const signature = await service.signatureHelp(uri, {
-      line: 3,
+      line: 4,
       character: 21,
     });
     assert(signature !== null);
     assertStringIncludes(signature.signatures[0].label, "Int -> Int -> Int");
 
     const hints = await service.inlayHints(uri);
-    assert(hints.some((hint) => hint.label.includes("Int")));
+    assertEquals(hints, [{
+      position: { line: 3, character: 15 },
+      label: ": Int",
+      kind: 1,
+      tooltip: "Compiler-inferred signature hole",
+    }]);
 
     const symbols = await service.documentSymbols(uri);
     assertEquals(symbols.map((symbol) => symbol.name), ["add", "answer"]);
@@ -167,6 +173,186 @@ return answer
 
     const workspace = await service.workspaceSymbols("ans");
     assertEquals(workspace.map((symbol) => symbol.name), ["answer"]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("an unsigned value offers a matching signature-hole action", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:add-signature.blot";
+  const source = `let unsigned = 42
+let signed :: _
+let signed = unsigned
+return signed
+`;
+  try {
+    service.open(uri, source, 7);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 4 },
+      end: { line: 0, character: 12 },
+    });
+    const action = actions.find((candidate) =>
+      candidate.title === "Add inferred signature hole for `unsigned`"
+    );
+    assertEquals(action?.edit.documentChanges[0].edits, [{
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 0 },
+      },
+      newText: "let unsigned :: _\n",
+    }]);
+
+    const signedActions = await service.codeActions(uri, {
+      start: { line: 2, character: 4 },
+      end: { line: 2, character: 10 },
+    });
+    assertEquals(
+      signedActions.some((candidate) =>
+        candidate.title === "Add inferred signature hole for `signed`"
+      ),
+      false,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("each signature hole receives its inferred type", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:signature-hole-hints.blot";
+  const source = `open import "blot:prelude"
+let increment :: _ -> _
+let increment = fn value => value + 1
+return increment
+`;
+  try {
+    service.open(uri, source, 1);
+    assertEquals(await service.inlayHints(uri), [{
+      position: { line: 1, character: 18 },
+      label: ": Int",
+      kind: 1,
+      tooltip: "Compiler-inferred signature hole",
+    }, {
+      position: { line: 1, character: 23 },
+      label: ": Int",
+      kind: 1,
+      tooltip: "Compiler-inferred signature hole",
+    }]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("a recursive value receives a recursive signature header", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:add-recursive-signature.blot";
+  const source = `let rec identity = fn value => value
+return identity
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 8 },
+      end: { line: 0, character: 16 },
+    });
+    const action = actions.find((candidate) =>
+      candidate.title === "Add inferred signature hole for `identity`"
+    );
+    assertEquals(
+      action?.edit.documentChanges[0].edits[0]?.newText,
+      "let rec identity :: _\n",
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("a signature kind is corrected to match its binding", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:correct-signature-kind.blot";
+  const source = `const answer :: _
+let answer = 42
+return answer
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 1, character: 15 },
+    });
+    const correction = actions.find((candidate) =>
+      candidate.title === "Match signature header to `let answer`"
+    );
+    assertEquals(correction?.edit.documentChanges[0].edits, [{
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 13 },
+      },
+      newText: "let answer ",
+    }]);
+    assertEquals(
+      actions.some((candidate) =>
+        candidate.title === "Add inferred signature hole for `answer`"
+      ),
+      false,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("a signature recursion marker is corrected to match its binding", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:correct-signature-recursion.blot";
+  const source = `let rec identity :: _
+let identity = fn value => value
+return identity
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 21 },
+    });
+    const correction = actions.find((candidate) =>
+      candidate.title === "Match signature header to `let identity`"
+    );
+    assertEquals(correction?.edit.documentChanges[0].edits[0], {
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 17 },
+      },
+      newText: "let identity ",
+    });
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("a signature name is corrected to match its binding", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:correct-signature-name.blot";
+  const source = `let result :: _
+let answer = 42
+return answer
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 15 },
+    });
+    const correction = actions.find((candidate) =>
+      candidate.title === "Match signature header to `let answer`"
+    );
+    assertEquals(correction?.edit.documentChanges[0].edits[0], {
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 0, character: 11 },
+      },
+      newText: "let answer ",
+    });
   } finally {
     await service.destroy();
   }
@@ -201,6 +387,94 @@ return Library.answer
         end: { line: 0, character: 10 },
       },
     });
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("definition follows a local field to its shape member", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:local-field-definition.blot";
+  const source = `let record = { .answer = 42; }
+return record.answer
+`;
+  try {
+    service.open(uri, source, 1);
+    assertEquals(
+      await service.definition(uri, { line: 1, character: 15 }),
+      {
+        uri,
+        range: {
+          start: { line: 0, character: 16 },
+          end: { line: 0, character: 22 },
+        },
+      },
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("type definition follows the explicit signature type value", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:type-definition.blot";
+  const source = `const Point = { .x = Number; }
+let point :: Point
+let point = { .x = 42; }
+return point
+`;
+  try {
+    service.open(uri, source, 1);
+    const expected = [{
+      uri,
+      range: {
+        start: { line: 0, character: 6 },
+        end: { line: 0, character: 11 },
+      },
+    }];
+    assertEquals(
+      await service.typeDefinition(uri, { line: 3, character: 8 }),
+      expected,
+    );
+    assertEquals(
+      await service.typeDefinition(uri, { line: 1, character: 15 }),
+      expected,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("type definition follows a qualified type value across an import", async () => {
+  const directory = await Deno.makeTempDir();
+  const libraryPath = join(directory, "types.blot");
+  const mainPath = join(directory, "main.blot");
+  const librarySource = `const Point = { .x = Number; }
+return { .Point = Point; }
+`;
+  const mainSource = `const Types = import "./types.blot"
+let point :: Types.Point
+let point = { .x = 42; }
+return point
+`;
+  await Deno.writeTextFile(libraryPath, librarySource);
+  await Deno.writeTextFile(mainPath, mainSource);
+  const libraryUri = toFileUrl(libraryPath).href;
+  const mainUri = toFileUrl(mainPath).href;
+  const service = new LanguageService();
+  try {
+    service.open(libraryUri, librarySource, 1);
+    service.open(mainUri, mainSource, 1);
+    assertEquals(
+      await service.typeDefinition(mainUri, { line: 3, character: 8 }),
+      [{
+        uri: libraryUri,
+        range: {
+          start: { line: 0, character: 6 },
+          end: { line: 0, character: 11 },
+        },
+      }],
+    );
   } finally {
     await service.destroy();
   }
@@ -365,6 +639,45 @@ return 2
       diagnostic.code === "BLOT_LINT_UNUSED_BINDING"
     );
     assertEquals(unused?.severity, 2);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("idiom and array-cost rewrites preserve the checked interface", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:idiom-rewrites.blot";
+  const source = `open import "blot:prelude"
+let identity :: Bool -> Bool
+let identity = fn flag => do:
+  if flag:
+    return #True
+  else:
+    return #False
+let same :: Bool -> Int
+let same = fn flag => do:
+  if flag:
+    return 1
+  else:
+    return 1
+let pushed :: [Int]
+let pushed = Array.append [1] [2]
+let unchanged :: [Int]
+let unchanged = Array.append [1] []
+return (identity #True, same #True, pushed, unchanged)
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 18, character: 56 },
+    });
+    assertEquals(actions.map((action) => action.title), [
+      "Return the Boolean condition directly",
+      "Replace identical branches with their value",
+      "Replace singleton append with `Array.push`",
+      "Remove empty array append",
+    ]);
   } finally {
     await service.destroy();
   }

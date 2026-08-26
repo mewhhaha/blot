@@ -120,6 +120,7 @@ export async function runLanguageServer(
                 save: { includeText: false },
               },
               definitionProvider: true,
+              typeDefinitionProvider: true,
               referencesProvider: true,
               renameProvider: true,
               hoverProvider: true,
@@ -218,6 +219,19 @@ export async function runLanguageServer(
             message,
             params.textDocument.uri,
             () => service.definition(params.textDocument.uri, params.position),
+          );
+          continue;
+        }
+        if (message.method === "textDocument/typeDefinition") {
+          const params = message.params as PositionParams;
+          enqueueRequest(
+            message,
+            params.textDocument.uri,
+            () =>
+              service.typeDefinition(
+                params.textDocument.uri,
+                params.position,
+              ),
           );
           continue;
         }

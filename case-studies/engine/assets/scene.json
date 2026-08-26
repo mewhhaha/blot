@@ -8,7 +8,7 @@
       "z": 0,
       "scale": 1.4,
       "spin": 1,
-      "colour": "#4c8dff"
+      "color": { "red": 76, "green": 141, "blue": 255 }
     },
     {
       "kind": "mesh",
@@ -17,7 +17,7 @@
       "z": -1.2,
       "scale": 0.8,
       "spin": 2,
-      "colour": "#ff5f56"
+      "color": { "red": 255, "green": 95, "blue": 86 }
     },
     {
       "kind": "mesh",
@@ -26,7 +26,7 @@
       "z": 1.4,
       "scale": 0.9,
       "spin": -2,
-      "colour": "#27c93f"
+      "color": { "red": 39, "green": 201, "blue": 63 }
     },
     {
       "kind": "mesh",
@@ -35,7 +35,7 @@
       "z": -2.4,
       "scale": 0.6,
       "spin": 3,
-      "colour": "#ffbd2e"
+      "color": { "red": 255, "green": 189, "blue": 46 }
     },
     {
       "kind": "sprite",

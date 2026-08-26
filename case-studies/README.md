@@ -75,9 +75,15 @@ It draws to a canvas through four host capabilities and reaches nothing else on
 the page.
 
 `engine/game_loop.blot` is the deliberately traditional counterpart. It uses the
-same renderer and host boundary, but keeps named actors in one `Game` record
-instead of component stores. Each frame reads the clock, replaces the record
-with `update game`, renders it, and repeats:
+same renderer and host boundary, but keeps whole renderable objects in arrays
+instead of splitting them into component stores. Its scene is a computation over
+the ordinary `GameBuilder` effect: `mesh` and `sprite` operations describe
+objects without ids, and the source handler interprets them into an immutable
+setup. That setup owns one `next_id` across both arrays; `build_game` removes
+the construction-only counter. Stable object ids therefore leave room for a
+later lookup without fixing roles into the `Game` type. Named colors keep the
+object declarations about intent rather than RGB channels. Each frame reads the
+clock, replaces the record with `update game`, renders it, and repeats:
 
 ```blot
 for ever:
@@ -91,8 +97,8 @@ for ever:
 
 Run it with `deno task case-study game-loop [frames] [ortho]`. The two entry
 points make the tradeoff visible without changing the graphics code: the
-traditional loop is direct when the world has a few fixed roles; the ECS layout
-lets systems traverse an open collection of entities by component.
+traditional loop keeps each object's fields together; the ECS layout lets
+systems traverse an open collection of entities by component.
 
 ### Four modules, and what each of them owns
 
@@ -117,19 +123,18 @@ draw, and its inferred type says so:
 case-studies/engine/main.blot: (Int | 0) ~ { Assets, Canvas, Host, View }
 ```
 
-The same reason keeps `Canvas` out of the renderer's returned API: the record is
-a runtime value and an effect cannot be a field of one. The renderer returns a
-`frame` instead, which clears, reads the camera, hands the application two
-brushes, and presents.
+The same reason keeps `Canvas` out of the renderer's returned API: an effect has
+no runtime representation to return. The renderer instead returns its `Color`
+type, `rgb` constructor, coordinate conversions, and a `frame` that clears,
+reads the camera, hands the application two brushes, and presents.
 
 A camera is one record inside `lib/render.blot` and a different field subset at
 each of the four places that reads one, and those shapes agree because inference
 watches the record reach them. It watches across a module boundary too, now — a
 record may cross carrying more fields than the module it enters reads. So a
-brush takes a position, an angle, a scale, and a colour rather than a
-`Transform` because the renderer has no business knowing that this game's
-transform also has a spin, which is a design reason and no longer a lowering
-one.
+brush takes a position, an angle, a scale, and a color rather than a `Transform`
+because the renderer has no business knowing that this game's transform also has
+a spin, which is a design reason and no longer a lowering one.
 
 ### The world is the frame loop
 
@@ -287,23 +292,33 @@ compile and not a device acquisition.
 ### The host boundary
 
 ```text
+Color                = { red, green, blue : Int }
+rgb                  : (U8, U8, U8) -> Color
 Canvas.clear/present : () -> ()
-Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; colour : Text } -> ()
+Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; color : Color } -> ()
 Canvas.sprite        : { x, y, size, depth : Int; texture : Text } -> ()
 View.yaw/pitch/distance/lens : () -> Int
 Assets.generation/count      : () -> Int
-Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; colour : Text }
+Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; color : Color; texture : Text }
 Host.frame           : () -> Int
 ```
+
+`Color` uses runtime `Int` carriers because narrowed ranges do not survive in
+residual host and loop signatures. Blot-authored colors still enter through
+`rgb`, whose `U8` parameters prove each channel is from 0 through 255, and both
+scene hosts enforce the same range while parsing `scene.json`.
 
 The guest projects geometry and hands over triangles with a view depth; sorting
 them is the host's job. That is the same split a depth buffer makes, and it is
 why the guest never needs one.
 
 Record parameters flatten in _canonical_ field order, which is alphabetical and
-not the order the program wrote them — `Canvas.tri` arrives as
-`ax, ay, bx, by, colour, cx, cy, depth, shade`. `docs/abi.md` is the authority;
-getting it wrong silently transposes the geometry.
+not the order the program wrote them. Nested records follow the same rule, so
+`Canvas.tri` arrives as
+`ax, ay, bx, by, color.blue, color.green, color.red, cx,
+cy, depth, shade`.
+`docs/abi.md` is the authority; getting it wrong silently transposes the
+geometry.
 
 ### Two hosts
 
@@ -363,7 +378,7 @@ been rewritten to take them:
   the language forbids.
 - **A record may cross a module boundary carrying more fields than the module
   reads** (`LANGUAGE.md` §3). The renderer's brushes take a position, an angle,
-  a scale, and a colour because a boundary that names what it reads is a good
+  a scale, and a color because a boundary that names what it reads is a good
   boundary, not because a `Transform` would fail to lower. Differently shaped
   calls, including calls from separate importers, now specialize independently.
 - **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`

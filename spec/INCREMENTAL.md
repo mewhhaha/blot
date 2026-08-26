@@ -252,10 +252,14 @@ flat interface. A retained expanded check therefore contains no mutable
 inference variable. Failed checks and results that cannot publish that interface
 are removed before the next request.
 
-A cache hit may reuse the expanded closed check or inflate its flat interface
-with fresh quantified identities. Caller-specific facts remain in the importing
-module, and source, configuration, or dependency-boundary changes invalidate the
-affected resident entry before another request.
+A cache hit may reuse the expanded closed check or inflate its public boundary
+with fresh quantified identities. Private expression types and closure
+signatures remain in the validated flat arena until evaluation first requests
+their exact source-expression identity; that request freshens, reifies, and
+memoizes the fact in the resident context. Caller-specific facts remain in the
+importing module, and source, configuration, or dependency-boundary changes
+invalidate both the memoized values and their module resolver before another
+request.
 
 ## 8. Staging and specialization caches
 

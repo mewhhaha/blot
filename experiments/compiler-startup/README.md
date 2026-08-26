@@ -26,7 +26,10 @@ operational boundary rather than compiler work.
 Artifact authentication and Wasm compilation begin together because neither
 depends on the other's result. Their individual phases therefore overlap;
 `artifact-authenticate-and-compile` records their combined elapsed boundary.
-Instantiation begins only after both have completed successfully.
+Compilation is requested before Node's synchronous native SHA-256 digest so the
+engine may compile on its worker while the main thread authenticates the exact
+artifact bytes. Instantiation begins only after both have completed
+successfully.
 
 Prelude AST export and decode run after the semantic boundary and are also
 reported as individual phases because syntax consumers may request them.
