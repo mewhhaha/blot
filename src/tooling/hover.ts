@@ -243,9 +243,6 @@ function referencedType(
       case "rec":
         visit(expression.lambda);
         return;
-      case "comptime":
-        visit(expression.body);
-        return;
       case "tuple":
         for (const element of expression.elements) visit(element);
         return;
@@ -343,9 +340,6 @@ function valueSiteAt(
         return;
       case "rec":
         visit(expression.lambda);
-        return;
-      case "comptime":
-        visit(expression.body);
         return;
       case "tuple":
         for (const element of expression.elements) visit(element);
@@ -494,9 +488,6 @@ function declarationAt(
         return;
       case "rec":
         visitExpression(expression.lambda);
-        return;
-      case "comptime":
-        visitExpression(expression.body);
         return;
       case "tuple":
         for (const element of expression.elements) visitExpression(element);
@@ -651,8 +642,6 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   case: "Matches a value against ordered patterns.",
   of: "Separates a `case` target from its arms.",
   rec: "Makes a function binding recursively visible in its own body.",
-  compdo:
-    "Introduces a compile-time statement scope with its own `return` target.",
   open: "Spreads a compile-time record's fields into lexical scope.",
   for: "Folds an iterator, carrying names rebound with `:=` as loop state.",
   in: "Separates a `for` pattern from its iterator.",

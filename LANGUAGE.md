@@ -62,7 +62,7 @@ The reserved words are:
 module with import
 let const return use
 if else case of rec open
-for in break do compdo fn
+for in break do fn
 ```
 
 Reserved words and capitalized names remain valid field names: `.return`,
@@ -364,31 +364,31 @@ above the reader or the two belong in one recursive group.
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
 introducers are `=`, `=>`, `<-`, `of`, and `:`. `do:` is the explicit
-value-producing statement scope, and `compdo:` is its compile-time counterpart.
-Parentheses only group values or form tuples; they never introduce a statement
-suite. A suite may use any indentation width, but every line at that depth must
-agree; a dedent must return to an active suite width or to the introducer's
-width. Other indentation is expression continuation and does not silently create
-a scope. A closing delimiter does not select a suite width, so its indentation
-is ignored and canonicalized by the formatter. The formatter writes the accepted
-structure with two-space indentation and expands lines toward an 80-column
-limit. When a binding, signature, or `return` line is too wide, its value moves
-as a whole to the following line at one additional indentation level. That
-continuation does not introduce a scope. A delimited value that is already
-multiline likewise moves as a whole. A vertical delimiter indents its contents
-one level and closes at the indentation of the expression that opened it; `<-`
-does not add another delimiter level. The formatter writes a conditional
-vertically, giving each branch a block whose explicit `return` supplies the
-value that branch contributes. When the conditional is itself the terminal
-result of a scope, the formatter omits the redundant outer `return` and lets
-those branch returns target the scope directly. Arrays use one line when they
-fit within their value scope and otherwise place one element on each line. A
-signature and its binding have no empty line between them. Recursive-group
-members are likewise contiguous, followed by one empty line when another
-declaration follows. After a standalone `if` or `for` suite, or a multiline
-`case` arm, closes before another statement or arm, the formatter writes one
-empty line to make the dedent visible. It never separates an `else` from its
-`if`.
+value-producing statement scope. A `const` binding, rather than a second block
+keyword, requires its complete value to resolve at compile time. Parentheses
+only group values or form tuples; they never introduce a statement suite. A
+suite may use any indentation width, but every line at that depth must agree; a
+dedent must return to an active suite width or to the introducer's width. Other
+indentation is expression continuation and does not silently create a scope. A
+closing delimiter does not select a suite width, so its indentation is ignored
+and canonicalized by the formatter. The formatter writes the accepted structure
+with two-space indentation and expands lines toward an 80-column limit. When a
+binding, signature, or `return` line is too wide, its value moves as a whole to
+the following line at one additional indentation level. That continuation does
+not introduce a scope. A delimited value that is already multiline likewise
+moves as a whole. A vertical delimiter indents its contents one level and closes
+at the indentation of the expression that opened it; `<-` does not add another
+delimiter level. The formatter writes a conditional vertically, giving each
+branch a block whose explicit `return` supplies the value that branch
+contributes. When the conditional is itself the terminal result of a scope, the
+formatter omits the redundant outer `return` and lets those branch returns
+target the scope directly. Arrays use one line when they fit within their value
+scope and otherwise place one element on each line. A signature and its binding
+have no empty line between them. Recursive-group members are likewise
+contiguous, followed by one empty line when another declaration follows. After a
+standalone `if` or `for` suite, or a multiline `case` arm, closes before another
+statement or arm, the formatter writes one empty line to make the dedent
+visible. It never separates an `else` from its `if`.
 
 ### 4.1 Runtime and compile-time bindings
 
@@ -1008,8 +1008,8 @@ second pair of parentheses around itself: the tuple's comma or closing delimiter
 already marks its boundary, and the formatter removes a grouping used only for
 that purpose.
 
-A lambda whose body is an explicit `do:` or `compdo:` block has another visible
-boundary: the block's layout dedent. Such a bounded lambda may therefore be the
+A lambda whose body is an explicit `do:` block has another visible boundary: the
+block's layout dedent. Such a bounded lambda may therefore be the
 unparenthesized right operand of an infix operator:
 
 ```blot
@@ -1157,20 +1157,20 @@ reading itself.
 A member's type is inferred with the whole group's names bound monomorphically
 and generalized afterwards, so recursion within a group is not polymorphic.
 
-### 6.6 Compile-time blocks
+### 6.6 Compile-time statement blocks
 
 ```blot
-const fields = compdo:
+const fields = do:
   let reflected = reflect T
   return field_names reflected
 ```
 
-`compdo:` has the same statement and `return` rules as `do:`, but the complete
-block must resolve in the compile-time phase. It may use ordinary `let`,
-`const`, `if`, `case`, `for`, `:=`, and `return`; a demanded value that still
-depends on unresolved runtime data is a staging error rather than residual code.
-Lowering uses the existing internal compile-time expression form, so the
-evaluator and backend gain no second block representation.
+`do:` always has the same statement and `return` rules. The surrounding `const`
+binding requires the complete block to resolve in the compile-time phase. It may
+use ordinary `let`, `const`, `if`, `case`, `for`, `:=`, and `return`; a demanded
+value that still depends on unresolved runtime data is a staging error rather
+than residual code. A `let value = do:` block remains a runtime value. There is
+no block-specific phase expression in either semantic AST.
 
 A single expression normally needs no block:
 `const fields = field_names
@@ -2400,7 +2400,7 @@ wrapper locally. No `Slice` module, binding, or field name is recognized by the
 checker. Unknown and host-supplied functions retain the conservative ordinary
 call rule.
 
-Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 1
+Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 2
 has no encoding for either and refuses a live one at a public boundary. Internal
 Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
@@ -2497,6 +2497,33 @@ const Console = @effect {
 }
 ```
 
+An operation may instead use an ordinary compile-time descriptor record:
+
+```blot
+const Resource = @effect {
+  .acquire = Effect.produces (Unit -> Handle);
+  .release = Effect.consumes (Handle -> Unit);
+  .exchange = Effect.operation {
+    .signature = (Handle, Int) -> Result;
+    .input = (#Linear, #Unrestricted);
+    .result = #Affine;
+  };
+}
+```
+
+The descriptor has exactly `.signature`, `.input`, and `.result`. Its ownership
+summaries use `#Unrestricted`, `#Affine`, or `#Linear` at any root. A tuple or
+record may instead carry an exact field-for-field summary, and a closed variant
+may carry an exact record of its constructor cases. Arrays, seals, functions,
+and unresolved generic positions admit only a root mode. Borrowing is not an
+effect-boundary mode; a borrow cannot cross an operation request.
+
+`Effect.operation`, `Effect.consumes`, and `Effect.produces` are ordinary
+prelude functions that construct those records. `@effect` interprets their
+compile-time result, not the builder's name. A direct arrow remains shorthand
+for unrestricted input and result. The normalized ownership contract is part of
+the generative effect identity together with the operation signatures.
+
 Ordinary effects are generative by semantic occurrence. Two written calls of an
 effect-producing function create distinct effect values even when their
 arguments print alike, while aliasing one result preserves its identity.
@@ -2513,6 +2540,12 @@ Console.write "hello"
 
 There is no `perform` keyword. Calling an operation produces an effectful
 expression; `use` sequences it into the surrounding inferred row.
+
+Calling an ownership-bearing operation applies the same separate flow contract
+as a source function. A consuming input requires an explicit `!` or `?` handoff,
+and a produced linear or affine result carries that obligation even when the
+receiving binding has no written qualifier. This changes no type or effect-row
+lattice relation.
 
 An ordinary effect must be discharged before the module boundary. A host effect
 declared with `@effect.host` may reach the boundary; its operations become typed
@@ -2541,6 +2574,13 @@ let logging = {
   `(operation_argument, !resume)` when its suspended continuation owns a linear
   resource; and
 - an optional `.return` clause transforms the computation's normal result.
+
+The operation argument pattern must exactly match the operation's input
+ownership summary. A handler may pass a fresh unrestricted value to `resume`; if
+it explicitly hands an owned value to `resume`, that value must match the
+operation result summary. These checks make the source handler an implementation
+of the declared request/response ownership protocol rather than an escape from
+it.
 
 `resume` is one-shot. It is affine when aborting the rest of the computation
 discards no linear obligation. If the suspended computation captures one, every
@@ -2619,6 +2659,15 @@ Host-effect operations may use the concrete first-order boundary values listed
 in section 15: integers, text, unit, booleans, records, arrays, variants, and
 seals. A host capability's source name is part of its external contract and is
 not silently mangled.
+
+Every host operation carries its normalized input and result ownership contract
+through Runtime HIR into the Core Wasm manifest. The WebAssembly call remains
+synchronous and its memory parameters remain borrowed for the duration of the
+call. The ownership contract instead governs the logical Blot values: consuming
+input transfers source authority to the host, and a linear or affine result
+transfers a fresh obligation back to the program. A conforming host must obey
+that protocol even when the boundary carrier is a scalar with no allocated
+memory.
 
 ### 12.4 Written effect rows
 
@@ -3220,6 +3269,8 @@ values. They are import conveniences, not privileged scopes or independent
 implementations. [STDLIB.md](STDLIB.md) is the generated exact export index.
 
 - function tools: `Fn`, `identity`, `always`, `compose`, `flip`, `freeze`;
+- effect contract tools: `Effect.operation`, `Effect.consumes`, and
+  `Effect.produces`;
 - declaration-tag tools: `tag`, `derive`, `test`, and `assert.reuse`;
 - booleans: `Bool`, `True`, `False`, `Logic`, `not`, `expect`;
 - ordering and arithmetic: `Ordering`, `is_equal`, `is_less`, `is_greater`, and
@@ -3398,13 +3449,13 @@ lowered. Lowering may not ignore that settled representation and reject the same
 well-typed call merely because one aggregate component is residual.
 
 A positive recursive result equation is closed automatically. Runtime HIR schema
-2 represents its root as one private indirect word whose target is allocated in
+6 represents its root as one private indirect word whose target is allocated in
 the export call's scratch arena; constructor payloads may refer back to that
 root. Constructor matching loads the target before inspecting its tag, while a
 recursive edge copies only the indirect word. The representation is entirely
 compiler-owned: source programs do not name boxes, pointers, regions, or
 lifetimes. A recursive value may be used internally to produce an ABI-supported
-result, but the indirect root itself cannot cross Blot Core Wasm ABI 1. A
+result, but the indirect root itself cannot cross Blot Core Wasm ABI 2. A
 self-only result equation with no constructor case is refused rather than given
 an invented inhabitant.
 
@@ -3473,7 +3524,7 @@ literal policy, Blot re-ingests those already-identified token spans with
 offset-preserving zero spellings and materializes the original I64 text; no
 tokenization rule is duplicated. The external conformance tools may exercise
 alternate frontends or evaluators, but they are not compiler targets. Generated
-modules implement Blot Core Wasm ABI 1.0. Backend-private values and heap
+modules implement Blot Core Wasm ABI 2.0. Backend-private values and heap
 objects never cross the generated adapters, which expose the synchronous
 memory32, UTF-8 subset of the Component Model Canonical ABI.
 
@@ -3528,10 +3579,10 @@ continuation byte and returned indices remain scalar positions.
 
 The JSON sidecar and the `blot:abi` custom section contain identical bytes. The
 manifest is the authoritative structural contract for exports, imports,
-ownership, record fields, variant cases, and seals. ABI 1 layout and meaning are
-stable within major version 1; an incompatible change requires another major.
-The byte-level layouts and host calling example are in
-[docs/abi.md](docs/abi.md).
+operation input and result ownership, record fields, variant cases, and seals.
+ABI 2 layout and meaning are stable within major version 2; an incompatible
+change requires another major. The byte-level layouts and host calling example
+are in [docs/abi.md](docs/abi.md).
 
 ## 16. Complete example
 

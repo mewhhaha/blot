@@ -120,7 +120,11 @@ function acceptedModule(): BlotRuntimeModule {
     ],
     capabilities: [{
       name: "Console",
-      operations: [{ name: "write", signature: 1 }],
+      operations: [{
+        name: "write",
+        signature: 1,
+        ownership: { input: "unrestricted", result: "unrestricted" },
+      }],
     }],
     exports: [{
       sourceName: "default",
@@ -135,6 +139,70 @@ function acceptedModule(): BlotRuntimeModule {
 
 Deno.test("Blot Runtime HIR accepts typed control flow and declared effects", () => {
   validateBlotRuntimeModule(acceptedModule());
+});
+
+Deno.test("Blot Runtime HIR accepts structural operation ownership matching its type", () => {
+  const module = acceptedModule();
+  const structural: BlotRuntimeModule = {
+    ...module,
+    types: [...module.types, {
+      kind: "product",
+      name: "Request",
+      fields: [
+        { name: "handle", type: 1 },
+        { name: "priority", type: 1 },
+      ],
+    }],
+    signatures: [...module.signatures, {
+      parameters: [4],
+      result: 1,
+      effects: ["Console"],
+    }],
+    capabilities: [{
+      ...module.capabilities[0],
+      operations: [...module.capabilities[0].operations, {
+        name: "submit",
+        signature: 2,
+        ownership: {
+          input: {
+            kind: "record",
+            fields: [
+              { name: "handle", ownership: "linear" },
+              { name: "priority", ownership: "unrestricted" },
+            ],
+          },
+          result: "unrestricted",
+        },
+      }],
+    }],
+  };
+
+  validateBlotRuntimeModule(structural);
+});
+
+Deno.test("Blot Runtime HIR rejects structural ownership that disagrees with its type", () => {
+  const module = acceptedModule();
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    capabilities: [{
+      ...module.capabilities[0],
+      operations: [{
+        ...module.capabilities[0].operations[0],
+        ownership: {
+          input: {
+            kind: "record",
+            fields: [{ name: "handle", ownership: "linear" }],
+          },
+          result: "unrestricted",
+        },
+      }],
+    }],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /describes a record but runtime type 1 is signed-integer-64/,
+  );
 });
 
 Deno.test("Runtime HIR accepts F32x4 shuffle with constant lane selectors", () => {

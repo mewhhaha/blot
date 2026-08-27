@@ -119,7 +119,6 @@ const RESERVED_TOKENS = [
   "in",
   "break",
   "do",
-  "compdo",
   "fn",
   "=",
   "=>",

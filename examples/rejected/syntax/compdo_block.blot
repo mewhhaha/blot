@@ -1,0 +1,4 @@
+let value = compdo:
+  return 42
+
+return value

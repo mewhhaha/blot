@@ -297,11 +297,34 @@ export type BlotRuntimeFunction = {
   readonly span: BlotRuntimeSpan;
 };
 
+export type BlotEffectOwnership =
+  | "unrestricted"
+  | "affine"
+  | "linear"
+  | {
+    readonly kind: "record";
+    readonly fields: readonly {
+      readonly name: string;
+      readonly ownership: BlotEffectOwnership;
+    }[];
+  }
+  | {
+    readonly kind: "variant";
+    readonly cases: readonly {
+      readonly name: string;
+      readonly ownership: BlotEffectOwnership;
+    }[];
+  };
+
 export type BlotRuntimeCapability = {
   readonly name: string;
   readonly operations: readonly {
     readonly name: string;
     readonly signature: number;
+    readonly ownership: {
+      readonly input: BlotEffectOwnership;
+      readonly result: BlotEffectOwnership;
+    };
   }[];
 };
 
@@ -568,14 +591,39 @@ export function validateBlotRuntimeModule(
       `${module.source}: capability ${capability.name} operations`,
     );
     for (const operation of capability.operations) {
-      requireSignature(
+      const signature = requireSignature(
         module,
         operation.signature,
         `capability ${capability.name}.${operation.name}`,
       );
+      if (signature.parameters.length !== 1) {
+        throw new TypeError(
+          `${module.source}: capability ${capability.name}.${operation.name} requires exactly one input type; signature ${operation.signature} has ${signature.parameters.length}`,
+        );
+      }
       capabilityOperations.set(
         `${capability.name}\u0000${operation.name}`,
         operation.signature,
+      );
+      validateEffectOwnership(
+        operation.ownership.input,
+        `${module.source}: capability ${capability.name}.${operation.name} input ownership`,
+      );
+      validateEffectOwnership(
+        operation.ownership.result,
+        `${module.source}: capability ${capability.name}.${operation.name} result ownership`,
+      );
+      validateEffectOwnershipType(
+        module,
+        operation.ownership.input,
+        signature.parameters[0],
+        `${module.source}: capability ${capability.name}.${operation.name} input ownership`,
+      );
+      validateEffectOwnershipType(
+        module,
+        operation.ownership.result,
+        signature.result,
+        `${module.source}: capability ${capability.name}.${operation.name} result ownership`,
       );
     }
   }
@@ -1400,6 +1448,125 @@ function requireFunction(
     );
   }
   return module.functions[functionId];
+}
+
+function validateEffectOwnership(
+  ownership: BlotEffectOwnership,
+  location: string,
+): void {
+  if (
+    ownership === "unrestricted" || ownership === "affine" ||
+    ownership === "linear"
+  ) {
+    return;
+  }
+  if (typeof ownership !== "object" || ownership === null) {
+    throw new TypeError(`${location} has an invalid ownership mode`);
+  }
+  if (ownership.kind === "record") {
+    requireUniqueNames(
+      ownership.fields.map((field) => field.name),
+      `${location} fields`,
+    );
+    for (const field of ownership.fields) {
+      validateEffectOwnership(field.ownership, `${location}.${field.name}`);
+    }
+    return;
+  }
+  if (ownership.kind === "variant") {
+    requireUniqueNames(
+      ownership.cases.map((case_) => case_.name),
+      `${location} cases`,
+    );
+    for (const case_ of ownership.cases) {
+      validateEffectOwnership(case_.ownership, `${location}.#${case_.name}`);
+    }
+    return;
+  }
+  throw new TypeError(`${location} has an invalid structural ownership kind`);
+}
+
+function validateEffectOwnershipType(
+  module: BlotRuntimeModule,
+  ownership: BlotEffectOwnership,
+  typeId: number,
+  location: string,
+): void {
+  if (typeof ownership === "string") return;
+  const type = requireType(module, typeId, location);
+  if (ownership.kind === "record") {
+    if (type.kind !== "product") {
+      throw new TypeError(
+        `${location} describes a record but runtime type ${typeId} is ${type.kind}`,
+      );
+    }
+    requireMatchingOwnershipNames(
+      ownership.fields.map((field) => field.name),
+      type.fields.map((field) => field.name),
+      location,
+    );
+    for (const field of ownership.fields) {
+      const runtimeField = type.fields.find((candidate) =>
+        candidate.name === field.name
+      );
+      if (runtimeField === undefined) {
+        throw new TypeError(
+          `${location} omits field ${JSON.stringify(field.name)}`,
+        );
+      }
+      validateEffectOwnershipType(
+        module,
+        field.ownership,
+        runtimeField.type,
+        `${location}.${field.name}`,
+      );
+    }
+    return;
+  }
+  if (type.kind !== "sum") {
+    throw new TypeError(
+      `${location} describes a variant but runtime type ${typeId} is ${type.kind}`,
+    );
+  }
+  requireMatchingOwnershipNames(
+    ownership.cases.map((case_) => case_.name),
+    type.cases.map((case_) => case_.name),
+    location,
+  );
+  for (const case_ of ownership.cases) {
+    const runtimeCase = type.cases.find((candidate) =>
+      candidate.name === case_.name
+    );
+    if (runtimeCase === undefined) {
+      throw new TypeError(
+        `${location} omits case ${JSON.stringify(case_.name)}`,
+      );
+    }
+    validateEffectOwnershipType(
+      module,
+      case_.ownership,
+      runtimeCase.payloadType,
+      `${location}.#${case_.name}`,
+    );
+  }
+}
+
+function requireMatchingOwnershipNames(
+  ownershipNames: readonly string[],
+  typeNames: readonly string[],
+  location: string,
+): void {
+  if (
+    ownershipNames.length === typeNames.length &&
+    ownershipNames.every((name) => typeNames.includes(name))
+  ) {
+    return;
+  }
+  throw new TypeError(
+    `${location} names [${
+      ownershipNames.join(", ")
+    }] but its runtime type names [${typeNames.join(", ")}]`,
+  );
 }
 
 function requireUniqueNames(names: readonly string[], location: string): void {

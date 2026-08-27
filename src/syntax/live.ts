@@ -100,9 +100,6 @@ function collectFreeNames(expr: Expr, names: Set<string>): void {
     case "rec":
       collectFreeNames(expr.lambda, names);
       return;
-    case "comptime":
-      collectFreeNames(expr.body, names);
-      return;
     case "tuple":
       for (const element of expr.elements) collectFreeNames(element, names);
       return;

@@ -788,6 +788,15 @@ and the selected parameter summary promises at-most-once use. The marker cannot
 manufacture uniqueness for a shared value, and its runtime identity is erased
 after ownership-directed lowering has consumed the permission.
 
+An effect operation descriptor is checked at compile time as an exact
+`.signature`, `.input`, `.result` record. Its normalized ownership leaves are
+unrestricted, affine, or linear; structural summaries must match every field of
+a closed record/tuple or every case of a closed variant. Direct arrow operations
+normalize to unrestricted roots. The result is attached to the generative effect
+value and later consumed by `Omega`; it contributes no type bound, subtype edge,
+or effect-row label. Borrow is deliberately absent because a lexical borrow
+cannot survive a suspended request.
+
 **No-double-move lemma.** If `Omega` admits a move of path `p`, no prefix or
 descendant of `p` has previously been moved on that control-flow path.
 

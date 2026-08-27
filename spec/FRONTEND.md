@@ -108,12 +108,11 @@ A function body and a `case` arm are expressions. A newline and indentation may
 continue an expression, but layout alone creates no statement-valued AST node or
 scope.
 
-The only expression forms that contain declarations, sequencing, statement
-conditionals, loops, `break`, or `return` are:
+The only expression form that contains declarations, sequencing, statement
+conditionals, loops, `break`, or `return` is:
 
 ```text
-do:     run-time statement value
-compdo: compile-time statement value
+do: statement value
 ```
 
 Their exact source contract is in
@@ -122,10 +121,14 @@ writes `fn x => do:`. A case arm with statements writes `pattern => do:`.
 Statement suites under `if` and `for` are internal constituents of those forms;
 they cannot be used as anonymous expressions.
 
-A `return` targets the nearest module or explicit `do:`/`compdo:` block. A
-statement `if` and a loop preserve that target. A `case` arm is an expression
-boundary: only an explicit block inside the arm introduces a return target, and
-`break` cannot cross the case boundary to an enclosing loop.
+A surrounding `const` declaration requires its initializer, including a `do:`
+block, to resolve at compile time; `let` leaves the same form at run time. Phase
+is not a second block node or grammar branch.
+
+A `return` targets the nearest module or explicit `do:` block. A statement `if`
+and a loop preserve that target. A `case` arm is an expression boundary: only an
+explicit block inside the arm introduces a return target, and `break` cannot
+cross the case boundary to an enclosing loop.
 
 Blot has no element syntax. Components, properties, children, and suspension are
 ordinary functions, records, arrays, and nullary closures. The frontend has no

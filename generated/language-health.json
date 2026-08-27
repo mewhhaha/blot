@@ -2,7 +2,7 @@
   "protocol": {
     "compilerHostAbi": 3,
     "checkedModuleCertificate": 13,
-    "runtimeHir": 5
+    "runtimeHir": 6
   },
   "operators": [
     {
@@ -202,6 +202,9 @@
     "BLOT_DUPLICATE_RECURSIVE_BINDING",
     "BLOT_DYNAMIC_HOST_RESULT",
     "BLOT_DYNAMIC_SHAPE_FIELD",
+    "BLOT_EFFECT_HANDLER_OWNERSHIP",
+    "BLOT_EFFECT_OWNERSHIP_CONTRACT",
+    "BLOT_EFFECT_RESUME_OWNERSHIP",
     "BLOT_EFFECT_ROW_TAIL_OUTSIDE_SIGNATURE",
     "BLOT_EFFECT_ROW_TAIL_POSITION",
     "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
@@ -578,6 +581,7 @@
   ],
   "preludeExports": [
     "Fn",
+    "Effect",
     "identity",
     "freeze",
     "always",
@@ -706,63 +710,63 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 11604
+      "lines": 11592
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9517
+      "lines": 9616
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 5828
+      "lines": 6041
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 5738
-    },
-    {
-      "path": "compiler/src/session.rs",
-      "lines": 4707
+      "lines": 5740
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 4525
+      "lines": 4860
+    },
+    {
+      "path": "compiler/src/session.rs",
+      "lines": 4776
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3575
+      "lines": 3531
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3331
+      "lines": 3309
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3150
+      "lines": 3170
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 2753
+      "lines": 2742
     },
     {
       "path": "compiler/src/primitives.rs",
       "lines": 2129
     },
     {
-      "path": "compiler/src/value.rs",
-      "lines": 1502
+      "path": "src/runtime/hir.ts",
+      "lines": 1584
     },
     {
-      "path": "src/runtime/hir.ts",
-      "lines": 1417
+      "path": "compiler/src/value.rs",
+      "lines": 1530
     },
     {
       "path": "src/language_service.ts",
-      "lines": 1414
+      "lines": 1410
     },
     {
       "path": "compiler/src/safety.rs",
-      "lines": 1393
+      "lines": 1392
     }
   ]
 }

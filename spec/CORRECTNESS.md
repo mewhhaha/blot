@@ -74,7 +74,7 @@ The frontend owes:
 3. deterministic folding under the generated fixed operator table;
 4. rejection of removed custom fixity declarations;
 5. hygienic resolution and generated binders;
-6. explicit `do:`/`compdo:` control-target preservation;
+6. explicit `do:` control-target preservation, with declaration-directed phase;
 7. source-origin preservation; and
 8. typing and operational correspondence of surface elaboration.
 
@@ -326,7 +326,7 @@ A seal name is a manifest and conformance fact. Equal raw Core Wasm carrier
 bytes do not dynamically enforce source nominality. The ABI theorem assumes a
 caller that follows the declared manifest and ownership protocol.
 
-A private Runtime-HIR root or capability with no ABI 1 relation must be refused
+A private Runtime-HIR root or capability with no ABI 2 relation must be refused
 at public-layout construction. Reaching the emitter with such a boundary is an
 invariant failure.
 

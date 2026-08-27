@@ -1,6 +1,6 @@
 // PATHOLOGICAL BUT SUPPORTED: direct and mutually recursive algebraic values
 // terminate while constructing and consuming nested sums. Every input here is
-// known, so the values disappear during staging instead of crossing ABI 1,
+// known, so the values disappear during staging instead of crossing ABI 2,
 // where recursive roots deliberately have no public representation.
 
 open import "blot:prelude"

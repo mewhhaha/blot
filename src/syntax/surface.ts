@@ -76,11 +76,6 @@ function elaborateExpression(expression: Expr): Expr {
         ...expression,
         lambda: elaborateExpression(expression.lambda),
       };
-    case "comptime":
-      return {
-        ...expression,
-        body: elaborateExpression(expression.body),
-      };
     case "array":
       return {
         ...expression,

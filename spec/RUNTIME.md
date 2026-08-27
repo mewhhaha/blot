@@ -11,7 +11,7 @@ This document owns:
 - public-layout admissibility; and
 - the Runtime-HIR-to-WebAssembly correctness obligation.
 
-[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 1 bytes,
+[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 2 bytes,
 canonical lifting/lowering encodings, and caller ownership. Its **Runtime target
 status** section is operational and cannot weaken a rule for an artifact the
 compiler accepts. Cross-document corrections are in
@@ -67,7 +67,7 @@ A Runtime-HIR module contains:
 
 - first-order control-flow graphs;
 - closed scalar and aggregate representations;
-- explicit calls and host requests;
+- explicit calls and host requests with normalized input/result ownership;
 - explicit Store allocation, read, write, root, and release operations;
 - explicit traps classified by source or boundary contract;
 - closed closure environments where supported;
@@ -83,7 +83,7 @@ It contains no:
 - general run-time thunk introduced only for a known deferred source call;
 - source binding name used as semantic evidence;
 - unchecked proof-required operation; or
-- private capability object crossing ABI 1.
+- private capability object crossing ABI 2.
 
 ## 2. Validation
 
@@ -105,10 +105,13 @@ Validation independently checks at least:
 6. destructive Store operations name ownership permission for the exact consumed
    path and source occurrence;
 7. Store/root lineage is not duplicated, forged, or crossed between families;
-8. every public boundary has an admissible closed source type and adapter
+8. every capability operation has one closed input type, one closed result type,
+   and an exact normalized ownership contract whose structural fields match
+   those types;
+9. every public boundary has an admissible closed source type and adapter
    policy;
-9. no compile-time or proof-only value remains; and
-10. every target feature used is admitted by the selected production policy.
+10. no compile-time or proof-only value remains; and
+11. every target feature used is admitted by the selected production policy.
 
 The producer and validator may share data structures, but validation is a
 separate judgment. A missing fact after successful earlier checking is an
@@ -222,7 +225,7 @@ contract, or fail to respond.
 ## 7. Seals at the boundary
 
 A seal is nominal in source through its public name and canonical invariant
-carrier. ABI 1 may lower it transparently to the carrier representation, while
+carrier. ABI 2 may lower it transparently to the carrier representation, while
 the manifest records the public name and carrier contract.
 
 The public name therefore distinguishes contracts for conforming tooling and in
@@ -243,9 +246,16 @@ canonical byte sequence and, where both forms are produced, requires:
 embedded_manifest_bytes = sidecar_manifest_bytes
 ```
 
-The manifest includes ABI version, imports, exports, closed public types,
-ownership policy, seal names where relevant, and every representation parameter
-needed by a conforming adapter.
+The manifest includes ABI version, imports, exports, closed public types, export
+ownership policy, exact host-operation input/result ownership, seal names where
+relevant, and every representation parameter needed by a conforming adapter.
+
+Host-operation ownership is a source-value protocol, separate from canonical
+memory ownership. A synchronous import borrows its parameter memory for the
+call. Its normalized contract may additionally transfer a logical affine or
+linear input authority to the host or return a fresh obligation to the module.
+Related source, Runtime-HIR, and WebAssembly requests agree on both the value
+and that protocol.
 
 Manifest ordering and encoding are deterministic. A caller may reject an unknown
 version before invoking the module.
@@ -281,7 +291,7 @@ layout. Fixed-width SIMD vectors and masks occupy 16-byte-aligned, 16-byte slots
 and are transferred with `v128.load` and `v128.store`; this private layout does
 not admit a vector at an export or host-effect boundary.
 
-Runtime-HIR schema 5 represents a float shuffle with two vector operands
+Runtime-HIR schema 6 represents a float shuffle with two vector operands
 followed by four dominating `integer-32` constant operands in `0..7`. Emission
 expands each float-lane selector to four byte selectors for one `i8x16.shuffle`
 instruction. Float masks reduce with `i32x4.all_true` and `v128.any_true`;

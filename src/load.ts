@@ -116,9 +116,6 @@ function collectDependencies(expr: Expr, found: DependencySites): void {
     case "rec":
       collectDependencies(expr.lambda, found);
       return;
-    case "comptime":
-      collectDependencies(expr.body, found);
-      return;
     case "tuple":
       for (const element of expr.elements) {
         collectDependencies(element, found);

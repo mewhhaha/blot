@@ -1,0 +1,20 @@
+open import "blot:prelude"
+
+const Resource = @effect { .acquire = Unit -> Int; }
+
+let program = fn () => do:
+  use value <- Resource.acquire ()
+  return value
+
+let !token = 42
+let consume = fn !value => value
+let local =
+  {
+    .acquire = fn ((), ?resume) => do:
+      use !result <- resume (!token)
+      return consume (!result)
+    ;
+    .return = fn value => value;
+  }
+
+return @handle (Resource, program, local)

@@ -1,6 +1,6 @@
 // The guest side of the browser host.
 //
-// Blot Core Wasm ABI 1 calls host effects synchronously, and a browser paces
+// Blot Core Wasm ABI 2 calls host effects synchronously, and a browser paces
 // drawing with `requestAnimationFrame`, which is not something a synchronous
 // call can wait for. So the module runs here, off the main thread, where
 // blocking is allowed: `Host.frame` parks on `Atomics.wait` until the page's

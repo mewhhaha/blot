@@ -1,0 +1,15 @@
+open import "blot:prelude"
+
+const Resource = @effect { .acquire = Effect.produces (Unit -> Int); }
+
+let program = fn () => do:
+  use resource <- Resource.acquire ()
+  return 42
+
+let local =
+  {
+    .acquire = fn ((), ?resume) => resume 1;
+    .return = fn value => value;
+  }
+
+return @handle (Resource, program, local)

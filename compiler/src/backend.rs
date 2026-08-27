@@ -13,7 +13,7 @@ use wasmparser::{BinaryReader, FunctionBody, Operator};
 
 use crate::hir::{
     RuntimeBlock, RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation,
-    RuntimeTerminator, RuntimeType, WireConstant,
+    RuntimeOperationOwnership, RuntimeTerminator, RuntimeType, WireConstant,
 };
 
 const HEAP_GLOBAL: u32 = 0;
@@ -168,6 +168,7 @@ struct AbiImport {
     module: String,
     name: String,
     function: AbiFunction,
+    ownership: RuntimeOperationOwnership,
 }
 
 #[derive(Serialize)]
@@ -335,6 +336,7 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
                         },
                     )?,
                 },
+                ownership: operation.ownership.clone(),
             });
         }
     }
@@ -342,7 +344,7 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
-            major: 1,
+            major: 2,
             minor: 0,
             core_specification: "3.0",
             required_features,
@@ -583,20 +585,20 @@ fn runtime_layout_type(
         },
         RuntimeType::Scratch { .. } => {
             return Err(format!(
-                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 1",
+                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 2",
                 module.source
             ));
         }
         RuntimeType::Indirect { .. } if scope == LayoutScope::Internal => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
-                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 1",
+                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 2",
                 module.source
             ));
         }
         RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
             return Err(format!(
-                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 1",
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 2",
                 module.source
             ));
         }
@@ -1102,7 +1104,7 @@ fn emit_dynamic_module(
     });
     let mut globals = GlobalSection::new();
     add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 1, false);
+    add_i32_global(&mut globals, 2, false);
     add_i32_global(&mut globals, 0, false);
     add_i32_global(&mut globals, 0, true);
     add_i32_global(&mut globals, 0, true);
@@ -5488,10 +5490,10 @@ mod tests {
         };
 
         let Err(error) = canonical_type(&module, 1, &mut Vec::new()) else {
-            panic!("a recursive value acquired an ABI 1 layout");
+            panic!("a recursive value acquired an ABI 2 layout");
         };
 
-        assert!(error.contains("cannot cross Blot Core Wasm ABI 1"));
+        assert!(error.contains("cannot cross Blot Core Wasm ABI 2"));
     }
 
     #[test]

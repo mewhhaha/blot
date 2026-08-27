@@ -6,7 +6,7 @@
 
 open import "blot:prelude"
 
-let folded = compdo:
+const folded = do:
   return 20 * 2 + 1
 
 const Header =

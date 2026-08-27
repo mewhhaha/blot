@@ -1,4 +1,7 @@
-import type { BlotRuntimeModule } from "../../../runtime/hir.ts";
+import type {
+  BlotEffectOwnership,
+  BlotRuntimeModule,
+} from "../../../runtime/hir.ts";
 
 export const blotAbiCustomSectionName = "blot:abi";
 
@@ -38,7 +41,7 @@ export type BlotAbiFunction = {
 export type BlotAbiManifest = {
   readonly format: "blot-core-wasm";
   readonly abi: {
-    readonly major: 1;
+    readonly major: 2;
     readonly minor: 0;
     readonly memory: "memory32";
     readonly stringEncoding: "utf-8";
@@ -63,6 +66,10 @@ export type BlotAbiManifest = {
     readonly module: string;
     readonly name: string;
     readonly function: BlotAbiFunction;
+    readonly ownership: {
+      readonly input: BlotEffectOwnership;
+      readonly result: BlotEffectOwnership;
+    };
   }[];
 };
 
@@ -73,7 +80,7 @@ export function buildBlotAbiManifest(
   return {
     format: "blot-core-wasm",
     abi: {
-      major: 1,
+      major: 2,
       minor: 0,
       memory: "memory32",
       stringEncoding: "utf-8",
@@ -126,6 +133,7 @@ export function buildBlotAbiManifest(
             parameters: signature.parameters.map(canonical),
             result: canonical(signature.result),
           },
+          ownership: operation.ownership,
         };
       })
     ),
@@ -225,7 +233,7 @@ function requireDirectParameterCount(
   const flatParameters = function_.parameters.flatMap(flattenedAbiType).length;
   if (flatParameters <= maximumFlatParameters) return;
   throw new TypeError(
-    `${position} has ${flatParameters} flat parameters; Blot ABI 1 currently admits at most ${maximumFlatParameters}`,
+    `${position} has ${flatParameters} flat parameters; Blot ABI 2 currently admits at most ${maximumFlatParameters}`,
   );
 }
 
@@ -315,7 +323,7 @@ function requireDirectAbiType(type: BlotAbiType, position: string): void {
     return;
   }
   throw new TypeError(
-    `${position} uses ${type.kind}; the direct Blot ABI 1 path currently admits only flat values`,
+    `${position} uses ${type.kind}; the direct Blot ABI 2 path currently admits only flat values`,
   );
 }
 

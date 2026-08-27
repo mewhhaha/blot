@@ -18,7 +18,7 @@ Authority is applied in this order:
 5. [`PAPER.md`](PAPER.md) explains how those judgments compose; it is not a
    second source semantics.
 6. Files under `docs/` are operational or historical, except that
-   [`docs/abi.md`](../docs/abi.md) is normative for the versioned ABI 1 byte and
+   [`docs/abi.md`](../docs/abi.md) is normative for the versioned ABI 2 byte and
    caller-ownership contract by reference from [`RUNTIME.md`](RUNTIME.md).
 
 A subordinate document's broader claim of authority is read subject to this
@@ -45,23 +45,20 @@ A function body and a `case` arm are expressions. Layout may continue an
 expression after a newline, but indentation alone never creates a value that
 contains declarations or statements.
 
-The only expression forms that contain declarations, sequencing, statement `if`,
-loops, `break`, or `return` are:
+The only expression form that contains declarations, sequencing, statement `if`,
+loops, `break`, or `return` is:
 
 ```blot
 do:
   statements
   return value
-
-compdo:
-  statements
-  return value
 ```
 
-`compdo:` has the same control structure but must resolve at compile time. A
-function with a statement body writes `fn x => do:`. A case arm with statements
-writes `pattern => do:`. Statement suites under `if` and `for` are constituents
-of those statement forms, not independently usable expressions.
+A surrounding `const` declaration requires the same `do:` form to resolve at
+compile time; `let` leaves it at run time. A function with a statement body
+writes `fn x => do:`. A case arm with statements writes `pattern => do:`.
+Statement suites under `if` and `for` are constituents of those statement forms,
+not independently usable expressions.
 
 Consequently, examples of these shapes in older text are corrected by inserting
 the explicit block marker:
@@ -230,7 +227,7 @@ source diagnostic or a target-policy escape hatch.
 
 [`RUNTIME.md`](RUNTIME.md) owns the semantic relation between source values,
 Runtime HIR, and caller values, including which closed types are admissible.
-[`docs/abi.md`](../docs/abi.md) owns the exact versioned Core Wasm ABI 1 bytes,
+[`docs/abi.md`](../docs/abi.md) owns the exact versioned Core Wasm ABI 2 bytes,
 lifting/lowering rules, and caller ownership obligations. Its section describing
 current runtime-target coverage is operational and cannot weaken an ABI rule for
 an artifact the compiler accepts.
@@ -294,7 +291,7 @@ material:
 | Stale wording                                           | Correct reading                                                                   |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | source fixity environment                               | generated fixed operator plan                                                     |
-| indentation opens a value block                         | only `do:` or `compdo:` opens a statement value                                   |
+| indentation opens a value block                         | only `do:` opens a statement value                                                |
 | element lowering or implicit children                   | ordinary functions, records, arrays, and nullary closures                         |
 | empty-row application is pure Core                      | every application is a computation; the row may be empty                          |
 | effects and seals are generative                        | effects generative; seals applicative                                             |

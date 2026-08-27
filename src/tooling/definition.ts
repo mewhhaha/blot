@@ -262,9 +262,6 @@ function visitExpression(
     case "rec":
       visitExpression(expression.lambda, source, scope, references);
       return;
-    case "comptime":
-      visitExpression(expression.body, source, scope, references);
-      return;
     case "tuple":
       for (const element of expression.elements) {
         visitExpression(element, source, scope, references);
@@ -530,9 +527,6 @@ function visitExpressionValues(
       return;
     case "rec":
       visit(expression.lambda);
-      return;
-    case "comptime":
-      visit(expression.body);
       return;
     case "tuple":
       for (const element of expression.elements) visit(element);

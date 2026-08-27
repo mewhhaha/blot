@@ -520,7 +520,6 @@ export class LanguageService {
       const keyword of [
         "break",
         "case",
-        "compdo",
         "const",
         "do",
         "else",
@@ -1132,9 +1131,6 @@ function visitExpressionChildren(
       return;
     case "rec":
       visit(expression.lambda);
-      return;
-    case "comptime":
-      visit(expression.body);
       return;
     case "tuple":
       for (const element of expression.elements) visit(element);

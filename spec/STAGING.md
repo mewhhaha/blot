@@ -294,7 +294,7 @@ Public-layout construction either produces a validated adapter and manifest
 entry or returns `TargetRefusal`. It cannot accept a type whose required
 malformed-input checks are unimplemented.
 
-Exact ABI 1 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
+Exact ABI 2 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
 representation relation is owned by [`RUNTIME.md`](RUNTIME.md).
 
 ## 12. Obligations

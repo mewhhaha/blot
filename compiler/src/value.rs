@@ -328,6 +328,30 @@ impl<'a> IntoIterator for &'a OrderedFields {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EffectOwnership {
+    Unrestricted,
+    Affine,
+    Linear,
+    Record(BTreeMap<String, EffectOwnership>),
+    Variant(BTreeMap<String, EffectOwnership>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectOperationOwnership {
+    pub input: EffectOwnership,
+    pub result: EffectOwnership,
+}
+
+impl EffectOperationOwnership {
+    pub fn unrestricted() -> Self {
+        Self {
+            input: EffectOwnership::Unrestricted,
+            result: EffectOwnership::Unrestricted,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Value {
     Int(BigInt),
@@ -452,6 +476,7 @@ pub enum Value {
         id: u32,
         name: String,
         operations: OrderedFields,
+        operation_ownership: BTreeMap<String, EffectOperationOwnership>,
         host: bool,
     },
     Operation {
@@ -842,6 +867,7 @@ pub fn substitute_type_variable(
             id,
             name,
             operations,
+            operation_ownership,
             host,
         } => Value::Effect {
             id: *id,
@@ -850,6 +876,7 @@ pub fn substitute_type_variable(
                 .iter()
                 .map(|(name, value)| Some((name.clone(), substitute(value)?)))
                 .collect::<Option<OrderedFields>>()?,
+            operation_ownership: operation_ownership.clone(),
             host: *host,
         },
         Value::Operation { effect, name } => Value::Operation {
@@ -1313,6 +1340,7 @@ mod type_value_tests {
             id: 1,
             name: "Console".into(),
             operations: OrderedFields::default(),
+            operation_ownership: BTreeMap::new(),
             host: true,
         };
         assert!(equal(

@@ -4,7 +4,7 @@
 
 This audit follows the initial WebAssembly 3 target work. It asks which modern
 features materially reduce Blot compiler work or improve emitted-code
-performance without weakening source semantics, ABI 1, ownership evidence, or
+performance without weakening source semantics, ABI 2, ownership evidence, or
 engine compatibility.
 
 The compatibility snapshot is dated 2026-08-24. Engine and interpreter support
@@ -75,7 +75,7 @@ The next feature with potentially large work reduction is a separate V8 Text
 profile using standardized JS string integration. It could avoid repeated UTF-8
 lifting/lowering and some linear-memory allocation, but it changes the
 representation relation and host contract. It should be benchmarked as a new
-profile rather than mixed silently into Core Wasm ABI 1.
+profile rather than mixed silently into Core Wasm ABI 2.
 
 Typed function references become worthwhile only after Runtime HIR admits a real
 residual dynamic-call representation. Until then direct calls are smaller,

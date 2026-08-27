@@ -200,8 +200,24 @@ const REJECTIONS: Record<
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",
   },
-  "reuse_persistent_update": {
+  "effect_handler_input_mismatch": {
+    code: "BLOT_EFFECT_HANDLER_OWNERSHIP",
+    stage: "check",
+  },
+  "effect_owned_result_unconsumed": {
+    code: "BLOT_LINEAR_NOT_CONSUMED",
+    stage: "check",
+  },
+  "effect_resume_ownership_mismatch": {
+    code: "BLOT_EFFECT_RESUME_OWNERSHIP",
+    stage: "check",
+  },
+  "effect_unrestricted_input_owned": {
     code: "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+    stage: "check",
+  },
+  "malformed_effect_ownership": {
+    code: "BLOT_EFFECT_OWNERSHIP_CONTRACT",
     stage: "check",
   },
   "deferred_demanded_twice": {

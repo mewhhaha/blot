@@ -554,8 +554,7 @@ fn expression_span(module: &Module, expression: ExpressionId) -> Span {
         | Expression::If { span, .. }
         | Expression::Case { span, .. }
         | Expression::Block { span, .. }
-        | Expression::Rec { span, .. }
-        | Expression::Comptime { span, .. } => *span,
+        | Expression::Rec { span, .. } => *span,
     }
 }
 

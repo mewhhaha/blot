@@ -337,7 +337,7 @@ const Slice = {
 
 The backing Store must not be projectable from source. A Runtime-HIR
 representation may contain `(store,start,length,extent)`, but that layout is
-compiler-private and refused by ABI 1. `Slice.length` may publish the same
+compiler-private and refused by ABI 2. `Slice.length` may publish the same
 verified affine summary as `@region.length`, including selection of a later
 curried parameter and a literal offset. That fact enters `Phi`; it neither
 exposes the Store nor duplicates the authority in `Omega`.
@@ -728,7 +728,7 @@ split; the proof arrived with them.
 - A witness is linear. Leaking one is the ordinary unconsumed-linear error, and
   correctly so: losing the ability to rejoin means the root can never be
   reassembled for `freeze`.
-- A witness is refused at ABI 1 exactly as a live region authority is.
+- A witness is refused at ABI 2 exactly as a live region authority is.
 - Witness pairing proves sibling recombination of one split. The section 4
   adjacency rule — reassociating nested partitions — is deliberately given up in
   the first version; a checked witness-combination law can restore it later if a

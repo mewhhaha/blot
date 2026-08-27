@@ -30,8 +30,23 @@ let unwrap_or_zero = fn option => case option of
 ```
 
 The same rule applies in every value position. Layout alone does not construct a
-statement block. `do:` is the explicit lexical and `return` boundary; `compdo:`
-is its compile-time counterpart.
+statement block. `do:` is the explicit lexical and `return` boundary.
+
+The declaration consuming the block determines its phase:
+
+```blot
+const reflected_fields = do:
+  let reflected = reflect T
+  return field_names reflected
+
+let runtime_fields = do:
+  use names <- read_names ()
+  return names
+```
+
+The `const` initializer must resolve at compile time; the `let` initializer is
+an ordinary run-time value. Both use one statement-block grammar and one AST
+form.
 
 ## Frontend contract
 
@@ -39,7 +54,7 @@ The grammar has no anonymous layout-only block expression. `statement_suite`
 remains the internal suite owned by statement forms such as `if` and `for`, but
 it is not independently a value. The only source value containing declarations,
 rebinding, sequencing, statement conditionals, loops, `break`, or `return` is a
-`do:` or `compdo:` block.
+`do:` block.
 
 Removing the anonymous block rule is an intentional syntax break. The migration
 is mechanical: insert `do:` after the expression introducer and retain the

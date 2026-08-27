@@ -197,7 +197,6 @@ export const currentCompactFieldNames = [
   "parameters",
   "pattern",
   "payload",
-  "phase",
   "precedence",
   "prefixes",
   "qualifier",

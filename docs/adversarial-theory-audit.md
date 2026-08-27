@@ -28,11 +28,10 @@ target trace that could satisfy one rule and violate another.
 
 ### 1. Anonymous statement bodies contradicted the grammar
 
-The grammar admits declarations and statements as a value only through `do:` or
-`compdo:`. Older frontend and language prose still described indentation after
-`=>` or `=` as an anonymous statement block, and several examples wrote
-statement `if`, declarations, or `return` directly in a function body or case
-arm.
+The grammar admits declarations and statements as a value only through `do:`.
+Older frontend and language prose still described indentation after `=>` or `=`
+as an anonymous statement block, and several examples wrote statement `if`,
+declarations, or `return` directly in a function body or case arm.
 
 The corrected contract is:
 
@@ -40,6 +39,7 @@ The corrected contract is:
 - indentation may continue an expression but creates no block;
 - statement bodies use `fn x => do:`;
 - statement case arms use `pattern => do:`; and
+- a surrounding `const` determines compile-time resolution; and
 - statement `if` is not a value expression.
 
 ### 2. Source fixities contradicted the generated language plan
@@ -142,7 +142,7 @@ The authority split is now explicit:
 
 - `RUNTIME.md` owns the semantic source/Runtime-HIR/caller relation and public
   type admissibility;
-- `docs/abi.md` owns exact Core Wasm ABI 1 bytes and caller ownership; and
+- `docs/abi.md` owns exact Core Wasm ABI 2 bytes and caller ownership; and
 - the `Runtime target status` section in `docs/abi.md` remains operational.
 
 An implementation-status limitation cannot weaken a rule for an artifact the
