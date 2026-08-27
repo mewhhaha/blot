@@ -157,7 +157,7 @@ inside the runnable workspace artifact. A downloaded binary must match those
 inputs before use. Every semantic compiler command requires the artifact and
 must never fall back to TypeScript.
 
-**The caller never sees backend-private values.** Blot Core Wasm ABI 1 is the stable
+**The caller never sees backend-private values.** Blot Core Wasm ABI 2 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use
 its canonical adapters; internal tagged words, constructor numbers, and heap
 headers remain private. An incompatible layout, signature, ownership, import,

@@ -61,7 +61,7 @@ remain distinct.
 terminal and a synchronous `Model.complete` operation. The bundled model adapter
 is deterministic so the study runs without credentials or network access.
 
-This case deliberately exposes the next ABI question: Core ABI 1 calls host
+This case deliberately exposes the next ABI question: Core ABI 2 calls host
 effects synchronously, while network model APIs are asynchronous. A production
 agent therefore needs either a synchronous local model bridge or a future
 suspending host-effect ABI; the case study does not disguise that mismatch with
@@ -331,7 +331,7 @@ and its output is a value a test can compare.
 `CanvasRenderingContext2D`, an orbit camera on the pointer, and procedural
 textures for the sprite path.
 
-The browser one has a mismatch to resolve: ABI 1 calls host effects
+The browser one has a mismatch to resolve: ABI 2 calls host effects
 synchronously, and `requestAnimationFrame` is not something a synchronous call
 can wait for. So the module runs in a worker, where blocking is allowed, and
 `Host.frame` parks on `Atomics.wait` until the page's animation frame bumps a

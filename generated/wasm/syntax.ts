@@ -162,7 +162,6 @@ export type LiteralKind =
   | "else"
   | "of"
   | "do"
-  | "compdo"
   | "fn"
   | ".."
   | "..."
@@ -730,7 +729,6 @@ export interface CaseGuardCursor extends RuleCursorBase<"case_guard"> {
 }
 
 export interface DoBlockCursor extends RuleCursorBase<"do_block"> {
-  field(name: "phase"): TokenCursor<"literal", "compdo"> | TokenCursor<"literal", "do">;
   field(name: "statements"): ReadonlyArray<StatementCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];

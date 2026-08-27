@@ -1,5 +1,3 @@
-// The assertion does not turn a shared Array into a consuming argument.
-
 open import "blot:prelude"
 
 const clear_first :: [Int] -> [Int]

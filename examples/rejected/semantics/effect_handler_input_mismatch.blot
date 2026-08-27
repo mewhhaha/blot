@@ -1,0 +1,20 @@
+open import "blot:prelude"
+
+const Resource = @effect { .release = Effect.consumes (Int -> Int); }
+
+let consume = fn !value => value + 1
+let program = fn () => do:
+  let !resource = 41
+  use value <- Resource.release (!resource)
+  return value
+
+let local =
+  {
+    .release = fn (resource, ?resume) => do:
+      use result <- resume (consume resource)
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+return @handle (Resource, program, local)

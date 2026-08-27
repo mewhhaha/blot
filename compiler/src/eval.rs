@@ -10,9 +10,10 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
-    ClosureAlternative, Domain as ValueDomain, Environment, OpenedValues, OrderedFields, Resume,
-    RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature, child_env, equal, lookup,
-    lookup_signature, opened_members, show, tuple,
+    ClosureAlternative, Domain as ValueDomain, EffectOperationOwnership, EffectOwnership,
+    Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value,
+    as_tuple, attach_signature, child_env, equal, lookup, lookup_signature, opened_members, show,
+    tuple,
 };
 use crate::value_capsule::ValueCapsule;
 
@@ -249,7 +250,11 @@ impl EffectIdentity {
     }
 }
 
-type EffectSignatures = Vec<(OrderedFields, u32)>;
+type EffectSignatures = Vec<(
+    OrderedFields,
+    BTreeMap<String, EffectOperationOwnership>,
+    u32,
+)>;
 
 type LiveDeclarations = Rc<Vec<DeclarationId>>;
 type LivenessCache = HashMap<(String, Option<ExpressionId>), LiveDeclarations>;
@@ -535,6 +540,7 @@ impl Context {
         runtime: &Runtime,
         source: ApplicationSite,
         signature: &OrderedFields,
+        ownership: &BTreeMap<String, EffectOperationOwnership>,
         host: bool,
     ) -> u32 {
         let key = EffectIdentity {
@@ -545,18 +551,22 @@ impl Context {
             host,
         };
         if let Some(signatures) = self.effect_ids.borrow().get(&key)
-            && let Some((_, id)) = signatures
-                .iter()
-                .find(|(candidate, _)| effect_signatures_equal(candidate, signature))
+            && let Some((_, _, id)) =
+                signatures
+                    .iter()
+                    .find(|(candidate_signature, candidate_ownership, _)| {
+                        effect_signatures_equal(candidate_signature, signature)
+                            && candidate_ownership == ownership
+                    })
         {
             return *id;
         }
         let id = self.fresh_effect_id();
-        self.effect_ids
-            .borrow_mut()
-            .entry(key)
-            .or_default()
-            .push((signature.clone(), id));
+        self.effect_ids.borrow_mut().entry(key).or_default().push((
+            signature.clone(),
+            ownership.clone(),
+            id,
+        ));
         id
     }
 
@@ -601,7 +611,7 @@ impl Context {
             .borrow()
             .iter()
             .filter(|(identity, _)| paths.iter().any(|path| identity.references_module(path)))
-            .flat_map(|(_, signatures)| signatures.iter().map(|(_, id)| *id))
+            .flat_map(|(_, signatures)| signatures.iter().map(|(_, _, id)| *id))
             .collect()
     }
 
@@ -631,6 +641,259 @@ fn effect_signatures_equal(left: &OrderedFields, right: &OrderedFields) -> bool 
         && left
             .iter()
             .all(|(name, value)| right.get(name).is_some_and(|other| equal(value, other)))
+}
+
+fn normalize_effect_operations(
+    operations: &OrderedFields,
+    span: Span,
+) -> Result<(OrderedFields, BTreeMap<String, EffectOperationOwnership>), Diagnostic> {
+    let mut signatures = OrderedFields::default();
+    let mut ownership = BTreeMap::new();
+    for (name, descriptor) in operations {
+        let (signature, operation_ownership) = normalize_effect_operation(name, descriptor, span)?;
+        signatures.insert(name.clone(), signature);
+        ownership.insert(name.clone(), operation_ownership);
+    }
+    Ok((signatures, ownership))
+}
+
+fn normalize_effect_operation(
+    operation: &str,
+    descriptor: &Value,
+    span: Span,
+) -> Result<(Value, EffectOperationOwnership), Diagnostic> {
+    if effect_arrow(descriptor).is_some() {
+        return Ok((descriptor.clone(), EffectOperationOwnership::unrestricted()));
+    }
+    let Value::Shape(fields) = descriptor else {
+        return Err(effect_ownership_error(
+            operation,
+            "descriptor",
+            format!(
+                "expected a function signature or a record with `.signature`, `.input`, and `.result`, found {}",
+                show(descriptor)
+            ),
+            span,
+        ));
+    };
+    let expected_fields = ["signature", "input", "result"];
+    if fields.len() != expected_fields.len()
+        || expected_fields
+            .iter()
+            .any(|field| !fields.contains_key(field))
+    {
+        let found = fields
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(effect_ownership_error(
+            operation,
+            "descriptor",
+            format!(
+                "expected exactly `.signature`, `.input`, and `.result`, found fields [{found}]"
+            ),
+            span,
+        ));
+    }
+    let signature = fields
+        .get("signature")
+        .expect("checked effect descriptor signature");
+    let Some((domain, codomain)) = effect_arrow(signature) else {
+        return Err(effect_ownership_error(
+            operation,
+            "signature",
+            format!("expected a function type, found {}", show(signature)),
+            span,
+        ));
+    };
+    let input = parse_effect_ownership(
+        fields
+            .get("input")
+            .expect("checked effect descriptor input"),
+        domain,
+        operation,
+        "input",
+        span,
+    )?;
+    let result = parse_effect_ownership(
+        fields
+            .get("result")
+            .expect("checked effect descriptor result"),
+        codomain,
+        operation,
+        "result",
+        span,
+    )?;
+    Ok((
+        signature.clone(),
+        EffectOperationOwnership { input, result },
+    ))
+}
+
+fn effect_arrow(signature: &Value) -> Option<(&Value, &Value)> {
+    let Value::Arrow {
+        domain, codomain, ..
+    } = signature_body(signature)
+    else {
+        return None;
+    };
+    Some((domain, codomain))
+}
+
+fn parse_effect_ownership(
+    summary: &Value,
+    signature: &Value,
+    operation: &str,
+    path: &str,
+    span: Span,
+) -> Result<EffectOwnership, Diagnostic> {
+    if let Value::Tag {
+        name,
+        payload: None,
+    } = summary
+    {
+        return match name.as_str() {
+            "Unrestricted" => Ok(EffectOwnership::Unrestricted),
+            "Affine" => Ok(EffectOwnership::Affine),
+            "Linear" => Ok(EffectOwnership::Linear),
+            _ => Err(effect_ownership_error(
+                operation,
+                path,
+                format!("expected `#Unrestricted`, `#Affine`, or `#Linear`, found `#{name}`"),
+                span,
+            )),
+        };
+    }
+    let Value::Shape(summary_fields) = summary else {
+        return Err(effect_ownership_error(
+            operation,
+            path,
+            format!(
+                "expected an ownership mode or structural record, found {}",
+                show(summary)
+            ),
+            span,
+        ));
+    };
+    if let Value::Shape(signature_fields) = signature {
+        if summary_fields.len() != signature_fields.len()
+            || signature_fields
+                .keys()
+                .any(|name| !summary_fields.contains_key(name))
+        {
+            return Err(effect_structure_error(
+                operation,
+                path,
+                signature_fields,
+                summary_fields,
+                span,
+            ));
+        }
+        let fields = signature_fields
+            .iter()
+            .map(|(name, signature)| {
+                let child_path = format!("{path}.{name}");
+                parse_effect_ownership(
+                    summary_fields
+                        .get(name)
+                        .expect("checked effect ownership field"),
+                    signature,
+                    operation,
+                    &child_path,
+                    span,
+                )
+                .map(|ownership| (name.clone(), ownership))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        return Ok(EffectOwnership::Record(fields));
+    }
+    if let Some(cases) = effect_variant_cases(signature) {
+        if summary_fields.len() != cases.len()
+            || cases.keys().any(|name| !summary_fields.contains_key(name))
+        {
+            let expected = cases.keys().cloned().collect::<Vec<_>>().join(", ");
+            let found = summary_fields
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(effect_ownership_error(
+                operation,
+                path,
+                format!("expected variant cases [{expected}], found [{found}]"),
+                span,
+            ));
+        }
+        let cases = cases
+            .into_iter()
+            .map(|(name, signature)| {
+                let child_path = format!("{path}.#{name}");
+                parse_effect_ownership(
+                    summary_fields
+                        .get(&name)
+                        .expect("checked effect ownership case"),
+                    &signature,
+                    operation,
+                    &child_path,
+                    span,
+                )
+                .map(|ownership| (name, ownership))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        return Ok(EffectOwnership::Variant(cases));
+    }
+    Err(effect_ownership_error(
+        operation,
+        path,
+        format!(
+            "structural ownership requires a record, tuple, or variant type, found {}",
+            show(signature)
+        ),
+        span,
+    ))
+}
+
+fn effect_variant_cases(signature: &Value) -> Option<BTreeMap<String, Value>> {
+    let Value::Union(members) = signature else {
+        return None;
+    };
+    let mut cases = BTreeMap::new();
+    for member in members {
+        let Value::Tag { name, payload } = member else {
+            return None;
+        };
+        cases.insert(
+            name.clone(),
+            payload.as_deref().cloned().unwrap_or(Value::Unit),
+        );
+    }
+    Some(cases)
+}
+
+fn effect_structure_error(
+    operation: &str,
+    path: &str,
+    signature: &OrderedFields,
+    summary: &OrderedFields,
+    span: Span,
+) -> Diagnostic {
+    let expected = signature.keys().cloned().collect::<Vec<_>>().join(", ");
+    let found = summary.keys().cloned().collect::<Vec<_>>().join(", ");
+    effect_ownership_error(
+        operation,
+        path,
+        format!("expected fields [{expected}], found [{found}]"),
+        span,
+    )
+}
+
+fn effect_ownership_error(operation: &str, path: &str, evidence: String, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        "BLOT_EFFECT_OWNERSHIP_CONTRACT",
+        format!("Effect operation `.{operation}` has an invalid `{path}` contract: {evidence}."),
+        span,
+    )
 }
 
 fn effect_value_id(value: &Value) -> Option<u32> {
@@ -799,6 +1062,7 @@ pub struct Perform {
     pub operation: String,
     pub argument: Value,
     pub result_type: Value,
+    pub operation_ownership: EffectOperationOwnership,
     pub span: Span,
     pub host: bool,
     application: ApplicationSite,
@@ -1290,9 +1554,6 @@ pub fn evaluate_expression(
             "`rec` marks a `let rec` or `const rec` binding.",
             span,
         )),
-        Expression::Comptime { body, .. } => {
-            evaluate_expression(context, module_path, *body, environment, runtime.comptime())
-        }
     };
     computation.at(origin)
 }
@@ -2520,6 +2781,7 @@ fn named_effect(value: Value, name: &str) -> Value {
         id,
         name: effect_name,
         operations,
+        operation_ownership,
         host,
     } = value
     else {
@@ -2530,6 +2792,7 @@ fn named_effect(value: Value, name: &str) -> Value {
             id,
             name: effect_name,
             operations,
+            operation_ownership,
             host,
         };
     }
@@ -2537,6 +2800,7 @@ fn named_effect(value: Value, name: &str) -> Value {
         id,
         name: name.to_owned(),
         operations,
+        operation_ownership,
         host,
     }
 }
@@ -2924,6 +3188,7 @@ fn apply_with_expected(
                 id,
                 name: effect_name,
                 operations,
+                operation_ownership,
                 host,
             } = *effect
             else {
@@ -2950,12 +3215,17 @@ fn apply_with_expected(
                 } else {
                     declared_result
                 };
+            let operation_ownership = operation_ownership
+                .get(&name)
+                .cloned()
+                .expect("effect operation has an ownership contract");
             let request = Perform {
                 effect_id: id,
                 effect_name,
                 operation: name,
                 argument,
                 result_type,
+                operation_ownership,
                 span,
                 host,
                 application,
@@ -3142,11 +3412,23 @@ fn run_special_or_primitive(
                 span,
             ));
         };
+        let (operations, operation_ownership) = match normalize_effect_operations(operations, span)
+        {
+            Ok(normalized) => normalized,
+            Err(error) => return Computation::error(error),
+        };
         let host = name == "@effect.host";
         let value = Value::Effect {
-            id: context.effect_id(&runtime, application, operations, host),
+            id: context.effect_id(
+                &runtime,
+                application,
+                &operations,
+                &operation_ownership,
+                host,
+            ),
             name: "Effect".to_owned(),
-            operations: operations.clone(),
+            operations,
+            operation_ownership,
             host,
         };
         context.register_effect_declaration(&runtime.module, &value);
@@ -3488,6 +3770,7 @@ fn project(target: Value, name: &str, span: Span) -> Computation {
             id,
             name: effect_name,
             operations,
+            operation_ownership,
             host,
         } => {
             if !operations.contains_key(name) {
@@ -3502,6 +3785,7 @@ fn project(target: Value, name: &str, span: Span) -> Computation {
                     id,
                     name: effect_name,
                     operations,
+                    operation_ownership,
                     host,
                 }),
                 name: name.to_owned(),
@@ -3702,8 +3986,7 @@ fn expression_span(expression: &Expression) -> Span {
         | Expression::If { span, .. }
         | Expression::Case { span, .. }
         | Expression::Block { span, .. }
-        | Expression::Rec { span, .. }
-        | Expression::Comptime { span, .. } => *span,
+        | Expression::Rec { span, .. } => *span,
     }
 }
 
@@ -3730,9 +4013,9 @@ pub(crate) fn signature_hole_expressions(
                 collect(module, *argument, holes);
             }
             Expression::Field { target, .. } => collect(module, *target, holes),
-            Expression::Lambda { body, .. }
-            | Expression::Rec { lambda: body, .. }
-            | Expression::Comptime { body, .. } => collect(module, *body, holes),
+            Expression::Lambda { body, .. } | Expression::Rec { lambda: body, .. } => {
+                collect(module, *body, holes)
+            }
             Expression::Array { elements, .. } => {
                 for element in elements {
                     collect(module, element.value, holes);
@@ -4188,9 +4471,7 @@ fn collect_free(
             collect_free(module, *function, bound, free);
             collect_free(module, *argument, bound, free);
         }
-        Expression::Field { target, .. }
-        | Expression::Rec { lambda: target, .. }
-        | Expression::Comptime { body: target, .. } => {
+        Expression::Field { target, .. } | Expression::Rec { lambda: target, .. } => {
             collect_free(module, *target, bound, free);
         }
         Expression::Lambda {
@@ -4331,6 +4612,7 @@ mod tests {
             &runtime,
             ApplicationSite::expression(effect_revision, ExpressionId(10)),
             &OrderedFields::default(),
+            &BTreeMap::new(),
             false,
         )
     }
@@ -4385,9 +4667,6 @@ mod tests {
                 },
             )])
         };
-        let first = context.effect_id(&runtime, application.clone(), &signature(1), false);
-        let alpha_equivalent =
-            context.effect_id(&runtime, application.clone(), &signature(7), false);
         let different = OrderedFields::from([(
             "map".to_owned(),
             Value::Arrow {
@@ -4398,11 +4677,38 @@ mod tests {
                 effect_tail: None,
             },
         )]);
+        let ownership =
+            BTreeMap::from([("map".to_owned(), EffectOperationOwnership::unrestricted())]);
 
+        let first = context.effect_id(
+            &runtime,
+            application.clone(),
+            &signature(1),
+            &ownership,
+            false,
+        );
+        let alpha_equivalent = context.effect_id(
+            &runtime,
+            application.clone(),
+            &signature(7),
+            &ownership,
+            false,
+        );
         assert_eq!(first, alpha_equivalent);
         assert_ne!(
             first,
-            context.effect_id(&runtime, application, &different, false)
+            context.effect_id(&runtime, application.clone(), &different, &ownership, false,)
+        );
+        let linear_result = BTreeMap::from([(
+            "map".to_owned(),
+            EffectOperationOwnership {
+                input: EffectOwnership::Unrestricted,
+                result: EffectOwnership::Linear,
+            },
+        )]);
+        assert_ne!(
+            first,
+            context.effect_id(&runtime, application, &signature(1), &linear_result, false,)
         );
     }
 
@@ -4421,15 +4727,32 @@ mod tests {
         let mut recursive = shallow.clone();
         Rc::make_mut(&mut recursive.effect_scope).push(frame);
 
-        let shallow_id =
-            context.effect_id(&shallow, source.clone(), &OrderedFields::default(), false);
+        let shallow_id = context.effect_id(
+            &shallow,
+            source.clone(),
+            &OrderedFields::default(),
+            &BTreeMap::new(),
+            false,
+        );
         assert_eq!(
             shallow_id,
-            context.effect_id(&shallow, source.clone(), &OrderedFields::default(), false,)
+            context.effect_id(
+                &shallow,
+                source.clone(),
+                &OrderedFields::default(),
+                &BTreeMap::new(),
+                false,
+            )
         );
         assert_ne!(
             shallow_id,
-            context.effect_id(&recursive, source, &OrderedFields::default(), false)
+            context.effect_id(
+                &recursive,
+                source,
+                &OrderedFields::default(),
+                &BTreeMap::new(),
+                false,
+            )
         );
     }
 
@@ -4457,8 +4780,20 @@ mod tests {
         let source = ApplicationSite::expression(revision, ExpressionId(4));
 
         assert_ne!(
-            context.effect_id(&first, source.clone(), &OrderedFields::default(), false,),
-            context.effect_id(&second, source, &OrderedFields::default(), false),
+            context.effect_id(
+                &first,
+                source.clone(),
+                &OrderedFields::default(),
+                &BTreeMap::new(),
+                false,
+            ),
+            context.effect_id(
+                &second,
+                source,
+                &OrderedFields::default(),
+                &BTreeMap::new(),
+                false,
+            ),
         );
     }
 

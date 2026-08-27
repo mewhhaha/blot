@@ -3,9 +3,10 @@
 This directory records the source comparison used while simplifying the Blot
 surface. The implementation now:
 
-1. uses `compdo:` as the source compile-time block, lowering to the existing
-   internal compile-time expression;
-2. keeps function-local `const` as a compile-time must-resolve obligation;
+1. uses one `do:` statement block whose `const` or `let` consumer determines
+   compile-time or run-time phase;
+2. keeps function-local `const` as the same compile-time must-resolve
+   obligation;
 3. lets signatures relate open effect rows with a tail such as `..e`; and
 4. removes element syntax in favor of ordinary functions, records, arrays, and
    explicit nullary child computations.
@@ -21,16 +22,20 @@ The historical `examples/elements.blot` corpus entry now uses the same ordinary
 spelling and keeps its existing golden output. No replacement component syntax
 is introduced here; future sugar can be evaluated against this baseline.
 
-## `compdo:`
+## Declaration-directed `do:`
 
-`do:` is the ordinary value-producing statement scope. `compdo:` accepts the
-same statement language, but the complete block must resolve during compilation:
+`do:` is the value-producing statement scope. A surrounding `const` requires the
+complete block to resolve during compilation:
 
 ```blot
-const fields = compdo:
+const fields = do:
   let reflected = reflect T
   return field_names reflected
 ```
+
+A surrounding `let` uses the same block at run time. Keeping phase on the
+declaration removes a keyword and an AST case without introducing a second
+control structure.
 
 The common one-expression case remains just
 `const fields = field_names

@@ -144,8 +144,7 @@ export type Expr =
     readonly span: Span;
   }
   /** Internal root emitted for a `let rec` or `const rec` binding. */
-  | { readonly tag: "rec"; readonly lambda: Expr; readonly span: Span }
-  | { readonly tag: "comptime"; readonly body: Expr; readonly span: Span };
+  | { readonly tag: "rec"; readonly lambda: Expr; readonly span: Span };
 
 export type DeclKind = "let" | "effect" | "const";
 

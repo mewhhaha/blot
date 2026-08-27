@@ -290,7 +290,7 @@ expression = (
 
 // A value continued after `=` cannot begin with a statement conditional. Its
 // layout would be indistinguishable from the binding continuation itself. An
-// explicit statement value begins with the disjoint `do` or `compdo` token.
+// explicit statement value begins with the disjoint `do` token.
 continued_expression = (
   first:continued_operand
   rest:infix_operation*
@@ -377,7 +377,7 @@ keyword = (
   | "operators" | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "return" | "use"
   | "if" | "else" | "case" | "of" | "rec" | "open"
-  | "for" | "in" | "break" | "do" | "compdo" | "fn"
+  | "for" | "in" | "break" | "do" | "fn"
 ) ;
 
 primary_expression = (
@@ -608,11 +608,10 @@ case_guard = ( "if" condition:expression ) ;
 
 
 
-// `do:` is the explicit statement scope available as a value. `compdo:` is
-// the same scope with a compile-time obligation. Parentheses are only
-// grouping/tuple syntax and never announce a statement suite.
+// `do:` is the explicit statement scope available as a value. Parentheses are
+// only grouping/tuple syntax and never announce a statement suite.
 do_block = (
-  phase:("do" | "compdo")
+  "do"
   ":"
   LAYOUT_NEWLINE
   LAYOUT_INDENT

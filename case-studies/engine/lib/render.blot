@@ -29,11 +29,12 @@ const M = import "./math.blot"
 // Residual host and loop signatures admit integer carriers, not narrowed range
 // types. The constructor still requires U8 inputs, and scene hosts enforce the
 // same range before returning a color.
-const Color = {
-  .red = Int;
-  .green = Int;
-  .blue = Int;
-}
+const Color =
+  {
+    .red = Int;
+    .green = Int;
+    .blue = Int;
+  }
 
 const rgb :: (U8, U8, U8) -> Color
 const rgb = fn (red, green, blue) => {

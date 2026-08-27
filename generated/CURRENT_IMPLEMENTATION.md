@@ -9,8 +9,8 @@
 | Emitter | `rust-wasm-encoder` |
 | Compiler-host ABI | 3 |
 | Checked-module certificate | 13 |
-| Runtime HIR | 5 |
-| Public ABI | 1.0 |
+| Runtime HIR | 6 |
+| Public ABI | 2.0 |
 
 ## Supported public values
 
@@ -31,7 +31,7 @@
 - Scratch and private Region values cannot cross the public ABI
 - deferred functions must be eliminated before the public ABI
 - public values must have closed first-order layouts
-- ABI 1 host effects are synchronous
+- ABI 2 host effects are synchronous
 
 ## Editor features
 

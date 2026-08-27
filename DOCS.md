@@ -453,8 +453,8 @@ let describe = fn option => case option of
 
 Indentation after `=` or `=>` may continue an expression, but indentation alone
 does not create a statement block. `do:` is the explicit lexical and `return`
-boundary; `compdo:` is the same form when the whole statement scope must execute
-at compile time.
+boundary. A surrounding `const` requires the whole statement scope to execute at
+compile time; a surrounding `let` uses the same form at run time.
 
 ## Use `case` to explain closed data
 

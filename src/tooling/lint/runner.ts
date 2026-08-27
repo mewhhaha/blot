@@ -151,9 +151,6 @@ function visitExpression(
     case "rec":
       visitExpression(expression.lambda, expression, nested, visitors);
       return;
-    case "comptime":
-      visitExpression(expression.body, expression, nested, visitors);
-      return;
     case "tuple":
       for (const element of expression.elements) {
         visitExpression(element, expression, nested, visitors);

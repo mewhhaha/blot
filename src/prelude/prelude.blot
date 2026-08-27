@@ -51,6 +51,25 @@ const Fn =
     .flip = flip;
   }
 
+const effect_consumes = fn signature => {
+  .signature = signature;
+  .input = #Linear;
+  .result = #Unrestricted;
+}
+
+const effect_produces = fn signature => {
+  .signature = signature;
+  .input = #Unrestricted;
+  .result = #Linear;
+}
+
+const Effect =
+  {
+    .operation = identity;
+    .consumes = effect_consumes;
+    .produces = effect_produces;
+  }
+
 // --- declaration tags ------------------------------------------------------
 
 // The compiler reads this ordinary shape at compile time. The transform stays
@@ -3025,6 +3044,7 @@ const Type =
 
 return {
   .Fn = Fn;
+  .Effect = Effect;
   .identity = identity;
   .freeze = freeze;
   .always = always;

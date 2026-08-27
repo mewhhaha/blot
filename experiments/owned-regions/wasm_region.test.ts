@@ -401,7 +401,7 @@ return Slice.freeze (!restored)
   assertEquals(error.diagnostic.code, "BLOT_REGION_JOIN_UNPROVED");
 });
 
-Deno.test("live Slice capabilities are refused at Core Wasm ABI 1", async () => {
+Deno.test("live Slice capabilities are refused at Core Wasm ABI 2", async () => {
   const source = `module with !region
 open import "blot:prelude"
 let size = Slice.length (&region)
@@ -414,5 +414,5 @@ return size + Array.length (&frozen)
     Error,
   );
   assertStringIncludes(error.message, "live Region");
-  assertStringIncludes(error.message, "ABI 1");
+  assertStringIncludes(error.message, "ABI 2");
 });

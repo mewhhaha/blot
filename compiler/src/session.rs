@@ -18,7 +18,10 @@ use crate::typecheck::{
     CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, empty_effects,
     type_exposes_generative_effect,
 };
-use crate::value::{OrderedFields, Value, reusable_across_module_instances, show};
+use crate::value::{
+    EffectOperationOwnership, EffectOwnership, OrderedFields, Value,
+    reusable_across_module_instances, show,
+};
 use crate::value_capsule::ValueCapsule;
 
 const MODULE_SNAPSHOT_SCHEMA: u32 = 2;
@@ -1167,6 +1170,10 @@ fn tool_grants() -> Value {
     let effect = Value::Effect {
         id: u32::MAX,
         name: "Console".to_owned(),
+        operation_ownership: BTreeMap::from([(
+            "write".to_owned(),
+            EffectOperationOwnership::unrestricted(),
+        )]),
         operations,
         host: true,
     };
@@ -1186,6 +1193,30 @@ fn append_boundary_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
 
 fn append_boundary_string(target: &mut Vec<u8>, value: &str) {
     append_boundary_bytes(target, value.as_bytes());
+}
+
+fn encode_effect_ownership(ownership: &EffectOwnership, target: &mut Vec<u8>) {
+    match ownership {
+        EffectOwnership::Unrestricted => target.push(0),
+        EffectOwnership::Affine => target.push(1),
+        EffectOwnership::Linear => target.push(2),
+        EffectOwnership::Record(fields) => {
+            target.push(3);
+            target.extend_from_slice(&(fields.len() as u64).to_le_bytes());
+            for (name, ownership) in fields {
+                append_boundary_string(target, name);
+                encode_effect_ownership(ownership, target);
+            }
+        }
+        EffectOwnership::Variant(cases) => {
+            target.push(4);
+            target.extend_from_slice(&(cases.len() as u64).to_le_bytes());
+            for (name, ownership) in cases {
+                append_boundary_string(target, name);
+                encode_effect_ownership(ownership, target);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1376,6 +1407,7 @@ fn encode_boundary_value(
             id,
             name,
             operations,
+            operation_ownership,
             host,
         } => {
             target.push(31);
@@ -1386,6 +1418,12 @@ fn encode_boundary_value(
                 &Value::Shape(operations.clone()),
                 target,
             )?);
+            target.extend_from_slice(&(operation_ownership.len() as u64).to_le_bytes());
+            for (operation, ownership) in operation_ownership {
+                append_boundary_string(target, operation);
+                encode_effect_ownership(&ownership.input, target);
+                encode_effect_ownership(&ownership.result, target);
+            }
         }
         Value::Operation { effect, name } => {
             target.push(32);
@@ -1500,6 +1538,32 @@ pub fn compiler_failure_json(
     diagnostic.failure_json(phase)
 }
 
+fn json_effect_ownership(ownership: &EffectOwnership) -> serde_json::Value {
+    match ownership {
+        EffectOwnership::Unrestricted => serde_json::json!("unrestricted"),
+        EffectOwnership::Affine => serde_json::json!("affine"),
+        EffectOwnership::Linear => serde_json::json!("linear"),
+        EffectOwnership::Record(fields) => serde_json::json!({
+            "kind": "record",
+            "fields": fields.iter().map(|(name, ownership)| {
+                serde_json::json!({
+                    "name": name,
+                    "ownership": json_effect_ownership(ownership),
+                })
+            }).collect::<Vec<_>>(),
+        }),
+        EffectOwnership::Variant(cases) => serde_json::json!({
+            "kind": "variant",
+            "cases": cases.iter().map(|(name, ownership)| {
+                serde_json::json!({
+                    "name": name,
+                    "ownership": json_effect_ownership(ownership),
+                })
+            }).collect::<Vec<_>>(),
+        }),
+    }
+}
+
 fn json_value(value: &Value) -> serde_json::Value {
     match value {
         Value::Deferred { .. } => serde_json::json!({ "tag": "deferred" }),
@@ -1599,11 +1663,18 @@ fn json_value(value: &Value) -> serde_json::Value {
             id,
             name,
             operations,
+            operation_ownership,
             host,
         } => serde_json::json!({
             "tag": "effect", "id": id, "name": name, "host": host,
             "operations": operations.iter().map(|(name, value)| {
                 serde_json::json!([name, json_value(value)])
+            }).collect::<Vec<_>>(),
+            "ownership": operation_ownership.iter().map(|(name, ownership)| {
+                serde_json::json!([name, {
+                    "input": json_effect_ownership(&ownership.input),
+                    "result": json_effect_ownership(&ownership.result),
+                }])
             }).collect::<Vec<_>>(),
         }),
         Value::Operation { effect, name } => serde_json::json!({
@@ -1792,7 +1863,6 @@ impl<'a> UnchangedDeclarations<'a> {
                     && self.expression(result)
             }
             Expression::Rec { lambda, .. } => self.expression(lambda),
-            Expression::Comptime { body, .. } => self.expression(body),
             Expression::Var { .. }
             | Expression::Int { .. }
             | Expression::Float { .. }
@@ -1912,7 +1982,7 @@ fn collect_expression_dependencies(
         Expression::Field { target, .. } => {
             collect_expression_dependencies(*target, arena, dependencies);
         }
-        Expression::Lambda { body, .. } | Expression::Comptime { body, .. } => {
+        Expression::Lambda { body, .. } => {
             collect_expression_dependencies(*body, arena, dependencies);
         }
         Expression::Rec { lambda, .. } => {
@@ -1996,8 +2066,7 @@ fn source_expression_span(expression: &Expression) -> crate::ast::Span {
         | Expression::If { span, .. }
         | Expression::Case { span, .. }
         | Expression::Block { span, .. }
-        | Expression::Rec { span, .. }
-        | Expression::Comptime { span, .. } => *span,
+        | Expression::Rec { span, .. } => *span,
     }
 }
 
@@ -4109,7 +4178,7 @@ mod tests {
             .as_str()
             .expect("a diagnostic message");
         assert!(
-            message.contains("function choice") && message.contains("ABI 1"),
+            message.contains("function choice") && message.contains("ABI 2"),
             "the refusal must name the private layout: {message}"
         );
     }

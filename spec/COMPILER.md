@@ -155,7 +155,8 @@ SourceOrigin
 `grammar.baba` is the only parse authority. Operator grouping uses the generated
 fixed language plan; source modules cannot create a fixity environment. Layout
 continues expressions but creates a statement value only through `do:` or
-`compdo:`.
+through a module body. A surrounding `const` declaration determines that its
+initializer, including a `do:` block, must resolve at compile time.
 
 Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
@@ -317,8 +318,8 @@ at its stated policy boundary.
 ## 10. Runtime-HIR production and validation
 
 Runtime HIR is constructed only after representation closure. The producer emits
-closed operations, values, control flow, Store lineage, host requests, traps,
-and public metadata.
+closed operations, values, control flow, Store lineage, host requests with
+normalized input/result ownership, traps, and public metadata.
 
 The validator independently checks:
 
@@ -328,9 +329,10 @@ The validator independently checks:
 4. exact relationship-certificate replay;
 5. exact ownership and reuse permission;
 6. Store/root and capability-family lineage;
-7. absence of compile-time and proof-only values;
-8. target-policy admission; and
-9. complete public-layout inputs.
+7. capability operation ownership matches the exact closed input/result types;
+8. absence of compile-time and proof-only values;
+9. target-policy admission; and
+10. complete public-layout inputs.
 
 Producer success followed by validator failure is an invariant failure. The
 validator does not generate a new source diagnostic by reconstructing source
@@ -351,7 +353,7 @@ must not accept a boundary whose required malformed-input validation is
 unimplemented.
 
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
-ABI 1 bytes and caller ownership.
+ABI 2 bytes and caller ownership.
 
 For every admitted type, lifting validates before constructing a source value,
 and valid values round-trip through lowering and lifting up to the
@@ -385,7 +387,7 @@ An emission pass that reparses encoded function bodies for metadata must admit
 every WebAssembly feature used by those bodies. Metadata inspection cannot
 refuse an operator that the emitter selected for the validated module.
 
-The Runtime-HIR producer records each schema-5 float-shuffle selector as a
+The Runtime-HIR producer records each schema-6 float-shuffle selector as a
 dominating `integer-32` constant operand. The emitter treats a missing,
 non-constant, or out-of-range selector as an invariant failure rather than
 performing target-side type inference.
@@ -418,7 +420,7 @@ separate from target refusal.
 
 Target refusal means a checked program lies outside the selected target or ABI
 policy. It is permitted only at an explicit policy boundary, such as a public
-vector type refused by ABI 1 or an experimental target feature not enabled for
+vector type refused by ABI 2 or an experimental target feature not enabled for
 production.
 
 It cannot hide an unresolved production-supported internal representation,

@@ -243,13 +243,6 @@ export function encodePortableModule(module: Module): PortableModule {
           span: expression.span,
         };
         break;
-      case "comptime":
-        encoded = {
-          tag: expression.tag,
-          body: expressionId(expression.body),
-          span: expression.span,
-        };
-        break;
     }
     expressions[id] = encoded;
     return id;
@@ -783,19 +776,6 @@ export function decodePortableModule(
               node.lambda,
               encodedExpressions.length,
               `${location} expression ${index} lambda`,
-            ),
-          ),
-          span,
-        };
-        break;
-      case "comptime":
-        decoded = {
-          tag,
-          body: expression(
-            reference(
-              node.body,
-              encodedExpressions.length,
-              `${location} expression ${index} body`,
             ),
           ),
           span,

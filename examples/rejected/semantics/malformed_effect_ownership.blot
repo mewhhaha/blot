@@ -1,0 +1,12 @@
+open import "blot:prelude"
+
+const Resource =
+  @effect {
+    .acquire = {
+      .signature = Unit -> Int;
+      .input = #Unrestricted;
+      .output = #Linear;
+    };
+  }
+
+return Resource

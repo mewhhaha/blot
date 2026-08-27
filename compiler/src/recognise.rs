@@ -214,7 +214,6 @@ impl FactorScan<'_> {
                 self.expression(*result);
             }
             Expression::Rec { .. } => self.refused = true,
-            Expression::Comptime { body, .. } => self.expression(*body),
         }
     }
 

@@ -6,15 +6,15 @@ open import "blot:prelude"
 
 const Concurrent =
   @effect {
-    .spawn = (Unit -> Int) -> { .run = Unit -> Int; };
-    .await = { .run = Unit -> Int; } -> Int;
+    .spawn = Effect.produces ((Unit -> Int) -> { .run = Unit -> Int; });
+    .await = Effect.consumes ({ .run = Unit -> Int; } -> Int);
     .yield = Unit -> Unit;
   }
 
 let program = fn () => do:
   use task <- Concurrent.spawn (fn () => 40)
   use Concurrent.yield ()
-  use value <- Concurrent.await task
+  use value <- Concurrent.await (!task)
   return value + 2
 
 let sequential =
@@ -23,7 +23,7 @@ let sequential =
       use result <- resume { .run = task; }
       return result
     ;
-    .await = fn (task, ?resume) => do:
+    .await = fn (!task, ?resume) => do:
       let value = task.run ()
       use result <- resume value
       return result

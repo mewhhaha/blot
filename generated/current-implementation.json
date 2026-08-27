@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "publicAbi": {
-    "major": 1,
+    "major": 2,
     "minor": 0
   },
   "semanticCompiler": "rust-wasm",
@@ -25,7 +25,7 @@
     "Scratch and private Region values cannot cross the public ABI",
     "deferred functions must be eliminated before the public ABI",
     "public values must have closed first-order layouts",
-    "ABI 1 host effects are synchronous"
+    "ABI 2 host effects are synchronous"
   ],
   "editorFeatures": [
     "diagnostics",
@@ -46,5 +46,5 @@
   ],
   "compilerHostAbi": 3,
   "checkedModuleCertificate": 13,
-  "runtimeHir": 5
+  "runtimeHir": 6
 }

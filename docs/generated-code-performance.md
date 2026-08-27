@@ -215,7 +215,7 @@ indexed recursive data, and direct recursive algebraic representations now
 compile through the Rust production path. The recursive-representation refusal
 recorded by the historical report has been closed and is no longer a current
 lowering gap. The engine case study still reaches ABI planning and is refused
-for its declared `F32x4` host boundary, which is the specified ABI 1 SIMD
+for its declared `F32x4` host boundary, which is the specified ABI 2 SIMD
 restriction rather than a residual-lowering gap.
 
 This status paragraph does not refresh the historical timings or artifact sizes

@@ -200,10 +200,6 @@ pub enum Expression {
         lambda: ExpressionId,
         span: Span,
     },
-    Comptime {
-        body: ExpressionId,
-        span: Span,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -299,8 +295,7 @@ impl AstArena {
             | Expression::If { span, .. }
             | Expression::Case { span, .. }
             | Expression::Block { span, .. }
-            | Expression::Rec { span, .. }
-            | Expression::Comptime { span, .. } => *span,
+            | Expression::Rec { span, .. } => *span,
         }
     }
 }
@@ -443,9 +438,6 @@ impl Module {
                 }
                 Expression::Rec { lambda, .. } => {
                     targets.push(expression_index(*lambda, &location)?);
-                }
-                Expression::Comptime { body, .. } => {
-                    targets.push(expression_index(*body, &location)?);
                 }
             }
         }

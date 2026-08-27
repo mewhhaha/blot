@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const Jobs =
+  @effect.host {
+    .acquire = Effect.produces (Int -> Int);
+    .release = Effect.consumes (Int -> Unit);
+  }
+
+use handle <- Jobs.acquire 41
+use Jobs.release (!handle)
+return 42

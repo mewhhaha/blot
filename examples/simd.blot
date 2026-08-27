@@ -28,12 +28,13 @@ let normalize = fn input => do:
 
 let sample :: Int -> Int
 let sample = fn seed => do:
-  let normalized = normalize (F32x4.of (
-    F32.of_int seed,
-    F32.of_int (seed + 1),
-    F32.of_int (seed + 2),
-    F32.of_int (seed + 3)
-  ))
+  let normalized =
+    normalize (F32x4.of (
+      F32.of_int seed,
+      F32.of_int (seed + 1),
+      F32.of_int (seed + 2),
+      F32.of_int (seed + 3)
+    ))
   let gain = F32x4.splat (F32.of_int 10)
   let selected = F32x4.select (F32x4.less normalized gain) gain normalized
   let exact = F32x4.select (F32x4.equal selected selected) selected gain
@@ -58,6 +59,7 @@ let sample = fn seed => do:
   let any_score = case F32x4.any (F32x4.less gain normalized) of
     #True => 1
     #False => 0
-  return first + second + last + total + energy + shuffled_total + swizzled_total + all_score + any_score
+  return
+    first + second + last + total + energy + shuffled_total + swizzled_total + all_score + any_score
 
 return { .default = sample; .example = sample 1; }

@@ -427,7 +427,7 @@ This algebra does not introduce:
 - fractional shared-write permissions;
 - implicit witness search by equal-looking footprints;
 - universal proof-tree reassociation; or
-- a public run-time capability object in ABI 1.
+- a public run-time capability object in ABI 2.
 
 Read sharing remains immutable persistence or lexical borrowing. Concurrent
 shared mutation requires another algebra and synchronization semantics.

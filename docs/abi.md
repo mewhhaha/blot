@@ -3,7 +3,7 @@
 ## Status
 
 This document is the normative byte-level and caller-ownership contract for Blot
-Core Wasm ABI 1. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
+Core Wasm ABI 2. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
 source-to-caller representation relation and public-type admissibility. The
 section **Runtime target status** below records current implementation coverage;
 it cannot weaken an ABI rule for an artifact the compiler accepts.
@@ -16,7 +16,7 @@ the current ABI version and public capability inventory.
 Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
 caller values into that private representation and lower results back out.
 
-The current contract is Blot Core Wasm ABI 1.0. A compatible compiler may add
+The current contract is Blot Core Wasm ABI 2.0. A compatible compiler may add
 manifest fields or exports that do not change an existing declaration. Changing
 a function signature, layout, ownership rule, import name, or value meaning
 requires a new ABI major.
@@ -44,7 +44,7 @@ after it has finished reading that result.
 
 Host effects import operations from `blot:host/<capability>` under their source
 operation name. They use the same value layouts and flattening rules as exports.
-Host calls are synchronous in ABI 1.
+Host calls are synchronous in ABI 2.
 
 `@text.len`, `@text.of_int`, `@text.cmp`, and `@text.contains` are implemented
 in the artifact. They do not create a `Text` import. Text comparison is
@@ -53,7 +53,7 @@ representation; valid UTF-8 preserves textual substring boundaries.
 
 ## Core signatures
 
-ABI 1 is the synchronous memory32, UTF-8 subset of the WebAssembly Component
+ABI 2 is the synchronous memory32, UTF-8 subset of the WebAssembly Component
 Model Canonical ABI:
 
 - at most 16 flat parameters;
@@ -141,6 +141,15 @@ provided by the module. They allocate nested buffers with the module's
 `cabi_realloc`. The module consumes and releases those buffers before the
 enclosing synchronous export call completes.
 
+This memory ownership is distinct from an operation's source ownership contract.
+Every host import declares `ownership.input` and `ownership.result`. Each
+summary is `unrestricted`, `affine`, or `linear`, or an exact recursive
+record/variant summary whose leaves use those modes. A consuming input transfers
+the corresponding Blot authority to the host; an affine or linear result
+transfers a fresh obligation to the module. The host must obey this logical
+protocol even when the carrier is a scalar or points into memory that remains
+borrowed only for the call.
+
 `cabi_realloc` accepts alignments 1, 2, 4, 8, and 16. A zero new size releases a
 nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
 boolean, variant discriminant, or array length traps.
@@ -168,8 +177,9 @@ The manifest records:
 - memory, encoding, flattening limits, and allocator export;
 - runtime and compile-time source exports;
 - canonical function types and post-return names;
-- effects and result ownership; and
-- canonical host import modules, names, and function types.
+- effects and export result ownership; and
+- canonical host import modules, names, function types, and exact input/result
+  ownership contracts.
 
 The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
@@ -178,7 +188,7 @@ than dependent on private constructor numbers.
 
 ## Runtime target status
 
-This section is operational status, not a relaxation of ABI 1.
+This section is operational status, not a relaxation of ABI 2.
 
 Ordinary semantic analysis also runs public-layout preflight without emitting a
 Wasm binary. Its `targetPreflight` fact records whether the inferred boundary is
@@ -202,21 +212,26 @@ outstanding result: the matching `cabi_post_*` restores the call's allocation
 checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
 another export, and double post-return trap.
 
-Runtime HIR schema 5 retains private `indirect` roots introduced by schema 3 for
-positive recursive algebraic values. Their targets live in the current export
-call's scratch arena and recursive edges are memory32 pointers. ABI 1 defines no
-caller encoding for such a root: it is admitted only as an internal value whose
-eventual public observation has a supported non-recursive type. Public-layout
-construction rejects any signature that exposes it.
+Runtime HIR schema 6 retains private `indirect` roots for positive recursive
+algebraic values. Their targets live in the current export call's scratch arena
+and recursive edges are memory32 pointers. ABI 2 defines no caller encoding for
+such a root: it is admitted only as an internal value whose eventual public
+observation has a supported non-recursive type. Public-layout construction
+rejects any signature that exposes it.
 
-Schema 5 also retains private Scratch values as a memory32 pointer, initialized
-length, and capacity. Scratch has no ABI 1 caller encoding and is rejected in
+Schema 6 also retains private Scratch values as a memory32 pointer, initialized
+length, and capacity. Scratch has no ABI 2 caller encoding and is rejected in
 public signatures and initialized public aggregates; only a finished Array may
 cross the boundary.
 
-Schema 5 adds residual float-vector shuffle operations. Their immediate lane
+Schema 6 retains residual float-vector shuffle operations. Their immediate lane
 selectors are represented by four dominating private `integer-32` constants;
 this changes no public ABI layout because vectors and masks remain private.
+
+Schema 6 adds normalized ownership contracts to capability operations. Runtime
+HIR validation requires one operation input type and checks every structural
+ownership summary against the exact product or sum fields of that type before
+the ABI manifest is constructed.
 
 Multiple input paths are prepared independently and their admitted Runtime HIR
 modules form one stable target batch. Blot sends their generic Wasm plans
@@ -230,7 +245,7 @@ The production target currently refuses signatures requiring dynamic composite
 export parameters, general dynamic composite export results outside the admitted
 closed-result cases, indirect host results other than `Text`, boolean inputs,
 general caller-memory composite inputs, multiple outstanding results, or
-asynchronous host calls. These are target restrictions, not changes to ABI 1.
+asynchronous host calls. These are target restrictions, not changes to ABI 2.
 The compiler must refuse such a boundary before emission. For every boundary it
 does accept, all ABI-required range, representation, UTF-8, discriminant,
 boolean, pointer, extent, and ownership checks applicable to that signature must

@@ -1,0 +1,62 @@
+open import "blot:prelude"
+
+const produces = fn signature => {
+  .signature = signature;
+  .input = #Unrestricted;
+  .result = #Linear;
+}
+
+const Resource =
+  @effect {
+    .acquire = produces (Int -> Int);
+    .release = Effect.operation {
+      .signature = Int -> Int;
+      .input = #Linear;
+      .result = #Unrestricted;
+    };
+    .timeout = Effect.operation {
+      .signature = Unit -> Int;
+      .input = #Unrestricted;
+      .result = #Affine;
+    };
+    .combine = Effect.operation {
+      .signature = (Int, Int) -> Int;
+      .input = (#Linear, #Unrestricted);
+      .result = #Unrestricted;
+    };
+  }
+
+let consume = fn !value => value + 2
+
+let program = fn () => do:
+  use resource <- Resource.acquire 40
+  use result <- Resource.release (!resource)
+  use Resource.timeout ()
+  let !part = 20
+  use combined <- Resource.combine ((!part), 20)
+  return result + combined
+
+let local =
+  {
+    .acquire = fn (value, ?resume) => do:
+      use result <- resume value
+      return result
+    ;
+    .release = fn (!resource, ?resume) => do:
+      let result = consume (!resource)
+      use resumed <- resume result
+      return resumed
+    ;
+    .timeout = fn ((), ?resume) => do:
+      use result <- resume 0
+      return result
+    ;
+    .combine = fn ((!part, offset), ?resume) => do:
+      let value = consume (!part)
+      use result <- resume (value + offset)
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+return @handle (Resource, program, local)

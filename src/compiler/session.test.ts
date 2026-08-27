@@ -25,6 +25,84 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
   }
 });
 
+test("host effect ownership reaches Runtime HIR and Core Wasm ABI 2", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const runtime = await compiler.prepare(
+      "examples/lib/host_owned_handle.blot",
+    );
+    assert.deepEqual(
+      runtime.capabilities.map((capability) => ({
+        name: capability.name,
+        operations: capability.operations.map((operation) => ({
+          name: operation.name,
+          ownership: operation.ownership,
+        })),
+      })),
+      [{
+        name: "Jobs",
+        operations: [
+          {
+            name: "acquire",
+            ownership: { input: "unrestricted", result: "linear" },
+          },
+          {
+            name: "release",
+            ownership: { input: "linear", result: "unrestricted" },
+          },
+        ],
+      }],
+    );
+
+    const artifact = await compiler.compile(
+      "examples/lib/host_owned_handle.blot",
+    );
+    const manifest = JSON.parse(
+      new TextDecoder().decode(artifact.manifestBytes),
+    );
+    assert.equal(manifest.abi.major, 2);
+    assert.deepEqual(
+      manifest.imports.map((imported: { ownership: unknown }) =>
+        imported.ownership
+      ),
+      [
+        { input: "unrestricted", result: "linear" },
+        { input: "linear", result: "unrestricted" },
+      ],
+    );
+
+    const module = await WebAssembly.compile(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const abiSections = WebAssembly.Module.customSections(module, "blot:abi");
+    assert.equal(abiSections.length, 1);
+    assert.deepEqual(
+      new Uint8Array(abiSections[0]),
+      artifact.manifestBytes,
+    );
+    let released: bigint | undefined;
+    const instance = await WebAssembly.instantiate(module, {
+      "blot:host/Jobs": {
+        acquire(value: bigint): bigint {
+          return value;
+        },
+        release(value: bigint): void {
+          released = value;
+        },
+      },
+    });
+    const abiMajor = instance.exports["blot:abi-major"];
+    assert(abiMajor instanceof WebAssembly.Global);
+    assert.equal(abiMajor.value, 2);
+    const run = instance.exports["blot:default"];
+    assert.equal(typeof run, "function");
+    assert.equal((run as () => bigint)(), 42n);
+    assert.equal(released, 41n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("runtime SIMD arrays execute through private Store memory", async () => {
   const compiler = await Compiler.create();
   try {
@@ -246,13 +324,6 @@ test("reuse assertion tags publish only discharged Store updates", async () => {
     };
     assert.equal((await instantiate(1n))(), 204n);
     assert.equal((await instantiate(-1n))(), 120n);
-
-    await assert.rejects(
-      compiler.prepare(
-        "examples/rejected/semantics/reuse_persistent_update.blot",
-      ),
-      /BLOT_LINEAR_ARGUMENT_NOT_OWNED/,
-    );
   } finally {
     compiler.destroy();
   }

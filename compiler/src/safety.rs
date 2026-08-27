@@ -429,7 +429,6 @@ impl Analysis<'_> {
                 self.walk(result, &mut inner, false)?;
             }
             Expression::Rec { lambda, .. } => self.walk(lambda, scope, false)?,
-            Expression::Comptime { body, .. } => self.walk(body, scope, false)?,
             _ => {}
         }
         Ok(())

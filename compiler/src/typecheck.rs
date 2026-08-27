@@ -3367,6 +3367,7 @@ impl Checker {
                         name,
                         operations,
                         host,
+                        ..
                     } => operations
                         .iter()
                         .map(|(operation, signature)| {
@@ -4041,6 +4042,7 @@ impl Checker {
                             name: effect_name,
                             operations,
                             host,
+                            ..
                         } = target_value
                         else {
                             return None;
@@ -4414,13 +4416,6 @@ impl Checker {
                     .entry((path.to_owned(), body))
                     .or_insert_with(|| inferred.type_.clone());
                 Ok(inferred)
-            }
-            Expression::Comptime { body, .. } => {
-                let previous_phase = self.phase.replace(Phase::Comptime);
-                let inferred = self.infer(path, module, body, environment, values, dependencies);
-                self.phase.set(previous_phase);
-                let inferred = inferred?;
-                Ok(Inferred::pure(inferred.type_))
             }
         }
     }
@@ -8114,7 +8109,6 @@ fn statically_known_callee(
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Var { name, .. } => environment.binding_phase(name) == Some(Phase::Comptime),
         Expression::Field { target, .. } => statically_known_callee(module, *target, environment),
-        Expression::Comptime { .. } => true,
         _ => false,
     }
 }
@@ -10026,9 +10020,7 @@ fn expression_contains_intrinsic(
         Expression::Field { target, .. } => {
             expression_contains_intrinsic(module, *target, intrinsic)
         }
-        Expression::Lambda { body, .. }
-        | Expression::Rec { lambda: body, .. }
-        | Expression::Comptime { body, .. } => {
+        Expression::Lambda { body, .. } | Expression::Rec { lambda: body, .. } => {
             expression_contains_intrinsic(module, *body, intrinsic)
         }
         Expression::Array { elements, .. } => elements
@@ -10108,9 +10100,6 @@ fn expression_has_generic_reflection(
             found
         }
         Expression::Rec { lambda, .. } => expression_has_generic_reflection(module, *lambda, bound),
-        Expression::Comptime { body, .. } => {
-            expression_has_generic_reflection(module, *body, bound)
-        }
         Expression::Array { elements, .. } => elements
             .iter()
             .any(|element| expression_has_generic_reflection(module, element.value, bound)),
@@ -10222,8 +10211,7 @@ fn expression_span(expression: &Expression) -> Span {
         | Expression::If { span, .. }
         | Expression::Case { span, .. }
         | Expression::Block { span, .. }
-        | Expression::Rec { span, .. }
-        | Expression::Comptime { span, .. } => *span,
+        | Expression::Rec { span, .. } => *span,
     }
 }
 
@@ -10302,9 +10290,9 @@ fn free_name_span(
             }
             free_name_span(module, *argument, name, bound)
         }
-        Expression::Field { target, .. }
-        | Expression::Rec { lambda: target, .. }
-        | Expression::Comptime { body: target, .. } => free_name_span(module, *target, name, bound),
+        Expression::Field { target, .. } | Expression::Rec { lambda: target, .. } => {
+            free_name_span(module, *target, name, bound)
+        }
         Expression::Lambda {
             parameter, body, ..
         } => {

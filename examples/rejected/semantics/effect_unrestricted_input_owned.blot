@@ -1,0 +1,16 @@
+open import "blot:prelude"
+
+const Resource = @effect { .observe = Int -> Unit; }
+
+let program = fn () => do:
+  let !resource = 42
+  use Resource.observe (!resource)
+  return 0
+
+let local =
+  {
+    .observe = fn (resource, ?resume) => resume ();
+    .return = fn value => value;
+  }
+
+return @handle (Resource, program, local)

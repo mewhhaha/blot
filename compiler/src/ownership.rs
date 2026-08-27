@@ -15,7 +15,7 @@ use crate::partition::{
     reassociate_partition,
 };
 use crate::typecheck::Type;
-use crate::value::{Environment as ValueEnvironment, Value, lookup};
+use crate::value::{EffectOwnership, Environment as ValueEnvironment, Value, lookup};
 
 type BindingRef = Rc<RefCell<Binding>>;
 type ScopeRef = Rc<RefCell<Scope>>;
@@ -486,6 +486,27 @@ impl Analysis<'_> {
                 match target {
                     Value::Shape(fields) => fields.get(name).cloned(),
                     Value::Extended { members, .. } => members.get(name).cloned(),
+                    Value::Effect {
+                        id,
+                        name: effect_name,
+                        operations,
+                        operation_ownership,
+                        host,
+                    } => {
+                        if !operations.contains_key(name) {
+                            return None;
+                        }
+                        Some(Value::Operation {
+                            effect: Box::new(Value::Effect {
+                                id,
+                                name: effect_name,
+                                operations,
+                                operation_ownership,
+                                host,
+                            }),
+                            name: name.clone(),
+                        })
+                    }
                     Value::Sealed { inner, .. } => match *inner {
                         Value::Shape(fields) => fields.get(name).cloned(),
                         _ => None,
@@ -1287,7 +1308,6 @@ fn walk(
             }
         }
         Expression::Rec { lambda, .. } => walk(lambda, scope, analysis, kind),
-        Expression::Comptime { body, .. } => walk(body, scope, analysis, kind),
         Expression::Tuple { elements, .. } => Produced::Sequence(
             elements
                 .into_iter()
@@ -1708,6 +1728,12 @@ fn walk_apply(
             walk(handle_arguments[0], scope, analysis, Use::Move);
             if handle_arguments.len() == 3 {
                 walk(handle_arguments[2], scope, analysis, Use::Move);
+                validate_effect_handler_ownership(
+                    handle_arguments[0],
+                    handle_arguments[2],
+                    scope,
+                    analysis,
+                );
             }
             return shared_array_result(expression, Produced::None, analysis);
         }
@@ -2254,6 +2280,117 @@ fn walk_apply(
         resolve_pending(result, span, analysis),
         analysis,
     )
+}
+
+fn validate_effect_handler_ownership(
+    effect: ExpressionId,
+    handler: ExpressionId,
+    scope: &ScopeRef,
+    analysis: &mut Analysis<'_>,
+) {
+    let Some(Value::Effect {
+        operation_ownership,
+        ..
+    }) = analysis.callee_value(effect)
+    else {
+        return;
+    };
+    let handler = static_expression(handler, scope, analysis);
+    let Expression::Shape { members, .. } = &analysis.module.arena.expressions[handler.0 as usize]
+    else {
+        return;
+    };
+    for member in members {
+        let ShapeMember::Field { name, value } = member else {
+            continue;
+        };
+        if name == "return" {
+            continue;
+        }
+        let Some(expected) = operation_ownership.get(name) else {
+            continue;
+        };
+        let Expression::Lambda {
+            parameter, body, ..
+        } = analysis.module.arena.expressions[value.0 as usize]
+        else {
+            continue;
+        };
+        let Pattern::Tuple { elements, .. } = &analysis.module.arena.patterns[parameter.0 as usize]
+        else {
+            continue;
+        };
+        let Some(argument) = elements.first() else {
+            continue;
+        };
+        let written = written_parameter_pattern(*argument, analysis.module, None);
+        let expected_input = effect_ownership_produced(&expected.input);
+        if !same_effect_ownership_contract(&expected_input, &written) {
+            analysis.report(
+                "BLOT_EFFECT_HANDLER_OWNERSHIP",
+                format!(
+                    "Handler clause `.{name}` must bind its operation argument with the declared ownership contract."
+                ),
+                pattern_span(analysis.module, *argument),
+            );
+        }
+        let Some(resume) = elements.get(1) else {
+            continue;
+        };
+        let expected_result = effect_ownership_produced(&expected.result);
+        let requirements = analysis
+            .contracts
+            .get(&body)
+            .map(|contract| contract.callback_requirements.clone())
+            .unwrap_or_default();
+        for requirement in requirements {
+            if requirement.source != *resume {
+                continue;
+            }
+            if !same_effect_ownership_contract(&expected_result, &requirement.input) {
+                analysis.report(
+                        "BLOT_EFFECT_RESUME_OWNERSHIP",
+                        format!(
+                            "Handler clause `.{name}` passes an owned value to its continuation that does not match the operation result contract."
+                        ),
+                        analysis.module.arena.expression_span(*value),
+                    );
+            }
+        }
+    }
+}
+
+fn same_effect_ownership_contract(expected: &Produced, actual: &Produced) -> bool {
+    match (expected, actual) {
+        (Produced::None, Produced::None) => true,
+        (Produced::Leaf(expected), Produced::Leaf(actual)) => expected == actual,
+        (
+            Produced::Leaf(expected),
+            Produced::Parameter {
+                qualifier: actual, ..
+            },
+        ) => expected == actual,
+        (Produced::Sequence(expected), Produced::Sequence(actual)) => {
+            expected.len() == actual.len()
+                && expected
+                    .iter()
+                    .zip(actual)
+                    .all(|(expected, actual)| same_effect_ownership_contract(expected, actual))
+        }
+        (Produced::Shape(expected), Produced::Shape(actual))
+        | (Produced::Choice(expected), Produced::Choice(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().all(|(name, expected)| {
+                    actual
+                        .get(name)
+                        .is_some_and(|actual| same_effect_ownership_contract(expected, actual))
+                })
+        }
+        (Produced::Variant(expected), Produced::Variant(actual)) => {
+            same_effect_ownership_contract(expected, actual)
+        }
+        _ => false,
+    }
 }
 
 fn contains_explicit_ownership_handoff(expression: ExpressionId, module: &Module) -> bool {
@@ -2889,6 +3026,21 @@ fn function_contract(
             None,
         );
     }
+    if let Some(Value::Operation { effect, name }) = analysis.callee_value(expression)
+        && let Value::Effect {
+            operation_ownership,
+            ..
+        } = effect.as_ref()
+        && let Some(ownership) = operation_ownership.get(&name)
+    {
+        return (
+            None,
+            effect_ownership_produced(&ownership.input),
+            effect_ownership_produced(&ownership.result),
+            Vec::new(),
+            None,
+        );
+    }
     match analysis.module.arena.expressions[expression.0 as usize] {
         Expression::Lambda {
             parameter, body, ..
@@ -2962,6 +3114,46 @@ fn function_contract(
             Vec::new(),
             None,
         )),
+    }
+}
+
+fn effect_ownership_produced(ownership: &EffectOwnership) -> Produced {
+    match ownership {
+        EffectOwnership::Unrestricted => Produced::None,
+        EffectOwnership::Affine => Produced::Leaf(Qualifier::Affine),
+        EffectOwnership::Linear => Produced::Leaf(Qualifier::Linear),
+        EffectOwnership::Record(fields) => {
+            if (0..fields.len()).all(|index| fields.contains_key(&index.to_string())) {
+                return Produced::Sequence(
+                    (0..fields.len())
+                        .map(|index| {
+                            effect_ownership_produced(
+                                fields
+                                    .get(&index.to_string())
+                                    .expect("checked positional ownership field"),
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            Produced::Shape(
+                fields
+                    .iter()
+                    .map(|(name, ownership)| (name.clone(), effect_ownership_produced(ownership)))
+                    .collect(),
+            )
+        }
+        EffectOwnership::Variant(cases) => Produced::Choice(
+            cases
+                .iter()
+                .map(|(name, ownership)| {
+                    (
+                        name.clone(),
+                        Produced::Variant(Box::new(effect_ownership_produced(ownership))),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -5496,9 +5688,7 @@ fn recursion_paths(
             (path, violated || (path.spends && path.recurses))
         }
         Expression::Field { target, .. } => recursion_paths(*target, names, captures, module),
-        Expression::Lambda { body, .. } | Expression::Comptime { body, .. } => {
-            recursion_paths(*body, names, captures, module)
-        }
+        Expression::Lambda { body, .. } => recursion_paths(*body, names, captures, module),
         Expression::Rec { lambda, .. } => recursion_paths(*lambda, names, captures, module),
         Expression::Tuple { elements, .. } => {
             sequential(elements.iter().copied(), names, captures, module)
@@ -5647,7 +5837,6 @@ fn recursive_calls_are_tail(
         Expression::Field { target, .. } => recursive_calls_are_tail(*target, names, false, module),
         Expression::Lambda { body, .. } => recursive_calls_are_tail(*body, names, tail, module),
         Expression::Rec { lambda, .. } => recursive_calls_are_tail(*lambda, names, tail, module),
-        Expression::Comptime { body, .. } => recursive_calls_are_tail(*body, names, false, module),
         Expression::Tuple { elements, .. } => elements
             .iter()
             .all(|element| recursive_calls_are_tail(*element, names, false, module)),
@@ -5725,7 +5914,6 @@ fn collect_free_names(
             bound.pop();
         }
         Expression::Rec { lambda, .. } => collect_free_names(*lambda, module, bound, names),
-        Expression::Comptime { body, .. } => collect_free_names(*body, module, bound, names),
         Expression::Tuple { elements, .. } => {
             for expression in elements {
                 collect_free_names(*expression, module, bound, names);
@@ -5823,5 +6011,30 @@ fn pattern_span(module: &Module, pattern: PatternId) -> Span {
         | Pattern::Array { span, .. }
         | Pattern::Constructor { span, .. }
         | Pattern::Shape { span, .. } => *span,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_tuple_ownership_retains_numeric_field_order() {
+        let fields = (0..11)
+            .map(|index| (index.to_string(), EffectOwnership::Linear))
+            .collect();
+
+        let Produced::Sequence(elements) =
+            effect_ownership_produced(&EffectOwnership::Record(fields))
+        else {
+            panic!("numeric ownership fields did not remain a tuple");
+        };
+
+        assert_eq!(elements.len(), 11);
+        assert!(
+            elements
+                .iter()
+                .all(|element| *element == Produced::Leaf(Qualifier::Linear))
+        );
     }
 }

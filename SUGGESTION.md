@@ -26,13 +26,13 @@ non-recursive records and sums keep their flat representation.
 The mechanism is automatic. Adding source-level `Box`, pointer types, or
 lifetime parameters would expose a target repair as a language concept and make
 ordinary algebraic data harder to read. Recursive values should remain barred
-from ABI 1 until a canonical cyclic graph format is designed; an internal list
+from ABI 2 until a canonical cyclic graph format is designed; an internal list
 used to produce a scalar can safely die with the export call's scratch arena.
 
 The executable probes cover direct and mutually recursive values, empty and
 singleton cases, constructor projection, exhaustive matching, ABI refusal, and
 scaling against the indexed `Arena` baseline. The private indirect edge is not a
-source ownership location: it remains call-local and cannot cross ABI 1.
+source ownership location: it remains call-local and cannot cross ABI 2.
 Source-level variant, record, and consuming-array extraction lineage is instead
 published by ownership certificate schema 3.
 
@@ -98,7 +98,7 @@ This is deliberately not a function-pointer representation. `call.indirect`, a
 runtime code table, or a uniform closure record would each make every joined
 function opaque to specialization and would put a dispatch the compiler cannot
 see into a language whose ownership analysis depends on knowing the callee. The
-table is refused at ABI 1 for the same reason: its cases name compiler-local
+table is refused at ABI 2 for the same reason: its cases name compiler-local
 closure sources, so no caller could read one.
 
 ## 5. Require evidence before adding algebraic loop rewrites
@@ -394,9 +394,9 @@ inferred demand stays the truth; the signature is the human-facing bound on it.
 - **Concurrency.** Nothing states what it will be, and the pieces on hand —
   one-shot continuations, handlers, typed host imports — admit the ordinary
   answer of async as a host effect whose handler owns the schedule. That answer
-  constrains ABI 1, in whether a suspension may cross the boundary, and
-  generalizes the `!resume` ownership case. Write the design note before ABI 1
-  accretes exports; do not add a form.
+  constrains ABI 2, in whether a suspension may cross the boundary, and
+  generalizes the `!resume` ownership case. Treat it as an explicit future ABI
+  change; do not add a form.
 - **Mechanized invariants.** The evidence bullet in section 6 should name its
   targets: linearity preserved by the `for` desugaring, Phi's frame conditions
   under `:=` and aliasing, ownership-certificate replay soundness, and

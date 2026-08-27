@@ -59,8 +59,9 @@ Blot makes these commitments:
    computation. An empty row excludes algebraic-effect requests; it does not
    create a pure-call semantics, prove termination, or remove specified traps.
 3. **Explicit statement values.** Declarations and statement control appear in a
-   value only through `do:` or `compdo:`. Indentation alone is continuation
-   layout, not an anonymous block constructor.
+   value only through `do:`. Indentation alone is continuation layout, not an
+   anonymous block constructor. A surrounding `const` determines compile-time
+   resolution without adding another block form.
 4. **Checked phase crossing.** Run-time data cannot determine a compile-time
    type, effect descriptor, layout, declaration tag, or reflection decision.
 5. **Separate fact domains.** Ordinary subtype bounds, relational propositions,
@@ -643,7 +644,7 @@ Malformed UTF-8, booleans, discriminants, pointers, alignments, lengths, and
 ownership state trap before an invalid source value is constructed.
 
 `RUNTIME.md` owns the semantic representation relation and admissible type
-boundary. `docs/abi.md` owns exact ABI 1 bytes and caller ownership. A seal's
+boundary. `docs/abi.md` owns exact ABI 2 bytes and caller ownership. A seal's
 public name is present in the manifest and conformance relation, not dynamically
 inside equal raw carrier bytes. Nominal ABI safety therefore assumes a caller
 that obeys the declared manifest.

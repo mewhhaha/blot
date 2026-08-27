@@ -375,18 +375,6 @@ fn quantify_effect_row_tails(
     value
 }
 
-fn finish_source_block(
-    phase: &str,
-    body: ExpressionId,
-    span: Span,
-    arena: &mut AstArena,
-) -> ExpressionId {
-    if phase == "compdo" {
-        return arena.expression(Expression::Comptime { body, span });
-    }
-    body
-}
-
 fn lower_declaration(
     cst: &CompactCst<'_>,
     rule: u32,
@@ -2886,17 +2874,7 @@ fn lower_primary(
             }
             lower_guards(target, &arms, span, arena)
         }
-        // `do:` and `compdo:` share one statement scope. `compdo:` wraps the
-        // completed block in the existing internal comptime expression.
         "block" | "do_block" => {
-            let phase = if cst.rule_name(rule)? == "do_block" {
-                token_text(cst, required(cst, rule, "phase")?)?
-            } else {
-                "do".to_owned()
-            };
-            if phase != "do" && phase != "compdo" {
-                return Err(format!("unknown block phase `{phase}`"));
-            }
             let mut statements = cst.field_list(rule, "statements")?;
             let mut result = arena.expression(Expression::Unit { span });
             let mut result_effects = ResultEffects::Pure;
@@ -2913,7 +2891,7 @@ fn lower_primary(
                 contains_only_result = statements.is_empty();
             }
             if contains_only_result {
-                return Ok(finish_source_block(&phase, result, span, arena));
+                return Ok(result);
             }
             if statements_need_control(cst, &statements)? {
                 let result = resolve_control_sequence(
@@ -2930,7 +2908,7 @@ fn lower_primary(
                     result_effects: ResultEffects::Ambient,
                     span,
                 });
-                return Ok(finish_source_block(&phase, block, span, arena));
+                return Ok(block);
             }
             let mut declarations = Vec::new();
             for statement in statements {
@@ -2943,7 +2921,7 @@ fn lower_primary(
                 result_effects,
                 span,
             });
-            Ok(finish_source_block(&phase, block, span, arena))
+            Ok(block)
         }
         name => Err(format!(
             "Rust middle has not lowered expression `{name}` yet"

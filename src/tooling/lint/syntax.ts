@@ -56,11 +56,7 @@ export function expressionReads(
       return expressionReads(expression.body, visible);
     }
     case "rec":
-    case "comptime":
-      return expressionReads(
-        expression.tag === "rec" ? expression.lambda : expression.body,
-        names,
-      );
+      return expressionReads(expression.lambda, names);
     case "tuple":
       return expression.elements.some((element) =>
         expressionReads(element, names)

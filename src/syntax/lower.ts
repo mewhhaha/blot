@@ -2507,17 +2507,6 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
   }
 
   if (rule.name === "do_block") {
-    const phase = tokenOf(required(rule, "phase")).text;
-    expect(
-      phase === "do" || phase === "compdo",
-      `unknown block phase ${phase}`,
-    );
-    const finish = (body: Expr): Expr => {
-      if (phase === "compdo") {
-        return { tag: "comptime", body, span: rule.span };
-      }
-      return body;
-    };
     let statements = fieldList(rule, "statements");
     let result: Expr = { tag: "unit", span: rule.span };
     let resultEffects: "pure" | "ambient" = "pure";
@@ -2536,9 +2525,9 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         containsOnlyResult = statements.length === 0;
       }
     }
-    if (containsOnlyResult) return finish(result);
+    if (containsOnlyResult) return result;
     if (statementsNeedControlLowering(statements)) {
-      return finish({
+      return {
         tag: "block",
         declarations: [],
         result: resolveControlSequence(
@@ -2549,18 +2538,18 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
         ),
         resultEffects: "ambient",
         span: rule.span,
-      });
+      };
     }
     const declarations = statements.map((statement) =>
       lowerDecl(asRule(unwrap(statement), "statement"), blockContext)
     );
-    return finish({
+    return {
       tag: "block",
       declarations,
       result,
       resultEffects,
       span: rule.span,
-    });
+    };
   }
 
   fail(

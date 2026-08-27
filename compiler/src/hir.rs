@@ -12,8 +12,8 @@ use crate::ownership::Produced;
 use crate::protocol::RUNTIME_HIR_SCHEMA;
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type, sealed_type, sealed_type_name};
 use crate::value::{
-    ChoiceSource, ClosureAlternative, Environment, OrderedFields, RuntimeMeaning, RuntimeValue,
-    Value, as_tuple, child_env, lookup,
+    ChoiceSource, ClosureAlternative, EffectOperationOwnership, EffectOwnership, Environment,
+    OrderedFields, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env, lookup,
 };
 
 #[derive(Clone, Serialize)]
@@ -448,10 +448,72 @@ pub(crate) struct RuntimeFunction {
     pub(crate) span: RuntimeSpan,
 }
 
+#[derive(Clone, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum RuntimeEffectOwnership {
+    Mode(&'static str),
+    Record {
+        kind: &'static str,
+        fields: Vec<RuntimeEffectOwnershipMember>,
+    },
+    Variant {
+        kind: &'static str,
+        cases: Vec<RuntimeEffectOwnershipMember>,
+    },
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub(crate) struct RuntimeEffectOwnershipMember {
+    name: String,
+    ownership: RuntimeEffectOwnership,
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize)]
+pub(crate) struct RuntimeOperationOwnership {
+    input: RuntimeEffectOwnership,
+    result: RuntimeEffectOwnership,
+}
+
+fn runtime_operation_ownership(ownership: &EffectOperationOwnership) -> RuntimeOperationOwnership {
+    RuntimeOperationOwnership {
+        input: runtime_effect_ownership(&ownership.input),
+        result: runtime_effect_ownership(&ownership.result),
+    }
+}
+
+fn runtime_effect_ownership(ownership: &EffectOwnership) -> RuntimeEffectOwnership {
+    match ownership {
+        EffectOwnership::Unrestricted => RuntimeEffectOwnership::Mode("unrestricted"),
+        EffectOwnership::Affine => RuntimeEffectOwnership::Mode("affine"),
+        EffectOwnership::Linear => RuntimeEffectOwnership::Mode("linear"),
+        EffectOwnership::Record(fields) => RuntimeEffectOwnership::Record {
+            kind: "record",
+            fields: fields
+                .iter()
+                .map(|(name, ownership)| RuntimeEffectOwnershipMember {
+                    name: name.clone(),
+                    ownership: runtime_effect_ownership(ownership),
+                })
+                .collect(),
+        },
+        EffectOwnership::Variant(cases) => RuntimeEffectOwnership::Variant {
+            kind: "variant",
+            cases: cases
+                .iter()
+                .map(|(name, ownership)| RuntimeEffectOwnershipMember {
+                    name: name.clone(),
+                    ownership: runtime_effect_ownership(ownership),
+                })
+                .collect(),
+        },
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub(crate) struct RuntimeCapabilityOperation {
     pub(crate) name: String,
     pub(crate) signature: usize,
+    pub(crate) ownership: RuntimeOperationOwnership,
 }
 
 #[derive(Clone, Serialize)]
@@ -498,7 +560,7 @@ pub(crate) struct ResidualTrace {
     types: Vec<RuntimeType>,
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
-    capabilities: BTreeMap<String, BTreeMap<String, usize>>,
+    capabilities: BTreeMap<String, BTreeMap<String, (usize, RuntimeOperationOwnership)>>,
     blocks: Vec<ResidualBlock>,
     current_block: usize,
     next_value: usize,
@@ -728,6 +790,7 @@ impl ResidualTrace {
         operation: String,
         argument: &Value,
         result_type: &Value,
+        operation_ownership: &EffectOperationOwnership,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
         let argument = self.lower_value(argument, span)?;
@@ -742,28 +805,33 @@ impl ResidualTrace {
                 diagnostic
             })?;
         let parameter_type = argument.type_id;
-        let signature = self.signatures.len();
+        let ownership_contract = runtime_operation_ownership(operation_ownership);
         let operations = self.capabilities.entry(capability.clone()).or_default();
-        if let Some(existing) = operations.get(&operation) {
+        if let Some((existing, existing_ownership)) = operations.get(&operation) {
             let declared = &self.signatures[*existing];
-            if declared.parameters != [parameter_type] || declared.result != result_type {
+            if declared.parameters != [parameter_type]
+                || declared.result != result_type
+                || existing_ownership != &ownership_contract
+            {
                 return Err(hir_error(&format!(
-                    "Host operation `{capability}.{operation}` was used with incompatible signatures."
+                    "Host operation `{capability}.{operation}` was used with incompatible signatures or ownership contracts."
                 )));
             }
         } else {
+            let signature = self.signatures.len();
             self.signatures.push(RuntimeSignature {
                 parameters: vec![parameter_type],
                 result: result_type,
                 effects: vec![capability.clone()],
             });
-            operations.insert(operation.clone(), signature);
+            operations.insert(operation.clone(), (signature, ownership_contract));
         }
         let result = self.next_value();
         let ownership = self.ownership(result_type);
-        let operation_signature = *self.capabilities[&capability]
+        let operation_signature = self.capabilities[&capability]
             .get(&operation)
-            .expect("inserted host operation");
+            .expect("inserted host operation")
+            .0;
         let _ = operation_signature;
         let runtime_span = self.span(span);
         self.current().operations.push(RuntimeOperation {
@@ -866,7 +934,13 @@ impl ResidualTrace {
                 name,
                 operations: operations
                     .into_iter()
-                    .map(|(name, signature)| RuntimeCapabilityOperation { name, signature })
+                    .map(
+                        |(name, (signature, ownership))| RuntimeCapabilityOperation {
+                            name,
+                            signature,
+                            ownership,
+                        },
+                    )
                     .collect(),
             })
             .collect();
@@ -3348,7 +3422,13 @@ impl ResidualTrace {
                 operations: {
                     let mut operations = operations
                         .into_iter()
-                        .map(|(name, signature)| RuntimeCapabilityOperation { name, signature })
+                        .map(
+                            |(name, (signature, ownership))| RuntimeCapabilityOperation {
+                                name,
+                                signature,
+                                ownership,
+                            },
+                        )
                         .collect::<Vec<_>>();
                     operations.sort_by_key(|operation| operation.signature);
                     operations
@@ -7377,6 +7457,7 @@ struct HostCall {
     capability: String,
     operation: String,
     argument: Value,
+    ownership: RuntimeOperationOwnership,
 }
 
 struct RuntimeValueExport {
@@ -7780,6 +7861,7 @@ fn complete_residual_host_calls(
                     request.operation,
                     &request.argument,
                     &request.result_type,
+                    &request.operation_ownership,
                     request.span,
                 )?;
                 computation = resume(result);
@@ -7821,6 +7903,10 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
     let effect = Value::Effect {
         id: u32::MAX,
         name: "Init".to_owned(),
+        operation_ownership: operations
+            .keys()
+            .map(|name| (name.clone(), EffectOperationOwnership::unrestricted()))
+            .collect(),
         operations,
         host: true,
     };
@@ -7954,6 +8040,7 @@ fn complete_host_calls(mut computation: Computation) -> Result<(Value, Vec<HostC
                     capability: request.effect_name,
                     operation: request.operation,
                     argument: request.argument,
+                    ownership: runtime_operation_ownership(&request.operation_ownership),
                 });
                 computation = resume(Value::Unit);
             }
@@ -8038,7 +8125,8 @@ struct HirBuilder {
     types: Vec<RuntimeType>,
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
-    capability_signatures: BTreeMap<String, BTreeMap<String, (usize, String)>>,
+    capability_signatures:
+        BTreeMap<String, BTreeMap<String, (usize, String, RuntimeOperationOwnership)>>,
     next_value: usize,
 }
 
@@ -8100,7 +8188,13 @@ impl HirBuilder {
                 name,
                 operations: operations
                     .into_iter()
-                    .map(|(name, (signature, _))| RuntimeCapabilityOperation { name, signature })
+                    .map(
+                        |(name, (signature, _, ownership))| RuntimeCapabilityOperation {
+                            name,
+                            signature,
+                            ownership,
+                        },
+                    )
                     .collect(),
             })
             .collect();
@@ -8621,10 +8715,12 @@ impl HirBuilder {
             .capability_signatures
             .entry(call.capability.clone())
             .or_default();
-        let signature = if let Some((signature, existing_key)) = capability.get(&call.operation) {
-            if existing_key != &parameter_key {
+        let signature = if let Some((signature, existing_key, existing_ownership)) =
+            capability.get(&call.operation)
+        {
+            if existing_key != &parameter_key || existing_ownership != &call.ownership {
                 return Err(hir_error(&format!(
-                    "Host operation {}.{} has inconsistent argument types.",
+                    "Host operation {}.{} has inconsistent argument types or ownership contracts.",
                     call.capability, call.operation
                 )));
             }
@@ -8636,7 +8732,10 @@ impl HirBuilder {
                 result: unit_type,
                 effects: vec![call.capability.clone()],
             });
-            capability.insert(call.operation.clone(), (signature, parameter_key));
+            capability.insert(
+                call.operation.clone(),
+                (signature, parameter_key, call.ownership.clone()),
+            );
             signature
         };
         let _ = signature;
@@ -8904,12 +9003,12 @@ fn type_name(type_: &Type) -> &'static str {
     }
 }
 
-/// What ABI 1 says about the private function-choice layout. The tag and its
+/// What ABI 2 says about the private function-choice layout. The tag and its
 /// capture product are Runtime HIR's own bookkeeping: they name compiler-local
 /// closure sources, so no caller could read one even if it were exported.
 fn closure_choice_refusal(alternatives: usize) -> String {
     format!(
-        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 1 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
+        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 2 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
     )
 }
 

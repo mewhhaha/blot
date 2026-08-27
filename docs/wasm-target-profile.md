@@ -3,7 +3,7 @@
 ## Status
 
 Blot's production target is standard WebAssembly 3.0, tested on V8 through the
-current Node LTS and Current release lines. Core Wasm ABI 1 remains memory32.
+current Node LTS and Current release lines. Core Wasm ABI 2 remains memory32.
 This document records target selection and implementation status; semantic and
 byte-level authority remain in `spec/RUNTIME.md` and `docs/abi.md`.
 
@@ -42,9 +42,9 @@ concrete engine.
 | branch hinting                | cold immediate-trap branches                                          | improves V8 layout/register decisions without changing validation or observations   |
 | typed references / `call_ref` | deferred                                                              | residual known choices already become direct calls; open closures are refused       |
 | GC / JS string builtins       | separate future V8 profile                                            | can remove Text/runtime work but replaces Store and ABI representation proofs       |
-| memory64                      | deferred                                                              | ABI 1 is memory32 and current programs gain no offset-space benefit                 |
+| memory64                      | deferred                                                              | ABI 2 is memory32 and current programs gain no offset-space benefit                 |
 | multiple memories             | deferred                                                              | no measured benefit yet; complicates canonical adapters and interpreter portability |
-| exception handling / JSPI     | separate future async profile                                         | Blot effects are resumable and ABI 1 host calls are synchronous                     |
+| exception handling / JSPI     | separate future async profile                                         | Blot effects are resumable and ABI 2 host calls are synchronous                     |
 | relaxed SIMD                  | deferred                                                              | relaxed/FMA instructions can change deterministic floating-point results            |
 
 ## Branch-hint lowering

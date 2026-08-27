@@ -165,6 +165,20 @@ A function publishes a type-independent ownership summary describing parameter,
 callback, and result-path use. Passing a linear closure once to a function that
 invokes it twice is a duplication and is rejected.
 
+Each effect operation likewise publishes one normalized input summary and one
+result summary. A direct arrow supplies unrestricted roots. A descriptor may use
+unrestricted, affine, or linear roots, or exact recursive record/variant
+summaries whose names match the operation type. Borrow is not an operation mode:
+a request suspends the caller and cannot carry a lexical borrow across that
+boundary.
+
+Calling an operation applies the input summary as an ordinary function contract
+and mints the result summary as a fresh obligation. A handler clause's argument
+pattern must match the input summary exactly. An explicit owned handoff to its
+one-shot `resume` must match the result summary exactly; an unrestricted resume
+value requires no ownership promise. These summaries remain outside the ordinary
+type and effect lattices.
+
 Current linearity is a structural unique-use theorem. A consuming action runs a
 domain-specific finalizer only when that operation's contract explicitly says
 so. `Continuation.cancel` accounts for the continuation without executing the

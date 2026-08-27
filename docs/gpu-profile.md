@@ -19,14 +19,15 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     123 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     119 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
 | `islandCount`               |      68 | one island for every grammar rule                  |
-| `islandStates`              |     405 |                                                    |
-| `islandTransitions`         |     417 |                                                    |
+| `islandStates`              |     403 |                                                    |
+| `islandTransitions`         |     414 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 612,360 | immutable device table                             |
-| `packedBytes`               | 478,100 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 604,500 | immutable device table                             |
+| `packedBytes`               | 472,483 | version-3 runtime section                          |
+| `scratch.summaries`         |      24 | summaries retained per scratch region              |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
@@ -39,9 +40,9 @@ Admitting a block-bodied lambda as an unparenthesized infix right operand adds
 one bounded island, four island states, four island transitions, 10,788 dense
 transition bytes, and 7,944 packed bytes. Lexer states, candidate multiplicity,
 contraction rounds, scratch factors, the root loop, and parallel long-region
-admission do not change. The lambda's `do:` or `compdo:` dedent terminates the
-new island; expression-bodied lambdas remain outside operand chains, so the
-unbounded `expression -> lambda -> expression` recursion does not return.
+admission do not change. The lambda's `do:` dedent terminates the new island;
+expression-bodied lambdas remain outside operand chains, so the unbounded
+`expression -> lambda -> expression` recursion does not return.
 
 Removing the expression-local `reuse fn` assertion saves three lexer states, two
 island states, three island transitions, 7,644 dense-transition bytes, and 5,450
@@ -49,15 +50,24 @@ packed bytes. `@[assert.reuse]` uses the existing declaration-tag grammar, so
 the checked assertion adds no syntax state, island, candidate multiplicity,
 contraction round, scratch expansion, or long-region loss.
 
-Removing element syntax while adding `compdo:` and effect-row tails moves the
-current plan from 117 to 113 lexer states, from 81 to 67 islands, and from 30 to
-22 maximum candidates per token. Dense transitions fall from 769,392 to 573,888
-bytes and the packed plan from 593,683 to 450,224 bytes. The root loop and 33
-contraction rounds are unchanged; parallel long-region admission moves from 9 to
-7 islands because the retired element regions no longer exist. These are the
-historical counters immediately before later module-syntax changes; the element
+The historical element-removal experiment also added the now-retired `compdo:`
+keyword alongside effect-row tails. At that point it moved the current plan from
+117 to 113 lexer states, from 81 to 67 islands, and from 30 to 22 maximum
+candidates per token. Dense transitions fall from 769,392 to 573,888 bytes and
+the packed plan from 593,683 to 450,224 bytes. The root loop and 33 contraction
+rounds are unchanged; parallel long-region admission moves from 9 to 7 islands
+because the retired element regions no longer exist. These are the historical
+counters immediately before later module-syntax changes; the element
 measurements later in this document remain historical records of the retired
 syntax.
+
+Removing `compdo:` in favor of declaration-directed phase reduces the current
+plan from 123 to 119 lexer states, 405 to 403 island states, and 417 to 414
+island transitions. Dense transitions fall by 7,860 bytes to 604,500; the packed
+plan falls by 5,617 bytes to 472,483; and scratch summary capacity falls from 25
+to 24. Island count 68, maximum candidate multiplicity 24, contraction rounds
+33, root-loop island 5, six parallel long-region islands, and scratch node/edge/
+constraint capacities 1/2/4 are unchanged.
 
 Replacing exposed module functions with `module with input` and immediate
 `import "path" [with value]` adds one retained island, ten island states, nine

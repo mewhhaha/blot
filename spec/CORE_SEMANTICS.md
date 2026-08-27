@@ -17,7 +17,7 @@ A closed Core computation has finite observations:
 
 ```text
 Return(v)
-Request(ell, operation, argument, continuation-protocol)
+Request(ell, operation, argument, operation-ownership, continuation-protocol)
 Trap(specified-trap)
 ```
 
@@ -29,8 +29,9 @@ Store headers, and private representation choices are hidden unless a source or
 ABI relation explicitly exposes a corresponding value.
 
 A request is compared as a protocol. Related executions agree on effect
-identity, operation, and related argument. Related host responses resume related
-one-shot continuations. Raw continuation addresses are not source observations.
+identity, operation, related argument, and normalized input/result ownership.
+Related host responses resume related one-shot continuations. Raw continuation
+addresses are not source observations.
 
 ## 2. Values and computations
 
@@ -175,8 +176,8 @@ capture generative values, closures, traps, or divergence.
 For an ordinary source effect declaration:
 
 ```text
-newEffect(module-instance, source-node, compile-time-scope, Sigma)
-  => effect(ell, Sigma)
+newEffect(module-instance, source-node, compile-time-scope, Sigma, Pi)
+  => effect(ell, Sigma, Pi)
 ```
 
 An application occurrence is the exact source-expression identity in its
@@ -198,7 +199,8 @@ observable dependency boundary changes.
 
 `Sigma` is compared by exact type-value equality: quantified variables are
 alpha-equivalent, record order is immaterial, and referenced effect atoms keep
-their exact identities. It is never replaced by a partial structural hash.
+their exact identities. `Pi` is the exact normalized input/result ownership map
+for the same operation names. Neither is replaced by a partial structural hash.
 
 `ell` is fresh for every different tuple. Administrative compiler re-evaluation
 of the same recorded tuple recovers the same atom. Evaluation in another module
@@ -217,7 +219,7 @@ canonical invariant carrier, as specified by `TYPECHECKING.md` and `STAGING.md`.
 If:
 
 ```text
-Signature(ell, operation) = A -> B
+Operation(ell, operation) = (A -> B, input_ownership -> result_ownership)
 ```
 
 then:
@@ -230,6 +232,11 @@ Gamma |- perform[ell, operation](v) : B ! {ell}
 
 The atom is part of the capability. An equal-looking signature under another
 atom does not handle or authorize the request.
+
+The companion ownership transition, owned by `SAFETY.md`, consumes the argument
+according to `input_ownership` and assigns a fresh obligation described by
+`result_ownership` to the returned value. Neither summary changes `A`, `B`, or
+the effect row. A request cannot carry a borrow.
 
 ## 8. Handler reduction and rows
 
@@ -248,6 +255,11 @@ A successful resume re-enters the handler around the captured context. The
 operation clause itself is not recursively enclosed by the same handler. A
 clause that performs `ell` therefore emits a new request and reintroduces the
 label.
+
+The clause argument pattern implements the operation input ownership exactly.
+When a clause explicitly transfers an owned value to `resume`, that value
+implements the result ownership exactly. Thus handling discharges the request
+without weakening its ownership protocol.
 
 Let all operation clauses and the optional return clause contribute `epsilon_h`.
 Handling has the row rule:

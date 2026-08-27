@@ -7,6 +7,7 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | Export | Import |
 | --- | --- |
 | `Fn` | `blot:prelude` |
+| `Effect` | `blot:prelude` |
 | `identity` | `blot:prelude` |
 | `freeze` | `blot:prelude` |
 | `always` | `blot:prelude` |
