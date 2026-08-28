@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const User = { .name = Text; .score = Int; }
+
+let project :: User -> { .name = Text; .score = Int; }
+let project = fn user => {
+  .name = user.name;
+  .score = user.score;
+}
+
+return { .project = project; }

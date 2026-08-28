@@ -1,0 +1,7 @@
+open import "blot:prelude"
+
+let stream_sum :: Int -> Int
+let stream_sum = fn seed => do:
+  return (seed + 1) * 2 + (seed + 2) * 2 + (seed + 3) * 2
+
+return { .run = stream_sum; }

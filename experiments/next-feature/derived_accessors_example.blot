@@ -1,0 +1,3 @@
+open import "./derived_accessors.blot"
+
+return project { .name = "Ada"; .score = 42; }

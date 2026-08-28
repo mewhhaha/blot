@@ -1,0 +1,41 @@
+// A stream is an effect protocol. Producers know only `Emit`; transformers
+// reinterpret one protocol as another; consumers decide the result.
+
+open import "blot:prelude"
+
+const Source = @effect { .emit = Int -> Unit; }
+const Mapped = @effect { .emit = Int -> Unit; }
+
+let stream_sum :: Int -> Int
+let stream_sum = fn seed => do:
+  let produce = fn () => do:
+    use Source.emit (seed + 1)
+    use Source.emit (seed + 2)
+    use Source.emit (seed + 3)
+    return ()
+
+  let double = {
+    .emit = fn (value, ?resume) => do:
+      use Mapped.emit (value * 2)
+      use result <- resume ()
+      return result
+    ;
+  }
+
+  let sum = {
+    .emit = fn (value, ?resume) => do:
+      use rest <- resume ()
+      return value + rest
+    ;
+    .return = fn () => 0;
+  }
+
+  let streamed =
+    produce
+      |> @handle (Source, double)
+      |> @handle (Mapped, sum)
+
+  use result <- streamed
+  return result
+
+return { .run = stream_sum; }
