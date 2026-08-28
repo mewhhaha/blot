@@ -529,7 +529,7 @@ fn lower_declaration(
             }
             let nested = nested_statement_lists(cst, rule)?;
             let flattened = nested.iter().flatten().copied().collect::<Vec<_>>();
-            let rebound = rebound_names(cst, &flattened, context)?;
+            let rebound = rebound_names(cst, &flattened, &[], context)?;
             let mut branches = Vec::new();
             branches.push(Branch {
                 condition: lower_expression(
@@ -995,7 +995,7 @@ fn lower_control_statement(
 
     let nested = nested_statement_lists(cst, rule)?;
     let flattened = nested.iter().flatten().copied().collect::<Vec<_>>();
-    let rebound = rebound_names(cst, &flattened, context)?;
+    let rebound = rebound_names(cst, &flattened, &[], context)?;
     let branch_continue = if remaining.is_empty() {
         continue_value
     } else {
@@ -1196,7 +1196,24 @@ fn lower_control_loop(
 ) -> Result<LoweredControlLoop, String> {
     let span = cst.span(Cursor::Rule(rule))?;
     let statements = statement_suite(cst, rule, "body")?;
-    let carried = rebound_names(cst, &statements, context)?;
+    let drawn = cst.field(rule, "drawn")?;
+    let mut head_context = context.clone();
+    head_context.pattern_head = drawn.is_some();
+    let head = lower_value(cst, required(cst, rule, "head")?, &head_context, arena)?;
+    let (binder, source) = match drawn {
+        None => (None, head),
+        Some(drawn) => {
+            let binder = pattern_from_expression(head, arena)?;
+            let drawn = as_rule(drawn)?;
+            let source = lower_value(cst, required(cst, drawn, "source")?, context, arena)?;
+            (Some(binder), source)
+        }
+    };
+    let mut local_names = Vec::new();
+    if let Some(binder) = binder {
+        pattern_names(binder, arena, &mut local_names);
+    }
+    let carried = rebound_names(cst, &statements, &local_names, context)?;
     let constructors = ControlConstructors {
         return_constructor: synthetic_constructor("LoopReturn", span),
         continue_constructor: synthetic_constructor("LoopContinue", span),
@@ -1225,19 +1242,6 @@ fn lower_control_loop(
         arena,
     )?;
 
-    let drawn = cst.field(rule, "drawn")?;
-    let mut head_context = context.clone();
-    head_context.pattern_head = drawn.is_some();
-    let head = lower_value(cst, required(cst, rule, "head")?, &head_context, arena)?;
-    let (binder, source) = match drawn {
-        None => (None, head),
-        Some(drawn) => {
-            let binder = pattern_from_expression(head, arena)?;
-            let drawn = as_rule(drawn)?;
-            let source = lower_value(cst, required(cst, drawn, "source")?, context, arena)?;
-            (Some(binder), source)
-        }
-    };
     let filtering = loop_filtering(cst, rule, binder, arena)?;
     let (pattern, value) = desugar_loop(
         binder,
@@ -1306,7 +1310,6 @@ fn lower_iteration(
             span,
         }));
     }
-    let carried = rebound_names(cst, &statements, context)?;
     let effectful = statements_contain_effect(cst, &statements)?;
     let drawn = cst.field(rule, "drawn")?;
     let mut head_context = context.clone();
@@ -1321,6 +1324,11 @@ fn lower_iteration(
             (Some(binder), source)
         }
     };
+    let mut local_names = Vec::new();
+    if let Some(binder) = binder {
+        pattern_names(binder, arena, &mut local_names);
+    }
+    let carried = rebound_names(cst, &statements, &local_names, context)?;
     let filtering = loop_filtering(cst, rule, binder, arena)?;
     let mut body = Vec::new();
     for statement in statements {
@@ -1838,8 +1846,16 @@ fn pattern_from_expression(
         Expression::Shape { members, span } => {
             let mut fields = Vec::new();
             for member in members {
-                let ShapeMember::Field { name, value } = member else {
-                    return Err("BLOT_BAD_BINDER: a binder cannot spread".to_owned());
+                let (name, value) = match member {
+                    ShapeMember::Field { name, value } => (name, value),
+                    ShapeMember::Computed { .. } => {
+                        return Err(
+                            "BLOT_BAD_BINDER: a binder cannot compute a field name".to_owned()
+                        );
+                    }
+                    ShapeMember::Spread { .. } => {
+                        return Err("BLOT_BAD_BINDER: a binder cannot spread".to_owned());
+                    }
                 };
                 fields.push(ShapePatternField {
                     name,
@@ -2065,10 +2081,11 @@ fn nested_statement_lists(
 fn rebound_names(
     cst: &CompactCst<'_>,
     statements: &[Cursor],
+    initially_shadowed: &[String],
     context: &LoweringContext<'_>,
 ) -> Result<Vec<String>, String> {
     let mut rebound = Vec::new();
-    collect_rebound_names(cst, statements, &[], &mut rebound, context)?;
+    collect_rebound_names(cst, statements, initially_shadowed, &mut rebound, context)?;
     Ok(rebound)
 }
 
@@ -2810,10 +2827,26 @@ fn lower_primary(
                     });
                     continue;
                 }
-                let name = token_text(cst, required(cst, member, "name")?)?;
-                let mut value =
-                    lower_value(cst, required(cst, member, "value")?, context, arena)
-                        .map_err(|error| format!("while lowering field `{name}`: {error}"))?;
+                let computed_name = if cst.rule_name(member)? == "computed_shape_field" {
+                    Some(lower_expression(
+                        cst,
+                        as_rule(required(cst, member, "name")?)?,
+                        context,
+                        arena,
+                    )?)
+                } else {
+                    None
+                };
+                let field_name = if computed_name.is_none() {
+                    Some(token_text(cst, required(cst, member, "name")?)?)
+                } else {
+                    None
+                };
+                let mut value = lower_value(cst, required(cst, member, "value")?, context, arena)
+                    .map_err(|error| match &field_name {
+                    Some(name) => format!("while lowering field `{name}`: {error}"),
+                    None => format!("while lowering computed field: {error}"),
+                })?;
                 if cst.field(member, "optional")?.is_some() {
                     let function = arena.expression(Expression::Intrinsic {
                         name: "@type.union".to_owned(),
@@ -2833,17 +2866,24 @@ fn lower_primary(
                         span: cst.span(Cursor::Rule(member))?,
                     });
                 }
-                members.push(ShapeMember::Field { name, value });
+                match (field_name, computed_name) {
+                    (Some(name), None) => members.push(ShapeMember::Field { name, value }),
+                    (None, Some(name)) => members.push(ShapeMember::Computed { name, value }),
+                    _ => unreachable!("a shape field name is static or computed"),
+                }
             }
             Ok(arena.expression(Expression::Shape { members, span }))
         }
         "case_expression" => {
-            let target = lower_expression(
-                cst,
-                as_rule(required(cst, rule, "target")?)?,
-                &context.value_condition(),
-                arena,
-            )?;
+            let mut targets = Vec::new();
+            for target in cst.field_list(rule, "targets")? {
+                targets.push(lower_expression(
+                    cst,
+                    as_rule(target)?,
+                    &context.value_condition(),
+                    arena,
+                )?);
+            }
             let mut arm_cursors = vec![required(cst, rule, "first")?];
             arm_cursors.extend(cst.field_list(rule, "rest")?);
             let mut arms = Vec::new();
@@ -2861,8 +2901,12 @@ fn lower_primary(
                     }
                     None => None,
                 };
-                arms.push(GuardedArm {
-                    pattern: lower_pattern(cst, required(cst, arm, "pattern")?, arena)?,
+                let mut patterns = Vec::new();
+                for pattern in cst.field_list(arm, "patterns")? {
+                    patterns.push(lower_pattern(cst, pattern, arena)?);
+                }
+                arms.push(MultiCaseArm {
+                    patterns,
                     guard,
                     body: lower_value(
                         cst,
@@ -2872,7 +2916,7 @@ fn lower_primary(
                     )?,
                 });
             }
-            lower_guards(target, &arms, span, arena)
+            lower_case_targets(targets, &arms, span, arena)
         }
         "block" | "do_block" => {
             let mut statements = cst.field_list(rule, "statements")?;
@@ -3028,6 +3072,423 @@ struct GuardedArm {
     pattern: PatternId,
     guard: Option<ExpressionId>,
     body: ExpressionId,
+}
+
+#[derive(Clone)]
+struct MultiCaseArm {
+    patterns: Vec<PatternId>,
+    guard: Option<ExpressionId>,
+    body: ExpressionId,
+}
+
+fn lower_case_targets(
+    targets: Vec<ExpressionId>,
+    arms: &[MultiCaseArm],
+    span: Span,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    if targets.len() == 1 && arms.iter().all(|arm| arm.patterns.len() == 1) {
+        let target = targets[0];
+        let arms = arms
+            .iter()
+            .map(|arm| GuardedArm {
+                pattern: arm.patterns[0],
+                guard: arm.guard,
+                body: arm.body,
+            })
+            .collect::<Vec<_>>();
+        return lower_guards(target, &arms, span, arena);
+    }
+
+    if targets.len() < 2 || arms.iter().any(|arm| arm.patterns.len() != targets.len()) {
+        let target = arena.expression(Expression::Tuple {
+            elements: targets,
+            span,
+        });
+        let arms = arms
+            .iter()
+            .map(|arm| GuardedArm {
+                pattern: arena.pattern(Pattern::Tuple {
+                    elements: arm.patterns.clone(),
+                    span,
+                }),
+                guard: arm.guard,
+                body: arm.body,
+            })
+            .collect::<Vec<_>>();
+        return lower_guards(target, &arms, span, arena);
+    }
+
+    let mut subject_names = Vec::new();
+    for index in 0..targets.len() {
+        let name = format!("case_subject${}${}${index}", span.start, span.end);
+        subject_names.push(name);
+    }
+
+    let cached = vec![None; subject_names.len()];
+    let mut result = lower_multi_case_rows(arms, &subject_names, &cached, span, 0, arena)?;
+    // The executable probes include fall-through wildcards, so each probe is
+    // locally total and cannot close the whole pattern matrix. Inferring this
+    // unused closure first closes that matrix over the same monomorphic subject
+    // parameters without evaluating any subject at runtime.
+    let coverage = multi_case_coverage_witness(arms, &subject_names, &cached, span, arena);
+    let parameter = arena.pattern(Pattern::Unit { span });
+    let coverage = arena.expression(Expression::Lambda {
+        parameter,
+        body: coverage,
+        deferred: false,
+        span,
+    });
+    let pattern = arena.pattern(Pattern::Wildcard { span });
+    let coverage = arena.declaration(Declaration::Binding {
+        kind: DeclarationKind::Let,
+        tags: Vec::new(),
+        pattern,
+        value: coverage,
+        span,
+    });
+    result = arena.expression(Expression::Block {
+        declarations: vec![coverage],
+        result,
+        result_effects: ResultEffects::Ambient,
+        span,
+    });
+    for (target, name) in targets.into_iter().zip(subject_names).rev() {
+        let parameter = arena.pattern(Pattern::Name {
+            name,
+            qualifier: Qualifier::None,
+            span,
+        });
+        let function = arena.expression(Expression::Lambda {
+            parameter,
+            body: result,
+            deferred: true,
+            span,
+        });
+        result = arena.expression(Expression::Apply {
+            function,
+            argument: target,
+            span,
+        });
+    }
+    Ok(result)
+}
+
+fn lower_multi_case_rows(
+    rows: &[MultiCaseArm],
+    subject_names: &[String],
+    cached: &[Option<String>],
+    span: Span,
+    depth: usize,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let Some(row) = rows.first() else {
+        return Ok(compiler_panic(
+            "complete multi-subject case reached its failure path",
+            span,
+            arena,
+        ));
+    };
+    lower_multi_case_column(
+        row,
+        &rows[1..],
+        subject_names,
+        cached,
+        span,
+        depth,
+        0,
+        arena,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_multi_case_column(
+    row: &MultiCaseArm,
+    remaining: &[MultiCaseArm],
+    subject_names: &[String],
+    cached: &[Option<String>],
+    span: Span,
+    depth: usize,
+    column: usize,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    if column == row.patterns.len() {
+        return lower_multi_case_body(row, remaining, subject_names, cached, span, depth, arena);
+    }
+    let pattern = row.patterns[column];
+    if matches!(arena.patterns[pattern.0 as usize], Pattern::Wildcard { .. }) {
+        return lower_multi_case_column(
+            row,
+            remaining,
+            subject_names,
+            cached,
+            span,
+            depth,
+            column + 1,
+            arena,
+        );
+    }
+
+    let Some(subject_name) = cached[column].clone() else {
+        let subject_name = format!("case_value${}${}${depth}${column}", span.start, span.end);
+        let argument = variable(&subject_names[column], span, arena);
+        let parameter = arena.pattern(Pattern::Name {
+            name: subject_name.clone(),
+            qualifier: Qualifier::None,
+            span,
+        });
+        let mut next_cached = cached.to_vec();
+        next_cached[column] = Some(subject_name);
+        let body = lower_multi_case_column(
+            row,
+            remaining,
+            subject_names,
+            &next_cached,
+            span,
+            depth + 1,
+            column,
+            arena,
+        )?;
+        let function = arena.expression(Expression::Lambda {
+            parameter,
+            body,
+            deferred: false,
+            span,
+        });
+        return Ok(arena.expression(Expression::Apply {
+            function,
+            argument,
+            span,
+        }));
+    };
+
+    if matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. }) {
+        return lower_multi_case_column(
+            row,
+            remaining,
+            subject_names,
+            cached,
+            span,
+            depth,
+            column + 1,
+            arena,
+        );
+    }
+
+    let consequence = lower_multi_case_column(
+        row,
+        remaining,
+        subject_names,
+        cached,
+        span,
+        depth + 1,
+        column + 1,
+        arena,
+    )?;
+    let fallback = lower_multi_case_rows(remaining, subject_names, cached, span, depth + 1, arena)?;
+    let tested_pattern = erase_binders(pattern, arena);
+    let wildcard = arena.pattern(Pattern::Wildcard { span });
+    let target = variable(&subject_name, span, arena);
+    Ok(arena.expression(Expression::Case {
+        target,
+        arms: vec![
+            Arm {
+                pattern: tested_pattern,
+                body: consequence,
+            },
+            Arm {
+                pattern: wildcard,
+                body: fallback,
+            },
+        ],
+        span,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_multi_case_body(
+    row: &MultiCaseArm,
+    remaining: &[MultiCaseArm],
+    subject_names: &[String],
+    cached: &[Option<String>],
+    span: Span,
+    depth: usize,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let mut body = row.body;
+    if let Some(condition) = row.guard {
+        let fallback =
+            lower_multi_case_rows(remaining, subject_names, cached, span, depth + 1, arena)?;
+        body = arena.expression(Expression::If {
+            branches: vec![Branch {
+                condition,
+                consequence: body,
+            }],
+            fallback: Some(fallback),
+            span,
+        });
+    }
+
+    for (column, pattern) in row.patterns.iter().copied().enumerate().rev() {
+        if matches!(arena.patterns[pattern.0 as usize], Pattern::Wildcard { .. }) {
+            continue;
+        }
+        let subject_name = cached[column]
+            .as_ref()
+            .ok_or_else(|| format!("multi-subject case column {column} was not evaluated"))?;
+        let target = variable(subject_name, span, arena);
+        if matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. }) {
+            let binding = arena.declaration(Declaration::Binding {
+                kind: DeclarationKind::Let,
+                tags: Vec::new(),
+                pattern,
+                value: target,
+                span,
+            });
+            body = arena.expression(Expression::Block {
+                declarations: vec![binding],
+                result: body,
+                result_effects: ResultEffects::Ambient,
+                span,
+            });
+            continue;
+        }
+        let wildcard = arena.pattern(Pattern::Wildcard { span });
+        let impossible = compiler_panic(
+            "multi-subject case probe disagreed with its binding",
+            span,
+            arena,
+        );
+        body = arena.expression(Expression::Case {
+            target,
+            arms: vec![
+                Arm { pattern, body },
+                Arm {
+                    pattern: wildcard,
+                    body: impossible,
+                },
+            ],
+            span,
+        });
+    }
+    Ok(body)
+}
+
+fn multi_case_coverage_witness(
+    rows: &[MultiCaseArm],
+    subject_names: &[String],
+    cached: &[Option<String>],
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    let rows = rows
+        .iter()
+        .filter(|row| row.guard.is_none())
+        .collect::<Vec<_>>();
+    multi_case_coverage_column(&rows, subject_names, cached, span, 0, arena)
+}
+
+fn multi_case_coverage_column(
+    rows: &[&MultiCaseArm],
+    subject_names: &[String],
+    cached: &[Option<String>],
+    span: Span,
+    column: usize,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    if column == subject_names.len() {
+        return compiler_panic(
+            "complete multi-subject case reached its failure path",
+            span,
+            arena,
+        );
+    }
+
+    let mut groups: Vec<(String, PatternId, Vec<&MultiCaseArm>)> = Vec::new();
+    for row in rows {
+        let pattern = row.patterns[column];
+        let key = pattern_structure_key(pattern, arena);
+        if let Some((_, _, grouped)) = groups.iter_mut().find(|group| group.0 == key) {
+            grouped.push(row);
+        } else {
+            groups.push((key, pattern, vec![row]));
+        }
+    }
+    let arms = groups
+        .into_iter()
+        .map(|(_, pattern, rows)| {
+            let pattern = erase_binders(pattern, arena);
+            let body =
+                multi_case_coverage_column(&rows, subject_names, cached, span, column + 1, arena);
+            Arm { pattern, body }
+        })
+        .collect();
+    let target = match &cached[column] {
+        Some(name) => variable(name, span, arena),
+        None => variable(&subject_names[column], span, arena),
+    };
+    arena.expression(Expression::Case { target, arms, span })
+}
+
+fn pattern_structure_key(pattern: PatternId, arena: &AstArena) -> String {
+    match &arena.patterns[pattern.0 as usize] {
+        Pattern::Name { .. } | Pattern::Wildcard { .. } => "*".to_owned(),
+        Pattern::Pin { name, .. } => format!("pin:{name}"),
+        Pattern::Int { value, .. } => format!("int:{value}"),
+        Pattern::Float { value, .. } => format!("float:{}", value.to_bits()),
+        Pattern::Text { value, .. } => format!("text:{value:?}"),
+        Pattern::Unit { .. } => "unit".to_owned(),
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+            let kind = if matches!(arena.patterns[pattern.0 as usize], Pattern::Tuple { .. }) {
+                "tuple"
+            } else {
+                "array"
+            };
+            let elements = elements
+                .iter()
+                .map(|element| pattern_structure_key(*element, arena))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{kind}:{elements}")
+        }
+        Pattern::Constructor { name, payload, .. } => match payload {
+            Some(payload) => format!(
+                "constructor:{name}({})",
+                pattern_structure_key(*payload, arena)
+            ),
+            None => format!("constructor:{name}"),
+        },
+        Pattern::Shape { fields, .. } => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}:{}",
+                        field.name,
+                        pattern_structure_key(field.pattern, arena)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("shape:{fields}")
+        }
+    }
+}
+
+fn compiler_panic(message: &str, span: Span, arena: &mut AstArena) -> ExpressionId {
+    let function = arena.expression(Expression::Intrinsic {
+        name: "@panic".to_owned(),
+        span,
+    });
+    let argument = arena.expression(Expression::Text {
+        value: message.to_owned(),
+        span,
+    });
+    arena.expression(Expression::Apply {
+        function,
+        argument,
+        span,
+    })
 }
 
 /// Builds a `case`, folding the two-arm Boolean form into the internal

@@ -86,13 +86,18 @@
     const LENS = 5, GENERATION = 6;
     // Thousandths, matching the wire the guest reads its scene from.
     const ONE = 1000;
+    const CAMERA_SUBSTEPS = 16;
+    const CAMERA_TURN = 256 * CAMERA_SUBSTEPS;
+    const ORBIT_UNITS_PER_PIXEL = 6;
 
     // The camera lives here, not in the guest. That is the whole reason a
     // code reload does not throw your viewpoint away.
     const shared = new Int32Array(new SharedArrayBuffer(28));
+    let cameraYaw = 34 * CAMERA_SUBSTEPS;
+    let cameraPitch = 18 * CAMERA_SUBSTEPS;
     Atomics.store(shared, RUNNING, 1);
-    Atomics.store(shared, YAW, 34);
-    Atomics.store(shared, PITCH, 18);
+    Atomics.store(shared, YAW, cameraYaw);
+    Atomics.store(shared, PITCH, cameraPitch);
     Atomics.store(shared, DISTANCE, 9 * ONE);
 
     // --- input ---------------------------------------------------------
@@ -110,13 +115,15 @@
     });
     screen.addEventListener("pointermove", (event) => {
       if (!dragging) return;
-      const yaw = Atomics.load(shared, YAW) -
-        Math.round((event.clientX - lastX) * 0.4);
-      let pitch = Atomics.load(shared, PITCH) +
-        Math.round((event.clientY - lastY) * 0.4);
-      pitch = Math.max(-60, Math.min(60, pitch));
-      Atomics.store(shared, YAW, ((yaw % 256) + 256) % 256);
-      Atomics.store(shared, PITCH, pitch);
+      cameraYaw -= (event.clientX - lastX) * ORBIT_UNITS_PER_PIXEL;
+      cameraPitch += (event.clientY - lastY) * ORBIT_UNITS_PER_PIXEL;
+      cameraPitch = Math.max(
+        -60 * CAMERA_SUBSTEPS,
+        Math.min(60 * CAMERA_SUBSTEPS, cameraPitch),
+      );
+      const yaw = ((cameraYaw % CAMERA_TURN) + CAMERA_TURN) % CAMERA_TURN;
+      Atomics.store(shared, YAW, Math.round(yaw));
+      Atomics.store(shared, PITCH, Math.round(cameraPitch));
       lastX = event.clientX;
       lastY = event.clientY;
     });
@@ -178,9 +185,7 @@
 
     // --- rendering -----------------------------------------------------
     //
-    // The guest hands over projected triangles and sprites with a view
-    // depth. Sorting them is the host's job — the same split a depth buffer
-    // makes, and the reason the guest never needs one.
+    // The guest hands over projected triangles and sprites with view depth.
     let draws = [];
     const shade = (color, amount) => {
       const f = Math.max(0, Math.min(255, amount)) / 255;
@@ -193,7 +198,7 @@
     const draw = () => {
       context.fillStyle = "#08090b";
       context.fillRect(0, 0, screen.width, screen.height);
-      const sorted = draws.slice().sort((a, b) => b.depth - a.depth);
+      const sorted = draws.slice().sort((left, right) => right.depth - left.depth);
       for (const item of sorted) {
         if (item.kind === "tri") {
           context.fillStyle = shade(item.color, item.shade);

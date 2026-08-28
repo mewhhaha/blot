@@ -1,4 +1,5 @@
 import { assertEquals } from "@std/assert";
+import { Worker } from "node:worker_threads";
 import { checkFile } from "../src/check.ts";
 import { Compiler } from "../src/compiler/session.ts";
 import { evaluateFile, show } from "../src/run.ts";
@@ -22,6 +23,48 @@ for (
     }
   });
 }
+
+Deno.test("game_loop.blot streams every shrubbery without spending render frames", async () => {
+  const compiler = await Compiler.create();
+  let artifact;
+  try {
+    artifact = await compiler.compile("case-studies/engine/game_loop.blot");
+  } finally {
+    compiler.destroy();
+  }
+  for (const selection of [1, 2, 3, 4, 5]) {
+    const worker = new Worker(
+      new URL("./engine/game_loop_test_worker.mjs", import.meta.url),
+      { workerData: { wasm: artifact.wasm, selection } },
+    );
+    let observation;
+    try {
+      observation = await new Promise<{
+        readonly frames: bigint;
+        readonly streamedBatches: number;
+        readonly uploadedBatches: number;
+        readonly redraws: number;
+      }>((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+      });
+    } finally {
+      await worker.terminate();
+    }
+    assertEquals(observation.frames, 1n, `selection ${selection} frame count`);
+    assertEquals(
+      observation.streamedBatches > 0,
+      true,
+      `selection ${selection} stream`,
+    );
+    assertEquals(
+      observation.uploadedBatches > 0,
+      true,
+      `selection ${selection} upload`,
+    );
+    assertEquals(observation.redraws, 1, `selection ${selection} redraw`);
+  }
+});
 
 Deno.test("Text.contains searches Unicode text", async () => {
   const directory = await Deno.makeTempDir();

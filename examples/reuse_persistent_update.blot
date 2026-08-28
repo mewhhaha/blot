@@ -9,4 +9,5 @@ const clear_first = fn values => do:
   return values
 
 let shared = freeze [1, 2, 3]
-return clear_first shared
+let working = Array.copy shared
+return clear_first working

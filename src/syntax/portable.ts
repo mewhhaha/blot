@@ -195,6 +195,13 @@ export function encodePortableModule(module: Module): PortableModule {
                 value: expressionId(member.value),
               };
             }
+            if (member.tag === "computed") {
+              return {
+                tag: member.tag,
+                name: expressionId(member.name),
+                value: expressionId(member.value),
+              };
+            }
             return { tag: member.tag, value: expressionId(member.value) };
           }),
           span: expression.span,
@@ -655,6 +662,19 @@ export function decodePortableModule(
                 name: text(
                   member.name,
                   `${location} expression ${index} member ${ordinal} name`,
+                ),
+                value,
+              };
+            }
+            if (memberTag === "computed") {
+              return {
+                tag: memberTag,
+                name: expression(
+                  reference(
+                    member.name,
+                    encodedExpressions.length,
+                    `${location} expression ${index} member ${ordinal} name`,
+                  ),
                 ),
                 value,
               };

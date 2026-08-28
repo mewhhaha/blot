@@ -1,155 +1,58 @@
-// A traditional game loop over one explicit game-state record.
+// Procedural voxel shrubbery in an explicit immutable game state.
 //
-// Unlike `main.blot`, this program has no entity-component stores and no
-// systems. Its objects live in ordinary arrays, `update` returns the next game
-// state, and `render` reads that state. The `for` loop carries the state between
-// frames, which is the functional form of the familiar initialize / update /
-// render loop.
+// Shrubbery recipes are Blot modules rather than serialized assets. The seed
+// changes their surface detail while their source records own the silhouettes
+// and colors.
 
 open import "blot:prelude"
 
-const M = import "./lib/math.blot"
 const R = import "./lib/render.blot"
 
 const Host =
   @effect.host {
     .frame = Unit -> Int;
+    .option = { .key = Int; .name = Text; } -> Unit;
+    .seed = Unit -> Int;
+    .selected = { .key = Int; .name = Text; } -> Unit;
+    .selection = Unit -> Int;
   }
+
+const S = import "./lib/shrubbery.blot"
 
 const MeshDraft =
   {
-    .position = F32x4;
-    .angle = Int;
-    .spin = Int;
-    .scale = F32;
+    .x = Int;
+    .y = Int;
+    .z = Int;
     .color = R.Color;
   }
 const Mesh = { .id = Int; ...MeshDraft; }
 
-const SpriteDraft =
-  {
-    .position = F32x4;
-    .scale = F32;
-    .texture = Text;
-  }
-const Sprite = { .id = Int; ...SpriteDraft; }
-
 const Game =
   {
     .meshes = [Mesh];
-    .sprites = [Sprite];
-  }
-
-const GameSetup =
-  {
-    .next_id = Int;
-    .meshes = [Mesh];
-    .sprites = [Sprite];
-  }
-
-let empty_setup :: GameSetup
-let empty_setup = { .next_id = 0; .meshes = []; .sprites = []; }
-
-const GameBuilder =
-  @effect {
-    .mesh = MeshDraft -> Unit;
-    .sprite = SpriteDraft -> Unit;
-  }
-
-let build_game = fn scene => do:
-  // A clause resumes to obtain the transformation for the remaining
-  // declarations, then puts its own object into the setup first. IDs and arrays
-  // therefore follow source order even though handlers unwind from the end.
-  let building =
-    {
-      .mesh = fn (mesh, ?resume) => do:
-        use continue <- resume ()
-        return fn setup => continue {
-          .next_id = setup.next_id + 1;
-          .meshes = [
-            ...setup.meshes,
-            Shape.update mesh { .id = setup.next_id; }
-          ];
-          .sprites = setup.sprites;
-        }
-      ;
-      .sprite = fn (sprite, ?resume) => do:
-        use continue <- resume ()
-        return fn setup => continue {
-          .next_id = setup.next_id + 1;
-          .meshes = setup.meshes;
-          .sprites = [
-            ...setup.sprites,
-            Shape.update sprite { .id = setup.next_id; }
-          ];
-        }
-      ;
-      .return = fn () => fn setup => setup;
-    }
-  let populate = @handle (GameBuilder, scene, building)
-  let setup = populate empty_setup
-  return {
-    .meshes = setup.meshes;
-    .sprites = setup.sprites;
-  }
-
-let update :: Game -> Game
-let update = fn game => do:
-  let meshes = @satisfies Array.empty [Mesh]
-  for mesh in Iter.items game.meshes:
-    meshes := [
-      ...meshes,
-      Shape.update mesh {
-        .angle = (mesh.angle + mesh.spin) % M.turn;
-      }
-    ]
-
-  return {
-    .meshes = meshes;
-    .sprites = game.sprites;
   }
 
 let render = fn game => do:
-  use R.frame $ fn draw => do:
-    for mesh in Iter.items game.meshes:
-      use draw.mesh mesh
+  use S.render (&game.meshes)
 
-    for sprite in Iter.items game.sprites:
-      use draw.sprite sprite
+for option in Iter.items (Array.copy (&S.selections)):
+  use Host.option { .key = option.key; .name = option.name; }
 
-let player_blue = R.rgb (126, 224, 255)
-let rival_coral = R.rgb (255, 139, 132)
-
+use seed <- Host.seed ()
+use requested_selection <- Host.selection ()
+let selection = S.selection_of requested_selection
+use Host.selected { .key = selection.key; .name = selection.name; }
+use meshes <- S.build_shrubbery (seed, selection)
 let game :: Game
-let game =
-  build_game $ fn () => do:
-    open GameBuilder
-    use mesh {
-      .position = R.point (-1800, 0, 0);
-      .angle = 0;
-      .spin = 2;
-      .scale = R.unit 1400;
-      .color = player_blue;
-    }
-    use mesh {
-      .position = R.point (1800, 0, 0);
-      .angle = 0;
-      .spin = -3;
-      .scale = R.unit 1100;
-      .color = rival_coral;
-    }
-    use sprite {
-      .position = R.point (0, 1800, 0);
-      .scale = R.unit 900;
-      .texture = "ring";
-    }
+let game = { .meshes = meshes; }
+
 let frames = 0
 for ever:
   use remaining <- Host.frame ()
   if remaining <= 0:
     break
 
-  game := update game
   use render game
   frames := frames + 1
 

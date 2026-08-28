@@ -2,6 +2,13 @@ import { assertEquals } from "@std/assert";
 import { parse } from "../syntax/parse.ts";
 import { formatSource } from "./formatter.ts";
 
+Deno.test("formatting preserves computed shape fields", async () => {
+  const source = `const name = "count"
+return { .[name] = 1; }
+`;
+  assertEquals(await formatSource(source), { ok: true, source });
+});
+
 Deno.test("formatting indents nested conditionals within calls", async () => {
   const source = `const remove_residence = fn tile => do:
   use present <- Residences.has tile
@@ -469,6 +476,19 @@ return unwrap
 
   #None => 0
 return unwrap
+`,
+  );
+});
+
+Deno.test("formatting preserves multi-subject case columns", async () => {
+  await assertStableFormatting(
+    `return case first, second of
+  #True, _ => 1
+  #False, value => value
+`,
+    `return case first, second of
+  #True, _ => 1
+  #False, value => value
 `,
   );
 });

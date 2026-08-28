@@ -1,0 +1,31 @@
+// Flower locations and colors are source values rather than host-side assets.
+
+open import "blot:prelude"
+
+const Color = { .red = Int; .green = Int; .blue = Int; }
+const Flower = { .x = Int; .z = Int; .petals = Color; }
+const FlowerRecipe = { .stem = Color; .centre = Color; .flowers = [Flower]; }
+
+let fresh_stem :: Color
+let fresh_stem = { .red = 49; .green = 119; .blue = 61; }
+let pollen_centre :: Color
+let pollen_centre = { .red = 105; .green = 67; .blue = 38; }
+let golden_petals :: Color
+let golden_petals = { .red = 255; .green = 188; .blue = 74; }
+let coral_petals :: Color
+let coral_petals = { .red = 244; .green = 113; .blue = 111; }
+
+let flowers :: FlowerRecipe
+let flowers =
+  {
+    .stem = fresh_stem;
+    .centre = pollen_centre;
+    .flowers = [
+      { .x = -10; .z = -7; .petals = golden_petals; },
+      { .x = -7; .z = 9; .petals = coral_petals; },
+      { .x = 8; .z = -10; .petals = coral_petals; },
+      { .x = 11; .z = 7; .petals = golden_petals; }
+    ];
+  }
+
+return flowers

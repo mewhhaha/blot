@@ -1449,6 +1449,8 @@ pub struct Checker {
     level: Cell<u32>,
     phase: Cell<Phase>,
     specialization_depth: Cell<u32>,
+    active_closures: RefCell<Vec<(String, ExpressionId)>>,
+    deferred_predicate_closures: RefCell<HashSet<(String, ExpressionId)>>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
     closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
@@ -1501,6 +1503,8 @@ impl Checker {
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
+            active_closures: RefCell::new(Vec::new()),
+            deferred_predicate_closures: RefCell::new(HashSet::new()),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             closure_types: RefCell::new(HashMap::new()),
@@ -2739,7 +2743,19 @@ impl Checker {
                     )?;
                 }
             }
-            Value::Array(elements) | Value::Union(elements) | Value::IndexedStep { elements } => {
+            Value::Array(elements) => {
+                for element in elements {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        element,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::Union(elements) | Value::IndexedStep { elements } => {
                 for element in elements {
                     self.refuse_runtime_const_captures(
                         path,
@@ -3530,42 +3546,6 @@ impl Checker {
                         ));
                     }
                 }
-                if member_arguments.len() == 2
-                    && let Ok(Value::Primitive { name, .. }) =
-                        self.evaluate(path, member_callee, values, Phase::Comptime)
-                    && name == "@shape.update"
-                {
-                    let target = self.infer(
-                        path,
-                        module,
-                        member_arguments[0],
-                        environment,
-                        values,
-                        dependencies,
-                    )?;
-                    let patch = self.infer(
-                        path,
-                        module,
-                        member_arguments[1],
-                        environment,
-                        values,
-                        dependencies,
-                    )?;
-                    let Type::Record(fields) = patch.type_ else {
-                        return Err(Diagnostic::new(
-                            "BLOT_SHAPE_UPDATE_FIELDS",
-                            "Shape.update requires a statically known record of fields.",
-                            span,
-                        ));
-                    };
-                    return Ok(Inferred {
-                        type_: Type::RecordUpdate {
-                            base: Rc::new(target.type_),
-                            fields,
-                        },
-                        effects: self.join_effects(target.effects, patch.effects)?,
-                    });
-                }
                 if member_arguments.len() > 1
                     && let Expression::Field { target, name, .. } =
                         &module.arena.expressions[member_callee.0 as usize]
@@ -3958,9 +3938,28 @@ impl Checker {
                 )?;
                 let inferred_result = self.settle(result.clone(), true);
                 let unsettled_result = matches!(inferred_result, Type::Top | Type::Bottom);
+                let requires_specialization = evaluated_function.as_ref().is_some_and(|value| {
+                    let Value::Closure { module, body, .. } = value else {
+                        return false;
+                    };
+                    if self
+                        .deferred_predicate_closures
+                        .borrow()
+                        .contains(&(module.as_ref().clone(), *body))
+                    {
+                        return true;
+                    }
+                    self.context
+                        .modules
+                        .borrow()
+                        .get(module.as_ref())
+                        .is_some_and(|loaded| {
+                            expression_contains_computed_field(&loaded.module, *body)
+                        })
+                });
                 let mut selected_effects = None;
                 let selected_result = if self.specialization_depth.get() == 0
-                    && unsettled_result
+                    && (unsettled_result || requires_specialization)
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -4091,7 +4090,12 @@ impl Checker {
                     &mut scope,
                     parameter_phase,
                 );
-                let body = self.infer(path, module, body_id, &scope, values, dependencies)?;
+                self.active_closures
+                    .borrow_mut()
+                    .push((path.to_owned(), body_id));
+                let body = self.infer(path, module, body_id, &scope, values, dependencies);
+                self.active_closures.borrow_mut().pop();
+                let body = body?;
                 let type_ = Type::Function {
                     deferred,
                     parameter: Rc::new(parameter_type),
@@ -4149,6 +4153,7 @@ impl Checker {
             Expression::Shape { members, .. } => {
                 let mut fields = Vec::new();
                 let mut explicit_fields = HashSet::new();
+                let mut base = None;
                 let mut effects = pure();
                 for member in members {
                     match member {
@@ -4171,16 +4176,69 @@ impl Checker {
                             }
                             effects = self.join_effects(effects, inferred.effects)?;
                         }
+                        ShapeMember::Computed {
+                            name: name_expression,
+                            value,
+                        } => {
+                            let inferred_name = self.infer(
+                                path,
+                                module,
+                                name_expression,
+                                environment,
+                                values,
+                                dependencies,
+                            )?;
+                            self.constrain(inferred_name.type_, text_type(), span)?;
+                            let inferred =
+                                self.infer(path, module, value, environment, values, dependencies)?;
+                            match self.evaluate(path, name_expression, values, Phase::Comptime) {
+                                Ok(Value::Text(name)) => {
+                                    if !explicit_fields.insert(name.clone()) {
+                                        return Err(Diagnostic::new(
+                                            "BLOT_DUPLICATE_FIELD",
+                                            format!(
+                                                "Record field `{name}` is written more than once."
+                                            ),
+                                            span,
+                                        ));
+                                    }
+                                    if let Some(existing) =
+                                        fields.iter_mut().find(|(field, _)| field == &name)
+                                    {
+                                        existing.1 = inferred.type_;
+                                    } else {
+                                        fields.push((name, inferred.type_));
+                                    }
+                                }
+                                _ if !self.active_closures.borrow().is_empty() => {
+                                    self.defer_current_closure();
+                                }
+                                _ => {
+                                    return Err(Diagnostic::new(
+                                        "BLOT_DYNAMIC_SHAPE_FIELD",
+                                        "A computed record field name must be known at compile time.",
+                                        span,
+                                    ));
+                                }
+                            }
+                            effects = self.join_effects(effects, inferred_name.effects)?;
+                            effects = self.join_effects(effects, inferred.effects)?;
+                        }
                         ShapeMember::Spread { value } => {
+                            let inferred =
+                                self.infer(path, module, value, environment, values, dependencies)?;
                             if !self.exact_record_expression(module, value, environment) {
+                                if base.is_none() && fields.is_empty() {
+                                    base = Some(inferred.type_);
+                                    effects = self.join_effects(effects, inferred.effects)?;
+                                    continue;
+                                }
                                 return Err(Diagnostic::new(
                                     "BLOT_OPEN_RECORD_SPREAD",
-                                    "A record spread must carry an exact, closed field set.",
+                                    "An open record spread must be the first member of a record update.",
                                     span,
                                 ));
                             }
-                            let inferred =
-                                self.infer(path, module, value, environment, values, dependencies)?;
                             let settled = self.settle(inferred.type_, true);
                             let Type::Record(spread) = settled else {
                                 let code = if fields.is_empty() {
@@ -4207,10 +4265,12 @@ impl Checker {
                         }
                     }
                 }
-                Ok(Inferred {
-                    type_: Type::Record(fields.into()),
-                    effects,
-                })
+                let type_ = match base {
+                    Some(base) if fields.is_empty() => base,
+                    Some(base) => record_update_type(base, fields.into()),
+                    None => Type::Record(fields.into()),
+                };
+                Ok(Inferred { type_, effects })
             }
             Expression::If {
                 branches, fallback, ..
@@ -4429,7 +4489,7 @@ impl Checker {
         match &module.arena.expressions[expression.0 as usize] {
             Expression::Var { name, .. } => environment.is_exact_record(name),
             Expression::Shape { members, .. } => members.iter().all(|member| match member {
-                ShapeMember::Field { .. } => true,
+                ShapeMember::Field { .. } | ShapeMember::Computed { .. } => true,
                 ShapeMember::Spread { value } => {
                     self.exact_record_expression(module, *value, environment)
                 }
@@ -4688,6 +4748,9 @@ impl Checker {
         let previous_specialization_depth = self.specialization_depth.get();
         self.specialization_depth
             .set(previous_specialization_depth + 1);
+        self.active_closures
+            .borrow_mut()
+            .push((closure_module.to_owned(), body));
         let inferred = self.infer(
             closure_module,
             &closure_ast,
@@ -4696,6 +4759,7 @@ impl Checker {
             closure_values,
             dependencies,
         );
+        self.active_closures.borrow_mut().pop();
         self.specialization_depth.set(previous_specialization_depth);
         let inferred = inferred?;
         let function = Type::Function {
@@ -4736,6 +4800,10 @@ impl Checker {
             }
             Requirement::Predicate(predicate) => {
                 let settled = self.settle(subject.type_.clone(), true);
+                if contains_bottom(&settled) && self.active_closure_contains_computed_field() {
+                    self.defer_current_closure();
+                    return Ok(subject);
+                }
                 let reified = self.reify_runtime_type(&settled).ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_TYPE_NOT_REIFIABLE",
@@ -4771,6 +4839,25 @@ impl Checker {
                 }
             }
         }
+    }
+
+    fn defer_current_closure(&self) {
+        if let Some(closure) = self.active_closures.borrow().last() {
+            self.deferred_predicate_closures
+                .borrow_mut()
+                .insert(closure.clone());
+        }
+    }
+
+    fn active_closure_contains_computed_field(&self) -> bool {
+        let Some((path, body)) = self.active_closures.borrow().last().cloned() else {
+            return false;
+        };
+        self.context
+            .modules
+            .borrow()
+            .get(&path)
+            .is_some_and(|loaded| expression_contains_computed_field(&loaded.module, body))
     }
 
     fn fresh(&self) -> Type {
@@ -7228,6 +7315,37 @@ impl Checker {
     }
 }
 
+fn contains_bottom(type_: &Type) -> bool {
+    match type_ {
+        Type::Bottom => true,
+        Type::Forall { body, .. } => contains_bottom(body),
+        Type::Function {
+            parameter,
+            effects,
+            result,
+            ..
+        } => contains_bottom(parameter) || contains_bottom(effects) || contains_bottom(result),
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+            fields.iter().any(|(_, field)| contains_bottom(field))
+        }
+        Type::RecordUpdate { base, fields } => {
+            contains_bottom(base) || fields.iter().any(|(_, field)| contains_bottom(field))
+        }
+        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+            contains_bottom(element)
+        }
+        Type::OpenEffects { tail, .. } => contains_bottom(tail),
+        Type::Union(members) => members.iter().any(contains_bottom),
+        Type::Variable(_)
+        | Type::Rigid(_)
+        | Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top => false,
+    }
+}
+
 fn type_variable_name(index: usize) -> String {
     if index < 26 {
         format!("'{}", char::from(b'a' + index as u8))
@@ -7890,14 +8008,6 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@shape.names" => curried(vec![checker.fresh()], Type::Array(Rc::new(text))),
         "@shape.has" => curried(vec![checker.fresh(), text], bool_),
         "@shape.get" | "@shape.remove" => curried(vec![checker.fresh(), text], checker.fresh()),
-        "@shape.update" => {
-            let target = checker.fresh();
-            curried(vec![target.clone(), checker.fresh()], target)
-        }
-        "@shape.set" => curried(
-            vec![checker.fresh(), text, checker.fresh()],
-            checker.fresh(),
-        ),
         "@type.unbounded" | "@type.int" | "@type.text" | "@type.float" | "@type.float32"
         | "@type.f32x4" | "@type.f32x4_mask" | "@type.i32x4" | "@type.i32x4_mask"
         | "@type.i16x8" | "@type.i16x8_mask" | "@type.i8x16" | "@type.i8x16_mask" => {
@@ -9451,9 +9561,9 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
                 .into_iter()
                 .collect(),
         )),
-        Type::Array(element) => Some(Value::Array(vec![reify_type_with_holes(
-            context, element, next_hole,
-        )?])),
+        Type::Array(element) => Some(Value::Array(
+            vec![reify_type_with_holes(context, element, next_hole)?].into(),
+        )),
         Type::Region(element) => Some(Value::RegionType(Box::new(reify_type_with_holes(
             context, element, next_hole,
         )?))),
@@ -10009,46 +10119,73 @@ fn expression_contains_intrinsic(
     expression: ExpressionId,
     intrinsic: &str,
 ) -> bool {
-    match &module.arena.expressions[expression.0 as usize] {
-        Expression::Intrinsic { name, .. } => name == intrinsic,
+    expression_contains(
+        module,
+        expression,
+        &|expression| matches!(expression, Expression::Intrinsic { name, .. } if name == intrinsic),
+    )
+}
+
+fn expression_contains_computed_field(module: &Module, expression: ExpressionId) -> bool {
+    expression_contains(module, expression, &|expression| {
+        matches!(
+            expression,
+            Expression::Shape { members, .. }
+                if members
+                    .iter()
+                    .any(|member| matches!(member, ShapeMember::Computed { .. }))
+        )
+    })
+}
+
+fn expression_contains(
+    module: &Module,
+    expression: ExpressionId,
+    predicate: &impl Fn(&Expression) -> bool,
+) -> bool {
+    let expression = &module.arena.expressions[expression.0 as usize];
+    if predicate(expression) {
+        return true;
+    }
+    match expression {
         Expression::Apply {
             function, argument, ..
         } => {
-            expression_contains_intrinsic(module, *function, intrinsic)
-                || expression_contains_intrinsic(module, *argument, intrinsic)
+            expression_contains(module, *function, predicate)
+                || expression_contains(module, *argument, predicate)
         }
-        Expression::Field { target, .. } => {
-            expression_contains_intrinsic(module, *target, intrinsic)
-        }
+        Expression::Field { target, .. } => expression_contains(module, *target, predicate),
         Expression::Lambda { body, .. } | Expression::Rec { lambda: body, .. } => {
-            expression_contains_intrinsic(module, *body, intrinsic)
+            expression_contains(module, *body, predicate)
         }
         Expression::Array { elements, .. } => elements
             .iter()
-            .any(|element| expression_contains_intrinsic(module, element.value, intrinsic)),
+            .any(|element| expression_contains(module, element.value, predicate)),
         Expression::Tuple { elements, .. } => elements
             .iter()
-            .any(|element| expression_contains_intrinsic(module, *element, intrinsic)),
-        Expression::Shape { members, .. } => members.iter().any(|member| {
-            let value = match member {
-                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-            };
-            expression_contains_intrinsic(module, value, intrinsic)
+            .any(|element| expression_contains(module, *element, predicate)),
+        Expression::Shape { members, .. } => members.iter().any(|member| match member {
+            ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                expression_contains(module, *value, predicate)
+            }
+            ShapeMember::Computed { name, value } => {
+                expression_contains(module, *name, predicate)
+                    || expression_contains(module, *value, predicate)
+            }
         }),
         Expression::If {
             branches, fallback, ..
         } => {
             branches.iter().any(|branch| {
-                expression_contains_intrinsic(module, branch.condition, intrinsic)
-                    || expression_contains_intrinsic(module, branch.consequence, intrinsic)
-            }) || fallback
-                .is_some_and(|fallback| expression_contains_intrinsic(module, fallback, intrinsic))
+                expression_contains(module, branch.condition, predicate)
+                    || expression_contains(module, branch.consequence, predicate)
+            }) || fallback.is_some_and(|fallback| expression_contains(module, fallback, predicate))
         }
         Expression::Case { target, arms, .. } => {
-            expression_contains_intrinsic(module, *target, intrinsic)
+            expression_contains(module, *target, predicate)
                 || arms
                     .iter()
-                    .any(|arm| expression_contains_intrinsic(module, arm.body, intrinsic))
+                    .any(|arm| expression_contains(module, arm.body, predicate))
         }
         Expression::Block {
             declarations,
@@ -10062,8 +10199,8 @@ fn expression_contains_intrinsic(
                     | Declaration::Shadow { value, .. }
                     | Declaration::Open { value, .. } => *value,
                 };
-                expression_contains_intrinsic(module, value, intrinsic)
-            }) || expression_contains_intrinsic(module, *result, intrinsic)
+                expression_contains(module, value, predicate)
+            }) || expression_contains(module, *result, predicate)
         }
         _ => false,
     }
@@ -10106,11 +10243,14 @@ fn expression_has_generic_reflection(
         Expression::Tuple { elements, .. } => elements
             .iter()
             .any(|element| expression_has_generic_reflection(module, *element, bound)),
-        Expression::Shape { members, .. } => members.iter().any(|member| {
-            let value = match member {
-                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-            };
-            expression_has_generic_reflection(module, value, bound)
+        Expression::Shape { members, .. } => members.iter().any(|member| match member {
+            ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                expression_has_generic_reflection(module, *value, bound)
+            }
+            ShapeMember::Computed { name, value } => {
+                expression_has_generic_reflection(module, *name, bound)
+                    || expression_has_generic_reflection(module, *value, bound)
+            }
         }),
         Expression::If {
             branches, fallback, ..
@@ -10183,11 +10323,14 @@ fn expression_references_bound(
         Expression::Tuple { elements, .. } => elements
             .iter()
             .any(|element| expression_references_bound(module, *element, bound)),
-        Expression::Shape { members, .. } => members.iter().any(|member| {
-            let value = match member {
-                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-            };
-            expression_references_bound(module, value, bound)
+        Expression::Shape { members, .. } => members.iter().any(|member| match member {
+            ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                expression_references_bound(module, *value, bound)
+            }
+            ShapeMember::Computed { name, value } => {
+                expression_references_bound(module, *name, bound)
+                    || expression_references_bound(module, *value, bound)
+            }
         }),
         _ => false,
     }
@@ -10319,11 +10462,23 @@ fn free_name_span(
         }
         Expression::Shape { members, .. } => {
             for member in members {
-                let value = match member {
-                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-                };
-                if let Some(span) = free_name_span(module, value, name, bound) {
-                    return Some(span);
+                match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                        if let Some(span) = free_name_span(module, *value, name, bound) {
+                            return Some(span);
+                        }
+                    }
+                    ShapeMember::Computed {
+                        name: field_name,
+                        value,
+                    } => {
+                        if let Some(span) = free_name_span(module, *field_name, name, bound) {
+                            return Some(span);
+                        }
+                        if let Some(span) = free_name_span(module, *value, name, bound) {
+                            return Some(span);
+                        }
+                    }
                 }
             }
             None

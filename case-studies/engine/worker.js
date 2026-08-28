@@ -1,18 +1,20 @@
-// The guest side of the browser host.
+// The guest side of the browser and raw Deno Desktop hosts.
 //
-// Blot Core Wasm ABI 2 calls host effects synchronously, and a browser paces
-// drawing with `requestAnimationFrame`, which is not something a synchronous
-// call can wait for. So the module runs here, off the main thread, where
-// blocking is allowed: `Host.frame` parks on `Atomics.wait` until the page's
-// animation frame bumps a shared counter.
+// Blot Core Wasm ABI 2 calls host effects synchronously, while drawing is paced
+// asynchronously, which is not something a synchronous call can wait for. So
+// the module runs here, off the main thread, where blocking is allowed:
+// `Host.frame` parks on `Atomics.wait` until the rendering host bumps a shared
+// counter.
 //
 // That is the whole reconciliation. The program keeps its own frame loop and
-// the page keeps its refresh rate; neither has to know about the other.
+// the host keeps its refresh rate; neither has to know about the other.
 
 /**
- * Shared with the page, so the guest reads input without a round trip:
+ * Shared with the rendering host, so the guest reads input without a round
+ * trip:
  * [0] tick, [1] running, [2] yaw, [3] pitch, [4] distance, [5] lens,
- * [6] asset generation.
+ * [6] asset generation for the ECS entry point, or shrubbery selection for
+ * the game-loop entry point.
  */
 const TICK = 0;
 const RUNNING = 1;
@@ -21,6 +23,8 @@ const PITCH = 3;
 const DISTANCE = 4;
 const LENS = 5;
 const GENERATION = 6;
+const SELECTION = 6;
+const SCREEN_SCALE = 256;
 
 let shared = null;
 let lastTick = 0;
@@ -29,6 +33,9 @@ let lastTick = 0;
 let scene = [];
 let batch = [];
 let instance = null;
+let settled = false;
+let renderedDistance = 0;
+let renderedLens = 0;
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -48,6 +55,15 @@ function writeText(resultPointer, value) {
   view.setUint32(resultPointer + 4, bytes.length, true);
 }
 
+function waitForFrame() {
+  while (Atomics.load(shared, TICK) === lastTick) {
+    if (Atomics.load(shared, RUNNING) === 0) return 0n;
+    Atomics.wait(shared, TICK, lastTick, 100);
+  }
+  lastTick = Atomics.load(shared, TICK);
+  return BigInt(Atomics.load(shared, RUNNING));
+}
+
 const imports = {
   "blot:host/Canvas": {
     clear() {
@@ -56,16 +72,33 @@ const imports = {
     // A record parameter arrives flattened in *canonical* field order, which is
     // alphabetical and not the order the program wrote them. `docs/abi.md` is
     // the authority; getting this wrong silently transposes the geometry.
-    tri(ax, ay, bx, by, colorBlue, colorGreen, colorRed, cx, cy, depth, shade) {
+    tri(
+      ax,
+      ay,
+      az,
+      bx,
+      by,
+      bz,
+      colorBlue,
+      colorGreen,
+      colorRed,
+      cx,
+      cy,
+      cz,
+      shade,
+    ) {
       batch.push({
         kind: "tri",
-        ax: Number(ax),
-        ay: Number(ay),
-        bx: Number(bx),
-        by: Number(by),
-        cx: Number(cx),
-        cy: Number(cy),
-        depth: Number(depth),
+        ax: Number(ax) / SCREEN_SCALE,
+        ay: Number(ay) / SCREEN_SCALE,
+        az: Number(az),
+        bx: Number(bx) / SCREEN_SCALE,
+        by: Number(by) / SCREEN_SCALE,
+        bz: Number(bz),
+        cx: Number(cx) / SCREEN_SCALE,
+        cy: Number(cy) / SCREEN_SCALE,
+        cz: Number(cz),
+        depth: (Number(az) + Number(bz) + Number(cz)) / 3,
         shade: Number(shade),
         color: {
           red: Number(colorRed),
@@ -78,22 +111,67 @@ const imports = {
       batch.push({
         kind: "sprite",
         depth: Number(depth),
-        size: Number(size),
+        size: Number(size) / SCREEN_SCALE,
         texture: readText(texturePointer, textureLength),
-        x: Number(x),
-        y: Number(y),
+        x: Number(x) / SCREEN_SCALE,
+        y: Number(y) / SCREEN_SCALE,
       });
     },
     present() {
-      self.postMessage({ kind: "frame", draws: batch });
+      self.postMessage({
+        kind: "frame",
+        draws: batch,
+        distance: renderedDistance,
+        lens: renderedLens,
+      });
     },
   },
 
   "blot:host/View": {
     yaw: () => BigInt(Atomics.load(shared, YAW)),
     pitch: () => BigInt(Atomics.load(shared, PITCH)),
-    distance: () => BigInt(Atomics.load(shared, DISTANCE)),
-    lens: () => BigInt(Atomics.load(shared, LENS)),
+    distance() {
+      renderedDistance = Atomics.load(shared, DISTANCE);
+      return BigInt(renderedDistance);
+    },
+    lens() {
+      renderedLens = Atomics.load(shared, LENS);
+      return BigInt(renderedLens);
+    },
+  },
+
+  "blot:host/VoxelCanvas": {
+    enabled: () => 1,
+    clear() {
+      batch = [];
+    },
+    // Canonical record order: color.blue, color.green, color.red, scale,
+    // x, y, z.
+    voxel(colorBlue, colorGreen, colorRed, scale, x, y, z) {
+      batch.push({
+        kind: "voxel",
+        x: Number(x) / 1000,
+        y: Number(y) / 1000,
+        z: Number(z) / 1000,
+        scale: Number(scale) / 1000,
+        color: {
+          red: Number(colorRed),
+          green: Number(colorGreen),
+          blue: Number(colorBlue),
+        },
+      });
+    },
+    present() {
+      self.postMessage({
+        kind: "frame",
+        draws: batch,
+        distance: Atomics.load(shared, DISTANCE),
+        lens: Atomics.load(shared, LENS),
+      });
+    },
+    redraw() {
+      self.postMessage({ kind: "redraw" });
+    },
   },
 
   "blot:host/Assets": {
@@ -119,16 +197,36 @@ const imports = {
   },
 
   "blot:host/Host": {
+    option(key, namePointer, nameLength) {
+      self.postMessage({
+        kind: "option",
+        key: Number(key),
+        name: readText(namePointer, nameLength),
+      });
+    },
+    seed: () => 424242n,
+    selected(key, namePointer, nameLength) {
+      self.postMessage({
+        kind: "selected",
+        key: Number(key),
+        name: readText(namePointer, nameLength),
+      });
+    },
+    selection: () => BigInt(Atomics.load(shared, SELECTION)),
     frame() {
-      // Park until the page has drawn. `Atomics.wait` is why this runs in a
-      // worker at all — on the main thread it would deadlock the page it is
-      // waiting for.
-      while (Atomics.load(shared, TICK) === lastTick) {
-        if (Atomics.load(shared, RUNNING) === 0) return 0n;
-        Atomics.wait(shared, TICK, lastTick, 100);
+      const remaining = waitForFrame();
+      if (!settled) {
+        settled = true;
+        self.postMessage({ kind: "settled" });
       }
-      lastTick = Atomics.load(shared, TICK);
-      return BigInt(Atomics.load(shared, RUNNING));
+      return remaining;
+    },
+  },
+
+  "blot:host/Stream": {
+    batch_size: () => 256n,
+    yield() {
+      waitForFrame();
     },
   },
 };
@@ -136,7 +234,7 @@ const imports = {
 self.onmessage = async (event) => {
   const message = event.data;
 
-  // A scene reload does not touch the module. The page bumps the generation in
+  // A scene reload does not touch the module. The host bumps the generation in
   // shared memory and the guest reloads on its own next frame.
   if (message.kind === "scene") {
     scene = message.scene;

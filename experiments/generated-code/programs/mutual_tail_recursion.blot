@@ -4,15 +4,15 @@ const rec even_go :: Int -> Int
 const rec even_go = fn remaining => do:
   if remaining <= 0:
     return 1
-
-  return odd_go (remaining - 1)
+  else:
+    return odd_go (remaining - 1)
 
 const rec odd_go :: Int -> Int
 const rec odd_go = fn remaining => do:
   if remaining <= 0:
     return 0
-
-  return even_go (remaining - 1)
+  else:
+    return even_go (remaining - 1)
 
 const is_even :: Int -> Int
 const is_even = fn count => even_go count

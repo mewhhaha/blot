@@ -93,6 +93,7 @@ export const compactRuleNames = [
   "import_expression",
   "signature",
   "bounded_lambda",
+  "computed_shape_field",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do
@@ -161,6 +162,8 @@ export const compactFieldNames = [
   "input",
   "specifier",
   "recursive",
+  "targets",
+  "patterns",
 ] as const;
 
 // Baba numbers live fields densely in grammar order. Keep this list exactly in
@@ -196,6 +199,7 @@ export const currentCompactFieldNames = [
   "parameter",
   "parameters",
   "pattern",
+  "patterns",
   "payload",
   "precedence",
   "prefixes",
@@ -212,6 +216,7 @@ export const currentCompactFieldNames = [
   "tags",
   "tail",
   "target",
+  "targets",
   "value",
 ] as const;
 
@@ -240,6 +245,8 @@ export const compactRepeatedFields = [
   "binding.tags",
   "do_block.statements",
   "case_expression.rest",
+  "case_expression.targets",
+  "case_arm.patterns",
   "conditional_statement_branches.alternatives",
   "continued_expression.rest",
   "continued_operand.prefixes",

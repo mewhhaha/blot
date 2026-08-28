@@ -1,0 +1,29 @@
+// Rounded boulders use the same voxel interpreter as the plants.
+
+open import "blot:prelude"
+
+const Color = { .red = Int; .green = Int; .blue = Int; }
+const Point = { .x = Int; .y = Int; .z = Int; }
+const Rock = { .centre = Point; .radii = Point; .color = Color; }
+
+let cool_granite :: Color
+let cool_granite = { .red = 111; .green = 119; .blue = 124; }
+let sun_warmed_stone :: Color
+let sun_warmed_stone = { .red = 139; .green = 124; .blue = 105; }
+
+let rocks :: [Rock]
+let rocks =
+  [
+    {
+      .centre = { .x = -10; .y = 0; .z = 6; };
+      .radii = { .x = 3; .y = 2; .z = 2; };
+      .color = cool_granite;
+    },
+    {
+      .centre = { .x = 10; .y = -1; .z = -5; };
+      .radii = { .x = 4; .y = 2; .z = 3; };
+      .color = sun_warmed_stone;
+    }
+  ]
+
+return rocks

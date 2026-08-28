@@ -63,6 +63,7 @@ export interface ArrayElement {
 
 export type ShapeMember =
   | { readonly tag: "field"; readonly name: string; readonly value: Expr }
+  | { readonly tag: "computed"; readonly name: Expr; readonly value: Expr }
   | { readonly tag: "spread"; readonly value: Expr };
 
 export interface Branch {

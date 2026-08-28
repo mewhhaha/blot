@@ -205,6 +205,88 @@ Deno.test("Blot Runtime HIR rejects structural ownership that disagrees with its
   );
 });
 
+Deno.test("Runtime HIR accepts an integer switch with distinct cases", () => {
+  const module: BlotRuntimeModule = {
+    ...acceptedModule(),
+    functions: [{
+      id: 0,
+      name: "main",
+      signature: 0,
+      entryBlock: 0,
+      blocks: [
+        {
+          id: 0,
+          parameters: [],
+          operations: [{
+            kind: "constant",
+            result: 0,
+            type: 1,
+            operands: [],
+            ownership: "plain",
+            value: 2n,
+            span,
+          }],
+          terminator: {
+            kind: "switch",
+            selector: 0,
+            cases: [
+              { value: { kind: "signed-integer-64", value: "1" }, target: 1 },
+              { value: { kind: "signed-integer-64", value: "2" }, target: 2 },
+            ],
+            fallback: 3,
+            span,
+          },
+        },
+        {
+          id: 1,
+          parameters: [],
+          operations: [{
+            kind: "constant",
+            result: 1,
+            type: 1,
+            operands: [],
+            ownership: "plain",
+            value: 10n,
+            span,
+          }],
+          terminator: { kind: "return", value: 1, span },
+        },
+        {
+          id: 2,
+          parameters: [],
+          operations: [{
+            kind: "constant",
+            result: 2,
+            type: 1,
+            operands: [],
+            ownership: "plain",
+            value: 20n,
+            span,
+          }],
+          terminator: { kind: "return", value: 2, span },
+        },
+        {
+          id: 3,
+          parameters: [],
+          operations: [{
+            kind: "constant",
+            result: 3,
+            type: 1,
+            operands: [],
+            ownership: "plain",
+            value: 30n,
+            span,
+          }],
+          terminator: { kind: "return", value: 3, span },
+        },
+      ],
+      span,
+    }],
+  };
+
+  validateBlotRuntimeModule(module);
+});
+
 Deno.test("Runtime HIR accepts F32x4 shuffle with constant lane selectors", () => {
   validateBlotRuntimeModule(shuffleModule(7));
 });

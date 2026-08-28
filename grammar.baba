@@ -487,7 +487,7 @@ shape = (
   "}"
 ) ;
 
-shape_member = shape_spread | shape_field ;
+shape_member = shape_spread | computed_shape_field | shape_field ;
 
 shape_spread = (
   "..."
@@ -498,6 +498,17 @@ shape_spread = (
 shape_field = (
   "."
   name:field_name
+  optional:QUESTION?
+  "="
+  value:value
+  ";"
+) ;
+
+computed_shape_field = (
+  "."
+  "["
+  name:expression
+  "]"
   optional:QUESTION?
   "="
   value:value
@@ -581,7 +592,7 @@ conditional_statement_else_clause = (
 
 case_expression = (
   "case"
-  target:expression
+  targets:(expression % ",")
   "of"
   LAYOUT_NEWLINE
   LAYOUT_INDENT
@@ -597,7 +608,7 @@ case_expression = (
 // ends where one could continue it — the only keyword a pattern admits is a
 // shape field's name, which is preceded by `.` and terminated by `;`.
 case_arm = (
-  pattern:binding_pattern
+  patterns:(binding_pattern % ",")
   guard:case_guard?
   "=>"
   body:value

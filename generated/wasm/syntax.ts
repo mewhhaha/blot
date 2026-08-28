@@ -280,6 +280,7 @@ export type RuleName =
   | "shape_member"
   | "shape_spread"
   | "shape_field"
+  | "computed_shape_field"
   | "lambda"
   | "lambda_parameter"
   | "conditional_statement"
@@ -657,6 +658,14 @@ export interface ShapeFieldCursor extends RuleCursorBase<"shape_field"> {
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
+export interface ComputedShapeFieldCursor extends RuleCursorBase<"computed_shape_field"> {
+  field(name: "name"): ExpressionCursor;
+  field(name: "optional"): TokenCursor<"named", "QUESTION"> | null;
+  field(name: "value"): ValueCursor;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
 export interface LambdaCursor extends RuleCursorBase<"lambda"> {
   field(name: "body"): ExpressionCursor;
   field(name: "parameters"): ReadonlyArray<LambdaParameterCursor>;
@@ -709,7 +718,7 @@ export interface ConditionalStatementElseClauseCursor extends RuleCursorBase<"co
 export interface CaseExpressionCursor extends RuleCursorBase<"case_expression"> {
   field(name: "first"): CaseArmCursor;
   field(name: "rest"): ReadonlyArray<CaseArmCursor>;
-  field(name: "target"): ExpressionCursor;
+  field(name: "targets"): ReadonlyArray<ExpressionCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -717,7 +726,7 @@ export interface CaseExpressionCursor extends RuleCursorBase<"case_expression"> 
 export interface CaseArmCursor extends RuleCursorBase<"case_arm"> {
   field(name: "body"): ValueCursor;
   field(name: "guard"): CaseGuardCursor | null;
-  field(name: "pattern"): BindingPatternCursor;
+  field(name: "patterns"): ReadonlyArray<BindingPatternCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -810,6 +819,7 @@ export type AnyRuleCursor =
   | ShapeMemberCursor
   | ShapeSpreadCursor
   | ShapeFieldCursor
+  | ComputedShapeFieldCursor
   | LambdaCursor
   | LambdaParameterCursor
   | ConditionalStatementCursor

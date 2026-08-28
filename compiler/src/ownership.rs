@@ -36,12 +36,14 @@ pub(crate) enum Produced {
         qualifier: Qualifier,
         source: PatternId,
     },
-    /// Symbolic unique Store authority introduced by an unqualified Array
-    /// parameter. Unlike written `?`, this may be frozen as shareable.
+    /// Symbolic Store authority introduced by an unqualified Array parameter.
+    /// Element shareability and backing-Store access are independent: an Array
+    /// of unrestricted elements may still require a unique Store for an update.
     StoreParameter {
         source: PatternId,
         path: Vec<String>,
-        shareable: bool,
+        elements_shareable: bool,
+        access: StoreAccess,
     },
     Closure {
         captures: Box<Produced>,
@@ -108,6 +110,12 @@ pub(crate) enum Produced {
         outer: Box<Produced>,
         inner: Box<Produced>,
     },
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) enum StoreAccess {
+    Shared,
+    Unique,
 }
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
@@ -1332,7 +1340,8 @@ fn walk(
                     | Produced::SharedStore
                     | Produced::EmptyStore
                     | Produced::StoreParameter {
-                        shareable: true, ..
+                        elements_shareable: true,
+                        ..
                     } => {}
                     produced => {
                         if obligation(&produced) != Obligation::None {
@@ -1366,6 +1375,15 @@ fn walk(
                     }
                     ShapeMember::Spread { value } => {
                         spread = combine(spread, walk(value, scope, analysis, Use::Move));
+                    }
+                    ShapeMember::Computed { name, value } => {
+                        spread = combine(
+                            spread,
+                            combine(
+                                walk(name, scope, analysis, Use::Project),
+                                walk(value, scope, analysis, Use::Move),
+                            ),
+                        );
                     }
                 }
             }
@@ -1745,7 +1763,8 @@ fn walk_apply(
                 | Produced::SharedStore
                 | Produced::EmptyStore
                 | Produced::StoreParameter {
-                    shareable: true, ..
+                    elements_shareable: true,
+                    ..
                 } => Produced::None,
                 source => source,
             };
@@ -1787,6 +1806,7 @@ fn walk_apply(
         }
         if name == "@scratch.recycle" && arguments.len() == 1 {
             let source = walk(arguments[0], scope, analysis, Use::Move);
+            let source = require_unique_store_access(source, analysis);
             return recycle_scratch(
                 source,
                 analysis.module.arena.expression_span(arguments[0]),
@@ -1990,6 +2010,7 @@ fn walk_apply(
         }
         if (name == "@array.take" || name == "@array.split") && arguments.len() == 2 {
             let array = walk(arguments[0], scope, analysis, Use::Move);
+            let array = require_unique_store_access(array, analysis);
             walk(arguments[1], scope, analysis, Use::Move);
             if name == "@array.take" {
                 if let Produced::Store(elements) = &array
@@ -2030,7 +2051,7 @@ fn walk_apply(
                 if matches!(
                     &array,
                     Produced::StoreParameter {
-                        shareable: true,
+                        elements_shareable: true,
                         ..
                     }
                 ) {
@@ -2117,6 +2138,7 @@ fn walk_apply(
         }
         if name == "@array.set" && arguments.len() == 3 {
             let array = walk(arguments[0], scope, analysis, Use::Move);
+            let array = require_unique_store_access(array, analysis);
             walk(arguments[1], scope, analysis, Use::Move);
             let replacement = walk(arguments[2], scope, analysis, Use::Move);
             if matches!(array, Produced::SharedStore) {
@@ -2155,6 +2177,7 @@ fn walk_apply(
         }
         if name == "@array.push" && arguments.len() == 2 {
             let array = walk(arguments[0], scope, analysis, Use::Move);
+            let array = require_unique_store_access(array, analysis);
             let value = walk(arguments[1], scope, analysis, Use::Move);
             if matches!(array, Produced::SharedStore) {
                 analysis.report(
@@ -2233,6 +2256,7 @@ fn walk_apply(
             analysis,
         )
     };
+    let argument_value = require_contract_store_access(&input, argument_value, analysis);
     if contains_borrow(&argument_value)
         && !parameter_accepts_borrow(parameter, &argument_value, contract_module)
         && !trusted_borrow_operation(function, analysis.module)
@@ -2417,6 +2441,10 @@ fn contains_explicit_ownership_handoff(expression: ExpressionId, module: &Module
         Expression::Shape { members, .. } => members.iter().any(|member| match member {
             ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
                 contains_explicit_ownership_handoff(*value, module)
+            }
+            ShapeMember::Computed { name, value } => {
+                contains_explicit_ownership_handoff(*name, module)
+                    || contains_explicit_ownership_handoff(*value, module)
             }
         }),
         _ => false,
@@ -2706,6 +2734,226 @@ fn demands_ownership(input: &Produced) -> bool {
     }
 }
 
+fn require_contract_store_access(
+    expected: &Produced,
+    actual: Produced,
+    analysis: &Analysis<'_>,
+) -> Produced {
+    match (expected, actual) {
+        (
+            Produced::StoreParameter {
+                access: StoreAccess::Unique,
+                ..
+            },
+            actual,
+        ) => require_unique_store_access(actual, analysis),
+        (Produced::Sequence(expected), Produced::Sequence(actual))
+            if expected.len() == actual.len() =>
+        {
+            Produced::Sequence(
+                expected
+                    .iter()
+                    .zip(actual)
+                    .map(|(expected, actual)| {
+                        require_contract_store_access(expected, actual, analysis)
+                    })
+                    .collect(),
+            )
+        }
+        (Produced::Shape(expected), Produced::Shape(mut actual)) => {
+            for (name, expected) in expected {
+                let Some(value) = actual.remove(name) else {
+                    continue;
+                };
+                actual.insert(
+                    name.clone(),
+                    require_contract_store_access(expected, value, analysis),
+                );
+            }
+            Produced::Shape(actual)
+        }
+        (Produced::Variant(expected), Produced::Variant(actual)) => Produced::Variant(Box::new(
+            require_contract_store_access(expected, *actual, analysis),
+        )),
+        (Produced::Choice(expected), Produced::Choice(mut actual)) => {
+            for (name, expected) in expected {
+                let Some(value) = actual.remove(name) else {
+                    continue;
+                };
+                actual.insert(
+                    name.clone(),
+                    require_contract_store_access(expected, value, analysis),
+                );
+            }
+            Produced::Choice(actual)
+        }
+        (Produced::Many(expected), actual) if expected.iter().any(requires_unique_store_access) => {
+            require_unique_store_access(actual, analysis)
+        }
+        (_, actual) => actual,
+    }
+}
+
+fn requires_unique_store_access(produced: &Produced) -> bool {
+    match produced {
+        Produced::StoreParameter {
+            access: StoreAccess::Unique,
+            ..
+        } => true,
+        Produced::Borrow(value)
+        | Produced::Variant(value)
+        | Produced::PendingFreeze { region: value }
+        | Produced::PendingScratchRecycle { source: value } => requires_unique_store_access(value),
+        Produced::Closure {
+            captures, result, ..
+        } => requires_unique_store_access(captures) || requires_unique_store_access(result),
+        Produced::Many(values) | Produced::Sequence(values) => {
+            values.iter().any(requires_unique_store_access)
+        }
+        Produced::Shape(fields) | Produced::Choice(fields) => {
+            fields.values().any(requires_unique_store_access)
+        }
+        Produced::PendingCallback { input, .. } => requires_unique_store_access(input),
+        Produced::Region { elements, .. } => requires_unique_store_access(elements),
+        Produced::RegionWitness {
+            left,
+            right,
+            parent,
+        } => {
+            requires_unique_store_access(left)
+                || requires_unique_store_access(right)
+                || requires_unique_store_access(parent)
+        }
+        Produced::PendingJoin {
+            witness,
+            left,
+            right,
+        } => {
+            requires_unique_store_access(witness)
+                || requires_unique_store_access(left)
+                || requires_unique_store_access(right)
+        }
+        Produced::PendingReassociate { outer, inner, .. } => {
+            requires_unique_store_access(outer) || requires_unique_store_access(inner)
+        }
+        _ => false,
+    }
+}
+
+fn require_unique_store_access(produced: Produced, analysis: &Analysis<'_>) -> Produced {
+    match produced {
+        Produced::StoreParameter {
+            source,
+            path,
+            elements_shareable,
+            ..
+        } => {
+            record_unique_store_access(source, &path, analysis);
+            Produced::StoreParameter {
+                source,
+                path,
+                elements_shareable,
+                access: StoreAccess::Unique,
+            }
+        }
+        Produced::Borrow(value) => {
+            Produced::Borrow(Box::new(require_unique_store_access(*value, analysis)))
+        }
+        Produced::Closure {
+            captures,
+            parameter,
+            result,
+        } => Produced::Closure {
+            captures: Box::new(require_unique_store_access(*captures, analysis)),
+            parameter,
+            result: Box::new(require_unique_store_access(*result, analysis)),
+        },
+        Produced::Many(values) => Produced::Many(
+            values
+                .into_iter()
+                .map(|value| require_unique_store_access(value, analysis))
+                .collect(),
+        ),
+        Produced::Sequence(values) => Produced::Sequence(
+            values
+                .into_iter()
+                .map(|value| require_unique_store_access(value, analysis))
+                .collect(),
+        ),
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, require_unique_store_access(value, analysis)))
+                .collect(),
+        ),
+        Produced::Variant(value) => {
+            Produced::Variant(Box::new(require_unique_store_access(*value, analysis)))
+        }
+        Produced::Choice(cases) => Produced::Choice(
+            cases
+                .into_iter()
+                .map(|(name, value)| (name, require_unique_store_access(value, analysis)))
+                .collect(),
+        ),
+        produced => produced,
+    }
+}
+
+fn record_unique_store_access(source: PatternId, path: &[String], analysis: &Analysis<'_>) {
+    for binding in &analysis.bindings {
+        if binding.borrow().pattern != source {
+            continue;
+        }
+        let mut binding = binding.borrow_mut();
+        binding.owned = set_unique_store_access(binding.owned.clone(), source, path);
+    }
+}
+
+fn set_unique_store_access(produced: Produced, source: PatternId, path: &[String]) -> Produced {
+    match produced {
+        Produced::StoreParameter {
+            source: found,
+            path: found_path,
+            elements_shareable,
+            access,
+        } => {
+            let access = if found == source && found_path == path {
+                StoreAccess::Unique
+            } else {
+                access
+            };
+            Produced::StoreParameter {
+                source: found,
+                path: found_path,
+                elements_shareable,
+                access,
+            }
+        }
+        Produced::Sequence(values) => Produced::Sequence(
+            values
+                .into_iter()
+                .map(|value| set_unique_store_access(value, source, path))
+                .collect(),
+        ),
+        Produced::Shape(fields) => Produced::Shape(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, set_unique_store_access(value, source, path)))
+                .collect(),
+        ),
+        Produced::Variant(value) => {
+            Produced::Variant(Box::new(set_unique_store_access(*value, source, path)))
+        }
+        Produced::Many(values) => Produced::Many(
+            values
+                .into_iter()
+                .map(|value| set_unique_store_access(value, source, path))
+                .collect(),
+        ),
+        produced => produced,
+    }
+}
+
 fn local_recursive_call(function: ExpressionId, scope: &ScopeRef, analysis: &Analysis<'_>) -> bool {
     let Expression::Var { name, .. } = &analysis.module.arena.expressions[function.0 as usize]
     else {
@@ -2840,15 +3088,16 @@ fn prepare_array_binding(
         return;
     }
     if let Some((source, path)) = binding.parameter_source.clone() {
-        let shareable = array_parameter_shareable(expression, analysis);
+        let elements_shareable = array_parameter_elements_shareable(expression, analysis);
         binding.qualifier = Qualifier::Affine;
         binding.owned = Produced::StoreParameter {
             source,
             path: path.clone(),
-            shareable,
+            elements_shareable,
+            access: StoreAccess::Shared,
         };
         drop(binding);
-        record_store_parameter_authority(source, &path, shareable, analysis);
+        record_store_parameter_authority(source, &path, elements_shareable, analysis);
     } else {
         binding.owned = Produced::SharedStore;
     }
@@ -2867,15 +3116,16 @@ fn prepare_array_operand(expression: ExpressionId, scope: &ScopeRef, analysis: &
         return;
     }
     if let Some((source, path)) = binding.parameter_source.clone() {
-        let shareable = array_parameter_shareable(expression, analysis);
+        let elements_shareable = array_parameter_elements_shareable(expression, analysis);
         binding.qualifier = Qualifier::Affine;
         binding.owned = Produced::StoreParameter {
             source,
             path: path.clone(),
-            shareable,
+            elements_shareable,
+            access: StoreAccess::Shared,
         };
         drop(binding);
-        record_store_parameter_authority(source, &path, shareable, analysis);
+        record_store_parameter_authority(source, &path, elements_shareable, analysis);
     } else {
         binding.owned = Produced::SharedStore;
     }
@@ -2884,7 +3134,7 @@ fn prepare_array_operand(expression: ExpressionId, scope: &ScopeRef, analysis: &
 fn record_store_parameter_authority(
     source: PatternId,
     path: &[String],
-    shareable: bool,
+    elements_shareable: bool,
     analysis: &Analysis<'_>,
 ) {
     let Some(root) = analysis
@@ -2898,7 +3148,8 @@ fn record_store_parameter_authority(
     let authority = Produced::StoreParameter {
         source,
         path: path.to_vec(),
-        shareable,
+        elements_shareable,
+        access: StoreAccess::Shared,
     };
     let mut root = root.borrow_mut();
     root.owned = insert_parameter_authority(root.owned.clone(), path, authority);
@@ -2935,7 +3186,7 @@ fn runtime_array_expression(expression: ExpressionId, analysis: &Analysis<'_>) -
     !contains_type_value(element)
 }
 
-fn array_parameter_shareable(expression: ExpressionId, analysis: &Analysis<'_>) -> bool {
+fn array_parameter_elements_shareable(expression: ExpressionId, analysis: &Analysis<'_>) -> bool {
     let Some(Type::Array(element)) = analysis.expression_types.get(&expression) else {
         return false;
     };
@@ -3237,13 +3488,20 @@ fn specialize_store_parameter_shareability(produced: &Produced, type_: &Type) ->
         (produced, Type::Forall { body, .. }) => {
             specialize_store_parameter_shareability(produced, body)
         }
-        (Produced::StoreParameter { source, path, .. }, Type::Array(element)) => {
+        (
             Produced::StoreParameter {
-                source: *source,
-                path: path.clone(),
-                shareable: !type_may_carry_ownership(element),
-            }
-        }
+                source,
+                path,
+                access,
+                ..
+            },
+            Type::Array(element),
+        ) => Produced::StoreParameter {
+            source: *source,
+            path: path.clone(),
+            elements_shareable: !type_may_carry_ownership(element),
+            access: *access,
+        },
         (Produced::Sequence(values), Type::Record(fields)) => Produced::Sequence(
             values
                 .iter()
@@ -3362,7 +3620,8 @@ fn substitute_parameter_source(
         Produced::StoreParameter {
             source: found,
             path,
-            shareable,
+            elements_shareable,
+            access,
         } => {
             if found == source {
                 project_parameter_argument(argument, &path)
@@ -3370,7 +3629,8 @@ fn substitute_parameter_source(
                 Produced::StoreParameter {
                     source: found,
                     path,
-                    shareable,
+                    elements_shareable,
+                    access,
                 }
             }
         }
@@ -3548,7 +3808,8 @@ fn substitute_store_contents(
             | Produced::SharedStore
             | Produced::EmptyStore
             | Produced::StoreParameter {
-                shareable: true, ..
+                elements_shareable: true,
+                ..
             } => Produced::None,
             argument => argument,
         };
@@ -3587,7 +3848,8 @@ fn substitute_element_source(
         Produced::StoreParameter {
             source: found,
             path,
-            shareable,
+            elements_shareable,
+            access,
         } => {
             if found == source {
                 project_parameter_argument(argument_elements, &path)
@@ -3595,7 +3857,8 @@ fn substitute_element_source(
                 Produced::StoreParameter {
                     source: found,
                     path,
-                    shareable,
+                    elements_shareable,
+                    access,
                 }
             }
         }
@@ -3951,9 +4214,12 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
             .iter()
             .find(|(moved, ..)| moved.is_some())
             .unwrap_or(first);
+        let owned = states.iter().fold(chosen.1.clone(), |owned, state| {
+            merge_store_access_requirements(owned, &state.1)
+        });
         let mut binding = binding.borrow_mut();
         binding.moved = chosen.0;
-        binding.owned = chosen.1.clone();
+        binding.owned = owned;
         binding.partial = chosen.2;
         binding.ownership_demanded = states.iter().any(|state| state.3);
     }
@@ -4071,7 +4337,27 @@ fn recursive_owned_candidates(produced: &Produced, candidates: &mut Vec<Produced
 fn recursive_result_matches(expected: &Produced, result: &Produced) -> bool {
     match (region_proof_part(expected), region_proof_part(result)) {
         (Some(expected), Some(result)) => expected == result,
-        _ => expected == result,
+        _ => match (expected, result) {
+            (
+                Produced::StoreParameter {
+                    source: expected_source,
+                    path: expected_path,
+                    elements_shareable: expected_elements_shareable,
+                    ..
+                },
+                Produced::StoreParameter {
+                    source: result_source,
+                    path: result_path,
+                    elements_shareable: result_elements_shareable,
+                    ..
+                },
+            ) => {
+                expected_source == result_source
+                    && expected_path == result_path
+                    && expected_elements_shareable == result_elements_shareable
+            }
+            _ => expected == result,
+        },
     }
 }
 
@@ -4150,12 +4436,14 @@ fn owned_parameter_type(type_: &Type, source: PatternId, path: &[String]) -> Pro
         Type::Array(element) => Produced::StoreParameter {
             source,
             path: path.to_vec(),
-            shareable: !type_may_carry_ownership(element),
+            elements_shareable: !type_may_carry_ownership(element),
+            access: StoreAccess::Shared,
         },
         Type::Scratch(_) => Produced::StoreParameter {
             source,
             path: path.to_vec(),
-            shareable: false,
+            elements_shareable: false,
+            access: StoreAccess::Unique,
         },
         _ => Produced::None,
     }
@@ -4423,7 +4711,8 @@ fn contains_concrete_store(produced: &Produced) -> bool {
     match produced {
         Produced::Store(_) => true,
         Produced::StoreParameter {
-            shareable: true, ..
+            elements_shareable: true,
+            ..
         } => true,
         Produced::Borrow(value)
         | Produced::Variant(value)
@@ -4467,7 +4756,8 @@ fn contains_concrete_store(produced: &Produced) -> bool {
         | Produced::Leaf(_)
         | Produced::Parameter { .. }
         | Produced::StoreParameter {
-            shareable: false, ..
+            elements_shareable: false,
+            ..
         } => false,
     }
 }
@@ -4476,7 +4766,8 @@ fn share_concrete_stores(produced: Produced) -> Produced {
     match produced {
         Produced::Store(_) => Produced::SharedStore,
         Produced::StoreParameter {
-            shareable: true, ..
+            elements_shareable: true,
+            ..
         } => Produced::SharedStore,
         Produced::Borrow(value) => Produced::Borrow(Box::new(share_concrete_stores(*value))),
         Produced::Closure {
@@ -4555,6 +4846,31 @@ fn join(values: impl IntoIterator<Item = Produced>) -> Produced {
 fn join_alternatives(values: Vec<Produced>) -> Produced {
     if values.is_empty() || values.iter().all(|value| *value == Produced::None) {
         return Produced::None;
+    }
+    if let Produced::StoreParameter {
+        source,
+        path,
+        elements_shareable,
+        ..
+    } = &values[0]
+        && values.iter().all(|value| {
+            matches!(
+                value,
+                Produced::StoreParameter {
+                    source: candidate_source,
+                    path: candidate_path,
+                    elements_shareable: candidate_elements_shareable,
+                    ..
+                } if candidate_source == source
+                    && candidate_path == path
+                    && candidate_elements_shareable == elements_shareable
+            )
+        })
+    {
+        return values
+            .iter()
+            .skip(1)
+            .fold(values[0].clone(), merge_store_access_requirements);
     }
     let first = values[0].clone();
     if values.iter().all(|value| value == &first) {
@@ -4710,6 +5026,95 @@ fn join_alternatives(values: Vec<Produced>) -> Produced {
         );
     }
     join(values)
+}
+
+fn merge_store_access_requirements(primary: Produced, alternative: &Produced) -> Produced {
+    match (primary, alternative) {
+        (
+            Produced::StoreParameter {
+                source,
+                path,
+                elements_shareable,
+                access,
+            },
+            Produced::StoreParameter {
+                source: alternative_source,
+                path: alternative_path,
+                elements_shareable: alternative_elements_shareable,
+                access: alternative_access,
+            },
+        ) if source == *alternative_source
+            && path == *alternative_path
+            && elements_shareable == *alternative_elements_shareable =>
+        {
+            let access =
+                if access == StoreAccess::Unique || *alternative_access == StoreAccess::Unique {
+                    StoreAccess::Unique
+                } else {
+                    StoreAccess::Shared
+                };
+            Produced::StoreParameter {
+                source,
+                path,
+                elements_shareable,
+                access,
+            }
+        }
+        (Produced::Sequence(primary), Produced::Sequence(alternative))
+            if primary.len() == alternative.len() =>
+        {
+            Produced::Sequence(
+                primary
+                    .into_iter()
+                    .zip(alternative)
+                    .map(|(primary, alternative)| {
+                        merge_store_access_requirements(primary, alternative)
+                    })
+                    .collect(),
+            )
+        }
+        (Produced::Shape(mut primary), Produced::Shape(alternative)) => {
+            for (name, alternative) in alternative {
+                let Some(value) = primary.remove(name) else {
+                    continue;
+                };
+                primary.insert(
+                    name.clone(),
+                    merge_store_access_requirements(value, alternative),
+                );
+            }
+            Produced::Shape(primary)
+        }
+        (Produced::Variant(primary), Produced::Variant(alternative)) => Produced::Variant(
+            Box::new(merge_store_access_requirements(*primary, alternative)),
+        ),
+        (Produced::Choice(mut primary), Produced::Choice(alternative)) => {
+            for (name, alternative) in alternative {
+                let Some(value) = primary.remove(name) else {
+                    continue;
+                };
+                primary.insert(
+                    name.clone(),
+                    merge_store_access_requirements(value, alternative),
+                );
+            }
+            Produced::Choice(primary)
+        }
+        (Produced::Many(primary), Produced::Many(alternative))
+            if primary.len() == alternative.len() =>
+        {
+            Produced::Many(
+                primary
+                    .into_iter()
+                    .zip(alternative)
+                    .map(|(primary, alternative)| {
+                        merge_store_access_requirements(primary, alternative)
+                    })
+                    .collect(),
+            )
+        }
+        (primary, _) => primary,
+    }
 }
 
 fn ownership_parts(source: &Produced, span: Span) -> (Produced, Produced) {
@@ -5139,6 +5544,48 @@ mod region_join_tests {
     }
 }
 
+#[cfg(test)]
+mod store_access_tests {
+    use super::*;
+
+    fn store_parameter(access: StoreAccess) -> Produced {
+        Produced::StoreParameter {
+            source: PatternId(7),
+            path: Vec::new(),
+            elements_shareable: true,
+            access,
+        }
+    }
+
+    #[test]
+    fn destructive_branch_makes_store_access_unique() {
+        let joined = join_alternatives(vec![
+            store_parameter(StoreAccess::Shared),
+            store_parameter(StoreAccess::Unique),
+        ]);
+
+        assert!(matches!(
+            joined,
+            Produced::StoreParameter {
+                access: StoreAccess::Unique,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn shared_store_only_satisfies_shared_access() {
+        assert!(parameter_accepts_ownership(
+            &store_parameter(StoreAccess::Shared),
+            &Produced::SharedStore,
+        ));
+        assert!(!parameter_accepts_ownership(
+            &store_parameter(StoreAccess::Unique),
+            &Produced::SharedStore,
+        ));
+    }
+}
+
 fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
     match (left, right) {
         (
@@ -5431,7 +5878,9 @@ fn parameter_accepts_ownership(input: &Produced, argument: &Produced) -> bool {
     match (input, argument) {
         (
             Produced::StoreParameter {
-                shareable: true, ..
+                elements_shareable: true,
+                access: StoreAccess::Shared,
+                ..
             },
             Produced::SharedStore,
         ) => true,
@@ -5699,14 +6148,15 @@ fn recursion_paths(
             captures,
             module,
         ),
-        Expression::Shape { members, .. } => sequential(
-            members.iter().map(|member| match member {
-                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-            }),
-            names,
-            captures,
-            module,
-        ),
+        Expression::Shape { members, .. } => {
+            let expressions = members.iter().flat_map(|member| match member {
+                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                    vec![*value]
+                }
+                ShapeMember::Computed { name, value } => vec![*name, *value],
+            });
+            sequential(expressions, names, captures, module)
+        }
         Expression::If {
             branches, fallback, ..
         } => {
@@ -5843,11 +6293,14 @@ fn recursive_calls_are_tail(
         Expression::Array { elements, .. } => elements
             .iter()
             .all(|element| recursive_calls_are_tail(element.value, names, false, module)),
-        Expression::Shape { members, .. } => members.iter().all(|member| {
-            let value = match member {
-                ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-            };
-            recursive_calls_are_tail(value, names, false, module)
+        Expression::Shape { members, .. } => members.iter().all(|member| match member {
+            ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                recursive_calls_are_tail(*value, names, false, module)
+            }
+            ShapeMember::Computed { name, value } => {
+                recursive_calls_are_tail(*name, names, false, module)
+                    && recursive_calls_are_tail(*value, names, false, module)
+            }
         }),
         Expression::If {
             branches, fallback, ..
@@ -5926,10 +6379,15 @@ fn collect_free_names(
         }
         Expression::Shape { members, .. } => {
             for member in members {
-                let value = match member {
-                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-                };
-                collect_free_names(value, module, bound, names);
+                match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                        collect_free_names(*value, module, bound, names);
+                    }
+                    ShapeMember::Computed { name, value } => {
+                        collect_free_names(*name, module, bound, names);
+                        collect_free_names(*value, module, bound, names);
+                    }
+                }
             }
         }
         Expression::If {

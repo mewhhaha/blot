@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+let adjusted = @satisfies Array.empty [Int]
+for value in Iter.items [1, 2, 3]:
+  value := value + 1
+  if value > 2:
+    value := value + 1
+
+  adjusted := [...adjusted, value]
+
+return adjusted

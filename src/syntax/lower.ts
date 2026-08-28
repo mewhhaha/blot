@@ -1230,6 +1230,7 @@ function loopFiltering(rule: Rule, binder: Pattern | null): boolean {
 function reboundNames(
   statements: readonly Cursor[],
   context: Context,
+  initiallyShadowed: readonly string[] = [],
 ): readonly string[] {
   const rebound: string[] = [];
   const visit = (
@@ -1300,7 +1301,7 @@ function reboundNames(
       }
     }
   };
-  visit(statements, new Set());
+  visit(statements, new Set(initiallyShadowed));
   return rebound;
 }
 
@@ -1311,7 +1312,29 @@ function lowerControlLoop(
   context: Context,
 ): LoweredControlLoop {
   const statements = statementSuite(rule, "body");
-  const carried = carriedNames(statements, context);
+  expect(rule.name === "iteration", `expected a loop, got ${rule.name}`);
+  const drawn = field(rule, "drawn");
+  let headContext = context;
+  if (drawn !== null) headContext = { ...context, patternHead: true };
+  const head = lowerValue(
+    asRule(field(rule, "head"), "value"),
+    headContext,
+  );
+  let binder: Pattern | null = null;
+  let source = head;
+  if (drawn !== null) {
+    binder = patternFromExpr(head);
+    source = lowerValue(
+      asRule(
+        required(asRule(drawn, "iteration_source"), "source"),
+        "value",
+      ),
+      context,
+    );
+  }
+  let localNames: readonly string[] = [];
+  if (binder !== null) localNames = patternNames(binder);
+  const carried = carriedNames(statements, context, localNames);
   const constructors: ControlConstructors = {
     return: syntheticConstructor("LoopReturn", rule.span),
     continue: syntheticConstructor("LoopContinue", rule.span),
@@ -1336,48 +1359,9 @@ function lowerControlLoop(
     bodyConstructors,
   );
 
-  expect(rule.name === "iteration", `expected a loop, got ${rule.name}`);
-  const drawn = field(rule, "drawn");
-  const head = lowerValue(
-    asRule(field(rule, "head"), "value"),
-    drawn === null ? context : { ...context, patternHead: true },
-  );
-  if (drawn === null) {
-    const loop = desugarLoop(
-      null,
-      head,
-      {
-        tag: "control",
-        outcome,
-        carried,
-        constructors: bodyConstructors,
-        resultConstructors: constructors,
-        breakConstructor,
-        returns,
-        continues,
-        breaks,
-      },
-      statementsContainEffect(statements),
-      loopFiltering(rule, null),
-      { tag: "control" },
-      rule.span,
-    );
-    return {
-      ...loop,
-      constructors,
-      returns,
-    };
-  }
-  const binder = patternFromExpr(head);
   const loop = desugarLoop(
     binder,
-    lowerValue(
-      asRule(
-        required(asRule(drawn, "iteration_source"), "source"),
-        "value",
-      ),
-      context,
-    ),
+    source,
     {
       tag: "control",
       outcome,
@@ -1584,45 +1568,41 @@ function lowerDecl(rule: Rule, context: Context): Decl {
         span: rule.span,
       };
     }
-    const carried = carriedNames(statements, context);
     const drawn = field(rule, "drawn");
+    let headContext = context;
+    if (drawn !== null) headContext = { ...context, patternHead: true };
     const head = lowerValue(
       asRule(field(rule, "head"), "value"),
-      drawn === null ? context : { ...context, patternHead: true },
+      headContext,
     );
+    let binder: Pattern | null = null;
+    let source = head;
+    if (drawn !== null) {
+      binder = patternFromExpr(head);
+      source = lowerValue(
+        asRule(
+          required(asRule(drawn, "iteration_source"), "source"),
+          "value",
+        ),
+        context,
+      );
+    }
+    let localNames: readonly string[] = [];
+    if (binder !== null) localNames = patternNames(binder);
+    const carried = carriedNames(statements, context, localNames);
     const body = statements.map((statement) => {
       const inner = asRule(unwrap(statement), "statement");
       return lowerDecl(inner, { ...context, loop: null });
     });
-    let loop: LoweredLoop;
-    if (drawn === null) {
-      loop = desugarLoop(
-        null,
-        head,
-        { tag: "plain", declarations: body, carried },
-        kind === "effect",
-        loopFiltering(rule, null),
-        { tag: "iterate" },
-        rule.span,
-      );
-    } else {
-      const binder = patternFromExpr(head);
-      loop = desugarLoop(
-        binder,
-        lowerValue(
-          asRule(
-            required(asRule(drawn, "iteration_source"), "source"),
-            "value",
-          ),
-          context,
-        ),
-        { tag: "plain", declarations: body, carried },
-        kind === "effect",
-        loopFiltering(rule, binder),
-        { tag: "iterate" },
-        rule.span,
-      );
-    }
+    const loop = desugarLoop(
+      binder,
+      source,
+      { tag: "plain", declarations: body, carried },
+      kind === "effect",
+      loopFiltering(rule, binder),
+      { tag: "iterate" },
+      rule.span,
+    );
     return {
       tag: "binding",
       kind,
@@ -2038,6 +2018,13 @@ function patternFromExpr(expr: Expr): Pattern {
     const fields: ShapePatternField[] = expr.members.map((member) => {
       if (member.tag === "spread") {
         fail("BLOT_BAD_BINDER", "A binder cannot spread.", expr.span);
+      }
+      if (member.tag === "computed") {
+        fail(
+          "BLOT_BAD_BINDER",
+          "A binder cannot compute a field name.",
+          expr.span,
+        );
       }
       return { name: member.name, pattern: patternFromExpr(member.value) };
     });
@@ -2459,6 +2446,13 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
           ),
         };
       }
+      let computedName: Expr | null = null;
+      if (member.name === "computed_shape_field") {
+        computedName = lowerExpression(
+          asRule(field(member, "name"), "computed field name"),
+          context,
+        );
+      }
       let value = lowerValue(
         asRule(field(member, "value"), "value"),
         context,
@@ -2477,6 +2471,13 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
           span: member.span,
         };
       }
+      if (computedName !== null) {
+        return {
+          tag: "computed",
+          name: computedName,
+          value,
+        };
+      }
       return {
         tag: "field",
         name: tokenOf(required(member, "name")).text,
@@ -2493,17 +2494,16 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
       returnScope: false,
       escapeBoundary: "value-condition",
     };
-    const arms: GuardedArm[] = [
-      lowerArm(asRule(field(rule, "first"), "first"), closed),
+    const arms: MultiCaseArm[] = [
+      lowerMultiCaseArm(asRule(field(rule, "first"), "first"), closed),
     ];
     for (const cursor of fieldList(rule, "rest")) {
-      arms.push(lowerArm(asRule(cursor, "case_arm"), closed));
+      arms.push(lowerMultiCaseArm(asRule(cursor, "case_arm"), closed));
     }
-    const target = lowerExpression(
-      asRule(field(rule, "target"), "target"),
-      closed,
+    const targets = fieldList(rule, "targets").map((target) =>
+      lowerExpression(asRule(target, "expression"), closed)
     );
-    return lowerGuards(target, arms, rule.span);
+    return lowerCaseTargets(targets, arms, rule.span);
   }
 
   if (rule.name === "do_block") {
@@ -2566,6 +2566,12 @@ interface GuardedArm {
   readonly body: Expr;
 }
 
+interface MultiCaseArm {
+  readonly patterns: readonly Pattern[];
+  readonly guard: Expr | null;
+  readonly body: Expr;
+}
+
 function lowerCaseGuard(rule: Rule, context: Context): Expr | null {
   const guard = field(rule, "guard");
   if (guard === null) return null;
@@ -2575,11 +2581,413 @@ function lowerCaseGuard(rule: Rule, context: Context): Expr | null {
   );
 }
 
-function lowerArm(rule: Rule, context: Context): GuardedArm {
+function lowerMultiCaseArm(rule: Rule, context: Context): MultiCaseArm {
   return {
-    pattern: lowerPattern(asRule(field(rule, "pattern"), "pattern")),
+    patterns: fieldList(rule, "patterns").map((pattern) =>
+      lowerPattern(asRule(pattern, "binding_pattern"))
+    ),
     guard: lowerCaseGuard(rule, context),
     body: lowerValue(asRule(field(rule, "body"), "body"), context),
+  };
+}
+
+function lowerCaseTargets(
+  targets: readonly Expr[],
+  arms: readonly MultiCaseArm[],
+  span: Span,
+): Expr {
+  if (
+    targets.length === 1 && arms.every((arm) => arm.patterns.length === 1)
+  ) {
+    const target = targets[0];
+    expect(target !== undefined, "a single-subject case lost its subject");
+    return lowerGuards(
+      target,
+      arms.map((arm) => {
+        const pattern = arm.patterns[0];
+        expect(pattern !== undefined, "a single-subject case lost its pattern");
+        return { pattern, guard: arm.guard, body: arm.body };
+      }),
+      span,
+    );
+  }
+
+  if (
+    targets.length < 2 ||
+    arms.some((arm) => arm.patterns.length !== targets.length)
+  ) {
+    return lowerGuards(
+      { tag: "tuple", elements: targets, span },
+      arms.map((arm) => ({
+        pattern: { tag: "tuple", elements: arm.patterns, span },
+        guard: arm.guard,
+        body: arm.body,
+      })),
+      span,
+    );
+  }
+
+  const subjectNames: string[] = [];
+  for (let index = 0; index < targets.length; index += 1) {
+    const name = `case_subject$${span.start}$${span.end}$${index}`;
+    subjectNames.push(name);
+  }
+  let result = lowerMultiCaseRows(
+    arms,
+    subjectNames,
+    targets.map(() => null),
+    span,
+    0,
+  );
+  // Fall-through wildcards make every executable probe locally total. This
+  // unused closure is inferred first so the same subject parameters still have
+  // to satisfy the complete unguarded matrix, without demanding them at run time.
+  result = {
+    tag: "block",
+    declarations: [{
+      tag: "binding",
+      kind: "let",
+      tags: [],
+      pattern: { tag: "wildcard", span },
+      value: {
+        tag: "lambda",
+        parameter: { tag: "unit", span },
+        body: multiCaseCoverageWitness(
+          arms,
+          subjectNames,
+          targets.map(() => null),
+          span,
+        ),
+        span,
+      },
+      span,
+    }],
+    result,
+    resultEffects: "ambient",
+    span,
+  };
+  for (let index = targets.length - 1; index >= 0; index -= 1) {
+    const target = targets[index];
+    const name = subjectNames[index];
+    expect(target !== undefined, `multi-subject case lost subject ${index}`);
+    expect(name !== undefined, `multi-subject case lost name ${index}`);
+    result = {
+      tag: "apply",
+      fn: {
+        tag: "lambda",
+        parameter: { tag: "name", name, qualifier: "none", span },
+        body: result,
+        deferred: true,
+        span,
+      },
+      arg: target,
+      span,
+    };
+  }
+  return result;
+}
+
+function lowerMultiCaseRows(
+  rows: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
+  cached: readonly (string | null)[],
+  span: Span,
+  depth: number,
+): Expr {
+  const row = rows[0];
+  if (row === undefined) {
+    return compilerPanic(
+      "complete multi-subject case reached its failure path",
+      span,
+    );
+  }
+  return lowerMultiCaseColumn(
+    row,
+    rows.slice(1),
+    subjectNames,
+    cached,
+    span,
+    depth,
+    0,
+  );
+}
+
+function lowerMultiCaseColumn(
+  row: MultiCaseArm,
+  remaining: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
+  cached: readonly (string | null)[],
+  span: Span,
+  depth: number,
+  column: number,
+): Expr {
+  if (column === row.patterns.length) {
+    return lowerMultiCaseBody(
+      row,
+      remaining,
+      subjectNames,
+      cached,
+      span,
+      depth,
+    );
+  }
+  const pattern = row.patterns[column];
+  expect(pattern !== undefined, `multi-subject case lost pattern ${column}`);
+  if (pattern.tag === "wildcard") {
+    return lowerMultiCaseColumn(
+      row,
+      remaining,
+      subjectNames,
+      cached,
+      span,
+      depth,
+      column + 1,
+    );
+  }
+
+  const cachedName = cached[column];
+  if (cachedName === null || cachedName === undefined) {
+    const subject = subjectNames[column];
+    expect(subject !== undefined, `multi-subject case lost subject ${column}`);
+    const subjectName =
+      `case_value$${span.start}$${span.end}$${depth}$${column}`;
+    const nextCached = [...cached];
+    nextCached[column] = subjectName;
+    return {
+      tag: "apply",
+      fn: {
+        tag: "lambda",
+        parameter: {
+          tag: "name",
+          name: subjectName,
+          qualifier: "none",
+          span,
+        },
+        body: lowerMultiCaseColumn(
+          row,
+          remaining,
+          subjectNames,
+          nextCached,
+          span,
+          depth + 1,
+          column,
+        ),
+        span,
+      },
+      arg: { tag: "var", name: subject, span },
+      span,
+    };
+  }
+  if (pattern.tag === "name") {
+    return lowerMultiCaseColumn(
+      row,
+      remaining,
+      subjectNames,
+      cached,
+      span,
+      depth,
+      column + 1,
+    );
+  }
+  return {
+    tag: "case",
+    target: { tag: "var", name: cachedName, span },
+    arms: [{
+      pattern: eraseBinders(pattern),
+      body: lowerMultiCaseColumn(
+        row,
+        remaining,
+        subjectNames,
+        cached,
+        span,
+        depth + 1,
+        column + 1,
+      ),
+    }, {
+      pattern: { tag: "wildcard", span },
+      body: lowerMultiCaseRows(
+        remaining,
+        subjectNames,
+        cached,
+        span,
+        depth + 1,
+      ),
+    }],
+    span,
+  };
+}
+
+function lowerMultiCaseBody(
+  row: MultiCaseArm,
+  remaining: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
+  cached: readonly (string | null)[],
+  span: Span,
+  depth: number,
+): Expr {
+  let body = row.body;
+  if (row.guard !== null) {
+    body = {
+      tag: "if",
+      branches: [{ condition: row.guard, consequence: body }],
+      fallback: lowerMultiCaseRows(
+        remaining,
+        subjectNames,
+        cached,
+        span,
+        depth + 1,
+      ),
+      span,
+    };
+  }
+  for (let column = row.patterns.length - 1; column >= 0; column -= 1) {
+    const pattern = row.patterns[column];
+    expect(pattern !== undefined, `multi-subject case lost pattern ${column}`);
+    if (pattern.tag === "wildcard") continue;
+    const subjectName = cached[column];
+    expect(
+      subjectName !== null && subjectName !== undefined,
+      `multi-subject case column ${column} was not evaluated`,
+    );
+    const target: Expr = { tag: "var", name: subjectName, span };
+    if (pattern.tag === "name") {
+      body = {
+        tag: "block",
+        declarations: [{
+          tag: "binding",
+          kind: "let",
+          tags: [],
+          pattern,
+          value: target,
+          span,
+        }],
+        result: body,
+        resultEffects: "ambient",
+        span,
+      };
+      continue;
+    }
+    body = {
+      tag: "case",
+      target,
+      arms: [{ pattern, body }, {
+        pattern: { tag: "wildcard", span },
+        body: compilerPanic(
+          "multi-subject case probe disagreed with its binding",
+          span,
+        ),
+      }],
+      span,
+    };
+  }
+  return body;
+}
+
+function multiCaseCoverageWitness(
+  rows: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
+  cached: readonly (string | null)[],
+  span: Span,
+): Expr {
+  return multiCaseCoverageColumn(
+    rows.filter((row) => row.guard === null),
+    subjectNames,
+    cached,
+    span,
+    0,
+  );
+}
+
+function multiCaseCoverageColumn(
+  rows: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
+  cached: readonly (string | null)[],
+  span: Span,
+  column: number,
+): Expr {
+  if (column === subjectNames.length) {
+    return compilerPanic(
+      "complete multi-subject case reached its failure path",
+      span,
+    );
+  }
+  const groups = new Map<
+    string,
+    { readonly pattern: Pattern; readonly rows: MultiCaseArm[] }
+  >();
+  for (const row of rows) {
+    const pattern = row.patterns[column];
+    expect(pattern !== undefined, `multi-subject case lost pattern ${column}`);
+    const key = patternStructureKey(pattern);
+    const existing = groups.get(key);
+    if (existing === undefined) groups.set(key, { pattern, rows: [row] });
+    else existing.rows.push(row);
+  }
+  let subjectName = cached[column];
+  if (subjectName === null || subjectName === undefined) {
+    subjectName = subjectNames[column];
+  }
+  expect(
+    subjectName !== null && subjectName !== undefined,
+    `multi-subject case lost subject ${column}`,
+  );
+  return {
+    tag: "case",
+    target: { tag: "var", name: subjectName, span },
+    arms: [...groups.values()].map((group) => ({
+      pattern: eraseBinders(group.pattern),
+      body: multiCaseCoverageColumn(
+        group.rows,
+        subjectNames,
+        cached,
+        span,
+        column + 1,
+      ),
+    })),
+    span,
+  };
+}
+
+function patternStructureKey(pattern: Pattern): string {
+  switch (pattern.tag) {
+    case "name":
+    case "wildcard":
+      return "*";
+    case "pin":
+      return `pin:${pattern.name}`;
+    case "int":
+      return `int:${pattern.value}`;
+    case "float":
+      return `float:${pattern.value}`;
+    case "text":
+      return `text:${JSON.stringify(pattern.value)}`;
+    case "unit":
+      return "unit";
+    case "tuple":
+    case "array":
+      return `${pattern.tag}:${
+        pattern.elements.map(patternStructureKey).join(",")
+      }`;
+    case "constructor":
+      if (pattern.payload === null) return `constructor:${pattern.name}`;
+      return `constructor:${pattern.name}(${
+        patternStructureKey(pattern.payload)
+      })`;
+    case "shape":
+      return `shape:${
+        pattern.fields.map((field) =>
+          `${field.name}:${patternStructureKey(field.pattern)}`
+        ).join(",")
+      }`;
+  }
+}
+
+function compilerPanic(message: string, span: Span): Expr {
+  return {
+    tag: "apply",
+    fn: { tag: "intrinsic", name: "@panic", span },
+    arg: { tag: "text", value: message, span },
+    span,
   };
 }
 

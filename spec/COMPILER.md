@@ -265,6 +265,11 @@ linear
 It produces closure summaries, branch states, consumed-path facts, partition
 witness lineage, and destructive-reuse certificates.
 
+For a symbolic Array parameter, element shareability and backing-Store access
+are separate certificate fields. Type specialization may refine only element
+shareability. Destructive operations and calls propagate `Unique` Store access;
+a branch join uses `Unique` when any continuing alternative requires it.
+
 The checker enforces mode-specific rules: affine discard is permitted; linear
 paths require one consuming action on every terminating exit. A consuming
 operation is not assumed to run a domain-specific finalizer unless its own
@@ -320,6 +325,12 @@ at its stated policy boundary.
 Runtime HIR is constructed only after representation closure. The producer emits
 closed operations, values, control flow, Store lineage, host requests with
 normalized input/result ownership, traps, and public metadata.
+
+Schema 6 adds an integer `switch` terminator. The producer creates every arm
+block before evaluating its residual body, settles survivors against the checked
+result representation, and emits parameter-free switch edges followed by
+ordinary branches into a shared join. Validators and emitters consume this
+terminator directly rather than reconstructing a case tree from source.
 
 The validator independently checks:
 

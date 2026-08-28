@@ -190,6 +190,12 @@ If the requirement is not a canonical type, the subject type must already be
 closed. The checker reifies that type, evaluates the requirement as a pure
 compile-time predicate, and accepts only `#True` or `#False`.
 
+A source record reconstruction may inspect a generic patch through a predicate
+before its computed-field loop is specialized. Internal `bottom` placeholders do
+not count as a closed subject there: the checker marks that closure for
+specialization and evaluates the predicate exactly once the concrete call closes
+both record types. No predicate constraint enters biunification.
+
 ```blot
 const both = fn (left, right) => fn type => left type && right type
 const is_shape = fn type => case reflect type of

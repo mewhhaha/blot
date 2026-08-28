@@ -1,0 +1,45 @@
+// A broad crown described as branch directions and named surface materials.
+
+open import "blot:prelude"
+
+const Color = { .red = Int; .green = Int; .blue = Int; }
+const Direction = { .x = Int; .z = Int; }
+const OakRecipe =
+  {
+    .trunk_height = Int;
+    .trunk_radius = Int;
+    .branches = [Direction];
+    .bark = Color;
+    .leaf_shadow = Color;
+    .leaf_green = Color;
+    .leaf_sun = Color;
+  }
+
+let weathered_bark :: Color
+let weathered_bark = { .red = 88; .green = 57; .blue = 38; }
+let deep_leaf_shadow :: Color
+let deep_leaf_shadow = { .red = 37; .green = 92; .blue = 48; }
+let summer_leaf :: Color
+let summer_leaf = { .red = 55; .green = 129; .blue = 62; }
+let sunlit_leaf :: Color
+let sunlit_leaf = { .red = 92; .green = 164; .blue = 71; }
+
+let oak :: OakRecipe
+let oak =
+  {
+    .trunk_height = 11;
+    .trunk_radius = 1;
+    .branches = [
+      { .x = 5; .z = 1; },
+      { .x = -4; .z = 3; },
+      { .x = -2; .z = -5; },
+      { .x = 4; .z = -3; },
+      { .x = 1; .z = 5; }
+    ];
+    .bark = weathered_bark;
+    .leaf_shadow = deep_leaf_shadow;
+    .leaf_green = summer_leaf;
+    .leaf_sun = sunlit_leaf;
+  }
+
+return oak

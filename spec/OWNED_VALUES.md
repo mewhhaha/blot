@@ -51,6 +51,17 @@ function preserves the caller's uniqueness instead of sharing it. This calling
 convention is published structurally in the ownership certificate and is
 independent of binding or module names.
 
+Each symbolic Array position carries two independent certificate facts:
+
+- whether its element ownership tree can be shared; and
+- whether the backing Store access is `Shared` or `Unique`.
+
+Concrete type specialization may refine the first fact. It preserves the second.
+An operation that destructively reuses, partitions, or recycles the Store raises
+the access requirement to `Unique`, including through nested and imported calls.
+Control-flow joins retain `Unique` when any alternative requires it while
+keeping the common Store lineage.
+
 A caller may hand a fresh or otherwise owned Store directly to a consuming
 parameter:
 

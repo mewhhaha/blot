@@ -81,6 +81,14 @@ const REJECTIONS: Record<
   // the two above can state what these are missing: every column is complete on
   // its own, and it is a combination no arm reaches.
   "missing_tuple_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
+  "missing_multi_subject_case": {
+    code: "BLOT_TYPE_ERROR",
+    stage: "check",
+  },
+  "multi_subject_case_arity": {
+    code: "BLOT_INCOMPLETE_CASE",
+    stage: "check",
+  },
   "unlisted_tuple_column": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   // A field named by a value is still named at compile time, and a rule that
   // answered with a type variable would have this signature believed rather than
@@ -280,10 +288,6 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "transformed_sig": { code: "BLOT_TYPE_ERROR", stage: "check" },
-  "spread_of_a_parameter": {
-    code: "BLOT_OPEN_RECORD_SPREAD",
-    stage: "check",
-  },
   // The other half of the spread rule, and the half that was wrong: a spread
   // whose fields are unknown contributes no names, so keeping the fields
   // written before it typed `{ .tag = 1; ...r; }` as `{ .tag = 1; }` for a call
@@ -303,6 +307,26 @@ const REJECTIONS: Record<
   },
   "dynamic_shape_field": {
     code: "BLOT_DYNAMIC_SHAPE_FIELD",
+    stage: "check",
+  },
+  "dynamic_computed_shape_field": {
+    code: "BLOT_DYNAMIC_SHAPE_FIELD",
+    stage: "check",
+  },
+  "computed_shape_field_requires_text": {
+    code: "BLOT_TYPE_ERROR",
+    stage: "check",
+  },
+  "duplicate_computed_shape_field": {
+    code: "BLOT_DUPLICATE_FIELD",
+    stage: "check",
+  },
+  "shape_update_missing_field": {
+    code: "BLOT_DOES_NOT_SATISFY",
+    stage: "check",
+  },
+  "shape_update_wrong_field_type": {
+    code: "BLOT_DOES_NOT_SATISFY",
     stage: "check",
   },
   "reflection_not_indexed": {

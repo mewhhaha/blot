@@ -2201,11 +2201,6 @@ const map_with = fn equal => do:
 
 const Map = { .of = map_type; .with = map_with; }
 
-const Shape =
-  {
-    .update = @shape.update;
-  }
-
 const set_type = fn value => [value]
 
 const set_has = fn (equal, values, needle) => do:
@@ -2630,6 +2625,44 @@ const rec refines =
     #Forall => type_equal (narrow, wide)
     #Opaque => False
 
+const shape_update_compatible = fn pair => case reflect pair of
+  #Shape pair_fields => do:
+    let left = @shape.get pair_fields "0"
+    let patch = @shape.get pair_fields "1"
+    return case (reflect left, reflect patch) of
+      (#Shape left_fields, #Shape patch_fields) => every (
+        @shape.names patch_fields,
+        fn name => @shape.has left_fields name && refines (
+          @shape.get patch_fields name,
+          @shape.get left_fields name
+        )
+      )
+
+      _ => False
+
+  _ => False
+
+const shape_entries = fn shape => array_map (
+  @shape.names shape,
+  fn name => (name, @shape.get shape name)
+)
+
+const shape_update = fn (left, patch) => do:
+  let _ = @satisfies (left, patch) shape_update_compatible
+  for (name, value) in array_items (shape_entries patch):
+    left := {
+      ...left;
+      .[name] = value;
+    }
+
+  return left
+
+const Shape =
+  {
+    .entries = shape_entries;
+    .update = shape_update;
+  }
+
 // --- asking about a type ----------------------------------------------------
 //
 // Predicate-form `@satisfies` hands a predicate the type of an expression, and a
@@ -2656,12 +2689,14 @@ const Exclude = fn (whole, bound) => do:
     fn option => not (refines (option, bound))
   ))
 
-// The field-level pair. `@shape.*` already does the work; these only name it.
 const Pick = fn (shape, names) => do:
   return fold (
     names,
     @shape.empty,
-    fn (kept, name) => @shape.set kept name (@shape.get shape name)
+    fn (kept, name) => {
+      ...kept;
+      .[name] = @shape.get shape name;
+    }
   )
 
 const Omit = fn (shape, names) => do:
@@ -2719,7 +2754,10 @@ const reorder = fn (shape, order) => do:
   return fold (
     order,
     @shape.empty,
-    fn (moved, name) => @shape.set moved name (@shape.get shape name)
+    fn (moved, name) => {
+      ...moved;
+      .[name] = @shape.get shape name;
+    }
   )
 
 const struct = fn shape => do:
@@ -2728,7 +2766,7 @@ const struct = fn shape => do:
   let next = 0
   let slots = @shape.empty
   for name in array_items (@array.copy (&order)):
-    slots := @shape.set slots name next
+    slots := { ...slots; .[name] = next; }
     next := @int.add next 1
 
   let at = slots
@@ -2737,12 +2775,11 @@ const struct = fn shape => do:
   // has, where `product_type` is built by one loop and extended by the next.
   //
   // Two passes rather than one because they build different things: the first
-  // fills a shape, and the second wraps that shape in a namespace. `@shape.set`
-  // takes a shape and `@type.attach` takes a type value, so the storage has to
-  // be finished before an accessor can go on it.
+  // fills a shape, and the second wraps that shape in a namespace. The storage
+  // has to be finished before an accessor can go on it.
   let product = @shape.empty
   for name in array_items (@array.copy (&order)):
-    product := @shape.set product (key name) (@shape.get shape name)
+    product := { ...product; .[key name] = @shape.get shape name; }
 
   // One accessor per field: a projection at a known slot, nothing more. The
   // names are computed, so this is `@type.attach` rather than `<+`.
@@ -2760,7 +2797,10 @@ const struct = fn shape => do:
       let _ = @satisfies (@shape.names record) order
       let product = @shape.empty
       for name in array_items (@array.copy (&order)):
-        product := @shape.set product (key name) (@satisfies (@shape.get record name) (@shape.get shape name))
+        product := {
+          ...product;
+          .[key name] = @satisfies (@shape.get record name) (@shape.get shape name);
+        }
 
       return product
     ;
@@ -2769,7 +2809,7 @@ const struct = fn shape => do:
     .named = fn value => do:
       let record = @shape.empty
       for name in array_items (@array.copy (&order)):
-        record := @shape.set record name (@shape.get value (key name))
+        record := { ...record; .[name] = @shape.get value (key name); }
 
       return record
     ;

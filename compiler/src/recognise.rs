@@ -165,11 +165,14 @@ impl FactorScan<'_> {
             }
             Expression::Shape { members, .. } => {
                 for member in members {
-                    let value = match member {
+                    match member {
                         crate::ast::ShapeMember::Field { value, .. }
-                        | crate::ast::ShapeMember::Spread { value } => value,
-                    };
-                    self.expression(*value);
+                        | crate::ast::ShapeMember::Spread { value } => self.expression(*value),
+                        crate::ast::ShapeMember::Computed { name, value } => {
+                            self.expression(*name);
+                            self.expression(*value);
+                        }
+                    }
                 }
             }
             Expression::If {

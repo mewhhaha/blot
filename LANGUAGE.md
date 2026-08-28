@@ -620,10 +620,12 @@ The old and new types must constrain each other after singleton integer and text
 literals are widened to their stable domains. The previous polymorphic scheme is
 retained. Use another `let` or `const` to shadow a name with a different type.
 
-Only a single name may appear to the left of `:=`. A `:=` in a `for` body also
-defines one of that loop's accumulator fields, including one written inside a
-statement conditional in that body. A `:=` inside a nested `for` defines a field
-of the inner loop instead.
+Only a single name may appear to the left of `:=`. A `:=` in a `for` body
+defines one of that loop's accumulator fields only when the target comes from
+the enclosing scope, including when the rebinding is written inside a statement
+conditional. A loop-pattern name or a name introduced in the body rebinds only
+its iteration-local lineage. A `:=` inside a nested `for` belongs to the inner
+loop instead.
 
 ### 4.5 Effect sequencing
 
@@ -897,25 +899,33 @@ reference evaluator materializes the unit field at the call boundary. An exact
 `T | ()` has one HM representation; that sum is not source syntax and does not
 cross the Wasm ABI.
 
-A spread requires an exact record value: a shape literal, a binding whose value
-is exact, or `@shape.empty`. A parameter known only through width subtyping may
-carry fields absent from its visible type, so spreading it would either discard
-runtime data or require row polymorphism. It is rejected with
-`BLOT_OPEN_RECORD_SPREAD` in every member position. Deconstruct the fields the
-result needs, or construct an exact record before spreading. Exact spreads and
-explicit fields still apply from left to right, so override order remains
-visible in source.
+A computed field is written `.[name] = value`, where `name` must resolve at
+compile time to `Text`. The resolved text is the structural field name; it is
+not restricted to identifier spelling. The value remains an ordinary runtime
+expression. Duplicate checking happens after resolving computed names, so a
+computed field cannot repeat another computed or explicit field. A name that
+remains dynamic is `BLOT_DYNAMIC_SHAPE_FIELD`.
 
-`Shape.update record patch` is the width-preserving alternative for generic
-record updates. `patch` must be a statically known shape. Its fields replace
-same-named fields in `record`, while every other field and its type are
-retained, including fields not mentioned by the updater's inferred parameter
-type. Unlike a spread, this operation does not reconstruct an open record from
-only its visible fields.
+An exact spread may occur anywhere. One spread whose complete width is unknown
+may instead be the first member of a shape. Its unknown fields are retained by
+the compiler's record-update relationship, and later explicit or computed fields
+replace or add named fields without reconstructing the base from only the fields
+visible through width subtyping. A second open spread, or an open spread after
+another member, is `BLOT_OPEN_RECORD_SPREAD`; concatenating two unknown rows has
+no principal type in Blot's lattice.
+
+`Shape.entries record` enumerates its statically known fields in insertion order
+as `(name, value)` pairs. `Shape.update (record, patch)` is ordinary prelude
+source: it checks at specialization that every patch field exists in `record`
+and that the patch value refines the corresponding field type, then rebuilds the
+record with computed fields. The result preserves the record's type. Use a
+leading spread directly when constructing an extension with new fields.
 
 ```blot
-const rename = fn value => Shape.update value { .name = "new"; }
-return (rename { .name = "old"; .count = 3; }).count
+let original :: { .name = Text; .count = Int; }
+let original = { .name = "old"; .count = 3; }
+let renamed = Shape.update (original, { .name = "new"; })
+let identified = { ...original; .id = 7; }
 ```
 
 Braces with no leading `.` on their members are an effect row rather than a
@@ -1384,6 +1394,38 @@ next _arm_, not to the next column, and an arm that matches binds every name in
 it. A column is an ordinary pattern, so it may be a constructor, a literal, a
 name, a wildcard, or another tuple.
 
+Comma-separated subjects spell the demand-driven form of the same matrix:
+
+```blot
+case first, second, fallback of
+  #True, _, _ => 1
+  #False, #Some value, _ => value
+  #False, #None, value => value
+```
+
+Every arm must write one pattern for every subject. Subjects are captured in the
+surrounding scope before any arm binds names, then an arm tests its columns from
+left to right. A wildcard does not demand its subject. Every other pattern
+demands the subject when that column is first reached, and the resulting value
+is shared by later arms on that execution path. Thus the first arm above never
+evaluates `second` or `fallback`. Subject expressions retain their written scope
+even when a preceding column binds the same name.
+
+This is distinct from `case (first, second, fallback) of`: constructing that
+tuple evaluates all three elements before matching it. Both forms use the same
+row ordering, pattern bindings, guards, result typing, and cross-product
+coverage rule. A guarded row still contributes nothing to coverage.
+
+Comma-separated cases are surface syntax. Lowering captures each subject as an
+affine deferred argument, caches a demanded argument in an ordinary strict
+binding, and emits ordinary nested `case`, `if`, application, and block nodes.
+The checker also sees a non-executed decision tree made from the unguarded rows,
+so exhaustiveness is proved without making the executable path eager. No
+multi-subject case node reaches inference, ownership, evaluation, Runtime HIR,
+or a backend. The editor linter offers this form when at least three nested
+single-subject cases form the same decision matrix without depending on an outer
+arm's bindings.
+
 Coverage reads the columns. The arms taken together must cover the
 cross-product: a combination of columns no arm accepts is
 `BLOT_INCOMPLETE_CASE`, exactly as a constructor no arm names is for a single
@@ -1684,9 +1726,9 @@ and binds it. The `for case` form opts into filtering: a refutable pattern that
 does not match skips that element. Keeping the distinction explicit prevents a
 pattern edit from silently changing iteration cardinality.
 
-The names rebound with `:=` in the loop body — including inside a statement
-conditional in that body, but not inside a nested `for` — form an implicit
-accumulator record:
+The names from the enclosing scope that are rebound with `:=` in the loop body —
+including inside a statement conditional in that body, but not inside a nested
+`for` — form an implicit accumulator record:
 
 - their incoming values initialize the accumulator;
 - each iteration sees the previous iteration's accumulator;
@@ -1694,11 +1736,13 @@ accumulator record:
 - zero iterations preserve the incoming values; and
 - a `let` inside the body is local to that iteration.
 
-A `let` is local whether or not the name is taken outside. `let n = …` in the
-body introduces a binding that ends with the body, so the outer `n` is untouched
-and the local is free to hold a different type — only `:=` carries a value out.
-Where a `let` shadows a name, every `:=` after it in that block rebinds the
-local and therefore escapes nothing.
+A loop-pattern name is local to its iteration. Rebinding it with `:=` changes
+the value seen by later statements in that iteration but does not initialize or
+escape through the accumulator. A `let` is likewise local whether or not the
+name is taken outside. `let n = …` in the body introduces a binding that ends
+with the body, so the outer `n` is untouched and the local is free to hold a
+different type. Where a `let` shadows a name, every `:=` after it in that block
+rebinds the local and therefore escapes nothing.
 
 Rebinding a name with `:=` and then shadowing it with a `let` in the same block
 is an error. The carried value is read where the block ends, which is inside the
@@ -2117,12 +2161,10 @@ The implemented checker does not currently prove:
   it;
 - an index bound that came from anywhere but a comparison against a literal or
   against `@array.len` applied to a name (§8.5, §13.3);
-- the result of `@shape.get`, `@shape.set`, or `@shape.remove` whose field name
-  is a runtime value (§13.3);
+- the result of `@shape.get` or `@shape.remove` whose field name is a runtime
+  value (§13.3);
 - anything about a namespace member call whose arguments are not compile-time
   values (§10.4);
-- the fields a spread carries through from an operand whose own fields are not
-  known where the spread is written (§6); or
 - impredicative instantiation; or
 - a first-class recursive type value such as
   `const Json = #Null | #Array [Json]`.
@@ -2133,14 +2175,13 @@ graph recursion is not an equi-recursive source type constructor. Rank-N types
 are explicit and predicative through `@forall`. Higher-kinded abstraction is
 compile-time function application rather than a kind system.
 
-There is no record row variable, and there is not going to be one; the reasoning
-is in `docs/roadmap.md`. The lattice has width subtyping, which says what a
-function may _read_ from a record, and that is a different fact from what a
-value _carries_ — a spread needs the second. The effect row in
-`A -> B ~ { Console, e }` is a row over a set of labels with no types under
-them; a record row would be a second sort with types, and the operations shape
-syntax can write over it — concatenating two unknown rows, or overriding a field
-that may or may not be there — have no principal solution in this lattice.
+There is no record row variable, and there is not going to be one. The lattice
+has width subtyping, which says what a function may _read_ from a record, and
+the restricted leading-spread relation separately retains what one value
+carries. The effect row in `A -> B ~ { Console, e }` is a row over a set of
+labels with no types under them; a record row would be a second sort with types,
+and the operations shape syntax can write over it — in particular concatenating
+two unknown rows — has no principal solution in this lattice.
 
 ## 11. Ownership and linearity
 
@@ -2234,6 +2275,13 @@ exact module and closure identity, never by a binding name. A module or host
 result freezes remaining owned Stores implicitly because that transition copies
 no bytes; non-Store linear resources remain forbidden. Last-use and
 proved-consumption facts are recorded for the backend.
+
+An Array position records element shareability separately from its backing-Store
+access requirement. Specialization may prove that concrete elements carry no
+ownership and thereby admit a shared-safe observer such as iteration; it cannot
+weaken `Unique` access required by `@array.set`, `@array.push`, extraction, or a
+callee that performs one of those operations. A `Shared` Store satisfies only a
+`Shared` access requirement. No call boundary inserts an implicit copy.
 
 A function may itself publish a finite ownership requirement for a
 function-valued parameter. Calling an otherwise opaque parameter with an
@@ -2836,7 +2884,6 @@ signed 64-bit range trap.
 | `@continuation.cancel` | consume a handler continuation without resuming it  |
 | `@shape.empty`         | empty shape                                         |
 | `@shape.get`           | get a field named by text                           |
-| `@shape.set`           | immutably set a field named by text                 |
 | `@shape.remove`        | immutably remove a field named by text              |
 | `@shape.names`         | field names in insertion order                      |
 | `@shape.has`           | return `#True` or `#False` for field membership     |
@@ -2847,16 +2894,16 @@ static bounds proof; the prelude's total `Array.get` and `Array.set` return an
 
 #### A field named by a value
 
-`@shape.get`, `@shape.set` and `@shape.remove` name their field with a text
-value rather than with a literal, so no signature can state what they produce.
-They are typed at the call site instead, by the name:
+`@shape.get` and `@shape.remove` name their field with a text value rather than
+with a literal, so no signature can state what they produce. They are typed at
+the call site instead, by the name:
 
 - when the whole projection can be evaluated at compile time, what it produced
   is the result's type;
 - otherwise, when the name alone can be, the call is an ordinary field
   projection and is typed as one. `@shape.get r "a"` has the type of `r.a` and
-  is refused when `r` has no `.a`; `@shape.set` and `@shape.remove` answer with
-  the target's fields, with that one added, replaced, or dropped.
+  is refused when `r` has no `.a`; `@shape.remove` answers with the target's
+  fields minus that field.
 
 ```blot
 let r = { .a = 7; }
@@ -2867,12 +2914,11 @@ let z = @shape.get r "a"
 
 A name known only at run time has no structural result type: a heterogeneous
 record has no one element type, and width subtyping hides its complete field
-set. Runtime `@shape.get`, `@shape.set`, or `@shape.remove` with such a name is
+set. Runtime `@shape.get` or `@shape.remove` with such a name is
 `BLOT_DYNAMIC_SHAPE_FIELD`. Compile-time shape folds may use dynamic names while
 evaluating; their unevidenced result variables cannot prove a signature. Runtime
-dynamic keys belong in the prelude's homogeneous `Map` abstraction. When the
-name is static, all three shape operations may project or rebuild a record whose
-field values are available only at runtime.
+dynamic keys belong in the prelude's homogeneous `Map` abstraction. Computed
+shape fields are the construction form for names that settle at compile time.
 
 `Map.of (K, V)` is represented by an association array of `(K, V)` pairs.
 `Map.with equal` supplies key equality explicitly and returns the operations for
@@ -3284,7 +3330,8 @@ implementations. [STDLIB.md](STDLIB.md) is the generated exact export index.
 - arrays: `Array` (including `copy`, `quicksort`, and checked range helpers),
   `Range`, `fold`, `each`, `map`, `filter`, `partition`, `sum`, `upto`, `any`,
   `every`, and `sort_by`;
-- collections: `List`, `Map`, `Set`, and the text-keyed `Dict` specialization;
+- collections: `List`, `Map`, `Set`, `Shape` (`entries` and `update`), and the
+  text-keyed `Dict` specialization;
 - iterators: `ever`, `Iter` (`range`, `items`, `indexed`, `affine`, `slice`,
   `reverse`, `iterate`, and `collect`), `iterate`, and `collect`;
 - variants: `Option`, `None`, `Some`, `unwrap_or`, `Result`, `Ok`, `Error`;

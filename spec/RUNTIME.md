@@ -151,6 +151,12 @@ replayed ownership certificate proves:
 - the write preserves the operation's relationship and representation
   invariants.
 
+Computed record fields do not cross this boundary with a dynamic key. Partial
+evaluation resolves each key to text and applies the leading-spread
+`RecordUpdate` relationship before specialization publishes a nominal record. A
+computed key or open record relationship remaining after successful checking is
+an invariant failure, not a Runtime-HIR feature or backend inference case.
+
 The target write is related to construction of a fresh source result. It does
 not retroactively make source aliases mutable.
 
@@ -161,8 +167,24 @@ Store, then appends the spread operand with a `store.length` / `store.read` /
 source order; empty spreads perform zero loop iterations. Every grow is
 persistent unless a separate ownership certificate grants destructive reuse, so
 none of the spread operands is mutated. The typechecker has already proved a
-single element representation; a mismatch while constructing these operations is
-an `InvariantFailure`.
+single closed element representation. Residual evaluation retains that fact when
+a staged array passes through aliases or polymorphic calls, and constructs each
+element against it; in particular, a constructor member is injected into the
+checked closed sum instead of defining a one-constructor Store from the first
+element. A mismatch while constructing these operations is an
+`InvariantFailure`.
+
+Dynamic cases over integers and closed sums lower to a `switch` terminator in
+Runtime HIR schema 6. Its selector is a closed `integer-32` or
+`signed-integer-64`, its cases contain unique constants and parameter-free arm
+targets, and its fallback names the wildcard or final closed-sum arm. Sum
+lowering reads the constructor index once and projects a payload only inside the
+selected block. Surviving arms branch to one join whose parameter uses the
+checked result representation; trapping arms terminate without manufacturing a
+value. Compiler-local control envelopes may merge disjoint single-constructor
+representations into the closed constructor set already established by surface
+lowering. Dense `integer-32` switches emit `br_table`; other switches emit a
+balanced comparison tree.
 
 Borrowed reads never grant Store ownership. Splits and joins consume exact
 family, root, footprint, and produced-value lineage. Equal-looking intervals or

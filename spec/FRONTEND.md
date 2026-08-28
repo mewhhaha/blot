@@ -134,6 +134,12 @@ Blot has no element syntax. Components, properties, children, and suspension are
 ordinary functions, records, arrays, and nullary closures. The frontend has no
 element-specific lowering path.
 
+A computed shape field `.[expression] = value;` retains both expressions in the
+AST. It is not token-rewritten to a shape primitive: checking must evaluate the
+name at compile time, and evaluation must preserve the source ordering between
+the name, value, and surrounding spreads. Computed fields are not admitted when
+an expression-shaped value is reclassified as a binding pattern.
+
 ## 5. Contextual pattern recognition
 
 Most pattern syntax is unambiguous in the CST. A `for` head remains
@@ -186,7 +192,13 @@ Surface elaboration lowers rich control to the smaller Core owned by
   settles empty;
 - `use x <- c` becomes a bind, while `use c` binds the result to a wildcard;
 - sequencing a suspended nullary effect value applies it to unit once;
-- loops become recursion and cases with explicit accumulator transfer;
+- loops become recursion and cases with explicit accumulator transfer; names
+  bound by the loop pattern are local to an iteration and are excluded from the
+  accumulator even when rebound with `:=`;
+- comma-separated case subjects become affine deferred parameters whose first
+  demanded reads are cached before ordinary nested cases inspect them; a
+  non-executed tree over the unguarded rows carries the same subject identities
+  through the checker's existing coverage judgement;
 - statement `return` and `break` become compiler-local control results before
   ordinary Core control is reconstructed;
 - handler syntax becomes explicit handler Core; and

@@ -76,14 +76,19 @@ the page.
 
 `engine/game_loop.blot` is the deliberately traditional counterpart. It uses the
 same renderer and host boundary, but keeps whole renderable objects in arrays
-instead of splitting them into component stores. Its scene is a computation over
-the ordinary `GameBuilder` effect: `mesh` and `sprite` operations describe
-objects without ids, and the source handler interprets them into an immutable
-setup. That setup owns one `next_id` across both arrays; `build_game` removes
-the construction-only counter. Stable object ids therefore leave room for a
-later lookup without fixing roles into the `Game` type. Named colors keep the
-object declarations about intent rather than RGB channels. Each frame reads the
-clock, replaces the record with `update game`, renders it, and repeats:
+instead of splitting them into component stores. Its scene is a deterministic
+voxel scene generated from the Blot modules under `engine/shrubberies/`: oak,
+fir, flower, and rock recipes are typed source values rather than RON or
+host-side assets. A source catalog owns each number key and display name, and
+the same module owns generator dispatch; the desktop only forwards keys and
+displays the selected source-provided name. The generator assigns stable ids
+while it builds each owned Array. Named color bindings keep each recipe about
+materials such as weathered bark and new growth rather than anonymous RGB
+channels. There is no terrain mesh; every visible voxel belongs to the selected
+shrubbery.
+
+The selected shrubbery stays immutable and spatially stable while the host
+camera moves around it:
 
 ```blot
 for ever:
@@ -91,14 +96,55 @@ for ever:
   if remaining <= 0:
     break
 
-  game := update game
   use render game
 ```
 
-Run it with `deno task case-study game-loop [frames] [ortho]`. The two entry
-points make the tradeoff visible without changing the graphics code: the
-traditional loop keeps each object's fields together; the ECS layout lets
+Run it with `deno task case-study game-loop [frames] [ortho] [selection]`. The
+two entry points make the tradeoff visible without changing the graphics code:
+the traditional loop keeps each object's fields together; the ECS layout lets
 systems traverse an open collection of entities by component.
+
+Deno 2.9 or newer can run the traditional loop in a native desktop window:
+
+```bash
+deno task game-loop:desktop
+```
+
+On Arch-family x86-64 Linux systems where Deno's launcher needs `libxdo.so.3`,
+the task downloads a checksum-pinned copy into the user cache and exposes it
+only to the desktop process. It does not replace the system `libxdo.so.4`.
+
+This entry point selects Deno Desktop's raw backend: there is no HTML, Canvas
+2D, webview, or browser GPU implementation. Deno exposes the native window as a
+WebGPU surface backed by wgpu; the Blot loop stays in a worker because its
+synchronous `Host.frame` call must not block window and input events. Hold the
+middle mouse button and drag to orbit, scroll to dolly, press `L` to switch
+lenses, press `1` through `5` to browse the mixed shrubbery, oak, fir, flower
+patch, and rock cluster, and press Escape to exit. Camera angles use sixteenths
+of the renderer's 256-step turn, so small pointer movements interpolate between
+table entries instead of disappearing at a whole angle step. Projected positions
+retain 1/256-pixel precision across the integer host boundary, and the native
+pipeline resolves four coverage samples per pixel. The native host enables the
+source-defined `VoxelCanvas` effect, so each streaming update transfers one
+compact instance per voxel. WGPU keeps those instances resident and performs
+cube expansion, camera transforms, projection, face lighting, culling, and depth
+on every draw. Each orbit, scroll, or lens input wakes the Blot loop for one
+`VoxelCanvas.redraw` effect that updates a uniform. The application therefore
+owns the render request without rebuilding or retransferring its scene. The
+headless host disables `VoxelCanvas`; the same Blot source then uses its `F32x4`
+SIMD projection and culling renderer as the reference path. Set
+`DENO_WEBGPU_BACKEND=vulkan`, `metal`, or `dx12` to require a particular wgpu
+backend. The host watches every `.blot` file below `engine/`. A successful
+compile starts a candidate worker and promotes it only after its first rendered
+frame; a syntax, type, instantiation, or runtime failure leaves the last working
+revision drawing. The GPU instance buffer grows geometrically with the generated
+scene, up to the adapter's reported buffer limit. Changing shrubbery starts a
+fresh guest from the already compiled artifact. That lets the previous linear
+voxel Store leave with its Wasm instance while the shared camera remains
+untouched. The generator uses half-size voxels and twice the recipe resolution.
+It presents the current immutable Store after the first voxel and every 256
+additions, so the candidate appears immediately and fills in while its final
+Store is still being built.
 
 ### Four modules, and what each of them owns
 
@@ -171,10 +217,10 @@ means adding a name.
 The geometry is `F32x4`. It was fixed point at 4096 until the language had a
 second numeric type, then `F64` scalars until it had a fourth, and neither move
 touched the boundary: no float crossed one at the time, so the scene arrives as
-thousandths and the screen leaves as pixels, and everything between is a lane.
-Scalar floats cross now — `F32` and `F64` are canonical `f32` and `f64` at the
-ABI — so those two conversions are the port's history rather than a rule.
-`F32x4` is what still cannot cross, and that has not changed.
+thousandths and the screen leaves as 1/256-pixel fixed point, and everything
+between is a lane. Scalar floats cross now — `F32` and `F64` are canonical `f32`
+and `f64` at the ABI — so those two conversions are the port's history rather
+than a rule. `F32x4` is what still cannot cross, and that has not changed.
 
 A three-component vector in a four-lane register leaves one lane spare, and the
 whole port turns on spending it. A point carries 1 there and a direction carries
@@ -212,12 +258,10 @@ two screen rows translate by nothing at all and the depth row translates by the
 orbit radius. Subtracting the eye per vertex arrives at those same three
 numbers.
 
-Shading was already a dot product and now says so. The face depth is not as
-tidy: the four view depths are one lane each of four different points, so
-averaging them extracts four scalars and gathers them into a fresh vector before
-the horizontal sum. That is a gather to save three adds, which is not obviously
-a trade worth making, and it is written that way because the surrounding code is
-already vectors rather than because it is faster.
+Shading was already a dot product and now says so. Every projected triangle also
+keeps the view depth of each vertex, so the desktop host can interpolate depth
+across slanted faces instead of assigning one painter-order value to the whole
+face.
 
 Single precision is comfortable here on the arithmetic: `F32` carries about
 seven decimal digits, the scene is a few units across, and the screen is a few
@@ -245,13 +289,12 @@ lane cannot be written, only converted.
 The camera carries a lens, and `to_screen` is the only place it matters:
 
 ```blot
-const to_screen = fn (view, camera) =>
-  if camera.lens == 0:
-    return F32x4.add
+const to_screen = fn (view, camera) => case camera.lens of
+  #Perspective => F32x4.add
       SCREEN_CENTRE
       (F32x4.div (F32x4.mul view FOCAL_AXES) (F32x4.splat (F32x4.z view)))
-  else:
-    return F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
+
+  #Orthographic => F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
 ```
 
 A perspective divide, or no divide — the lenses differ only in what the view
@@ -295,12 +338,19 @@ compile and not a device acquisition.
 Color                = { red, green, blue : Int }
 rgb                  : (U8, U8, U8) -> Color
 Canvas.clear/present : () -> ()
-Canvas.tri           : { ax, ay, bx, by, cx, cy, depth, shade : Int; color : Color } -> ()
+Canvas.tri           : { ax, ay, az, bx, by, bz, cx, cy, cz, shade : Int; color : Color } -> ()
 Canvas.sprite        : { x, y, size, depth : Int; texture : Text } -> ()
 View.yaw/pitch/distance/lens : () -> Int
+VoxelCanvas.enabled           : () -> Bool
+VoxelCanvas.clear/present     : () -> ()
+VoxelCanvas.redraw            : () -> ()
+VoxelCanvas.voxel     : { x, y, z, scale : Int; color : Color } -> ()
 Assets.generation/count      : () -> Int
 Assets.entry         : Int -> { kind, x, y, z, scale, spin : Int; color : Color; texture : Text }
-Host.frame           : () -> Int
+Host.frame/seed/selection : () -> Int
+Host.option/selected      : { key : Int; name : Text } -> ()
+Stream.batch_size        : () -> Int
+Stream.yield             : () -> ()
 ```
 
 `Color` uses runtime `Int` carriers because narrowed ranges do not survive in
@@ -308,15 +358,17 @@ residual host and loop signatures. Blot-authored colors still enter through
 `rgb`, whose `U8` parameters prove each channel is from 0 through 255, and both
 scene hosts enforce the same range while parsing `scene.json`.
 
-The guest projects geometry and hands over triangles with a view depth; sorting
-them is the host's job. That is the same split a depth buffer makes, and it is
-why the guest never needs one.
+The general renderer projects geometry and hands over triangles with one view
+depth per vertex. The desktop host maps those values into its GPU depth
+attachment; the headless character renderer averages them because its cells are
+only a coarse preview. The shrubbery's native path instead hands stable voxel
+instances to WGPU and leaves projection on the device.
 
 Record parameters flatten in _canonical_ field order, which is alphabetical and
 not the order the program wrote them. Nested records follow the same rule, so
 `Canvas.tri` arrives as
-`ax, ay, bx, by, color.blue, color.green, color.red, cx,
-cy, depth, shade`.
+`ax, ay, az, bx, by, bz, color.blue, color.green, color.red, cx,
+cy, cz, shade`.
 `docs/abi.md` is the authority; getting it wrong silently transposes the
 geometry.
 
@@ -384,4 +436,5 @@ been rewritten to take them:
   calls, including calls from separate importers, now specialize independently.
 - **A float crosses the module boundary.** `F32` and `F64` are canonical `f32`
   and `f64` at the ABI (`docs/abi.md`), so `Assets.entry` carries thousandths
-  and `Canvas.tri` carries pixels by history rather than by necessity.
+  and `Canvas.tri` carries 1/256-pixel fixed point by history rather than by
+  necessity.

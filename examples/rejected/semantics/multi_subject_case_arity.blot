@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+let choose = fn (first, second) => case first, second of
+  #True => 1
+  #False, _ => 2
+return choose (True, False)

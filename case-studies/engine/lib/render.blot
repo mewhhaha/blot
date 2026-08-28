@@ -20,7 +20,8 @@
 //
 // The boundary is also where the units change, because a float cannot cross a
 // module boundary at all: the scene and the camera arrive as thousandths and
-// the screen leaves as pixels, and everything between them is a lane.
+// the screen leaves as 1/256-pixel fixed point, and everything between them is
+// a lane.
 
 open import "blot:prelude"
 
@@ -63,14 +64,12 @@ const point = fn (x, y, z) => F32x4.of (unit x, unit y, unit z, ONE)
 const Canvas =
   @effect.host {
     .clear = Unit -> Unit;
-    // A projected triangle. `depth` is the view distance the host sorts by — the
-    // guest owns geometry and the host owns rasterization order, which is the
-    // same split a depth buffer makes.
+    // A projected triangle. Each vertex keeps its view depth so the host can
+    // rasterize slanted faces without reducing them to a painter-order guess.
     .tri = {
-    .ax = Int; .ay = Int;
-    .bx = Int; .by = Int;
-    .cx = Int; .cy = Int;
-    .depth = Int;
+    .ax = Int; .ay = Int; .az = Int;
+    .bx = Int; .by = Int; .bz = Int;
+    .cx = Int; .cy = Int; .cz = Int;
     .shade = Int;
     .color = Color;
     } -> Unit;
@@ -98,6 +97,13 @@ const View =
     .lens = Unit -> Int;
   }
 
+const Lens = #Perspective | #Orthographic
+
+const lens_of :: Int -> Lens
+const lens_of = fn encoded => case encoded of
+  0 => #Perspective
+  _ => #Orthographic
+
 // --- the screen -------------------------------------------------------------
 
 // The centre is what projection needs, so the extent is written as the centre
@@ -109,6 +115,7 @@ const CY = lane 150.0
 // before its face is dropped.
 const FOCAL = lane 420.0
 const NEAR = lane 0.25
+const SCREEN_SCALE = lane 256.0
 
 // The screen centre, and the axes a view point is measured along to reach it. A
 // screen's y counts down and a world's counts up, so the flip rides in the axis
@@ -194,21 +201,21 @@ const to_view = fn (point, camera) => do:
 // View to screen. The two lenses differ in what the view point is measured
 // against: focal axes over its own depth, or zoom axes and no divide at all.
 // That is the whole of "2D is an orthographic camera".
-const to_screen = fn (view, camera) => case camera.lens == 0 of
-  #True => F32x4.add
+const to_screen = fn (view, camera) => case camera.lens of
+  #Perspective => F32x4.add
       SCREEN_CENTRE
       (F32x4.div (F32x4.mul view FOCAL_AXES) (F32x4.splat (F32x4.z view)))
 
-  #False => F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
+  #Orthographic => F32x4.add SCREEN_CENTRE (F32x4.mul view camera.zoom_axes)
 
 // Where the camera sits, and the three rows that take a world point to it.
 // Built once a frame rather than per vertex, because every vertex wants the
 // same four sines.
 const camera_of = fn (yaw, pitch, distance, lens) => do:
-  let sin_yaw = M.sin yaw
-  let cos_yaw = M.cos yaw
-  let sin_pitch = M.sin pitch
-  let cos_pitch = M.cos pitch
+  let sin_yaw = M.sin_precise yaw
+  let cos_yaw = M.cos_precise yaw
+  let sin_pitch = M.sin_precise pitch
+  let cos_pitch = M.cos_precise pitch
   // Pixels across one world unit, which is what the perspective divide works
   // out to at the camera's own distance — so switching lenses holds the scene
   // at roughly the size it already was, and pulling back still zooms out.
@@ -295,34 +302,36 @@ const draw_face = fn (position, angle, scale, color, camera, face) => do:
   use case behind || hidden of
     #True => ()
     #False => do:
-      // Pixels, and the last place a float exists in this function. `Canvas` is
-      // a module import, so its record is the boundary a float cannot cross.
+      // Fixed-point screen coordinates are the last place a float exists in
+      // this function. `Canvas` is a module import, so its record is the
+      // boundary a float cannot cross.
       let pixel = fn point => {
-        .x = F32.truncate (F32x4.x point);
-        .y = F32.truncate (F32x4.y point);
+        .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
+        .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
       }
       let pa = pixel (to_screen (a, camera))
       let pb = pixel (to_screen (b, camera))
       let pc = pixel (to_screen (c, camera))
       let pd = pixel (to_screen (d, camera))
-      // Millimetres of depth, so the host's sort keeps its resolution across an
-      // integer boundary. The mean of four and the millimetre scale are one
-      // constant — a quarter of a thousand — after the horizontal sum.
-      let depth =
-        F32.truncate
-          (F32.mul (F32x4.sum depths) (lane 250.0))
+      let millimetres = lane 1000.0
       let shade = shade_of normal
       use Canvas.tri {
         .ax = pa.x; .ay = pa.y;
+        .az = F32.truncate (F32.mul za millimetres);
         .bx = pb.x; .by = pb.y;
+        .bz = F32.truncate (F32.mul zb millimetres);
         .cx = pc.x; .cy = pc.y;
-        .depth = depth; .shade = shade; .color = color;
+        .cz = F32.truncate (F32.mul zc millimetres);
+        .shade = shade; .color = color;
       }
       use Canvas.tri {
         .ax = pa.x; .ay = pa.y;
+        .az = F32.truncate (F32.mul za millimetres);
         .bx = pc.x; .by = pc.y;
+        .bz = F32.truncate (F32.mul zc millimetres);
         .cx = pd.x; .cy = pd.y;
-        .depth = depth; .shade = shade; .color = color;
+        .cz = F32.truncate (F32.mul zd millimetres);
+        .shade = shade; .color = color;
       }
 
 // A box. Six faces, each culled on its own, which is the whole of the mesh
@@ -345,13 +354,13 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
     #True => ()
     #False => do:
       let point = to_screen (view, camera)
-      let size = case camera.lens == 0 of
-        #True => F32.div (F32.mul scale FOCAL) depth
-        #False => F32.mul scale camera.zoom
+      let size = case camera.lens of
+        #Perspective => F32.div (F32.mul scale FOCAL) depth
+        #Orthographic => F32.mul scale camera.zoom
       use Canvas.sprite {
-        .x = F32.truncate (F32x4.x point);
-        .y = F32.truncate (F32x4.y point);
-        .size = F32.truncate size;
+        .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
+        .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
+        .size = F32.truncate (F32.mul size SCREEN_SCALE);
         .depth = F32.truncate (F32.mul depth (lane 1000.0));
         .texture = texture;
       }
@@ -380,12 +389,13 @@ let frame ::
       .texture = Text;
     } -> Unit ~ { Canvas };
   } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
-let frame = fn paint => do:
+let frame = fn &paint => do:
   use Canvas.clear ()
   use yaw <- View.yaw ()
   use pitch <- View.pitch ()
   use distance <- View.distance ()
-  use lens <- View.lens ()
+  use encoded_lens <- View.lens ()
+  let lens = lens_of encoded_lens
   let camera =
     camera_of (
       yaw,

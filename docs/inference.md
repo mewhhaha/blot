@@ -194,14 +194,16 @@ honest signature. Range-refining arithmetic — `(a..b) + (c..d) : (a+c)..(b+d)`
 is what would close it, and it is the same machinery that would turn
 `if i < len` into a proof that an index is in bounds.
 
-**Structural fields named by values.** `@shape.get`, `@shape.set`, and
-`@shape.remove` project a field named by a _value_. Where the name alone is a
-compile-time text the call is an ordinary field projection and is typed as one —
-`@shape.get r "a"` has the type of `r.a` and is refused when `r` has no `.a` —
-and where the whole projection evaluates, what it produced is the type. A name
-known only at run time is rejected as `BLOT_DYNAMIC_SHAPE_FIELD`; heterogeneous
-records have no honest dynamic element type. Dynamic keys require a homogeneous
-dictionary abstraction instead.
+**Structural fields named by values.** `@shape.get` and `@shape.remove` project
+a field named by a _value_. Where the name alone is a compile-time text the call
+is an ordinary field projection and is typed as one — `@shape.get r "a"` has the
+type of `r.a` and is refused when `r` has no `.a` — and where the whole
+projection evaluates, what it produced is the type. A name known only at run
+time is rejected as `BLOT_DYNAMIC_SHAPE_FIELD`; heterogeneous records have no
+honest dynamic element type. Dynamic keys require a homogeneous dictionary
+abstraction instead. The construction form `.[name] = value` requires the same
+compile-time name evidence and retains a leading open spread as a `RecordUpdate`
+relationship until specialization settles its concrete field set.
 
 **Literal coverage is fail-closed.** A `case` over a declared literal union is
 checked by listing the union's members and subtracting the arms, so `1 | 2 | 3`

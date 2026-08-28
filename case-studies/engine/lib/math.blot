@@ -32,6 +32,8 @@ const HALF_PI = 1.5707963267948966
 // lookup be an array read instead of a range reduction.
 const TURN = 256
 const QUARTER = 64
+const SUBSTEPS = 16
+const PRECISE_TURN = TURN * SUBSTEPS
 
 const STEP_RADIANS = F32.of_float (F64.div TAU 256.0)
 
@@ -89,6 +91,20 @@ const sin_steps = fn steps => do:
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 
+// Camera input uses sixteenths of a table step. Interpolating adjacent entries
+// keeps pointer motion smooth without making model animation carry a different
+// definition of one turn.
+const sin_precise = fn steps => do:
+  let normalized = (steps % PRECISE_TURN + PRECISE_TURN) % PRECISE_TURN
+  let index = normalized / SUBSTEPS
+  let remainder = normalized % SUBSTEPS
+  let lower = sin_steps index
+  let upper = sin_steps (index + 1)
+  let fraction = F32.div (F32.of_int remainder) (F32.of_int SUBSTEPS)
+  return F32.add lower (F32.mul (F32.sub upper lower) fraction)
+
+const cos_precise = fn steps => sin_precise (steps + PRECISE_TURN / 4)
+
 return {
   .pi = F32.of_float PI;
   .tau = F32.of_float TAU;
@@ -97,5 +113,7 @@ return {
   .radians = radians;
   .sin = sin_steps;
   .cos = cos_steps;
+  .sin_precise = sin_precise;
+  .cos_precise = cos_precise;
   .sqrt = F32.sqrt;
 }

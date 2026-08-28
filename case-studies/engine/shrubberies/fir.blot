@@ -1,0 +1,36 @@
+// A conifer recipe: height, crown profile, and its four source-level colors.
+
+open import "blot:prelude"
+
+const Color = { .red = Int; .green = Int; .blue = Int; }
+const FirRecipe =
+  {
+    .height = Int;
+    .first_layer = Int;
+    .trunk = Color;
+    .pine_shadow = Color;
+    .pine_green = Color;
+    .pine_tip = Color;
+  }
+
+let red_brown_trunk :: Color
+let red_brown_trunk = { .red = 91; .green = 61; .blue = 42; }
+let pine_shadow :: Color
+let pine_shadow = { .red = 26; .green = 76; .blue = 54; }
+let pine_green :: Color
+let pine_green = { .red = 39; .green = 111; .blue = 70; }
+let new_growth :: Color
+let new_growth = { .red = 78; .green = 145; .blue = 82; }
+
+let fir :: FirRecipe
+let fir =
+  {
+    .height = 14;
+    .first_layer = 4;
+    .trunk = red_brown_trunk;
+    .pine_shadow = pine_shadow;
+    .pine_green = pine_green;
+    .pine_tip = new_growth;
+  }
+
+return fir

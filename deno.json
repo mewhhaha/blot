@@ -1,6 +1,7 @@
 {
   "exclude": [
     ".*",
+    "case-studies/engine/desktop.ts",
     "compiler/target",
     "dist",
     "experiments/rust-middle/target",
@@ -13,9 +14,14 @@
     "generate": "deno task generate:parser && deno task generate:compiler-schema",
     "check:generated": "deno task generate:parser && git diff --exit-code -- generated/wasm generated/queries generated/.baba-manifest.json && deno task generate:compiler-schema --check && deno run --allow-read scripts/generate_language_health.ts --check",
     "inspect": "deno run --allow-read scripts/inspect_plan.ts",
-    "parse": "deno run --allow-read scripts/parse.ts"
+    "parse": "deno run --allow-read scripts/parse.ts",
+    "game-loop:desktop": "deno run --allow-env=HOME,XDG_CACHE_HOME,LD_LIBRARY_PATH --allow-net=archive.archlinux.org --allow-read --allow-write --allow-run scripts/run_game_loop_desktop.ts"
   },
   "nodeModulesDir": "manual",
+  "desktop": {
+    "backend": "raw"
+  },
+  "unstable": ["webgpu"],
   "lint": {
     "exclude": [
       "generated",

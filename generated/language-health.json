@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 3,
-    "checkedModuleCertificate": 13,
+    "checkedModuleCertificate": 14,
     "runtimeHir": 6
   },
   "operators": [
@@ -248,6 +248,7 @@
     "BLOT_LINT_GUARD_SHAPED_CASE",
     "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES",
     "BLOT_LINT_IF_CHAIN",
+    "BLOT_LINT_NESTED_CASE_CHAIN",
     "BLOT_LINT_NESTED_IF_CHAIN",
     "BLOT_LINT_NOOP_REBINDING",
     "BLOT_LINT_OPERATOR_SPELLING",
@@ -300,7 +301,6 @@
     "BLOT_SCRATCH_NOT_OWNED",
     "BLOT_SCRATCH_RECYCLE_LINEAR",
     "BLOT_SHADOWED_ACCUMULATOR",
-    "BLOT_SHAPE_UPDATE_FIELDS",
     "BLOT_SHARED_ARRAY_UPDATE",
     "BLOT_SIGNATURE_NOT_A_TYPE",
     "BLOT_SIGNATURE_TARGET",
@@ -530,14 +530,11 @@
     "@scratch.recycle",
     "@scratch.type",
     "@scratch.with_capacity",
-    "@shape",
     "@shape.empty",
     "@shape.get",
     "@shape.has",
     "@shape.names",
     "@shape.remove",
-    "@shape.set",
-    "@shape.update",
     "@text.cmp",
     "@text.concat",
     "@text.contains",
@@ -710,55 +707,55 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 11592
+      "lines": 11747
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 9616
+      "lines": 10321
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6041
+      "lines": 6499
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 5740
-    },
-    {
-      "path": "compiler/src/eval.rs",
-      "lines": 4860
+      "lines": 5900
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 4776
+      "lines": 5156
     },
     {
-      "path": "compiler/src/frontend_plan.rs",
-      "lines": 3531
+      "path": "compiler/src/eval.rs",
+      "lines": 5041
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3309
+      "lines": 3770
+    },
+    {
+      "path": "compiler/src/frontend_plan.rs",
+      "lines": 3600
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3170
+      "lines": 3210
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 2742
+      "lines": 3150
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2129
+      "lines": 2117
     },
     {
       "path": "src/runtime/hir.ts",
-      "lines": 1584
+      "lines": 1653
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1530
+      "lines": 1621
     },
     {
       "path": "src/language_service.ts",
@@ -766,7 +763,7 @@
     },
     {
       "path": "compiler/src/safety.rs",
-      "lines": 1392
+      "lines": 1400
     }
   ]
 }

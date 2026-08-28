@@ -265,6 +265,18 @@ export type BlotRuntimeTerminator =
     readonly span: BlotRuntimeSpan;
   }
   | {
+    readonly kind: "switch";
+    readonly selector: number;
+    readonly cases: readonly {
+      readonly value:
+        | { readonly kind: "integer-32"; readonly value: number }
+        | { readonly kind: "signed-integer-64"; readonly value: string };
+      readonly target: number;
+    }[];
+    readonly fallback: number;
+    readonly span: BlotRuntimeSpan;
+  }
+  | {
     readonly kind: "return";
     readonly value: number;
     readonly span: BlotRuntimeSpan;
@@ -883,6 +895,12 @@ function recordPredecessors(
   if (terminator.kind === "conditional") {
     targets = [terminator.consequent, terminator.alternate];
   }
+  if (terminator.kind === "switch") {
+    targets = [
+      ...terminator.cases.map((case_) => case_.target),
+      terminator.fallback,
+    ];
+  }
   for (const target of targets) {
     if (function_.blocks[target] === undefined) {
       throw new TypeError(
@@ -965,6 +983,7 @@ function terminatorValues(
   if (terminator.kind === "return") return [terminator.value];
   if (terminator.kind === "branch") return terminator.arguments;
   if (terminator.kind === "trap") return [];
+  if (terminator.kind === "switch") return [terminator.selector];
   return [
     terminator.condition,
     ...terminator.consequentArguments,
@@ -1288,6 +1307,12 @@ function reachableBlocks(function_: BlotRuntimeFunction): ReadonlySet<number> {
     if (terminator.kind === "conditional") {
       pending.push(terminator.consequent, terminator.alternate);
     }
+    if (terminator.kind === "switch") {
+      pending.push(
+        ...terminator.cases.map((case_) => case_.target),
+        terminator.fallback,
+      );
+    }
   }
   return reachable;
 }
@@ -1340,6 +1365,50 @@ function validateTerminator(
       terminator.alternateArguments,
       values,
       `${block.id} alternate`,
+    );
+    return;
+  }
+  if (terminator.kind === "switch") {
+    const selectorType = values.get(terminator.selector)?.type;
+    const selectorKind = selectorType === undefined
+      ? undefined
+      : module.types[selectorType]?.kind;
+    if (selectorKind !== "integer-32" && selectorKind !== "signed-integer-64") {
+      throw new TypeError(
+        `${module.source}: switch ${function_.name}:${block.id} requires an integer selector; received ${terminator.selector} of type ${selectorType}`,
+      );
+    }
+    const expectedConstantKind = selectorKind;
+    const seen = new Set<string>();
+    for (const case_ of terminator.cases) {
+      if (case_.value.kind !== expectedConstantKind) {
+        throw new TypeError(
+          `${module.source}: switch ${function_.name}:${block.id} case ${case_.value.value} has kind ${case_.value.kind}; selector requires ${expectedConstantKind}`,
+        );
+      }
+      const key = `${case_.value.kind}:${case_.value.value}`;
+      if (seen.has(key)) {
+        throw new TypeError(
+          `${module.source}: switch ${function_.name}:${block.id} repeats case ${case_.value.value}`,
+        );
+      }
+      seen.add(key);
+      validateEdge(
+        module,
+        function_,
+        case_.target,
+        [],
+        values,
+        `${block.id} switch case ${case_.value.value}`,
+      );
+    }
+    validateEdge(
+      module,
+      function_,
+      terminator.fallback,
+      [],
+      values,
+      `${block.id} switch fallback`,
     );
     return;
   }

@@ -91,6 +91,7 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "import_expression",
     "signature",
     "bounded_lambda",
+    "computed_shape_field",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -157,6 +158,8 @@ pub(crate) const FIELD_NAMES: &[&str] = &[
     "input",
     "specifier",
     "recursive",
+    "targets",
+    "patterns",
 ];
 
 pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[
@@ -184,6 +187,8 @@ pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
     ("binding", "tags"),
     ("do_block", "statements"),
     ("case_expression", "rest"),
+    ("case_expression", "targets"),
+    ("case_arm", "patterns"),
     ("conditional_statement_branches", "alternatives"),
     ("continued_expression", "rest"),
     ("continued_operand", "prefixes"),

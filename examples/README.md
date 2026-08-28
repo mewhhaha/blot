@@ -14,7 +14,8 @@ that has not been implemented are four different claims about the language.
 Every pathological and pending file explains the edge in its opening comment.
 Pending files are not language proposals by themselves; `LANGUAGE.md` and
 `spec/` remain authoritative. They are executable markers for work already named
-in `TASKS.md` or `SUGGESTION.md`, not disabled tests that can silently rot.
+in `SUGGESTION.md` or a focused specification, not disabled tests that can
+silently rot.
 
 Here, "pathological" is a compiler term, not a judgment about the source. It
 includes direct definitions commonly used to demonstrate functional

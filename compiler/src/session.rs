@@ -1832,12 +1832,12 @@ impl<'a> UnchangedDeclarations<'a> {
             Expression::Tuple { elements, .. } => elements
                 .into_iter()
                 .all(|expression| self.expression(expression)),
-            Expression::Shape { members, .. } => members.into_iter().all(|member| {
-                let value = match member {
-                    crate::ast::ShapeMember::Field { value, .. }
-                    | crate::ast::ShapeMember::Spread { value } => value,
-                };
-                self.expression(value)
+            Expression::Shape { members, .. } => members.into_iter().all(|member| match member {
+                crate::ast::ShapeMember::Field { value, .. }
+                | crate::ast::ShapeMember::Spread { value } => self.expression(value),
+                crate::ast::ShapeMember::Computed { name, value } => {
+                    self.expression(name) && self.expression(value)
+                }
             }),
             Expression::If {
                 branches, fallback, ..
@@ -2000,11 +2000,16 @@ fn collect_expression_dependencies(
         }
         Expression::Shape { members, .. } => {
             for member in members {
-                let value = match member {
+                match member {
                     crate::ast::ShapeMember::Field { value, .. }
-                    | crate::ast::ShapeMember::Spread { value } => *value,
-                };
-                collect_expression_dependencies(value, arena, dependencies);
+                    | crate::ast::ShapeMember::Spread { value } => {
+                        collect_expression_dependencies(*value, arena, dependencies);
+                    }
+                    crate::ast::ShapeMember::Computed { name, value } => {
+                        collect_expression_dependencies(*name, arena, dependencies);
+                        collect_expression_dependencies(*value, arena, dependencies);
+                    }
+                }
             }
         }
         Expression::If {
@@ -2091,6 +2096,15 @@ mod tests {
         session
             .module_snapshot(path)
             .expect("module snapshot should encode")
+    }
+
+    fn run_with_compiler_test_stack(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .expect("compiler test thread should start")
+            .join()
+            .expect("compiler test thread should finish");
     }
 
     #[test]
@@ -3940,14 +3954,14 @@ mod tests {
     }
 
     #[test]
-    fn shape_update_preserves_unknown_record_width() {
+    fn open_record_update_preserves_unknown_width() {
         let path = "main.blot";
         let mut session = CompilerSession::default();
         session
             .add_source(
                 path.to_owned(),
                 source(
-                    "const replacement :: @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => @shape.update record { .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
+                    "const replacement :: @type.int\n\u{e000}const replacement = 2\n\u{e000}const set_x = fn record => { ...record; .x = replacement; }\n\u{e000}return (set_x { .x = 1; .y = \"kept\"; }).y\u{e000}",
                 ),
             )
             .expect("shape update source should load");
@@ -3958,6 +3972,27 @@ mod tests {
         let evaluated = session.evaluate_module(path);
         assert_eq!(evaluated["ok"], true, "{evaluated}");
         assert_eq!(evaluated["display"], "\"kept\"");
+    }
+
+    #[test]
+    fn computed_record_field_uses_a_compile_time_text_name() {
+        let path = "main.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                path.to_owned(),
+                source(
+                    "const name = \"answer key\"\n\u{e000}let record = { .[name] = 42; }\n\u{e000}return @shape.get record name\u{e000}",
+                ),
+            )
+            .expect("computed record field source should load");
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .expect("computed record field source should configure");
+
+        let evaluated = session.evaluate_module(path);
+        assert_eq!(evaluated["ok"], true, "{evaluated}");
+        assert_eq!(evaluated["display"], "42");
     }
 
     #[test]
@@ -4287,88 +4322,202 @@ mod tests {
 
     #[test]
     fn recursive_empty_array_accumulator_closes_from_pushed_elements() {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                let mut session = CompilerSession::default();
-                session
-                    .add_source(
-                        "prelude.blot".to_owned(),
-                        source(include_str!("../../src/prelude/prelude.blot")),
-                    )
-                    .expect("prelude should load");
-                session
-                    .add_source(
-                        "main.blot".to_owned(),
-                        source(include_str!("../../examples/collect_principal_type.blot")),
-                    )
-                    .expect("source should load");
-                session
-                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
-                    .expect("prelude should configure");
-                session
-                    .configure_module(
-                        "main.blot",
-                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
-                        BTreeMap::new(),
-                    )
-                    .expect("source should configure");
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(
+                    "prelude.blot".to_owned(),
+                    source(include_str!("../../src/prelude/prelude.blot")),
+                )
+                .expect("prelude should load");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/collect_principal_type.blot")),
+                )
+                .expect("source should load");
+            session
+                .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                .expect("prelude should configure");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
 
-                let checked = session.check_module("main.blot");
+            let checked = session.check_module("main.blot");
 
-                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
-                assert_eq!(checked["type"], "[Int]");
-            })
-            .expect("collect test thread should start")
-            .join()
-            .expect("collect test thread should finish");
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            assert_eq!(checked["type"], "[Int]");
+        });
     }
 
     #[test]
-    fn array_iterator_alias_consumes_a_runtime_array() {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                let prelude_snapshot = snapshot_from_source(
-                    "prelude.blot",
-                    include_str!("../../src/prelude/prelude.blot"),
-                );
-                let mut session = CompilerSession::default();
-                session
-                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
-                    .expect("prelude snapshot should install");
-                session
-                    .add_source(
-                        "main.blot".to_owned(),
-                        source(concat!(
-                            "open import \"blot:prelude\"\n",
-                            "let rebuild :: { .values = [Int]; } -> [Int]\n",
-                            "let rebuild = fn input => do:\n",
-                            "  let rebuilt = @satisfies Array.empty [Int]\n",
-                            "  for value in Iter.items input.values:\n",
-                            "    rebuilt := [...rebuilt, value]\n",
-                            "  return rebuilt\n",
-                            "return { .rebuild = rebuild; }\n",
-                        )),
-                    )
-                    .expect("source should load");
-                session
-                    .configure_module(
-                        "main.blot",
-                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
-                        BTreeMap::new(),
-                    )
-                    .expect("source should configure");
+    fn a_rebound_loop_element_stays_local_to_each_iteration() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let total = 0\n",
+                        "for value in Iter.items [1, 2, 3]:\n",
+                        "  value := value + 1\n",
+                        "  total := total + value\n",
+                        "return total\n",
+                    )),
+                )
+                .expect("loop source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("loop source should configure");
 
-                let checked = session.check_module("main.blot");
+            let checked = session.check_module("main.blot");
 
-                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
-                let prepared = session.prepare_runtime_hir("main.blot");
-                assert_eq!(prepared["ok"], true, "{prepared}");
-            })
-            .expect("array iterator test thread should start")
-            .join()
-            .expect("array iterator test thread should finish");
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            assert_eq!(checked["type"], "Int");
+        });
+    }
+
+    #[test]
+    fn a_conditionally_rebound_loop_element_stays_local_to_each_iteration() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let total = 0\n",
+                        "for value in Iter.items [1, 2, 3]:\n",
+                        "  if value > 1:\n",
+                        "    value := value + 1\n",
+                        "  total := total + value\n",
+                        "return total\n",
+                    )),
+                )
+                .expect("conditional loop source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("conditional loop source should configure");
+
+            let checked = session.check_module("main.blot");
+
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            assert_eq!(checked["type"], "Int");
+        });
+    }
+
+    #[test]
+    fn array_iterator_accepts_a_shared_runtime_array() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let rebuild :: { .values = [Int]; } -> [Int]\n",
+                        "let rebuild = fn input => do:\n",
+                        "  let rebuilt = @satisfies Array.empty [Int]\n",
+                        "  let shared = freeze input.values\n",
+                        "  for value in Iter.items shared:\n",
+                        "    rebuilt := [...rebuilt, value]\n",
+                        "  return rebuilt\n",
+                        "return { .rebuild = rebuild; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let checked = session.check_module("main.blot");
+
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn shared_store_cannot_enter_an_imported_unique_store_contract() {
+        run_with_compiler_test_stack(|| {
+            let library_snapshot = snapshot_from_source(
+                "library.blot",
+                concat!(
+                    "const push_zero :: [@type.int] -> [@type.int]\n",
+                    "const push_zero = fn values => @array.push values 0\n",
+                    "return { .push_zero = push_zero; }\n",
+                ),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("library.blot", &library_snapshot)
+                .expect("library snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"test:library\"\n",
+                        "let shared = @linear.freeze [1, 2, 3]\n",
+                        "return push_zero shared\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("test:library".to_owned(), "library.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], false, "{prepared}");
+            assert_eq!(
+                prepared["diagnostic"]["code"], "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
+                "{prepared}"
+            );
+            assert!(prepared.get("module").is_none(), "{prepared}");
+        });
     }
 
     #[test]
@@ -4399,233 +4548,469 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_integer_case_lowers_every_literal_before_the_wildcard() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(concat!(
+                    "module with input\n",
+                    "use requested <- input.key ()\n",
+                    "let key = @int.add requested 0\n",
+                    "return case key of\n",
+                    "  1 => 10\n",
+                    "  2 => 20\n",
+                    "  3 => 30\n",
+                    "  4 => 40\n",
+                    "  _ => 50\n",
+                )),
+            )
+            .expect("source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("source should configure");
+
+        let prepared = session.prepare_runtime_hir("main.blot");
+
+        assert_eq!(prepared["ok"], true, "{prepared}");
+        let switches = prepared["module"]["functions"]
+            .as_array()
+            .expect("runtime functions")
+            .iter()
+            .flat_map(|function| {
+                function["blocks"]
+                    .as_array()
+                    .expect("runtime blocks")
+                    .iter()
+            })
+            .filter(|block| block["terminator"]["kind"] == "switch")
+            .collect::<Vec<_>>();
+        assert_eq!(switches.len(), 1, "{prepared}");
+        assert_eq!(
+            switches[0]["terminator"]["cases"]
+                .as_array()
+                .expect("switch cases")
+                .len(),
+            4,
+            "{prepared}"
+        );
+    }
+
+    #[test]
+    fn runtime_array_uses_its_checked_sum_element_representation() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "module with input\n",
+                        "open import \"blot:prelude\"\n",
+                        "const Kind = #Oak | #Fir | #Rock\n",
+                        "const Entry = { .key = Int; .kind = Kind; }\n",
+                        "let entries :: [Entry]\n",
+                        "let entries = [\n",
+                        "  { .key = 1; .kind = #Oak; },\n",
+                        "  { .key = 2; .kind = #Fir; },\n",
+                        "  { .key = 3; .kind = #Rock; }\n",
+                        "]\n",
+                        "use requested <- input.index ()\n",
+                        "let index = @int.add requested 0\n",
+                        "let selected = Array.expect_get ((&entries), index)\n",
+                        "return case selected.kind of\n",
+                        "  #Oak => 10\n",
+                        "  #Fir => 20\n",
+                        "  #Rock => 30\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            assert!(
+                prepared["module"]["types"]
+                    .as_array()
+                    .expect("runtime types")
+                    .iter()
+                    .any(|type_| type_["cases"]
+                        .as_array()
+                        .is_some_and(|cases| cases.len() == 3))
+            );
+            let compiled = session
+                .compile_module("main.blot")
+                .expect("dynamic sum case should emit Wasm");
+            let has_branch_table = wasmparser::Parser::new(0)
+                .parse_all(&compiled.wasm)
+                .filter_map(
+                    |payload| match payload.expect("emitted Wasm should parse") {
+                        wasmparser::Payload::CodeSectionEntry(body) => Some(body),
+                        _ => None,
+                    },
+                )
+                .any(|body| {
+                    body.get_operators_reader()
+                        .expect("function operators should parse")
+                        .into_iter()
+                        .any(|operator| {
+                            matches!(
+                                operator.expect("operator should parse"),
+                                wasmparser::Operator::BrTable { .. }
+                            )
+                        })
+                });
+            assert!(has_branch_table, "dense sum dispatch should emit br_table");
+        });
+    }
+
+    #[test]
+    fn equal_arrays_keep_their_distinct_checked_sum_representations() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "module with input\n",
+                        "open import \"blot:prelude\"\n",
+                        "const Left = #Same | #Left\n",
+                        "const Right = #Same | #Right\n",
+                        "let left :: [Left]\n",
+                        "let left = [#Same]\n",
+                        "let right :: [Right]\n",
+                        "let right = [#Same]\n",
+                        "use requested <- input.index ()\n",
+                        "let index = @int.add requested 0\n",
+                        "let from_left = Array.expect_get ((&left), index)\n",
+                        "let from_right = Array.expect_get ((&right), index)\n",
+                        "return case from_left of\n",
+                        "  #Same => case from_right of\n",
+                        "    #Same => 1\n",
+                        "    #Right => 2\n",
+                        "  #Left => 3\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let sums = prepared["module"]["types"]
+                .as_array()
+                .expect("runtime types")
+                .iter()
+                .filter_map(|type_| type_["cases"].as_array())
+                .filter(|cases| cases.len() == 2)
+                .count();
+            assert!(sums >= 2, "{prepared}");
+        });
+    }
+
+    #[test]
     fn residual_simd_examples_emit_native_vector_operators() {
-        std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn(|| {
-                let prelude_snapshot = snapshot_from_source(
-                    "prelude.blot",
-                    include_str!("../../src/prelude/prelude.blot"),
-                );
-                let mut session = CompilerSession::default();
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            for (path, text) in [
+                ("simd.blot", include_str!("../../examples/simd.blot")),
+                (
+                    "simd_integer.blot",
+                    include_str!("../../examples/simd_integer.blot"),
+                ),
+            ] {
                 session
-                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
-                    .expect("prelude snapshot should install");
-                for (path, text) in [
-                    ("simd.blot", include_str!("../../examples/simd.blot")),
-                    (
-                        "simd_integer.blot",
-                        include_str!("../../examples/simd_integer.blot"),
-                    ),
-                ] {
-                    session
-                        .add_source(path.to_owned(), source(text))
-                        .expect("SIMD example should load");
-                    session
-                        .configure_module(
-                            path,
-                            BTreeMap::from([(
-                                "blot:prelude".to_owned(),
-                                "prelude.blot".to_owned(),
-                            )]),
-                            BTreeMap::new(),
-                        )
-                        .expect("SIMD example should configure");
-                }
+                    .add_source(path.to_owned(), source(text))
+                    .expect("SIMD example should load");
+                session
+                    .configure_module(
+                        path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("SIMD example should configure");
+            }
 
-                let float = session
-                    .compile_module("simd.blot")
-                    .expect("float SIMD example should emit Wasm");
-                let integer = session
-                    .compile_module("simd_integer.blot")
-                    .expect("integer SIMD example should emit Wasm");
+            let float = session
+                .compile_module("simd.blot")
+                .expect("float SIMD example should emit Wasm");
+            let integer = session
+                .compile_module("simd_integer.blot")
+                .expect("integer SIMD example should emit Wasm");
 
-                let operator_names = |wasm: &[u8]| {
-                    let mut names = Vec::new();
-                    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
-                        let wasmparser::Payload::CodeSectionEntry(body) =
-                            payload.expect("emitted Wasm should parse")
-                        else {
-                            continue;
-                        };
-                        for operator in body
-                            .get_operators_reader()
-                            .expect("function operators should parse")
-                        {
-                            let name = format!("{:?}", operator.expect("operator should parse"));
-                            names.push(name);
-                        }
+            let operator_names = |wasm: &[u8]| {
+                let mut names = Vec::new();
+                for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+                    let wasmparser::Payload::CodeSectionEntry(body) =
+                        payload.expect("emitted Wasm should parse")
+                    else {
+                        continue;
+                    };
+                    for operator in body
+                        .get_operators_reader()
+                        .expect("function operators should parse")
+                    {
+                        let name = format!("{:?}", operator.expect("operator should parse"));
+                        names.push(name);
                     }
-                    names
-                };
-                let float_operators = operator_names(&float.wasm);
-                for required in [
-                    "F32x4Add",
-                    "F32x4Sub",
-                    "F32x4Mul",
-                    "F32x4Div",
-                    "F32x4Lt",
-                    "F32x4Eq",
-                    "V128Bitselect",
-                    "I8x16Shuffle",
-                    "I32x4AllTrue",
-                    "V128AnyTrue",
-                ] {
-                    assert!(
-                        float_operators
-                            .iter()
-                            .any(|name| name.starts_with(required)),
-                        "float SIMD example omitted {required}: {float_operators:?}"
-                    );
                 }
+                names
+            };
+            let float_operators = operator_names(&float.wasm);
+            for required in [
+                "F32x4Add",
+                "F32x4Sub",
+                "F32x4Mul",
+                "F32x4Div",
+                "F32x4Lt",
+                "F32x4Eq",
+                "V128Bitselect",
+                "I8x16Shuffle",
+                "I32x4AllTrue",
+                "V128AnyTrue",
+            ] {
                 assert!(
                     float_operators
                         .iter()
-                        .filter(|name| name.starts_with("I8x16Shuffle"))
-                        .count()
-                        >= 2,
-                    "float SIMD example omitted shuffle or swizzle: {float_operators:?}"
+                        .any(|name| name.starts_with(required)),
+                    "float SIMD example omitted {required}: {float_operators:?}"
                 );
-                let integer_operators = operator_names(&integer.wasm);
-                for required in [
-                    "I32x4Shl",
-                    "I32x4MaxS",
-                    "I16x8Add",
-                    "I16x8LtS",
-                    "I16x8Bitmask",
-                    "I8x16Add",
-                    "I8x16LtS",
-                    "I8x16Bitmask",
-                ] {
-                    assert!(
-                        integer_operators
-                            .iter()
-                            .any(|name| name.starts_with(required)),
-                        "integer SIMD example omitted {required}: {integer_operators:?}"
-                    );
-                }
-            })
-            .expect("SIMD test thread should start")
-            .join()
-            .expect("SIMD test thread should finish");
+            }
+            assert!(
+                float_operators
+                    .iter()
+                    .filter(|name| name.starts_with("I8x16Shuffle"))
+                    .count()
+                    >= 2,
+                "float SIMD example omitted shuffle or swizzle: {float_operators:?}"
+            );
+            let integer_operators = operator_names(&integer.wasm);
+            for required in [
+                "I32x4Shl",
+                "I32x4MaxS",
+                "I16x8Add",
+                "I16x8LtS",
+                "I16x8Bitmask",
+                "I8x16Add",
+                "I8x16LtS",
+                "I8x16Bitmask",
+            ] {
+                assert!(
+                    integer_operators
+                        .iter()
+                        .any(|name| name.starts_with(required)),
+                    "integer SIMD example omitted {required}: {integer_operators:?}"
+                );
+            }
+        });
     }
 
     #[test]
     fn compositional_game_loop_prepares_and_emits_wasm() {
-        std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn(|| {
-                let prelude_snapshot = snapshot_from_source(
-                    "prelude.blot",
-                    include_str!("../../src/prelude/prelude.blot"),
-                );
-                let mut session = CompilerSession::default();
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            for (path, text) in [
+                (
+                    "case-studies/engine/lib/math.blot",
+                    include_str!("../../case-studies/engine/lib/math.blot"),
+                ),
+                (
+                    "case-studies/engine/lib/render.blot",
+                    include_str!("../../case-studies/engine/lib/render.blot"),
+                ),
+                (
+                    "case-studies/engine/lib/shrubbery.blot",
+                    include_str!("../../case-studies/engine/lib/shrubbery.blot"),
+                ),
+                (
+                    "case-studies/engine/shrubberies/oak.blot",
+                    include_str!("../../case-studies/engine/shrubberies/oak.blot"),
+                ),
+                (
+                    "case-studies/engine/shrubberies/fir.blot",
+                    include_str!("../../case-studies/engine/shrubberies/fir.blot"),
+                ),
+                (
+                    "case-studies/engine/shrubberies/flowers.blot",
+                    include_str!("../../case-studies/engine/shrubberies/flowers.blot"),
+                ),
+                (
+                    "case-studies/engine/shrubberies/rocks.blot",
+                    include_str!("../../case-studies/engine/shrubberies/rocks.blot"),
+                ),
+                (
+                    "case-studies/engine/game_loop.blot",
+                    include_str!("../../case-studies/engine/game_loop.blot"),
+                ),
+            ] {
                 session
-                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
-                    .expect("prelude snapshot should install");
-                for (path, text) in [
-                    (
-                        "case-studies/engine/lib/math.blot",
-                        include_str!("../../case-studies/engine/lib/math.blot"),
-                    ),
-                    (
-                        "case-studies/engine/lib/render.blot",
-                        include_str!("../../case-studies/engine/lib/render.blot"),
-                    ),
-                    (
-                        "case-studies/engine/game_loop.blot",
-                        include_str!("../../case-studies/engine/game_loop.blot"),
-                    ),
-                ] {
-                    session
-                        .add_source(path.to_owned(), source(text))
-                        .expect("engine source should load");
-                }
+                    .add_source(path.to_owned(), source(text))
+                    .expect("engine source should load");
+            }
+            session
+                .configure_module(
+                    "case-studies/engine/lib/math.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("math should configure");
+            session
+                .configure_module(
+                    "case-studies/engine/lib/render.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./math.blot".to_owned(),
+                            "case-studies/engine/lib/math.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("render should configure");
+            for path in [
+                "case-studies/engine/shrubberies/oak.blot",
+                "case-studies/engine/shrubberies/fir.blot",
+                "case-studies/engine/shrubberies/flowers.blot",
+                "case-studies/engine/shrubberies/rocks.blot",
+            ] {
                 session
                     .configure_module(
-                        "case-studies/engine/lib/math.blot",
+                        path,
                         BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
                         BTreeMap::new(),
                     )
-                    .expect("math should configure");
-                session
-                    .configure_module(
-                        "case-studies/engine/lib/render.blot",
-                        BTreeMap::from([
-                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
-                            (
-                                "./math.blot".to_owned(),
-                                "case-studies/engine/lib/math.blot".to_owned(),
-                            ),
-                        ]),
-                        BTreeMap::new(),
-                    )
-                    .expect("render should configure");
-                session
-                    .configure_module(
-                        "case-studies/engine/game_loop.blot",
-                        BTreeMap::from([
-                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
-                            (
-                                "./lib/math.blot".to_owned(),
-                                "case-studies/engine/lib/math.blot".to_owned(),
-                            ),
-                            (
-                                "./lib/render.blot".to_owned(),
-                                "case-studies/engine/lib/render.blot".to_owned(),
-                            ),
-                        ]),
-                        BTreeMap::new(),
-                    )
-                    .expect("game loop should configure");
+                    .expect("shrubbery recipe should configure");
+            }
+            session
+                .configure_module(
+                    "case-studies/engine/lib/shrubbery.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./render.blot".to_owned(),
+                            "case-studies/engine/lib/render.blot".to_owned(),
+                        ),
+                        (
+                            "../shrubberies/oak.blot".to_owned(),
+                            "case-studies/engine/shrubberies/oak.blot".to_owned(),
+                        ),
+                        (
+                            "../shrubberies/fir.blot".to_owned(),
+                            "case-studies/engine/shrubberies/fir.blot".to_owned(),
+                        ),
+                        (
+                            "../shrubberies/flowers.blot".to_owned(),
+                            "case-studies/engine/shrubberies/flowers.blot".to_owned(),
+                        ),
+                        (
+                            "../shrubberies/rocks.blot".to_owned(),
+                            "case-studies/engine/shrubberies/rocks.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("shrubbery generator should configure");
+            session
+                .configure_module(
+                    "case-studies/engine/game_loop.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./lib/math.blot".to_owned(),
+                            "case-studies/engine/lib/math.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/render.blot".to_owned(),
+                            "case-studies/engine/lib/render.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/shrubbery.blot".to_owned(),
+                            "case-studies/engine/lib/shrubbery.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("game loop should configure");
 
-                let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
+            let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
 
-                assert_eq!(prepared["ok"], true, "{prepared}");
-                session
-                    .compile_module("case-studies/engine/game_loop.blot")
-                    .expect("game loop should emit Wasm");
-            })
-            .expect("game loop test thread should start")
-            .join()
-            .expect("game loop test thread should finish");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("case-studies/engine/game_loop.blot")
+                .expect("game loop should emit Wasm");
+        });
     }
 
     #[test]
     fn short_circuit_bounds_refine_direct_array_access() {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                let mut session = CompilerSession::default();
-                session
-                    .add_source(
-                        "prelude.blot".to_owned(),
-                        source(include_str!("../../src/prelude/prelude.blot")),
-                    )
-                    .expect("prelude should load");
-                session
-                    .add_source(
-                        "main.blot".to_owned(),
-                        source(include_str!("../../examples/advanced_refinements.blot")),
-                    )
-                    .expect("source should load");
-                session
-                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
-                    .expect("prelude should configure");
-                session
-                    .configure_module(
-                        "main.blot",
-                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
-                        BTreeMap::new(),
-                    )
-                    .expect("source should configure");
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(
+                    "prelude.blot".to_owned(),
+                    source(include_str!("../../src/prelude/prelude.blot")),
+                )
+                .expect("prelude should load");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/advanced_refinements.blot")),
+                )
+                .expect("source should load");
+            session
+                .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                .expect("prelude should configure");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
 
-                let checked = session.check_module("main.blot");
-                assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
-            })
-            .expect("short-circuit refinement test thread should start")
-            .join()
-            .expect("short-circuit refinement test thread should finish");
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+        });
     }
 
     #[test]
@@ -4651,67 +5036,62 @@ mod tests {
 
     #[test]
     fn an_empty_scratch_uses_its_specialized_result_layout() {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                let mut session = CompilerSession::default();
-                session
-                    .add_source(
-                        "prelude.blot".to_owned(),
-                        source(include_str!("../../src/prelude/prelude.blot")),
-                    )
-                    .expect("prelude should load");
-                session
-                    .add_source(
-                        "main.blot".to_owned(),
-                        source(concat!(
-                            "open import \"blot:prelude\"\n",
-                            "const empty_length :: Int -> Int\n",
-                            "const empty_length = fn capacity => do:\n",
-                            "  let values :: [Int]\n",
-                            "  let values = Scratch.finish (Scratch.with_capacity capacity)\n",
-                            "  return Array.length (&values)\n",
-                            "return { .empty_length = empty_length; }\n",
-                        )),
-                    )
-                    .expect("source should load");
-                session
-                    .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
-                    .expect("prelude should configure");
-                session
-                    .configure_module(
-                        "main.blot",
-                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
-                        BTreeMap::new(),
-                    )
-                    .expect("source should configure");
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(
+                    "prelude.blot".to_owned(),
+                    source(include_str!("../../src/prelude/prelude.blot")),
+                )
+                .expect("prelude should load");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const empty_length :: Int -> Int\n",
+                        "const empty_length = fn capacity => do:\n",
+                        "  let values :: [Int]\n",
+                        "  let values = Scratch.finish (Scratch.with_capacity capacity)\n",
+                        "  return Array.length (&values)\n",
+                        "return { .empty_length = empty_length; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                .expect("prelude should configure");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
 
-                let prepared = session.prepare_runtime_hir("main.blot");
-                assert_eq!(prepared["ok"], true, "{}", prepared["diagnostic"]);
-                let operations = prepared["module"]["functions"]
-                    .as_array()
-                    .expect("runtime functions")
-                    .iter()
-                    .flat_map(|function| {
-                        function["blocks"]
-                            .as_array()
-                            .expect("runtime blocks")
-                            .iter()
-                    })
-                    .flat_map(|block| {
-                        block["operations"]
-                            .as_array()
-                            .expect("runtime operations")
-                            .iter()
-                    })
-                    .filter_map(|operation| operation["kind"].as_str())
-                    .collect::<Vec<_>>();
-                assert!(operations.contains(&"scratch.with-capacity"));
-                assert!(operations.contains(&"scratch.finish"));
-            })
-            .expect("empty Scratch test thread should start")
-            .join()
-            .expect("empty Scratch test thread should finish");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let operations = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .filter_map(|operation| operation["kind"].as_str())
+                .collect::<Vec<_>>();
+            assert!(operations.contains(&"scratch.with-capacity"));
+            assert!(operations.contains(&"scratch.finish"));
+        });
     }
 
     fn reflected_arrow_effect(evaluated: &serde_json::Value) -> &serde_json::Value {

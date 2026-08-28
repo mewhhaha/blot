@@ -384,10 +384,15 @@ impl Analysis<'_> {
             }
             Expression::Shape { members, .. } => {
                 for member in members {
-                    let value = match member {
-                        ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => value,
-                    };
-                    self.walk(value, scope, false)?;
+                    match member {
+                        ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                            self.walk(value, scope, false)?;
+                        }
+                        ShapeMember::Computed { name, value } => {
+                            self.walk(name, scope, false)?;
+                            self.walk(value, scope, false)?;
+                        }
+                    }
                 }
             }
             Expression::If {
@@ -785,6 +790,9 @@ impl Analysis<'_> {
                                 continue;
                             };
                             fields.extend(spread);
+                        }
+                        ShapeMember::Computed { .. } => {
+                            fields.clear();
                         }
                     }
                 }

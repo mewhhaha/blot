@@ -920,12 +920,14 @@ pub struct Runtime {
     signature_holes: Option<Rc<SignatureHoles>>,
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
+    checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
 }
 
 struct ArrayProgress {
     elements: Vec<crate::ast::ArrayElement>,
     index: usize,
     array: Value,
+    checked_type: Option<Value>,
     span: Span,
 }
 
@@ -955,6 +957,7 @@ impl Runtime {
             signature_holes: None,
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
+            checked_arguments: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -987,6 +990,7 @@ impl Runtime {
             signature_holes: self.signature_holes.clone(),
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
+            checked_arguments: self.checked_arguments.clone(),
         }
     }
 }
@@ -1242,6 +1246,10 @@ pub fn evaluate_expression(
     if let Some(variable) = signature_hole {
         return Computation::value(Value::TypeVariable(variable));
     }
+    let checked_representation = context
+        .expression_type(module_path.as_str(), expression_id)
+        .map(|type_| substitute_signature(&type_, &environment));
+    let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
     let computation = match expression {
         Expression::Int { value, .. } => {
@@ -1331,6 +1339,15 @@ pub fn evaluate_expression(
                 .map(|type_| substitute_signature(&type_, &environment));
             let function = *function;
             let argument = *argument;
+            let expected_argument = context
+                .expression_type(module_path.as_str(), argument)
+                .map(|type_| substitute_signature(&type_, &environment));
+            if let Some(expected_argument) = &expected_argument {
+                runtime
+                    .checked_arguments
+                    .borrow_mut()
+                    .insert(application.clone(), expected_argument.clone());
+            }
             let argument_context = context.clone();
             let argument_module = module_path.clone();
             let argument_environment = environment.clone();
@@ -1370,11 +1387,14 @@ pub fn evaluate_expression(
                     return apply_with_expected(
                         argument_context,
                         function,
-                        suspended,
-                        span,
-                        argument_runtime,
-                        expected_result.clone(),
-                        application.clone(),
+                        ApplicationCall {
+                            argument: suspended,
+                            expected_argument: expected_argument.clone(),
+                            span,
+                            runtime: argument_runtime,
+                            expected_result: expected_result.clone(),
+                            application: application.clone(),
+                        },
                     );
                 }
                 evaluate_expression(
@@ -1388,11 +1408,14 @@ pub fn evaluate_expression(
                     apply_with_expected(
                         argument_context,
                         function,
-                        argument,
-                        span,
-                        argument_runtime,
-                        expected_result,
-                        application,
+                        ApplicationCall {
+                            argument,
+                            expected_argument,
+                            span,
+                            runtime: argument_runtime,
+                            expected_result,
+                            application,
+                        },
                     )
                 })
             })
@@ -1434,7 +1457,7 @@ pub fn evaluate_expression(
             Vec::new(),
         )
         .and_then(|elements| match elements {
-            Value::Array(elements) => Computation::value(tuple(elements)),
+            Value::Array(elements) => Computation::value(tuple(elements.to_vec())),
             _ => unreachable!("evaluate_many returns its private array accumulator"),
         }),
         Expression::Array { elements, .. } => evaluate_array(
@@ -1445,7 +1468,8 @@ pub fn evaluate_expression(
             ArrayProgress {
                 elements: elements.clone(),
                 index: 0,
-                array: Value::Array(Vec::new()),
+                array: Value::Array(Vec::new().into()),
+                checked_type: checked_representation.clone(),
                 span,
             },
         ),
@@ -1555,7 +1579,19 @@ pub fn evaluate_expression(
             span,
         )),
     };
-    computation.at(origin)
+    computation
+        .and_then(move |value| {
+            if let (Some(trace), Some(type_)) = (
+                representation_trace.as_ref(),
+                checked_representation.as_ref(),
+            ) {
+                trace
+                    .borrow_mut()
+                    .record_checked_aggregate_representation(&value, type_);
+            }
+            Computation::value(value)
+        })
+        .at(origin)
 }
 
 fn evaluate_many(
@@ -1567,7 +1603,7 @@ fn evaluate_many(
     values: Vec<Value>,
 ) -> Computation {
     if values.len() == expressions.len() {
-        return Computation::value(Value::Array(values));
+        return Computation::value(Value::Array(values.into()));
     }
     let index = values.len();
     let expression = expressions[index];
@@ -1789,47 +1825,44 @@ fn evaluate_integer_case(
     arms: Vec<crate::ast::Arm>,
     span: Span,
 ) -> Computation {
-    if arms.len() != 2 {
-        return Computation::error(Diagnostic::new(
-            "BLOT_UNSUPPORTED_LOWERING",
-            "The Rust residual calculus currently lowers a dynamic integer case with one literal and one wildcard.",
-            span,
-        ));
-    }
     let loaded = match module(&context, &module_path) {
         Ok(module) => module,
         Err(error) => return Computation::error(error),
     };
-    let expected = match &loaded.arena.patterns[arms[0].pattern.0 as usize] {
-        Pattern::Int { value, .. } => Value::Int(value.clone()),
-        Pattern::Pin { name, .. } => match lookup(&environment, name) {
-            Some(Value::Int(value)) => Value::Int(value),
+    let mut matches = Vec::new();
+    let mut fallback = None;
+    for arm in arms {
+        match &loaded.arena.patterns[arm.pattern.0 as usize] {
+            Pattern::Int { value, .. } if fallback.is_none() => {
+                matches.push((Value::Int(value.clone()), arm.body));
+            }
+            Pattern::Pin { name, .. } if fallback.is_none() => match lookup(&environment, name) {
+                Some(Value::Int(value)) => matches.push((Value::Int(value), arm.body)),
+                _ => {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_UNSUPPORTED_LOWERING",
+                        "A dynamic pinned integer pattern must name a staged integer.",
+                        span,
+                    ));
+                }
+            },
+            Pattern::Wildcard { .. } if fallback.is_none() => fallback = Some(arm.body),
             _ => {
                 return Computation::error(Diagnostic::new(
                     "BLOT_UNSUPPORTED_LOWERING",
-                    "A dynamic pinned integer pattern must name a staged integer.",
+                    "A dynamic integer case requires literal or staged pinned integer arms followed by one wildcard.",
                     span,
                 ));
             }
-        },
-        _ => {
-            return Computation::error(Diagnostic::new(
-                "BLOT_UNSUPPORTED_LOWERING",
-                "The first dynamic integer arm must be a literal or pinned integer.",
-                span,
-            ));
         }
-    };
-    if !matches!(
-        loaded.arena.patterns[arms[1].pattern.0 as usize],
-        Pattern::Wildcard { .. }
-    ) {
+    }
+    let Some(fallback) = fallback else {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
             "The final dynamic integer arm must be a wildcard.",
             span,
         ));
-    }
+    };
     let Some(trace) = runtime.residual.clone() else {
         return Computation::error(Diagnostic::new(
             "BLOT_RUST_INVARIANT",
@@ -1837,54 +1870,108 @@ fn evaluate_integer_case(
             span,
         ));
     };
-    let condition = match trace.borrow_mut().integer_equal(&target, &expected, span) {
-        Ok(condition) => condition,
+    let switch = match trace.borrow_mut().begin_switch(
+        &target,
+        matches
+            .iter()
+            .map(|(value, _)| {
+                let Value::Int(value) = value else {
+                    unreachable!("dynamic integer matches contain integers")
+                };
+                crate::hir::WireConstant::SignedInteger64(value.to_string())
+            })
+            .collect(),
+        span,
+    ) {
+        Ok(switch) => Rc::new(switch),
         Err(error) => return Computation::error(error),
     };
-    let branches = match trace.borrow_mut().begin_conditional(&condition, span) {
-        Ok(branches) => branches,
-        Err(error) => return Computation::error(error),
+    evaluate_integer_switch_arm(
+        context,
+        module_path,
+        environment,
+        runtime,
+        Rc::new(matches),
+        fallback,
+        0,
+        switch,
+        Vec::new(),
+        span,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_integer_switch_arm(
+    context: Rc<Context>,
+    module_path: Rc<String>,
+    environment: Environment,
+    runtime: Runtime,
+    matches: Rc<Vec<(Value, ExpressionId)>>,
+    fallback: ExpressionId,
+    index: usize,
+    switch: Rc<crate::hir::ResidualSwitch>,
+    outcomes: Vec<(usize, Option<Value>)>,
+    span: Span,
+) -> Computation {
+    let Some(trace) = runtime.residual.clone() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "A runtime integer exists without a residual trace.",
+            span,
+        ));
     };
-    trace.borrow_mut().select_block(branches.consequent);
-    let alternate_context = context.clone();
+    let (block, body) = match matches.get(index) {
+        Some((_, body)) => (switch.arms[index], *body),
+        None => (switch.fallback, fallback),
+    };
+    trace.borrow_mut().select_block(block);
+    let next_context = context.clone();
     let join_context = context.clone();
-    let alternate_module = module_path.clone();
-    let alternate_environment = environment.clone();
-    let alternate_runtime = runtime.clone();
-    let alternate_body = arms[1].body;
+    let next_module = module_path.clone();
+    let next_environment = environment.clone();
+    let next_runtime = runtime.clone();
+    let next_matches = matches.clone();
+    let next_switch = switch.clone();
     evaluate_expression(
         context,
         module_path,
-        arms[0].body,
+        body,
         child_env(Some(environment)),
         runtime,
     )
-    .and_then(move |consequent| {
-        let consequent_end = trace.borrow().current_block();
-        trace.borrow_mut().select_block(branches.alternate);
-        let join_trace = trace.clone();
-        evaluate_expression(
-            alternate_context,
-            alternate_module,
-            alternate_body,
-            child_env(Some(alternate_environment)),
-            alternate_runtime,
-        )
-        .and_then(move |alternate| {
-            let alternate_end = join_trace.borrow().current_block();
-            match join_trace.borrow_mut().join_conditional(
-                &join_context,
-                branches,
-                consequent_end,
-                consequent,
-                alternate_end,
-                alternate,
-                span,
-            ) {
-                Ok(value) => Computation::value(value),
-                Err(error) => Computation::error(error),
+    .map_result(move |result| {
+        let value = match result {
+            Ok(value) => Some(value),
+            Err(error) if error.code == "BLOT_PANIC" => {
+                trace.borrow_mut().trap_current_block(&error.message, span);
+                None
             }
-        })
+            Err(error) => return Computation::error(error),
+        };
+        let end = trace.borrow().current_block();
+        let mut outcomes = outcomes;
+        outcomes.push((end, value));
+        if index < next_matches.len() {
+            return evaluate_integer_switch_arm(
+                next_context,
+                next_module,
+                next_environment,
+                next_runtime,
+                next_matches,
+                fallback,
+                index + 1,
+                next_switch,
+                outcomes,
+                span,
+            );
+        }
+        match trace
+            .borrow_mut()
+            .join_switch(&join_context, (*next_switch).clone(), outcomes, span)
+        {
+            Ok(value) => Computation::value(value),
+            Err(error) => Computation::error(error),
+        }
     })
 }
 
@@ -2000,10 +2087,10 @@ fn evaluate_sum_case(
     arms: Vec<crate::ast::Arm>,
     span: Span,
 ) -> Computation {
-    if cases.is_empty() || cases.len() > 2 {
+    if cases.is_empty() {
         return Computation::error(Diagnostic::new(
-            "BLOT_UNSUPPORTED_LOWERING",
-            "The Rust residual calculus currently lowers sums with one or two cases.",
+            "BLOT_RUST_INVARIANT",
+            "A dynamic sum case has no constructors.",
             span,
         ));
     }
@@ -2027,7 +2114,7 @@ fn evaluate_sum_case(
     let Some(selected) = selected else {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "A dynamic sum case must cover both constructors explicitly.",
+            "A dynamic sum case must cover every constructor explicitly.",
             span,
         ));
     };
@@ -2038,156 +2125,130 @@ fn evaluate_sum_case(
             span,
         ));
     };
-    if cases.len() == 1 {
-        let scope = child_env(Some(environment));
-        let payload = match trace.borrow_mut().sum_payload(&target, 0, span) {
-            Ok(payload) => payload,
-            Err(error) => return Computation::error(error),
-        };
-        let tagged = compiler_tag_value(cases[0].clone(), payload);
-        if !match_pattern(&loaded, selected[0].pattern, &tagged, &scope) {
-            return Computation::error(Diagnostic::new(
-                "BLOT_UNSUPPORTED_LOWERING",
-                "The dynamic sum pattern cannot bind its payload.",
-                span,
-            ));
-        }
-        return evaluate_expression(context, module_path, selected[0].body, scope, runtime);
-    }
-    let condition = match trace.borrow_mut().sum_condition(&target, span) {
-        Ok(condition) => condition,
+    let tag = match trace.borrow_mut().sum_tag(&target, span) {
+        Ok(tag) => tag,
         Err(error) => return Computation::error(error),
     };
-    let branches = match trace.borrow_mut().begin_conditional(&condition, span) {
-        Ok(branches) => branches,
+    let switch = match trace.borrow_mut().begin_switch(
+        &tag,
+        (0..cases.len().saturating_sub(1))
+            .map(|case| crate::hir::WireConstant::SignedInteger32(case as i32))
+            .collect(),
+        span,
+    ) {
+        Ok(switch) => Rc::new(switch),
         Err(error) => return Computation::error(error),
     };
+    evaluate_sum_switch_arm(
+        context,
+        module_path,
+        environment,
+        runtime,
+        target,
+        Rc::new(cases),
+        Rc::new(selected),
+        0,
+        switch,
+        Vec::new(),
+        span,
+    )
+}
 
-    trace.borrow_mut().select_block(branches.consequent);
-    let consequent_scope = child_env(Some(environment.clone()));
-    let consequent_payload = match trace.borrow_mut().sum_payload(&target, 0, span) {
+#[allow(clippy::too_many_arguments)]
+fn evaluate_sum_switch_arm(
+    context: Rc<Context>,
+    module_path: Rc<String>,
+    environment: Environment,
+    runtime: Runtime,
+    target: RuntimeValue,
+    cases: Rc<Vec<String>>,
+    arms: Rc<Vec<crate::ast::Arm>>,
+    index: usize,
+    switch: Rc<crate::hir::ResidualSwitch>,
+    outcomes: Vec<(usize, Option<Value>)>,
+    span: Span,
+) -> Computation {
+    let loaded = match module(&context, &module_path) {
+        Ok(module) => module,
+        Err(error) => return Computation::error(error),
+    };
+    let Some(trace) = runtime.residual.clone() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "A runtime sum exists without a residual trace.",
+            span,
+        ));
+    };
+    let Some(case_name) = cases.get(index).cloned() else {
+        return Computation::error(Diagnostic::new(
+            "BLOT_RUST_INVARIANT",
+            "Dynamic sum dispatch exhausted its checked constructor set.",
+            span,
+        ));
+    };
+    let arm = arms[index].clone();
+    let block = if index + 1 == cases.len() {
+        switch.fallback
+    } else {
+        switch.arms[index]
+    };
+    trace.borrow_mut().select_block(block);
+    let scope = child_env(Some(environment.clone()));
+    let payload = match trace.borrow_mut().sum_payload(&target, index, span) {
         Ok(payload) => payload,
         Err(error) => return Computation::error(error),
     };
-    let consequent_tag = compiler_tag_value(cases[0].clone(), consequent_payload);
-    if !match_pattern(
-        &loaded,
-        selected[0].pattern,
-        &consequent_tag,
-        &consequent_scope,
-    ) {
+    let tagged = compiler_tag_value(case_name, payload);
+    if !match_pattern(&loaded, arm.pattern, &tagged, &scope) {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "The first dynamic sum pattern cannot bind its payload.",
+            "A dynamic sum pattern cannot bind its payload.",
             span,
         ));
     }
 
-    let alternate_context = context.clone();
+    let next_context = context.clone();
     let join_context = context.clone();
-    let alternate_module = module_path.clone();
-    let alternate_runtime = runtime.clone();
-    let alternate_trace = trace.clone();
-    let alternate_loaded = loaded.clone();
-    let alternate_arm = selected[1].clone();
-    let alternate_case = cases[1].clone();
-    let alternate_target = target.clone();
-    evaluate_expression(
-        context,
-        module_path,
-        selected[0].body,
-        consequent_scope,
-        runtime,
-    )
-    .map_result(move |consequent_result| {
-        let consequent = match consequent_result {
+    let next_module = module_path.clone();
+    let next_runtime = runtime.clone();
+    let next_target = target.clone();
+    let next_cases = cases.clone();
+    let next_arms = arms.clone();
+    let next_switch = switch.clone();
+    evaluate_expression(context, module_path, arm.body, scope, runtime).map_result(move |result| {
+        let value = match result {
             Ok(value) => Some(value),
             Err(error) if error.code == "BLOT_PANIC" => {
-                alternate_trace
-                    .borrow_mut()
-                    .trap_current_block(&error.message, span);
+                trace.borrow_mut().trap_current_block(&error.message, span);
                 None
             }
             Err(error) => return Computation::error(error),
         };
-        let consequent_end = alternate_trace.borrow().current_block();
-        alternate_trace
-            .borrow_mut()
-            .select_block(branches.alternate);
-        let alternate_scope = child_env(Some(environment));
-        let alternate_payload =
-            match alternate_trace
-                .borrow_mut()
-                .sum_payload(&alternate_target, 1, span)
-            {
-                Ok(payload) => payload,
-                Err(error) => return Computation::error(error),
-            };
-        let alternate_tag = compiler_tag_value(alternate_case, alternate_payload);
-        if !match_pattern(
-            &alternate_loaded,
-            alternate_arm.pattern,
-            &alternate_tag,
-            &alternate_scope,
-        ) {
-            return Computation::error(Diagnostic::new(
-                "BLOT_UNSUPPORTED_LOWERING",
-                "The second dynamic sum pattern cannot bind its payload.",
+        let end = trace.borrow().current_block();
+        let mut outcomes = outcomes;
+        outcomes.push((end, value));
+        if index + 1 < next_cases.len() {
+            return evaluate_sum_switch_arm(
+                next_context,
+                next_module,
+                environment,
+                next_runtime,
+                next_target,
+                next_cases,
+                next_arms,
+                index + 1,
+                next_switch,
+                outcomes,
                 span,
-            ));
+            );
         }
-        let join_trace = alternate_trace.clone();
-        evaluate_expression(
-            alternate_context,
-            alternate_module,
-            alternate_arm.body,
-            alternate_scope,
-            alternate_runtime,
-        )
-        .map_result(move |alternate_result| {
-            let alternate = match alternate_result {
-                Ok(value) => Some(value),
-                Err(error) if error.code == "BLOT_PANIC" && consequent.is_some() => {
-                    join_trace
-                        .borrow_mut()
-                        .trap_current_block(&error.message, span);
-                    None
-                }
-                Err(error) => return Computation::error(error),
-            };
-            let alternate_end = join_trace.borrow().current_block();
-            match (consequent, alternate) {
-                (Some(consequent), Some(alternate)) => {
-                    match join_trace.borrow_mut().join_conditional(
-                        &join_context,
-                        branches,
-                        consequent_end,
-                        consequent,
-                        alternate_end,
-                        alternate,
-                        span,
-                    ) {
-                        Ok(value) => Computation::value(value),
-                        Err(error) => Computation::error(error),
-                    }
-                }
-                (Some(consequent), None) => {
-                    join_trace
-                        .borrow_mut()
-                        .join_survivor(&branches, consequent_end, span);
-                    Computation::value(consequent)
-                }
-                (None, Some(alternate)) => {
-                    join_trace
-                        .borrow_mut()
-                        .join_survivor(&branches, alternate_end, span);
-                    Computation::value(alternate)
-                }
-                (None, None) => {
-                    unreachable!("a trapped alternate propagates when the consequent trapped")
-                }
-            }
-        })
+        match trace
+            .borrow_mut()
+            .join_switch(&join_context, (*next_switch).clone(), outcomes, span)
+        {
+            Ok(value) => Computation::value(value),
+            Err(error) => Computation::error(error),
+        }
     })
 }
 
@@ -2247,6 +2308,7 @@ fn evaluate_array(
                         array = match trace.borrow_mut().append_array_element(
                             &array,
                             &value,
+                            progress.checked_type.as_ref(),
                             progress.span,
                         ) {
                             Ok(array) => array,
@@ -2264,13 +2326,19 @@ fn evaluate_array(
                         ));
                     };
                     let lowered = if spread {
-                        trace
-                            .borrow_mut()
-                            .append_array_spread(&array, &value, progress.span)
+                        trace.borrow_mut().append_array_spread(
+                            &array,
+                            &value,
+                            progress.checked_type.as_ref(),
+                            progress.span,
+                        )
                     } else {
-                        trace
-                            .borrow_mut()
-                            .append_array_element(&array, &value, progress.span)
+                        trace.borrow_mut().append_array_element(
+                            &array,
+                            &value,
+                            progress.checked_type.as_ref(),
+                            progress.span,
+                        )
                     };
                     match lowered {
                         Ok(array) => array,
@@ -2287,6 +2355,7 @@ fn evaluate_array(
                     elements: progress.elements,
                     index: progress.index + 1,
                     array,
+                    checked_type: progress.checked_type,
                     span: progress.span,
                 },
             )
@@ -2304,8 +2373,50 @@ fn evaluate_shape(
     let Some(member) = progress.members.get(progress.index).cloned() else {
         return Computation::value(Value::Shape(progress.fields));
     };
+    if let ShapeMember::Computed { name, value } = &member {
+        let name = *name;
+        let value = *value;
+        let name_context = context.clone();
+        let name_module = module_path.clone();
+        let name_environment = environment.clone();
+        let name_runtime = runtime.clone();
+        return evaluate_expression(context, module_path, name, environment, runtime.comptime())
+            .and_then(move |name| {
+                let Value::Text(name) = name else {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_DYNAMIC_SHAPE_FIELD",
+                        "A computed record field name must resolve at compile time to Text.",
+                        progress.span,
+                    ));
+                };
+                evaluate_expression(
+                    name_context.clone(),
+                    name_module.clone(),
+                    value,
+                    name_environment.clone(),
+                    name_runtime.clone(),
+                )
+                .and_then(move |value| {
+                    let mut fields = progress.fields;
+                    fields.insert(name, value);
+                    evaluate_shape(
+                        name_context,
+                        name_module,
+                        name_environment,
+                        name_runtime,
+                        ShapeProgress {
+                            members: progress.members,
+                            index: progress.index + 1,
+                            fields,
+                            span: progress.span,
+                        },
+                    )
+                })
+            });
+    }
     let value_id = match member {
         ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => value,
+        ShapeMember::Computed { .. } => unreachable!("computed fields return above"),
     };
     let next_context = context.clone();
     let next_module = module_path.clone();
@@ -2328,6 +2439,7 @@ fn evaluate_shape(
                     };
                     fields.extend(spread);
                 }
+                ShapeMember::Computed { .. } => unreachable!("computed fields return above"),
             }
             evaluate_shape(
                 next_context,
@@ -2605,6 +2717,7 @@ fn evaluate_declarations(
             let binding_phase = binding_runtime.phase;
             let effect_context = context.clone();
             let effect_runtime = binding_runtime.clone();
+            let representation_runtime = binding_runtime.clone();
             evaluate_binding(
                 context,
                 module_path,
@@ -2641,6 +2754,11 @@ fn evaluate_declarations(
                     && let Some(signature) = lookup_signature(&binding_environment, name)
                 {
                     attach_signature(&mut value, &signature);
+                    if let Some(trace) = &representation_runtime.residual {
+                        trace
+                            .borrow_mut()
+                            .record_checked_aggregate_representation(&value, &signature);
+                    }
                 }
                 if !match_pattern(&module, pattern, &value, &binding_environment) {
                     return Computation::error(Diagnostic::new(
@@ -2875,23 +2993,40 @@ pub(crate) fn apply(
     apply_with_expected(
         context,
         function,
-        argument,
-        span,
-        runtime,
-        None,
-        application,
+        ApplicationCall {
+            argument,
+            expected_argument: None,
+            span,
+            runtime,
+            expected_result: None,
+            application,
+        },
     )
+}
+
+#[derive(Clone)]
+struct ApplicationCall {
+    argument: Value,
+    expected_argument: Option<Value>,
+    span: Span,
+    runtime: Runtime,
+    expected_result: Option<Value>,
+    application: ApplicationSite,
 }
 
 fn apply_with_expected(
     context: Rc<Context>,
     function: Value,
-    argument: Value,
-    span: Span,
-    runtime: Runtime,
-    expected_result: Option<Value>,
-    application: ApplicationSite,
+    call: ApplicationCall,
 ) -> Computation {
+    let ApplicationCall {
+        argument,
+        expected_argument,
+        span,
+        runtime,
+        expected_result,
+        application,
+    } = call;
     match function {
         Value::ModuleClosure { module } => {
             let reusable = matches!(argument, Value::Unit)
@@ -2991,10 +3126,12 @@ fn apply_with_expected(
             selector,
             alternatives,
             0,
-            ClosureChoiceCall {
+            ApplicationCall {
                 argument,
+                expected_argument,
                 span,
                 runtime,
+                expected_result,
                 application,
             },
         ),
@@ -3043,6 +3180,7 @@ fn apply_with_expected(
                         reuse: reuse_assertion.is_some(),
                     },
                     &argument,
+                    expected_argument.as_ref(),
                     expected_result.as_ref(),
                     span,
                 );
@@ -3102,6 +3240,7 @@ fn apply_with_expected(
                 match trace.borrow_mut().primitive(
                     "@scratch.with_capacity",
                     &[(**capacity).clone()],
+                    &[],
                     Some(&expected),
                     span,
                 ) {
@@ -3295,49 +3434,39 @@ fn apply_with_expected(
 /// branch projects its alternative's captures out of the payload, then applies
 /// that alternative's body, so the body specializes for the concrete argument
 /// representation this call site supplies. The last alternative needs no test.
-struct ClosureChoiceCall {
-    argument: Value,
-    span: Span,
-    runtime: Runtime,
-    application: ApplicationSite,
-}
-
 fn apply_closure_choice(
     context: Rc<Context>,
     selector: RuntimeValue,
     alternatives: Rc<Vec<ClosureAlternative>>,
     index: usize,
-    call: ClosureChoiceCall,
+    call: ApplicationCall,
 ) -> Computation {
-    let ClosureChoiceCall {
-        argument,
-        span,
-        runtime,
-        application,
-    } = call;
-    let Some(trace) = runtime.residual.clone() else {
+    let Some(trace) = call.runtime.residual.clone() else {
         return Computation::error(Diagnostic::new(
             "BLOT_RUST_INVARIANT",
             "A function choice exists without a residual trace.",
-            span,
+            call.span,
         ));
     };
     let Some(alternative) = alternatives.get(index).cloned() else {
         return Computation::error(Diagnostic::new(
             "BLOT_RUST_INVARIANT",
             "A function choice dispatched outside its alternative table.",
-            span,
+            call.span,
         ));
     };
     let last = index + 1 == alternatives.len();
     let branches = if last {
         None
     } else {
-        let condition = match trace.borrow_mut().choice_condition(&selector, index, span) {
+        let condition = match trace
+            .borrow_mut()
+            .choice_condition(&selector, index, call.span)
+        {
             Ok(condition) => condition,
             Err(error) => return Computation::error(error),
         };
-        match trace.borrow_mut().begin_conditional(&condition, span) {
+        match trace.borrow_mut().begin_conditional(&condition, call.span) {
             Ok(branches) => Some(branches),
             Err(error) => return Computation::error(error),
         }
@@ -3345,23 +3474,24 @@ fn apply_closure_choice(
     if let Some(branches) = &branches {
         trace.borrow_mut().select_block(branches.consequent);
     }
-    let selected =
-        match trace
-            .borrow_mut()
-            .choice_function(&context, &selector, index, &alternative, span)
-        {
-            Ok(selected) => selected,
-            Err(error) => return Computation::error(error),
-        };
+    let selected = match trace.borrow_mut().choice_function(
+        &context,
+        &selector,
+        index,
+        &alternative,
+        call.span,
+    ) {
+        Ok(selected) => selected,
+        Err(error) => return Computation::error(error),
+    };
     let Some(branches) = branches else {
-        return apply(context, selected, argument, span, runtime, application);
+        return apply_with_expected(context, selected, call);
     };
     let alternate_context = context.clone();
     let join_context = context.clone();
-    let alternate_argument = argument.clone();
-    let alternate_runtime = runtime.clone();
-    let alternate_application = application.clone();
-    apply(context, selected, argument, span, runtime, application).and_then(move |consequent| {
+    let alternate_call = call.clone();
+    let span = call.span;
+    apply_with_expected(context, selected, call).and_then(move |consequent| {
         let consequent_end = trace.borrow().current_block();
         trace.borrow_mut().select_block(branches.alternate);
         let join_trace = trace.clone();
@@ -3370,12 +3500,7 @@ fn apply_closure_choice(
             selector,
             alternatives,
             index + 1,
-            ClosureChoiceCall {
-                argument: alternate_argument,
-                span,
-                runtime: alternate_runtime,
-                application: alternate_application,
-            },
+            alternate_call,
         )
         .and_then(move |alternate| {
             let alternate_end = join_trace.borrow().current_block();
@@ -3553,10 +3678,15 @@ fn run_special_or_primitive(
         );
     }
     if let Some(trace) = &runtime.residual {
-        match trace
-            .borrow_mut()
-            .primitive(name, &arguments, expected_result, span)
-        {
+        let checked_arguments =
+            checked_primitive_arguments(&context, &runtime, &application, arguments.len());
+        match trace.borrow_mut().primitive(
+            name,
+            &arguments,
+            &checked_arguments,
+            expected_result,
+            span,
+        ) {
             Ok(Some(value)) => {
                 if name == "@type.attach" {
                     context.register_effect_attachment(&runtime.module, &value);
@@ -3576,6 +3706,45 @@ fn run_special_or_primitive(
         }
         Err(error) => Computation::error(error),
     }
+}
+
+fn checked_primitive_arguments(
+    context: &Context,
+    runtime: &Runtime,
+    application: &ApplicationSite,
+    argument_count: usize,
+) -> Vec<Option<Value>> {
+    if !application.compiler_steps.is_empty() {
+        return vec![None; argument_count];
+    }
+    let ApplicationRoot::Expression {
+        revision,
+        expression,
+    } = &application.root
+    else {
+        return vec![None; argument_count];
+    };
+    let loaded = match context.modules.borrow().get(&revision.module).cloned() {
+        Some(loaded) => loaded,
+        None => return vec![None; argument_count],
+    };
+    let mut current = *expression;
+    let mut types = Vec::new();
+    while types.len() < argument_count {
+        let Some(Expression::Apply { function, .. }) =
+            loaded.module.arena.expressions.get(current.0 as usize)
+        else {
+            break;
+        };
+        let site = ApplicationSite::expression(revision.clone(), current);
+        types.push(runtime.checked_arguments.borrow().get(&site).cloned());
+        current = *function;
+    }
+    types.reverse();
+    if types.len() == argument_count {
+        return types;
+    }
+    vec![None; argument_count]
 }
 
 fn handle(
@@ -4028,10 +4197,15 @@ pub(crate) fn signature_hole_expressions(
             }
             Expression::Shape { members, .. } => {
                 for member in members {
-                    let value = match member {
-                        ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-                    };
-                    collect(module, value, holes);
+                    match member {
+                        ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                            collect(module, *value, holes);
+                        }
+                        ShapeMember::Computed { name, value } => {
+                            collect(module, *name, holes);
+                            collect(module, *value, holes);
+                        }
+                    }
                 }
             }
             Expression::If {
@@ -4301,8 +4475,10 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
                     .map(|(name, value)| Some((name.clone(), value_signature(value)?)))
                     .collect::<Option<OrderedFields>>()?,
             )),
-            Value::Array(elements) => Some(Value::Array(vec![value_signature(elements.first()?)?])),
-            Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()])),
+            Value::Array(elements) => Some(Value::Array(
+                vec![value_signature(elements.first()?)?].into(),
+            )),
+            Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()].into())),
             Value::Tag { name, payload } => Some(Value::Tag {
                 name: name.clone(),
                 payload: payload.as_deref().and_then(value_signature).map(Box::new),
@@ -4493,10 +4669,15 @@ fn collect_free(
         }
         Expression::Shape { members, .. } => {
             for member in members {
-                let value = match member {
-                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => *value,
-                };
-                collect_free(module, value, bound, free);
+                match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                        collect_free(module, *value, bound, free);
+                    }
+                    ShapeMember::Computed { name, value } => {
+                        collect_free(module, *name, bound, free);
+                        collect_free(module, *value, bound, free);
+                    }
+                }
             }
         }
         Expression::If {

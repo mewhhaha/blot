@@ -96,8 +96,17 @@ pub struct ArrayElement {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "tag", rename_all = "lowercase")]
 pub enum ShapeMember {
-    Field { name: String, value: ExpressionId },
-    Spread { value: ExpressionId },
+    Field {
+        name: String,
+        value: ExpressionId,
+    },
+    Computed {
+        name: ExpressionId,
+        value: ExpressionId,
+    },
+    Spread {
+        value: ExpressionId,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -402,6 +411,10 @@ impl Module {
                     for member in members {
                         let value = match member {
                             ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                                *value
+                            }
+                            ShapeMember::Computed { name, value } => {
+                                targets.push(expression_index(*name, &location)?);
                                 *value
                             }
                         };

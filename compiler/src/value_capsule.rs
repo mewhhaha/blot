@@ -990,14 +990,17 @@ fn decode_value(
             module,
             context,
         )?),
-        CapsuleValue::Array(values) => Value::Array(decode_values(
-            values,
-            environments,
-            provenance,
-            module_path,
-            module,
-            context,
-        )?),
+        CapsuleValue::Array(values) => Value::Array(
+            decode_values(
+                values,
+                environments,
+                provenance,
+                module_path,
+                module,
+                context,
+            )?
+            .into(),
+        ),
         CapsuleValue::RegionType(element) => Value::RegionType(Box::new(decode_value(
             element,
             environments,

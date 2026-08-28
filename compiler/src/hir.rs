@@ -12,8 +12,8 @@ use crate::ownership::Produced;
 use crate::protocol::RUNTIME_HIR_SCHEMA;
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type, sealed_type, sealed_type_name};
 use crate::value::{
-    ChoiceSource, ClosureAlternative, EffectOperationOwnership, EffectOwnership, Environment,
-    OrderedFields, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env, lookup,
+    ArrayValues, ChoiceSource, ClosureAlternative, EffectOperationOwnership, EffectOwnership,
+    Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env, lookup,
 };
 
 #[derive(Clone, Serialize)]
@@ -364,7 +364,7 @@ pub(crate) struct RuntimeOperation {
     pub(crate) signature: Option<usize>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub(crate) enum WireConstant {
     Unit,
@@ -378,6 +378,12 @@ pub(crate) enum WireConstant {
     Float64(f64),
     Boolean(bool),
     Text(String),
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct RuntimeSwitchCase {
+    pub(crate) value: WireConstant,
+    pub(crate) target: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -403,6 +409,12 @@ pub(crate) enum RuntimeTerminator {
         alternate: usize,
         #[serde(rename = "alternateArguments")]
         alternate_arguments: Vec<usize>,
+        span: RuntimeSpan,
+    },
+    Switch {
+        selector: usize,
+        cases: Vec<RuntimeSwitchCase>,
+        fallback: usize,
         span: RuntimeSpan,
     },
     Return {
@@ -571,6 +583,7 @@ pub(crate) struct ResidualTrace {
     recursive_result_ids: Vec<RecursiveResultIdentity>,
     next_function: usize,
     function_frames: Vec<ResidualFunctionFrame>,
+    checked_aggregate_representations: CheckedAggregateRepresentations,
 }
 
 struct ResidualFunctionIdentity {
@@ -606,6 +619,73 @@ enum RepresentationShape {
 struct RepresentationFacts {
     exact: Vec<(Value, Option<usize>)>,
     shapes: HashMap<RepresentationShape, Option<usize>>,
+}
+
+#[derive(Default)]
+struct CheckedAggregateRepresentations {
+    arrays: Vec<(ArrayValues, Option<usize>)>,
+    shapes: Vec<(OrderedFields, Option<usize>)>,
+    structural: HashMap<RepresentationShape, Option<usize>>,
+}
+
+impl CheckedAggregateRepresentations {
+    fn record(&mut self, value: &Value, type_id: usize) {
+        if let Some(shape) = representation_shape(value) {
+            self.structural
+                .entry(shape)
+                .and_modify(|known| {
+                    if known.is_some_and(|known| known != type_id) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(type_id));
+        }
+        let known = match value {
+            Value::Array(values) => self
+                .arrays
+                .iter_mut()
+                .find(|(candidate, _)| candidate.same_identity(values))
+                .map(|(_, known)| known),
+            Value::Shape(fields) => self
+                .shapes
+                .iter_mut()
+                .find(|(candidate, _)| candidate.same_identity(fields))
+                .map(|(_, known)| known),
+            _ => return,
+        };
+        if let Some(known) = known {
+            if known.is_some_and(|known| known != type_id) {
+                *known = None;
+            }
+            return;
+        }
+        match value {
+            Value::Array(values) => self.arrays.push((values.clone(), Some(type_id))),
+            Value::Shape(fields) => self.shapes.push((fields.clone(), Some(type_id))),
+            _ => unreachable!("checked aggregates are arrays or shapes"),
+        }
+    }
+
+    fn get(&self, value: &Value) -> Option<usize> {
+        let exact = match value {
+            Value::Array(values) => self
+                .arrays
+                .iter()
+                .find(|(candidate, _)| candidate.same_identity(values))
+                .map(|(_, known)| *known),
+            Value::Shape(fields) => self
+                .shapes
+                .iter()
+                .find(|(candidate, _)| candidate.same_identity(fields))
+                .map(|(_, known)| *known),
+            _ => return None,
+        };
+        if let Some(known) = exact {
+            return known;
+        }
+        let shape = representation_shape(value)?;
+        self.structural.get(&shape).copied().flatten()
+    }
 }
 
 impl RepresentationFacts {
@@ -718,6 +798,13 @@ pub(crate) struct ResidualBranches {
     pub(crate) join: usize,
 }
 
+#[derive(Clone)]
+pub(crate) struct ResidualSwitch {
+    pub(crate) arms: Vec<usize>,
+    pub(crate) fallback: usize,
+    join: usize,
+}
+
 impl ResidualTrace {
     pub(crate) fn begin_reuse_scope(&self) -> ResidualReuseScope {
         ResidualReuseScope {
@@ -775,6 +862,7 @@ impl ResidualTrace {
             recursive_result_ids: Vec::new(),
             next_function: 1,
             function_frames: Vec::new(),
+            checked_aggregate_representations: CheckedAggregateRepresentations::default(),
         };
         trace.insert_type("unit", RuntimeType::Unit);
         trace.insert_type("boolean", RuntimeType::Boolean);
@@ -864,6 +952,16 @@ impl ResidualTrace {
             },
             span,
         )
+    }
+
+    pub(crate) fn record_checked_aggregate_representation(&mut self, value: &Value, type_: &Value) {
+        if !matches!(value, Value::Array(_) | Value::Shape(_)) {
+            return;
+        }
+        if let Ok(type_id) = self.type_from_type_value(type_) {
+            self.checked_aggregate_representations
+                .record(value, type_id);
+        }
     }
 
     pub(crate) fn export_parameter(
@@ -980,6 +1078,7 @@ impl ResidualTrace {
         &mut self,
         name: &str,
         arguments: &[Value],
+        checked_arguments: &[Option<Value>],
         expected_result: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Option<Value>, Diagnostic> {
@@ -1043,8 +1142,6 @@ impl ResidualTrace {
                 | "@type.open"
                 | "@type.attach"
                 | "@shape.get"
-                | "@shape.set"
-                | "@shape.update"
                 | "@shape.remove"
                 | "@shape.names"
                 | "@shape.has"
@@ -1515,7 +1612,11 @@ impl ResidualTrace {
                 self.array_split(store, index, span)?
             }
             "@array.len" => {
-                let store = self.lower_value(&arguments[0], span)?;
+                let store = self.lower_primitive_argument(
+                    &arguments[0],
+                    checked_arguments.first().and_then(Option::as_ref),
+                    span,
+                )?;
                 if !matches!(self.types[store.type_id], RuntimeType::Store { .. }) {
                     return Err(hir_error(
                         "Dynamic array length received a non-array value.",
@@ -1526,7 +1627,11 @@ impl ResidualTrace {
             }
             "@array.copy" => {
                 let original = &arguments[0];
-                let lowered = self.lower_value(original, span)?;
+                let lowered = self.lower_primitive_argument(
+                    original,
+                    checked_arguments.first().and_then(Option::as_ref),
+                    span,
+                )?;
                 if !matches!(self.types[lowered.type_id], RuntimeType::Store { .. }) {
                     return Err(hir_error("Array copy lowered a non-Store value."));
                 }
@@ -1541,7 +1646,21 @@ impl ResidualTrace {
                 return self.symbolic_value(copied, span).map(Some);
             }
             "@array.get" => {
-                let store = self.lower_value(&arguments[0], span)?;
+                let store = if let Some(expected_element) = expected_result
+                    && let Ok(element_type) = self.type_from_type_value(expected_element)
+                {
+                    let store_type = self.insert_type(
+                        &format!("store:{element_type}"),
+                        RuntimeType::Store { element_type },
+                    );
+                    self.lower_value_as(&arguments[0], store_type, span)?
+                } else {
+                    self.lower_primitive_argument(
+                        &arguments[0],
+                        checked_arguments.first().and_then(Option::as_ref),
+                        span,
+                    )?
+                };
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error(
                         "Dynamic array access received a non-array value.",
@@ -1569,7 +1688,11 @@ impl ResidualTrace {
                 } else {
                     "persistent"
                 };
-                let store = self.lower_value(&arguments[0], span)?;
+                let store = self.lower_primitive_argument(
+                    &arguments[0],
+                    checked_arguments.first().and_then(Option::as_ref),
+                    span,
+                )?;
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error(
                         "Dynamic array update received a non-array value.",
@@ -1601,7 +1724,11 @@ impl ResidualTrace {
                 } else {
                     "persistent"
                 };
-                let store = self.lower_value(&arguments[0], span)?;
+                let store = self.lower_primitive_argument(
+                    &arguments[0],
+                    checked_arguments.first().and_then(Option::as_ref),
+                    span,
+                )?;
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error("Dynamic array push received a non-array value."));
                 };
@@ -2049,27 +2176,6 @@ impl ResidualTrace {
         }
     }
 
-    pub(crate) fn integer_equal(
-        &mut self,
-        target: &RuntimeValue,
-        expected: &Value,
-        span: crate::ast::Span,
-    ) -> Result<RuntimeValue, Diagnostic> {
-        if !self.is_integer(target) {
-            return Err(hir_error(
-                "A dynamic integer case has a non-integer target.",
-            ));
-        }
-        let expected = self.lower_as(Some(expected), "signed-integer-64", span)?;
-        Ok(self.operation(
-            "scalar",
-            1,
-            vec![target.id, expected.id],
-            span,
-            Some("equal"),
-        ))
-    }
-
     pub(crate) fn begin_conditional(
         &mut self,
         condition: &RuntimeValue,
@@ -2102,6 +2208,308 @@ impl ResidualTrace {
             alternate,
             join,
         })
+    }
+
+    pub(crate) fn begin_switch(
+        &mut self,
+        selector: &RuntimeValue,
+        values: Vec<WireConstant>,
+        span: crate::ast::Span,
+    ) -> Result<ResidualSwitch, Diagnostic> {
+        let selector_is_integer = matches!(
+            self.types[selector.type_id],
+            RuntimeType::Integer32 | RuntimeType::SignedInteger64
+        );
+        if !selector_is_integer {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "A residual switch selector is not an integer.",
+                span,
+            ));
+        }
+        let values_match = values.iter().all(|value| {
+            matches!(
+                (&self.types[selector.type_id], value),
+                (RuntimeType::Integer32, WireConstant::SignedInteger32(_))
+                    | (
+                        RuntimeType::SignedInteger64,
+                        WireConstant::SignedInteger64(_)
+                    )
+            )
+        });
+        if !values_match {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "A residual switch case does not match its selector representation.",
+                span,
+            ));
+        }
+        if values
+            .iter()
+            .enumerate()
+            .any(|(index, value)| values[..index].contains(value))
+        {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "A residual switch repeats a case value.",
+                span,
+            ));
+        }
+        let source = self.current_block;
+        let arms = values.iter().map(|_| self.block()).collect::<Vec<_>>();
+        let fallback = self.block();
+        let join = self.block();
+        let cases = values
+            .into_iter()
+            .zip(&arms)
+            .map(|(value, target)| RuntimeSwitchCase {
+                value,
+                target: *target,
+            })
+            .collect();
+        self.blocks[source].terminator = Some(RuntimeTerminator::Switch {
+            selector: selector.id,
+            cases,
+            fallback,
+            span: self.span(span),
+        });
+        Ok(ResidualSwitch {
+            arms,
+            fallback,
+            join,
+        })
+    }
+
+    pub(crate) fn join_switch(
+        &mut self,
+        _context: &Rc<Context>,
+        switch: ResidualSwitch,
+        branches: Vec<(usize, Option<Value>)>,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let mut survivors = branches
+            .into_iter()
+            .filter_map(|(end, value)| value.map(|value| (end, value)))
+            .collect::<Vec<_>>();
+        let Some((_, first)) = survivors.first() else {
+            return Err(Diagnostic::new(
+                "BLOT_PANIC",
+                "Every residual switch arm traps.",
+                span,
+            ));
+        };
+        if survivors
+            .iter()
+            .all(|(_, value)| crate::value::equal(first, value))
+        {
+            for (end, _) in &survivors {
+                self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
+                    target: switch.join,
+                    arguments: Vec::new(),
+                    span: self.span(span),
+                });
+            }
+            self.current_block = switch.join;
+            return Ok(first.clone());
+        }
+        if survivors.iter().any(|(_, value)| is_function_value(value)) {
+            return Err(Diagnostic::new(
+                "BLOT_UNSUPPORTED_LOWERING",
+                "A multi-way runtime case returning functions has no settled finite choice representation.",
+                span,
+            ));
+        }
+        let boolean_tags = survivors.iter().all(|(_, value)| {
+            matches!(value, Value::Tag { name, payload: None } if name == "True" || name == "False")
+        });
+        let all_tags = survivors
+            .iter()
+            .all(|(_, value)| matches!(value, Value::Tag { .. }));
+        let mut required_cases = BTreeSet::new();
+        let mut required_payloads = BTreeMap::new();
+        let mut candidate_sums = Vec::new();
+        for (_, value) in &survivors {
+            match value {
+                Value::Tag { name, payload } => {
+                    required_cases.insert(name.clone());
+                    let payload_type =
+                        self.value_type(&compiler_tag_payload(payload.as_deref()))?;
+                    if let Some(known) = required_payloads.get(name) {
+                        if *known != payload_type {
+                            return Err(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                format!(
+                                    "Constructor `#{name}` reached one multi-way join with payload representations {known} and {payload_type}."
+                                ),
+                                span,
+                            ));
+                        }
+                    } else {
+                        required_payloads.insert(name.clone(), payload_type);
+                    }
+                }
+                Value::Runtime(runtime) => {
+                    let Some((_, cases)) = self
+                        .sum_representation(runtime.type_id)
+                        .map(|(type_id, cases)| (type_id, cases.to_vec()))
+                    else {
+                        continue;
+                    };
+                    required_cases.extend(cases.iter().map(|case_| case_.name.clone()));
+                    for case_ in cases {
+                        if let Some(known) = required_payloads.get(&case_.name) {
+                            if *known != case_.payload_type {
+                                return Err(Diagnostic::new(
+                                    "BLOT_RUST_INVARIANT",
+                                    format!(
+                                        "Constructor `#{}` reached one multi-way join with payload representations {known} and {}.",
+                                        case_.name, case_.payload_type
+                                    ),
+                                    span,
+                                ));
+                            }
+                        } else {
+                            required_payloads.insert(case_.name, case_.payload_type);
+                        }
+                    }
+                    if !candidate_sums.contains(&runtime.type_id) {
+                        candidate_sums.push(runtime.type_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let expected_sum = candidate_sums.iter().copied().find(|type_id| {
+            self.sum_representation(*type_id).is_some_and(|(_, cases)| {
+                required_cases
+                    .iter()
+                    .all(|required| cases.iter().any(|case_| case_.name == *required))
+            })
+        });
+        let expected_sum = match (expected_sum, candidate_sums.is_empty()) {
+            (Some(type_id), _) => Some(type_id),
+            (None, true) => None,
+            (None, false) => {
+                let cases = required_payloads.keys().cloned().collect::<Vec<_>>();
+                let payloads = required_payloads.values().copied().collect::<Vec<_>>();
+                Some(self.sum_type(&cases, &payloads))
+            }
+        };
+        let mut lowered = Vec::new();
+        if let Some(expected_sum) = expected_sum {
+            for (end, value) in survivors.drain(..) {
+                self.current_block = end;
+                let value = match value {
+                    Value::Tag { .. } => self.lower_sum_member(&value, expected_sum, span)?,
+                    Value::Runtime(runtime) => {
+                        if runtime.type_id == expected_sum {
+                            runtime
+                        } else {
+                            let (_, cases) = self
+                                .sum_representation(runtime.type_id)
+                                .map(|(type_id, cases)| (type_id, cases.to_vec()))
+                                .ok_or_else(|| {
+                                    hir_error("A sum join received a non-sum runtime value.")
+                                })?;
+                            let [case_] = cases.as_slice() else {
+                                return Err(Diagnostic::new(
+                                    "BLOT_UNSUPPORTED_LOWERING",
+                                    "A multi-way case cannot widen a dynamic sum with more than one possible constructor.",
+                                    span,
+                                ));
+                            };
+                            let payload = self.sum_payload(&runtime, 0, span)?;
+                            let payload = if matches!(payload, Value::Unit) {
+                                None
+                            } else {
+                                Some(Box::new(payload))
+                            };
+                            self.lower_sum_member(
+                                &Value::Tag {
+                                    name: case_.name.clone(),
+                                    payload,
+                                },
+                                expected_sum,
+                                span,
+                            )?
+                        }
+                    }
+                    value => self.lower_value_as(&value, expected_sum, span)?,
+                };
+                lowered.push((end, value));
+            }
+        } else if all_tags && !boolean_tags {
+            let mut cases = Vec::new();
+            let mut payload_types = Vec::new();
+            for (_, value) in &survivors {
+                let Value::Tag { name, payload } = value else {
+                    unreachable!("all switch results are constructors")
+                };
+                if cases.contains(name) {
+                    continue;
+                }
+                cases.push(name.clone());
+                payload_types.push(self.value_type(&compiler_tag_payload(payload.as_deref()))?);
+            }
+            let sum_type = self.sum_type(&cases, &payload_types);
+            for (end, value) in survivors.drain(..) {
+                self.current_block = end;
+                lowered.push((end, self.lower_sum_member(&value, sum_type, span)?));
+            }
+        } else {
+            for (end, value) in survivors.drain(..) {
+                self.current_block = end;
+                lowered.push((end, self.lower_value(&value, span)?));
+            }
+        }
+        let expected_type = lowered[0].1.type_id;
+        if let Some((_, incompatible)) = lowered
+            .iter()
+            .find(|(_, value)| value.type_id != expected_type)
+        {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                format!(
+                    "A checked multi-way case produced incompatible runtime representations {} and {}.",
+                    serde_json::to_string(&self.types[expected_type])
+                        .unwrap_or_else(|_| format!("type {expected_type}")),
+                    serde_json::to_string(&self.types[incompatible.type_id])
+                        .unwrap_or_else(|_| format!("type {}", incompatible.type_id))
+                ),
+                span,
+            ));
+        }
+        let mut meaning = lowered[0].1.meaning.clone();
+        for (_, value) in &lowered[1..] {
+            meaning = merge_meaning(&meaning, &value.meaning);
+        }
+        for (end, value) in &lowered {
+            self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
+                target: switch.join,
+                arguments: vec![value.id],
+                span: self.span(span),
+            });
+        }
+        let joined = self.next_value();
+        let ownership = self.ownership(expected_type);
+        let runtime_span = self.span(span);
+        self.blocks[switch.join]
+            .parameters
+            .push(RuntimeBlockParameter {
+                value: joined,
+                type_id: expected_type,
+                ownership,
+                span: runtime_span,
+            });
+        self.current_block = switch.join;
+        self.symbolic_value(
+            RuntimeValue {
+                id: joined,
+                type_id: expected_type,
+                meaning,
+            },
+            span,
+        )
     }
 
     pub(crate) fn select_block(&mut self, block: usize) {
@@ -2166,6 +2574,13 @@ impl ResidualTrace {
                     alternate,
                     ..
                 } => vec![*consequent, *alternate],
+                RuntimeTerminator::Switch {
+                    cases, fallback, ..
+                } => cases
+                    .iter()
+                    .map(|case| case.target)
+                    .chain(std::iter::once(*fallback))
+                    .collect(),
                 RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
             };
             if successors.contains(&target) {
@@ -2832,29 +3247,20 @@ impl ResidualTrace {
         result
     }
 
-    pub(crate) fn sum_condition(
+    pub(crate) fn sum_tag(
         &mut self,
         target: &RuntimeValue,
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
-        let RuntimeMeaning::Sum { cases } = &target.meaning else {
+        let RuntimeMeaning::Sum { .. } = &target.meaning else {
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 "A dynamic sum case lost its constructor set.",
                 span,
             ));
         };
-        if cases.len() != 2 {
-            return Err(Diagnostic::new(
-                "BLOT_UNSUPPORTED_LOWERING",
-                "The Rust residual calculus currently lowers binary sums.",
-                span,
-            ));
-        }
         let sum = self.load_indirect(target, span);
-        let tag = self.operation("sum.tag", 2, vec![sum.id], span, None);
-        let first = self.constant(WireConstant::SignedInteger32(0), 2, span);
-        Ok(self.operation("scalar", 1, vec![tag.id, first.id], span, Some("equal")))
+        Ok(self.operation("sum.tag", 2, vec![sum.id], span, None))
     }
 
     pub(crate) fn sum_payload(
@@ -2914,6 +3320,7 @@ impl ResidualTrace {
         &mut self,
         closure: ResidualClosure<'_>,
         argument: &Value,
+        checked_argument_type: Option<&Value>,
         expected_result: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<ResidualFunctionCall, Diagnostic> {
@@ -2980,6 +3387,14 @@ impl ResidualTrace {
         };
         let mut substitutions = HashMap::new();
         let mut representation_facts = RepresentationFacts::default();
+        if let Some(checked_argument_type) = checked_argument_type {
+            self.record_checked_runtime_substitutions(
+                domain,
+                checked_argument_type,
+                &mut substitutions,
+                &mut representation_facts,
+            )?;
+        }
         self.record_runtime_substitutions(
             domain,
             argument,
@@ -3667,6 +4082,10 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         match (value, type_) {
+            (Value::Tag { .. }, Value::Union(_)) => {
+                let expected_type = self.type_from_type_value(type_)?;
+                self.lower_sum_member(value, expected_type, span)
+            }
             (Value::Array(elements), Value::Array(element_types)) => {
                 let element_type = element_types.first().ok_or_else(|| {
                     hir_error("A residual array signature omitted its element type.")
@@ -3725,21 +4144,40 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         match (value, type_) {
+            (_, Value::TypeVariable(variable)) => {
+                let expected_type = substitutions.get(variable).copied().ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        format!(
+                            "Residual argument type variable 't{variable} has no call-site representation."
+                        ),
+                        span,
+                    )
+                })?;
+                self.lower_value_as(value, expected_type, span)
+            }
             (Value::Shape(fields), Value::Shape(field_types)) => {
-                let mut runtime_fields = Vec::new();
-                let mut operands = Vec::new();
+                let mut lowered_fields = Vec::new();
                 for (name, value) in fields {
                     let field_type = field_types.get(name).ok_or_else(|| {
                         hir_error("A residual signature omitted an argument field.")
                     })?;
                     let lowered =
                         self.lower_residual_argument(value, field_type, substitutions, span)?;
-                    runtime_fields.push(RuntimeField {
+                    lowered_fields.push((name.clone(), lowered));
+                }
+                lowered_fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+                let runtime_fields = lowered_fields
+                    .iter()
+                    .map(|(name, lowered)| RuntimeField {
                         name: name.clone(),
                         type_id: lowered.type_id,
-                    });
-                    operands.push(lowered.id);
-                }
+                    })
+                    .collect();
+                let operands = lowered_fields
+                    .into_iter()
+                    .map(|(_, lowered)| lowered.id)
+                    .collect();
                 let type_id = self.insert_product_type(runtime_fields);
                 Ok(self.operation("product.make", type_id, operands, span, None))
             }
@@ -3857,6 +4295,67 @@ impl ResidualTrace {
                 ))
             }
             _ => self.lower_typed_value(value, type_, span),
+        }
+    }
+
+    fn lower_value_as(
+        &mut self,
+        value: &Value,
+        expected_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        if matches!(value, Value::Tag { .. }) && self.sum_representation(expected_type).is_some() {
+            return self.lower_sum_member(value, expected_type, span);
+        }
+        match (value, self.types[expected_type].clone()) {
+            (Value::Shape(fields), RuntimeType::Product { fields: layout, .. }) => {
+                let mut operands = Vec::new();
+                for field in layout {
+                    let value = fields.get(&field.name).ok_or_else(|| {
+                        Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            format!(
+                                "A residual argument omitted the checked field `{}`.",
+                                field.name
+                            ),
+                            span,
+                        )
+                    })?;
+                    operands.push(self.lower_value_as(value, field.type_id, span)?.id);
+                }
+                Ok(self.operation("product.make", expected_type, operands, span, None))
+            }
+            (Value::Array(elements), RuntimeType::Store { element_type }) => {
+                let mut store =
+                    self.array_operation("store.empty", expected_type, Vec::new(), span, None);
+                store.meaning = RuntimeMeaning::ReusableStore;
+                for element in elements {
+                    let element = self.lower_value_as(element, element_type, span)?;
+                    store = self.array_operation(
+                        "store.grow",
+                        expected_type,
+                        vec![store.id, element.id],
+                        span,
+                        Some("owned-reuse"),
+                    );
+                    store.meaning = RuntimeMeaning::ReusableStore;
+                }
+                Ok(store)
+            }
+            _ => {
+                let lowered = self.lower_value(value, span)?;
+                if lowered.type_id != expected_type {
+                    return Err(Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        format!(
+                            "A residual argument has runtime type {}, but checking requires runtime type {}.",
+                            lowered.type_id, expected_type
+                        ),
+                        span,
+                    ));
+                }
+                Ok(lowered)
+            }
         }
     }
 
@@ -4047,6 +4546,9 @@ impl ResidualTrace {
                 Ok(tagged)
             }
             Value::Shape(fields) => {
+                if let Some(expected_type) = self.checked_aggregate_representations.get(value) {
+                    return self.lower_value_as(value, expected_type, span);
+                }
                 let type_id = self.product_type(fields)?;
                 let mut operands = Vec::new();
                 let RuntimeType::Product {
@@ -4065,14 +4567,28 @@ impl ResidualTrace {
                 Ok(self.operation("product.make", type_id, operands, span, None))
             }
             Value::Array(elements) => {
-                let first = elements.first().ok_or_else(|| {
-                    hir_error("An untyped empty residual array has no element representation.")
-                })?;
-                let element_type = self.value_type(first)?;
-                let store_type = self.insert_type(
-                    &format!("store:{element_type}"),
-                    RuntimeType::Store { element_type },
-                );
+                let (store_type, element_type) = if let Some(store_type) =
+                    self.checked_aggregate_representations.get(value)
+                {
+                    let RuntimeType::Store { element_type } = self.types[store_type] else {
+                        return Err(Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            "A checked array value has a non-Store runtime representation.",
+                            span,
+                        ));
+                    };
+                    (store_type, element_type)
+                } else {
+                    let first = elements.first().ok_or_else(|| {
+                        hir_error("An untyped empty residual array has no element representation.")
+                    })?;
+                    let element_type = self.value_type(first)?;
+                    let store_type = self.insert_type(
+                        &format!("store:{element_type}"),
+                        RuntimeType::Store { element_type },
+                    );
+                    (store_type, element_type)
+                };
                 let mut store =
                     self.array_operation("store.empty", store_type, Vec::new(), span, None);
                 store.meaning = RuntimeMeaning::ReusableStore;
@@ -4209,46 +4725,95 @@ impl ResidualTrace {
         expected_type: usize,
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
-        if matches!(value, Value::Tag { .. }) && self.sum_representation(expected_type).is_some() {
-            return self.lower_sum_member(value, expected_type, span);
+        self.lower_value_as(value, expected_type, span)
+    }
+
+    fn lower_primitive_argument(
+        &mut self,
+        value: &Value,
+        checked_type: Option<&Value>,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        let Some(checked_type) = checked_type else {
+            return self.lower_value(value, span);
+        };
+        if !has_unresolved_representation(checked_type, &HashMap::new()) {
+            let expected_type = self.type_from_type_value(checked_type)?;
+            return self.lower_value_as(value, expected_type, span);
         }
-        let lowered = self.lower_value(value, span)?;
-        if lowered.type_id != expected_type {
-            return Err(hir_error(&format!(
-                "Array element {} has runtime type {}, but its Store expects runtime type {}.",
-                crate::value::show(value),
-                lowered.type_id,
-                expected_type,
-            )));
+        if let Some(expected_type) = self.checked_aggregate_representations.get(value) {
+            return self.lower_value_as(value, expected_type, span);
         }
-        Ok(lowered)
+        self.lower_value(value, span)
     }
 
     pub(crate) fn append_array_element(
         &mut self,
         array: &Value,
         element: &Value,
+        checked_array_type: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
-        let store = self.lower_value(array, span)?;
-        let RuntimeType::Store { element_type } = self.types[store.type_id] else {
-            return Err(Diagnostic::new(
-                "BLOT_RUST_INVARIANT",
-                "A residual array element was appended to a non-Store value.",
-                span,
-            ));
+        let (store, element) = match array {
+            Value::Array(elements) => {
+                let checked_store_type = match checked_array_type {
+                    Some(type_) if !has_unresolved_representation(type_, &HashMap::new()) => {
+                        Some(self.type_from_type_value(type_)?)
+                    }
+                    _ => None,
+                };
+                let (store_type, element) = match checked_store_type {
+                    Some(store_type) => {
+                        let RuntimeType::Store { element_type } = self.types[store_type] else {
+                            return Err(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                "A checked residual array has a non-Store representation.",
+                                span,
+                            ));
+                        };
+                        (
+                            store_type,
+                            self.lower_store_element(element, element_type, span)?,
+                        )
+                    }
+                    None => {
+                        let element = self.lower_value(element, span)?;
+                        let store_type = self.insert_type(
+                            &format!("store:{}", element.type_id),
+                            RuntimeType::Store {
+                                element_type: element.type_id,
+                            },
+                        );
+                        (store_type, element)
+                    }
+                };
+                let mut store =
+                    self.array_operation("store.empty", store_type, Vec::new(), span, None);
+                for prefix in elements {
+                    let prefix = self.lower_store_element(prefix, element.type_id, span)?;
+                    store = self.array_operation(
+                        "store.grow",
+                        store_type,
+                        vec![store.id, prefix.id],
+                        span,
+                        Some("persistent"),
+                    );
+                }
+                (store, element)
+            }
+            _ => {
+                let store = self.lower_value(array, span)?;
+                let RuntimeType::Store { element_type } = self.types[store.type_id] else {
+                    return Err(Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        "A residual array element was appended to a non-Store value.",
+                        span,
+                    ));
+                };
+                let element = self.lower_store_element(element, element_type, span)?;
+                (store, element)
+            }
         };
-        let element = self.lower_value(element, span)?;
-        if element.type_id != element_type {
-            return Err(Diagnostic::new(
-                "BLOT_RUST_INVARIANT",
-                format!(
-                    "A typechecked residual array mixed element representations {} and {}.",
-                    element_type, element.type_id
-                ),
-                span,
-            ));
-        }
         let store = self.array_operation(
             "store.grow",
             store.type_id,
@@ -4263,6 +4828,7 @@ impl ResidualTrace {
         &mut self,
         array: &Value,
         spread: &Value,
+        checked_array_type: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
         let source = self.lower_value(spread, span)?;
@@ -4273,22 +4839,27 @@ impl ResidualTrace {
                 span,
             ));
         };
+        if let Some(checked_array_type) = checked_array_type
+            && !has_unresolved_representation(checked_array_type, &HashMap::new())
+        {
+            let expected_store = self.type_from_type_value(checked_array_type)?;
+            if source.type_id != expected_store {
+                return Err(Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    format!(
+                        "A checked residual array spread has Store representation {}, but checking requires {}.",
+                        source.type_id, expected_store
+                    ),
+                    span,
+                ));
+            }
+        }
         let mut output = match array {
             Value::Array(elements) => {
                 let mut output =
                     self.array_operation("store.empty", source.type_id, Vec::new(), span, None);
                 for element in elements {
-                    let lowered = self.lower_value(element, span)?;
-                    if lowered.type_id != element_type {
-                        return Err(Diagnostic::new(
-                            "BLOT_RUST_INVARIANT",
-                            format!(
-                                "A typechecked residual array prefix mixed element representations {} and {}.",
-                                element_type, lowered.type_id
-                            ),
-                            span,
-                        ));
-                    }
+                    let lowered = self.lower_store_element(element, element_type, span)?;
                     output = self.array_operation(
                         "store.grow",
                         source.type_id,
@@ -4345,7 +4916,7 @@ impl ResidualTrace {
                 ))
             })?;
         let payload = compiler_tag_payload(payload.as_deref());
-        let lowered = self.lower_value(&payload, span)?;
+        let lowered = self.lower_value_as(&payload, cases[case].payload_type, span)?;
         if lowered.type_id != cases[case].payload_type {
             return Err(hir_error(&format!(
                 "Constructor `#{name}` has runtime payload type {}, but its inferred sum expects {}.",
@@ -4364,6 +4935,9 @@ impl ResidualTrace {
     }
 
     fn value_type(&mut self, value: &Value) -> Result<usize, Diagnostic> {
+        if let Some(type_id) = self.checked_aggregate_representations.get(value) {
+            return Ok(type_id);
+        }
         match value {
             Value::Runtime(value) => Ok(value.type_id),
             Value::Unit => Ok(0),
@@ -4586,8 +5160,11 @@ impl ResidualTrace {
             }
             Value::Extended { inner, .. } => self.type_from_type_value(inner),
             _ => Err(hir_error(&format!(
-                "{} is outside the Rust residual type calculus.",
-                crate::value::show(value)
+                "{} is outside the Rust residual type calculus while lowering {}.",
+                crate::value::show(value),
+                self.active_primitive
+                    .as_deref()
+                    .unwrap_or("a runtime value")
             ))),
         }
     }
@@ -4607,7 +5184,9 @@ impl ResidualTrace {
                 if matches!(actual, Value::Array(elements) if elements.is_empty()) {
                     return Ok(());
                 }
-                let type_id = self.value_type(actual)?;
+                let Ok(type_id) = self.value_type(actual) else {
+                    return Ok(());
+                };
                 if let Some(previous) = substitutions.insert(*variable, type_id)
                     && previous != type_id
                 {
@@ -4668,6 +5247,95 @@ impl ResidualTrace {
             | Value::Forall { body: inner, .. } => {
                 self.record_runtime_substitutions(
                     inner,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn record_checked_runtime_substitutions(
+        &mut self,
+        expected: &Value,
+        checked_actual: &Value,
+        substitutions: &mut HashMap<u32, usize>,
+        representation_facts: &mut RepresentationFacts,
+    ) -> Result<(), Diagnostic> {
+        if let Ok(type_id) = self.type_from_type_value(checked_actual) {
+            representation_facts.record(expected, type_id);
+        }
+        match (expected, checked_actual) {
+            (Value::TypeVariable(variable), checked_actual) => {
+                let type_id = self.type_from_type_value(checked_actual)?;
+                if let Some(previous) = substitutions.insert(*variable, type_id)
+                    && previous != type_id
+                {
+                    return Err(hir_error(
+                        "A checked residual type variable has incompatible call-site representations.",
+                    ));
+                }
+            }
+            (Value::Shape(expected_fields), Value::Shape(actual_fields)) => {
+                for (name, expected_field) in expected_fields {
+                    if let Some(actual_field) = actual_fields.get(name) {
+                        self.record_checked_runtime_substitutions(
+                            expected_field,
+                            actual_field,
+                            substitutions,
+                            representation_facts,
+                        )?;
+                    }
+                }
+            }
+            (Value::Array(expected), Value::Array(actual)) => {
+                let expected = expected
+                    .first()
+                    .ok_or_else(|| hir_error("A residual Array type omitted its element type."))?;
+                let actual = actual.first().ok_or_else(|| {
+                    hir_error("A checked residual Array type omitted its element type.")
+                })?;
+                self.record_checked_runtime_substitutions(
+                    expected,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            (Value::ScratchType(expected), Value::ScratchType(actual))
+            | (Value::RegionType(expected), Value::RegionType(actual)) => {
+                self.record_checked_runtime_substitutions(
+                    expected,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            (
+                Value::Extended {
+                    inner: expected, ..
+                }
+                | Value::Sealed {
+                    inner: expected, ..
+                }
+                | Value::Forall { body: expected, .. },
+                actual,
+            ) => {
+                self.record_checked_runtime_substitutions(
+                    expected,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            (
+                expected,
+                Value::Extended { inner: actual, .. } | Value::Sealed { inner: actual, .. },
+            ) => {
+                self.record_checked_runtime_substitutions(
+                    expected,
                     actual,
                     substitutions,
                     representation_facts,
@@ -6082,7 +6750,10 @@ fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usi
         Value::Shape(fields) => fields
             .iter()
             .any(|(_, field)| has_unresolved_representation(field, substitutions)),
-        Value::Array(elements) | Value::Union(elements) => elements
+        Value::Array(elements) => elements
+            .iter()
+            .any(|element| has_unresolved_representation(element, substitutions)),
+        Value::Union(elements) => elements
             .iter()
             .any(|element| has_unresolved_representation(element, substitutions)),
         Value::RegionType(element) | Value::ScratchType(element) => {
@@ -6255,9 +6926,8 @@ fn contains_static_integer(value: &Value) -> bool {
         Value::Shape(fields) => fields
             .iter()
             .any(|(_, value)| contains_static_integer(value)),
-        Value::Array(elements) | Value::Union(elements) => {
-            elements.iter().any(contains_static_integer)
-        }
+        Value::Array(elements) => elements.iter().any(contains_static_integer),
+        Value::Union(elements) => elements.iter().any(contains_static_integer),
         Value::Tag { payload, .. } => payload.as_deref().is_some_and(contains_static_integer),
         Value::Extended { inner, .. } | Value::Sealed { inner, .. } => {
             contains_static_integer(inner)
@@ -6357,7 +7027,12 @@ fn collect_value(
                 .or_insert_with(|| runtime.clone());
         }
         Value::Shape(fields) => collect_fields(context, fields, visited, captured)?,
-        Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+        Value::Array(elements) => {
+            for element in elements {
+                collect_value(context, element, visited, captured)?;
+            }
+        }
+        Value::IndexedStep { elements } | Value::Union(elements) => {
             for element in elements {
                 collect_value(context, element, visited, captured)?;
             }
@@ -6561,7 +7236,12 @@ fn replace_value(
         Value::Shape(fields) => {
             *fields = replace_fields(context, fields, replacements, replaced)?;
         }
-        Value::Array(elements) | Value::IndexedStep { elements } | Value::Union(elements) => {
+        Value::Array(elements) => {
+            for element in elements {
+                *element = replace_value(context, element, replacements, replaced)?;
+            }
+        }
+        Value::IndexedStep { elements } | Value::Union(elements) => {
             for element in elements {
                 *element = replace_value(context, element, replacements, replaced)?;
             }
@@ -6792,6 +7472,12 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     pending.push(*consequent);
                     pending.push(*alternate);
                 }
+                RuntimeTerminator::Switch {
+                    cases, fallback, ..
+                } => {
+                    pending.extend(cases.iter().map(|case| case.target));
+                    pending.push(*fallback);
+                }
                 RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
             }
         }
@@ -6820,6 +7506,14 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                 } => {
                     *consequent = block_ids[&resolve(*consequent)];
                     *alternate = block_ids[&resolve(*alternate)];
+                }
+                RuntimeTerminator::Switch {
+                    cases, fallback, ..
+                } => {
+                    for case in cases {
+                        case.target = block_ids[&resolve(case.target)];
+                    }
+                    *fallback = block_ids[&resolve(*fallback)];
                 }
                 RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
             }
@@ -7052,6 +7746,12 @@ fn folded_sum_dispatch(function: &RuntimeFunction, join: &RuntimeBlock) -> Optio
                     alternate,
                     ..
                 } => usize::from(*consequent == target) + usize::from(*alternate == target),
+                RuntimeTerminator::Switch {
+                    cases, fallback, ..
+                } => {
+                    cases.iter().filter(|case| case.target == target).count()
+                        + usize::from(*fallback == target)
+                }
                 RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => 0,
             })
             .sum::<usize>()
@@ -7145,6 +7845,7 @@ fn value_uses(function: &RuntimeFunction, value: usize) -> usize {
                             .filter(|argument| **argument == value)
                             .count()
                 }
+                RuntimeTerminator::Switch { selector, .. } => usize::from(*selector == value),
                 RuntimeTerminator::Return {
                     value: returned, ..
                 } => usize::from(*returned == value),
@@ -7183,6 +7884,7 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
                 );
                 record_incoming_arguments(function, *alternate, alternate_arguments, &mut incoming);
             }
+            RuntimeTerminator::Switch { .. } => {}
             RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
         }
     }
@@ -7373,7 +8075,9 @@ fn tail_call_suffix_returns(
     match terminator {
         RuntimeTerminator::Return { .. } => true,
         RuntimeTerminator::Branch { arguments, .. } => arguments.len() == 1,
-        RuntimeTerminator::Conditional { .. } | RuntimeTerminator::Trap { .. } => false,
+        RuntimeTerminator::Conditional { .. }
+        | RuntimeTerminator::Switch { .. }
+        | RuntimeTerminator::Trap { .. } => false,
     }
 }
 
@@ -7984,7 +8688,7 @@ fn type_value(type_: &Type) -> Value {
                 type_value(&updated)
             }
         }
-        Type::Array(element) => Value::Array(vec![type_value(element)]),
+        Type::Array(element) => Value::Array(vec![type_value(element)].into()),
         Type::Region(element) => Value::RegionType(Box::new(type_value(element))),
         Type::Scratch(element) => Value::ScratchType(Box::new(type_value(element))),
         Type::Variant { cases, .. } => Value::Union(
@@ -8947,7 +9651,7 @@ fn representative_value(type_: &Type) -> Option<Value> {
                 .into_iter()
                 .collect(),
         )),
-        Type::Array(_) => Some(Value::Array(Vec::new())),
+        Type::Array(_) => Some(Value::Array(Vec::new().into())),
         Type::Variant { cases, .. } => {
             let (name, payload) = cases.first()?;
             Some(Value::Tag {
@@ -9160,22 +9864,23 @@ mod tests {
         let source_ids = [one.id, empty.id, many.id];
         let mut combined = trace
             .append_array_spread(
-                &Value::Array(vec![Value::Int(10.into())]),
+                &Value::Array(vec![Value::Int(10.into())].into()),
                 &Value::Runtime(one),
+                None,
                 span,
             )
             .expect("a static prefix and one-element spread should lower");
         combined = trace
-            .append_array_element(&combined, &Value::Int(25.into()), span)
+            .append_array_element(&combined, &Value::Int(25.into()), None, span)
             .expect("an element between spreads should lower");
         combined = trace
-            .append_array_spread(&combined, &Value::Runtime(empty), span)
+            .append_array_spread(&combined, &Value::Runtime(empty), None, span)
             .expect("an empty spread should lower");
         combined = trace
-            .append_array_spread(&combined, &Value::Runtime(many), span)
+            .append_array_spread(&combined, &Value::Runtime(many), None, span)
             .expect("a later many-element spread should lower");
         trace
-            .append_array_element(&combined, &Value::Int(50.into()), span)
+            .append_array_element(&combined, &Value::Int(50.into()), None, span)
             .expect("a static suffix should lower");
 
         let copied_sources = trace

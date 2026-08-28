@@ -352,6 +352,12 @@
         }
       },
       {
+        "rule": "computed_shape_field",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
         "rule": "lambda",
         "boundary": {
           "kind": "root"

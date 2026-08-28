@@ -26,6 +26,25 @@ return lazy
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_DEFERRED_PARAMETER");
 });
 
+Deno.test("a multi-subject case suspends its subjects during surface lowering", async () => {
+  const parsed = await parse(`return case #True, @panic "not demanded" of
+  #True, _ => 1
+  #False, _ => 2
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  assertEquals(parsed.module.result.tag, "apply");
+  if (parsed.module.result.tag !== "apply") return;
+  assertEquals(parsed.module.result.fn.tag, "lambda");
+  if (parsed.module.result.fn.tag !== "lambda") return;
+  assertEquals(parsed.module.result.fn.deferred, true);
+  assertEquals(parsed.module.result.fn.body.tag, "apply");
+  if (parsed.module.result.fn.body.tag !== "apply") return;
+  assertEquals(parsed.module.result.fn.body.fn.tag, "lambda");
+  if (parsed.module.result.fn.body.fn.tag !== "lambda") return;
+  assertEquals(parsed.module.result.fn.body.fn.deferred, true);
+});
+
 Deno.test("a block-bodied lambda is an ordinary infix operand", async () => {
   const parsed = await parse(`let call = fn callback => callback 41
 let value = call $ fn input => fn amount => do:
@@ -182,6 +201,46 @@ return x
   assert(parsed.ok);
 });
 
+Deno.test("a loop element rebinding is not loop-carried state", async () => {
+  const source = `let total = 0
+for value in values:
+  value := value
+  total := total
+return total
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const loop = parsed.module.declarations[1];
+  assert(loop !== undefined && loop.tag === "binding");
+  if (loop === undefined || loop.tag !== "binding") return;
+  assertEquals(loop.pattern.tag, "shape");
+  if (loop.pattern.tag !== "shape") return;
+  assertEquals(loop.pattern.fields.map((field) => field.name), ["total"]);
+});
+
+Deno.test(
+  "a conditionally rebound loop element is not loop-carried state",
+  async () => {
+    const source = `let total = 0
+for value in values:
+  if True:
+    value := value
+  total := total
+return total
+`;
+    const parsed = await parse(source);
+    assert(parsed.ok);
+    if (!parsed.ok) return;
+    const loop = parsed.module.declarations[1];
+    assert(loop !== undefined && loop.tag === "binding");
+    if (loop === undefined || loop.tag !== "binding") return;
+    assertEquals(loop.pattern.tag, "shape");
+    if (loop.pattern.tag !== "shape") return;
+    assertEquals(loop.pattern.fields.map((field) => field.name), ["total"]);
+  },
+);
+
 Deno.test("a nested do cannot rebind its enclosing do lineage", async () => {
   const source = `let value = do:
   let x = 0
@@ -325,6 +384,22 @@ return value
 `;
   const parsed = await parse(source);
   assert(!parsed.ok);
+});
+
+Deno.test("a computed shape field keeps its name expression", async () => {
+  const parsed = await parse(`const name = "count"
+return { .[name] = 1; }
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const result = parsed.module.result;
+  assertEquals(result.tag, "shape");
+  if (result.tag !== "shape") return;
+  const member = result.members[0];
+  assert(member !== undefined && member.tag === "computed");
+  if (member === undefined || member.tag !== "computed") return;
+  assertEquals(member.name.tag, "var");
+  assertEquals(member.value.tag, "int");
 });
 
 function handledArguments(expression: Expr): readonly Expr[] | null {

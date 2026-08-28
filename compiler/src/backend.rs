@@ -422,7 +422,9 @@ fn forwards_to_return(
                     forwards_to_return(function, &block.terminator, parameter.value, &mut path)
                 })
         }
-        RuntimeTerminator::Conditional { .. } | RuntimeTerminator::Trap { .. } => false,
+        RuntimeTerminator::Conditional { .. }
+        | RuntimeTerminator::Switch { .. }
+        | RuntimeTerminator::Trap { .. } => false,
     }
 }
 
@@ -1896,6 +1898,20 @@ fn emit_dynamic_operation(
             )?;
         }
         "product.make" => {
+            let expected = flattened_runtime_type(module, operation.type_id)?;
+            let mut actual = Vec::new();
+            for operand in &operation.operands {
+                actual.extend(flattened_runtime_type(
+                    module,
+                    runtime_value_type(function, *operand)?,
+                )?);
+            }
+            if actual != expected {
+                return Err(format!(
+                    "{}: function {} product.make result {} changes its Wasm field layout",
+                    module.source, function.id, operation.result
+                ));
+            }
             let mut destination = 0;
             for operand in &operation.operands {
                 let source = locals_for(module, value_locals, *operand)?;
@@ -2471,6 +2487,9 @@ fn structured_loop_expansion(
     if block.id != block_id {
         return None;
     }
+    if matches!(block.terminator, RuntimeTerminator::Switch { .. }) {
+        return None;
+    }
     let mut expanded_blocks = 1;
     for target in terminator_targets(&block.terminator) {
         if target == function.entry_block {
@@ -2495,6 +2514,13 @@ fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
             alternate,
             ..
         } => vec![*consequent, *alternate],
+        RuntimeTerminator::Switch {
+            cases, fallback, ..
+        } => cases
+            .iter()
+            .map(|case| case.target)
+            .chain(std::iter::once(*fallback))
+            .collect(),
         RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
     }
 }
@@ -2627,6 +2653,9 @@ fn emit_structured_loop_block(
                 loop_depth + 1,
             )?;
             instructions.end();
+        }
+        RuntimeTerminator::Switch { .. } => {
+            return Err("a Runtime HIR switch entered structured loop emission".to_owned());
         }
         RuntimeTerminator::Return { value, .. } => {
             emit_structured_return(instructions, module, value_locals, *value, result)?;
@@ -2841,6 +2870,20 @@ fn emit_internal_terminator(
                 .end()
                 .br(1);
         }
+        RuntimeTerminator::Switch {
+            selector,
+            cases,
+            fallback,
+            ..
+        } => emit_switch_dispatch(
+            instructions,
+            module,
+            *selector,
+            cases,
+            *fallback,
+            value_locals,
+            dispatcher,
+        )?,
         RuntimeTerminator::Return { value, .. } => {
             emit_local_values(instructions, locals_for(module, value_locals, *value)?);
             instructions.return_();
@@ -2914,6 +2957,20 @@ fn emit_dynamic_terminator(
                 .end()
                 .br(1);
         }
+        RuntimeTerminator::Switch {
+            selector,
+            cases,
+            fallback,
+            ..
+        } => emit_switch_dispatch(
+            instructions,
+            module,
+            *selector,
+            cases,
+            *fallback,
+            value_locals,
+            dispatcher,
+        )?,
         RuntimeTerminator::Return { value, .. } => {
             emit_canonical_return(instructions, module, value_locals, *value, canonical_result)?;
             instructions.return_();
@@ -2922,6 +2979,112 @@ fn emit_dynamic_terminator(
             instructions.unreachable();
         }
     }
+    Ok(())
+}
+
+fn emit_switch_dispatch(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    selector: usize,
+    cases: &[crate::hir::RuntimeSwitchCase],
+    fallback: usize,
+    value_locals: &HashMap<usize, Vec<u32>>,
+    dispatcher: u32,
+) -> Result<(), String> {
+    let selector_local = locals_for(module, value_locals, selector)?[0];
+    let dense_i32 = cases
+        .iter()
+        .enumerate()
+        .all(|(index, case)| case.value == WireConstant::SignedInteger32(index as i32));
+    if dense_i32 {
+        for _ in 0..=cases.len() {
+            instructions.block(BlockType::Empty);
+        }
+        instructions
+            .local_get(selector_local)
+            .br_table(0..cases.len() as u32, cases.len() as u32);
+        for (index, case) in cases.iter().enumerate() {
+            instructions
+                .end()
+                .i32_const(case.target as i32)
+                .local_set(dispatcher)
+                .br((cases.len() - index + 1) as u32);
+        }
+        instructions
+            .end()
+            .i32_const(fallback as i32)
+            .local_set(dispatcher)
+            .br(1);
+        return Ok(());
+    }
+    let mut ordered = cases
+        .iter()
+        .map(|case| Ok((switch_case_integer(&case.value)?, case)))
+        .collect::<Result<Vec<_>, String>>()?;
+    ordered.sort_by_key(|(value, _)| *value);
+    let ordered = ordered.iter().map(|(_, case)| *case).collect::<Vec<_>>();
+    emit_balanced_switch_selection(instructions, selector_local, &ordered, fallback, dispatcher)?;
+    instructions.br(1);
+    Ok(())
+}
+
+fn switch_case_integer(value: &WireConstant) -> Result<i64, String> {
+    match value {
+        WireConstant::SignedInteger32(value) => Ok(i64::from(*value)),
+        WireConstant::SignedInteger64(value) => value
+            .parse::<i64>()
+            .map_err(|error| format!("Runtime HIR switch case `{value}` is not an i64: {error}")),
+        value => Err(format!(
+            "Runtime HIR switch case {value:?} is not an integer"
+        )),
+    }
+}
+
+fn emit_balanced_switch_selection(
+    instructions: &mut InstructionSink<'_>,
+    selector: u32,
+    cases: &[&crate::hir::RuntimeSwitchCase],
+    fallback: usize,
+    dispatcher: u32,
+) -> Result<(), String> {
+    let (left, remaining) = cases.split_at(cases.len() / 2);
+    let Some((case, right)) = remaining.split_first() else {
+        instructions
+            .i32_const(fallback as i32)
+            .local_set(dispatcher);
+        return Ok(());
+    };
+    let expected = switch_case_integer(&case.value)?;
+    instructions.local_get(selector);
+    match case.value {
+        WireConstant::SignedInteger32(_) => {
+            instructions.i32_const(expected as i32).i32_eq();
+        }
+        WireConstant::SignedInteger64(_) => {
+            instructions.i64_const(expected).i64_eq();
+        }
+        _ => unreachable!("switch_case_integer accepted a non-integer"),
+    }
+    instructions
+        .if_(BlockType::Empty)
+        .i32_const(case.target as i32)
+        .local_set(dispatcher)
+        .else_()
+        .local_get(selector);
+    match case.value {
+        WireConstant::SignedInteger32(_) => {
+            instructions.i32_const(expected as i32).i32_lt_s();
+        }
+        WireConstant::SignedInteger64(_) => {
+            instructions.i64_const(expected).i64_lt_s();
+        }
+        _ => unreachable!("switch_case_integer accepted a non-integer"),
+    }
+    instructions.if_(BlockType::Empty);
+    emit_balanced_switch_selection(instructions, selector, left, fallback, dispatcher)?;
+    instructions.else_();
+    emit_balanced_switch_selection(instructions, selector, right, fallback, dispatcher)?;
+    instructions.end().end();
     Ok(())
 }
 
@@ -2985,8 +3148,10 @@ fn assign_block_arguments(
     for (parameter, argument) in block.parameters.iter().zip(arguments) {
         let destination = locals_for(module, value_locals, parameter.value)?;
         let source = locals_for(module, value_locals, *argument)?;
-        if destination.len() != source.len() {
-            let argument_type = runtime_value_type(function, *argument)?;
+        let argument_type = runtime_value_type(function, *argument)?;
+        let argument_layout = flattened_runtime_type(module, argument_type)?;
+        let parameter_layout = flattened_runtime_type(module, parameter.type_id)?;
+        if argument_layout != parameter_layout {
             let argument_kind = module
                 .types
                 .get(argument_type)
@@ -2998,13 +3163,8 @@ fn assign_block_arguments(
                 .map(runtime_kind)
                 .unwrap_or("unknown");
             return Err(format!(
-                "{}: function {} branches to block {target} with value {} ({argument_kind}, {} locals) for parameter {} ({parameter_kind}, {} locals)",
-                module.source,
-                function.name,
-                argument,
-                source.len(),
-                parameter.value,
-                destination.len(),
+                "{}: function {} branches to block {target} with value {} ({argument_kind}, {argument_layout:?}) for parameter {} ({parameter_kind}, {parameter_layout:?})",
+                module.source, function.name, argument, parameter.value,
             ));
         }
         assignments.push((destination, source));

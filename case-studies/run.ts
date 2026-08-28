@@ -22,6 +22,7 @@ type Study =
       | "case-studies/engine/game_loop.blot";
     readonly frames: number;
     readonly lens: number;
+    readonly selection: number;
   };
 
 interface Color {
@@ -119,20 +120,29 @@ if (studyName === "grep") {
     source: "case-studies/engine/main.blot",
     frames: frames === undefined ? 120 : Number(frames),
     lens: lens === "ortho" ? 1 : 0,
+    selection: 0,
   };
-} else if (studyName === "game-loop" && studyArguments.length <= 2) {
-  const [frames, lens] = studyArguments;
+} else if (studyName === "game-loop" && studyArguments.length <= 3) {
+  const [frames, lens, selection] = studyArguments;
+  let shrubberySelection = 0;
+  if (selection !== undefined) shrubberySelection = Number(selection);
+  if (!Number.isInteger(shrubberySelection)) {
+    throw new Error(
+      `shrubbery selection must be an integer, got ${selection}`,
+    );
+  }
   study = {
     kind: "engine",
     source: "case-studies/engine/game_loop.blot",
     frames: frames === undefined ? 120 : Number(frames),
     lens: lens === "ortho" ? 1 : 0,
+    selection: shrubberySelection,
   };
 } else {
   throw new Error(
     "usage: deno task case-study " +
       "<grep <pattern> <path>|terminal|agent|engine [frames] [ortho]|" +
-      "game-loop [frames] [ortho]>",
+      "game-loop [frames] [ortho] [selection]>",
   );
 }
 
@@ -246,11 +256,19 @@ if (study.kind === "grep") {
     };
   });
 
+  const screenScale = 256;
+  const cameraSubsteps = 16;
+
   // Painter's algorithm over a character grid: the guest hands over projected
   // geometry with a view depth, and sorting it is the host's job in both hosts.
   let cells: { shade: number; depth: number }[][] = [];
   const frames = study.frames;
   let remaining = frames;
+  const advanceFrame = (): bigint => {
+    const answer = remaining;
+    remaining -= 1;
+    return BigInt(answer);
+  };
   let batch: {
     kind: string;
     points: [number, number][];
@@ -307,24 +325,26 @@ if (study.kind === "grep") {
       tri(
         ax: bigint,
         ay: bigint,
+        az: bigint,
         bx: bigint,
         by: bigint,
+        bz: bigint,
         _colorBlue: bigint,
         _colorGreen: bigint,
         _colorRed: bigint,
         cx: bigint,
         cy: bigint,
-        depth: bigint,
+        cz: bigint,
         shadeValue: bigint,
       ) {
         batch.push({
           kind: "tri",
           points: [
-            [Number(ax), Number(ay)],
-            [Number(bx), Number(by)],
-            [Number(cx), Number(cy)],
+            [Number(ax) / screenScale, Number(ay) / screenScale],
+            [Number(bx) / screenScale, Number(by) / screenScale],
+            [Number(cx) / screenScale, Number(cy) / screenScale],
           ],
-          depth: Number(depth),
+          depth: (Number(az) + Number(bz) + Number(cz)) / 3,
           shade: Number(shadeValue),
         });
       },
@@ -336,19 +356,22 @@ if (study.kind === "grep") {
         x: bigint,
         y: bigint,
       ) {
-        const half = Number(size) / 2;
+        const half = Number(size) / screenScale / 2;
         batch.push({
           kind: "sprite",
-          points: [[Number(x) - half, Number(y) - half], [
-            Number(x) + half,
-            Number(y) + half,
+          points: [[
+            Number(x) / screenScale - half,
+            Number(y) / screenScale - half,
+          ], [
+            Number(x) / screenScale + half,
+            Number(y) / screenScale + half,
           ], [0, 0]],
           depth: Number(depth),
           shade: 255,
         });
       },
       present() {
-        if (remaining > 0) return;
+        if (remaining !== 0) return;
         cells = Array.from(
           { length: rows },
           () =>
@@ -386,10 +409,26 @@ if (study.kind === "grep") {
     // A fixed camera, so the study is deterministic. The browser host puts a
     // pointer behind these four.
     "blot:host/View": {
-      yaw: () => 34n,
-      pitch: () => 18n,
+      yaw: () => BigInt(34 * cameraSubsteps),
+      pitch: () => BigInt(18 * cameraSubsteps),
       distance: () => BigInt(9 * ONE),
       lens: () => BigInt(study.kind === "engine" ? study.lens : 0),
+    },
+
+    "blot:host/VoxelCanvas": {
+      enabled: () => 0,
+      clear() {
+        throw new Error("headless host invoked disabled VoxelCanvas.clear");
+      },
+      voxel() {
+        throw new Error("headless host invoked disabled VoxelCanvas.voxel");
+      },
+      present() {
+        throw new Error("headless host invoked disabled VoxelCanvas.present");
+      },
+      redraw() {
+        throw new Error("headless host invoked disabled VoxelCanvas.redraw");
+      },
     },
 
     "blot:host/Assets": {
@@ -413,11 +452,20 @@ if (study.kind === "grep") {
     },
 
     "blot:host/Host": {
-      frame(): bigint {
-        const answer = remaining;
-        remaining -= 1;
-        return BigInt(answer);
+      option() {},
+      seed(): bigint {
+        return 424242n;
       },
+      selected() {},
+      selection(): bigint {
+        return BigInt(study.selection);
+      },
+      frame: advanceFrame,
+    },
+
+    "blot:host/Stream": {
+      batch_size: () => 256n,
+      yield() {},
     },
   };
 } else {

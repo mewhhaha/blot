@@ -249,6 +249,15 @@ HIR contains no:
 - representation choice selected by observation order; or
 - unchecked proof-required operation.
 
+Specialization lowers a residual aggregate only against its checked closed
+representation. Array prefixes, later elements, constructor payloads, recursive
+arguments, and branch results share the same representation-directed lowering
+judgment. Inferring an aggregate layout from its first element after checking,
+or borrowing the layout of an equal-looking staged value when checked views
+disagree, violates `closedRep` and is an invariant failure. A decoded immutable
+aggregate may reuse a structural memo only when every recorded checked view has
+the same closed representation.
+
 A validation failure caused only by unresolved representation for a closed
 accepted internal program is an `InvariantFailure`. An explicitly unsupported
 public ABI type or experimental target feature may return `TargetRefusal` at its

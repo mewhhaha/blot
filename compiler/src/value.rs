@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -55,7 +56,7 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
             }
         }
         (Value::Array(values), Value::Array(signatures)) => {
-            for (value, signature) in values.iter_mut().zip(signatures) {
+            for (value, signature) in values.iter_mut_preserving_identity().zip(signatures) {
                 attach_signature(value, signature);
             }
         }
@@ -221,8 +222,83 @@ pub type Resume = Rc<RefCell<Option<Box<dyn FnOnce(Value) -> Computation>>>>;
 /// interval points into.
 pub type RegionStore = Rc<RefCell<Vec<Value>>>;
 
+#[derive(Clone, Debug)]
+pub struct ArrayValues {
+    identity: Rc<()>,
+    values: Vec<Value>,
+}
+
+impl ArrayValues {
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    fn iter_mut_preserving_identity(&mut self) -> std::slice::IterMut<'_, Value> {
+        self.values.iter_mut()
+    }
+}
+
+impl From<Vec<Value>> for ArrayValues {
+    fn from(values: Vec<Value>) -> Self {
+        Self {
+            identity: Rc::new(()),
+            values,
+        }
+    }
+}
+
+impl FromIterator<Value> for ArrayValues {
+    fn from_iter<T: IntoIterator<Item = Value>>(values: T) -> Self {
+        values.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
+impl Deref for ArrayValues {
+    type Target = Vec<Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl DerefMut for ArrayValues {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if Rc::strong_count(&self.identity) > 1 {
+            self.identity = Rc::new(());
+        }
+        &mut self.values
+    }
+}
+
+impl IntoIterator for ArrayValues {
+    type Item = Value;
+    type IntoIter = std::vec::IntoIter<Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ArrayValues {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ArrayValues {
+    type Item = &'a mut Value;
+    type IntoIter = std::slice::IterMut<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.deref_mut().iter_mut()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
-pub struct OrderedFields(Rc<OrderedFieldStorage>);
+pub struct OrderedFields(Rc<OrderedFieldStorage>, Rc<()>);
 
 #[derive(Clone, Debug, Default)]
 struct OrderedFieldStorage {
@@ -231,12 +307,19 @@ struct OrderedFieldStorage {
 }
 
 impl OrderedFields {
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.1, &other.1)
+    }
+
     pub fn get(&self, name: &str) -> Option<&Value> {
         let position = self.0.positions.get(name)?;
         Some(&self.0.entries[*position].1)
     }
 
     pub fn insert(&mut self, name: String, value: Value) -> Option<Value> {
+        if Rc::strong_count(&self.1) > 1 {
+            self.1 = Rc::new(());
+        }
         let fields = Rc::make_mut(&mut self.0);
         if let Some(position) = fields.positions.get(&name) {
             return Some(std::mem::replace(&mut fields.entries[*position].1, value));
@@ -247,6 +330,9 @@ impl OrderedFields {
     }
 
     pub fn remove(&mut self, name: &str) -> Option<Value> {
+        if Rc::strong_count(&self.1) > 1 {
+            self.1 = Rc::new(());
+        }
         let fields = Rc::make_mut(&mut self.0);
         let position = fields.positions.remove(name)?;
         let value = fields.entries.remove(position).1;
@@ -370,7 +456,7 @@ pub enum Value {
     Text(String),
     Unit,
     Shape(OrderedFields),
-    Array(Vec<Value>),
+    Array(ArrayValues),
     /// Private type value produced only by `@region.type`.
     RegionType(Box<Value>),
     /// Private type value produced only by `@scratch.type`.
@@ -516,9 +602,8 @@ pub(crate) fn reusable_across_module_instances(value: &Value) -> bool {
         Value::Shape(fields) => fields
             .iter()
             .all(|(_, value)| reusable_across_module_instances(value)),
-        Value::Array(values) | Value::Union(values) => {
-            values.iter().all(reusable_across_module_instances)
-        }
+        Value::Array(values) => values.iter().all(reusable_across_module_instances),
+        Value::Union(values) => values.iter().all(reusable_across_module_instances),
         Value::RegionType(element)
         | Value::ScratchType(element)
         | Value::DeferredScratch { capacity: element }
@@ -778,7 +863,8 @@ pub fn substitute_type_variable(
             elements
                 .iter()
                 .map(substitute)
-                .collect::<Option<Vec<_>>>()?,
+                .collect::<Option<Vec<_>>>()?
+                .into(),
         ),
         Value::EmptyArray { element } => Value::EmptyArray {
             element: Box::new(substitute(element)?),
@@ -836,7 +922,7 @@ pub fn substitute_type_variable(
                                 .iter()
                                 .all(|member| matches!(member, Value::Effect { .. })) =>
                         {
-                            members.clone()
+                            members.to_vec()
                         }
                         _ => return None,
                     };
@@ -908,7 +994,12 @@ fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
                 collect_type_variables(member, variables);
             }
         }
-        Value::Array(members) | Value::Union(members) => {
+        Value::Array(members) => {
+            for member in members {
+                collect_type_variables(member, variables);
+            }
+        }
+        Value::Union(members) => {
             for member in members {
                 collect_type_variables(member, variables);
             }

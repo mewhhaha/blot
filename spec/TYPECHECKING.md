@@ -52,6 +52,15 @@ only `canonical(A)` because its following lambda may need bidirectional and
 rank-N checking. Predicate requirements are observations of a closed result:
 they may reject, but never grant an operation or add a solver node.
 
+When a predicate guards a staged computed-field reconstruction and its subject
+still contains an unresolved internal `bottom`, the checker records that the
+enclosing closure requires specialization instead of evaluating the predicate
+against that placeholder. The concrete application rechecks the closure with its
+argument type and must discharge the predicate then. Computed-field presence is
+an immutable closure-body fact available after loading a module capsule;
+silently accepting a still-open predicate at residualization is an invariant
+failure.
+
 For `k r? x :: R` followed by `k r? x = e`, elaboration evaluates `R` at compile
 time and requires `R` to bridge to `canonical(A)`, then checks `e` against `A`.
 Any difference in `k`, the presence of `rec`, or `x` is a source diagnostic
@@ -82,6 +91,7 @@ A, B ::=
   | range(domain, lower, upper)
   | A ->{E} B
   | { label_i : A_i }
+  | update A with { label_i : A_i }   internal record relationship
   | Array A
   | < label_i : A_i >open
   | Effects { label_i }
@@ -607,6 +617,14 @@ certificate signatures and is memoized on first demand. Runtime lowering does
 not reconstruct it, and a missing `Arrow` after successful checking is an
 invariant failure.
 
+A shape whose first member is an open spread receives
+`update A with { label_i : B_i }`, where `A` is the spread operand and the
+listed fields are the later statically named or computed-at-compile-time
+members. Settling against a concrete record applies the replacements in source
+order. A second open spread is refused because it would require concatenating
+two unknown field sets. The relationship is an inference fact only; Runtime HIR
+receives the settled nominal record.
+
 If an ordinary statically known application still settles to top or bottom, the
 checker infers the selected nonrecursive closure once against the actual
 argument type. This recovers evidence from the closure body while an explicit
@@ -685,6 +703,7 @@ known field-name vector `L = [l_0, ..., l_(n-1)]`, partial evaluation obeys
 PE(fold([], s, k)) = PE(s)
 PE(fold(l :: ls, s, k)) = PE(fold(ls, k(s, l), k))
 PE(shape.get(~r, l)) = ~(project_l r)       when l is static
+PE({ ...~r; .[l] = ~v }) = ~(update_l r v)  when l is static
 ```
 
 The recursive binding remains available to the partial evaluator, but each
@@ -1021,6 +1040,14 @@ expectation, so a recursive function can choose its first-order result layout
 before its body evaluates another recursive call. This is the compact
 certificate counterpart of the compiler's full typed-Core expression map, not a
 backend reconstruction of source constraints.
+
+Residual aggregate construction consumes the checked type attached to the source
+expression or application argument that introduced the current view. Immutable
+aliases and field projections preserve that checked expectation. An aggregate
+memo may reuse only one unambiguous closed representation; conflicting views
+erase the memoized answer instead of selecting one by observation order. A
+polymorphic recursive call specializes from its checked argument type rather
+than the first runtime inhabitant observed in that value.
 
 The certificate also carries each source closure's ownership contract, keyed by
 the same `(module, body-expression)` identity as its runtime closure signature.

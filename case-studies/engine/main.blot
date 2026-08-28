@@ -108,7 +108,7 @@ let advance = fn ts => E.each_1 (
 // Each brush takes one renderable record. The game assembles that view from its
 // components, and the renderer checks only the fields its path reads.
 let render = fn (transforms, models) => do:
-  use R.frame $ fn draw => do:
+  let paint = fn draw => do:
       use E.visit_2 (
           transforms,
           models,
@@ -127,6 +127,7 @@ let render = fn (transforms, models) => do:
                 .texture = model.texture;
               }
         )
+  use R.frame (&paint)
 
 // --- loading ----------------------------------------------------------------
 //

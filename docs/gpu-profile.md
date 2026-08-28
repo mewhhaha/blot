@@ -21,20 +21,32 @@ in a benchmark months later.
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     119 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
-| `islandCount`               |      68 | one island for every grammar rule                  |
-| `islandStates`              |     403 |                                                    |
-| `islandTransitions`         |     414 |                                                    |
+| `islandCount`               |      69 | one island for every grammar rule                  |
+| `islandStates`              |     415 |                                                    |
+| `islandTransitions`         |     428 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 604,500 | immutable device table                             |
-| `packedBytes`               | 472,483 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 627,480 | immutable device table                             |
+| `packedBytes`               | 489,681 | version-3 runtime section                          |
 | `scratch.summaries`         |      24 | summaries retained per scratch region              |
 | `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
 | `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 68 rules as islands is what preserves
+and edge arrays directly. Declaring all 69 rules as islands is what preserves
 the full CST shape needed by source lowering.
+
+Comma-separated case subjects and arm patterns add two island states, four
+island transitions, 3,024 dense-transition bytes, and 2,434 packed bytes. They
+reuse the existing comma token and case islands, so lexer states, island count,
+candidate multiplicity, contraction rounds, scratch factors, root-loop proof,
+and parallel long-region admission do not change.
+
+Computed shape fields add one island, ten island states, ten island transitions,
+19,956 dense-transition bytes, and 14,764 packed bytes. The `.[` prefix
+distinguishes the form before the field-name expression begins, so lexer states,
+candidate multiplicity, contraction rounds, scratch factors, the root loop, and
+parallel long-region admission do not change.
 
 Admitting a block-bodied lambda as an unparenthesized infix right operand adds
 one bounded island, four island states, four island transitions, 10,788 dense

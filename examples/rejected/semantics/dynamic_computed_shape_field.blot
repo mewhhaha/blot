@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+const Host = @effect.host { .field_name = Unit -> Text; }
+
+use field_name <- Host.field_name ()
+return { .[field_name] = 1; }

@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+let original :: { .count = Int; }
+let original = { .count = 1; }
+
+return Shape.update (original, { .id = 2; })

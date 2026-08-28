@@ -115,6 +115,26 @@ return choose
   );
 });
 
+Deno.test("a nested case decision tree becomes one demand-driven case", async () => {
+  const source = `return case first of
+  #One => 1
+  #More => case second of
+    #One => 2
+    #More => case third of
+      #One => 3
+      #More => 4
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_NESTED_CASE_CHAIN"),
+    `return case first, second, third of
+  #One, _, _ => 1
+  #More, #One, _ => 2
+  #More, #More, #One => 3
+  #More, #More, #More => 4
+`,
+  );
+});
+
 Deno.test("an identical-branch rewrite still evaluates its condition", async () => {
   const source = `let flag = #True
 if flag:
@@ -170,6 +190,18 @@ return count
     source: `return case 1 of
   _ => 1
   1 => 2
+`,
+  },
+  {
+    name: "a nested case tree is one decision matrix",
+    code: "BLOT_LINT_NESTED_CASE_CHAIN",
+    source: `return case first of
+  #One => 1
+  #More => case second of
+    #One => 2
+    #More => case third of
+      #One => 3
+      #More => 4
 `,
   },
   {

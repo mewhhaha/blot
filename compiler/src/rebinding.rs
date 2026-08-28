@@ -595,8 +595,14 @@ fn collect_binder_expression_names(
             let Cursor::Rule(member) = member else {
                 continue;
             };
-            if cst.rule_name(member)? != "shape_field" {
+            let rule_name = cst.rule_name(member)?;
+            if rule_name != "shape_field" && rule_name != "computed_shape_field" {
                 continue;
+            }
+            if rule_name == "computed_shape_field"
+                && let Some(name) = field(cst, member, "name")?
+            {
+                collect_binder_expression_names(cst, name, found)?;
             }
             if let Some(value) = field(cst, member, "value")? {
                 collect_binder_expression_names(cst, value, found)?;

@@ -52,7 +52,7 @@ pub fn constant(name: &str) -> Option<Value> {
         "@type.i8x16_mask" => Some(Value::OpaqueType(I8X16_MASK.to_owned())),
         "@region.rejoin" => Some(Value::OpaqueType("Rejoin".to_owned())),
         "@shape.empty" => Some(Value::Shape(OrderedFields::default())),
-        "@array.empty" => Some(Value::Array(Vec::new())),
+        "@array.empty" => Some(Value::Array(Vec::new().into())),
         _ => None,
     }
 }
@@ -124,7 +124,6 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@type.seal"
         | "@satisfies"
         | "@shape.get"
-        | "@shape.update"
         | "@shape.remove"
         | "@shape.has"
         | "@array.get"
@@ -164,10 +163,8 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@f32x4.div"
         | "@f32x4.eq"
         | "@f32x4.less" => 2,
-        "@type.attach" | "@shape.set" | "@array.set" | "@region.set" | "@region.replace"
-        | "@region.swap" | "@region.join" | "@text.slice" | "@text.find_from" | "@f32x4.select" => {
-            3
-        }
+        "@type.attach" | "@array.set" | "@region.set" | "@region.replace" | "@region.swap"
+        | "@region.join" | "@text.slice" | "@text.find_from" | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -350,7 +347,9 @@ pub fn run_primitive(
             // empty row. Both witnesses are closed, so source never observes a
             // binder identity or an open quantified body.
             substitute_type_variable(body, *variable, &Value::Unit)
-                .or_else(|| substitute_type_variable(body, *variable, &Value::Array(Vec::new())))
+                .or_else(|| {
+                    substitute_type_variable(body, *variable, &Value::Array(Vec::new().into()))
+                })
                 .ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_TYPE_INSTANTIATE",
@@ -389,21 +388,6 @@ pub fn run_primitive(
                 .get(key)
                 .cloned()
                 .ok_or_else(|| Diagnostic::new("BLOT_NO_FIELD", format!("No field `{key}`."), span))
-        }
-        "@shape.set" => {
-            let mut fields = shape(&arguments[0], span, name)?.clone();
-            fields.insert(
-                text(&arguments[1], span, name)?.to_owned(),
-                arguments[2].clone(),
-            );
-            Ok(Value::Shape(fields))
-        }
-        "@shape.update" => {
-            let mut fields = shape(&arguments[0], span, name)?.clone();
-            for (field, value) in shape(&arguments[1], span, name)? {
-                fields.insert(field.clone(), value.clone());
-            }
-            Ok(Value::Shape(fields))
         }
         "@shape.remove" => {
             let mut fields = shape(&arguments[0], span, name)?.clone();
@@ -454,7 +438,7 @@ pub fn run_primitive(
             let Value::Scratch { values, .. } = &arguments[0] else {
                 return Err(type_error(name, "an owned Scratch", &arguments[0], span));
             };
-            Ok(Value::Array(values.clone()))
+            Ok(Value::Array(values.clone().into()))
         }
         "@scratch.recycle" => {
             let values = array(&arguments[0], span, name)?;
@@ -677,12 +661,16 @@ pub fn run_primitive(
                     span,
                 ));
             }
-            Ok(Value::Array(values.clone()))
+            Ok(Value::Array(values.clone().into()))
         }
         "@array.len" => Ok(Value::Int(BigInt::from(
             array(&arguments[0], span, name)?.len(),
         ))),
-        "@array.copy" => Ok(Value::Array(array(&arguments[0], span, name)?.to_vec())),
+        "@array.copy" => match &arguments[0] {
+            Value::Array(values) => Ok(Value::Array(values.clone())),
+            Value::EmptyArray { .. } => Ok(arguments[0].clone()),
+            value => Err(type_error(name, "an array", value, span)),
+        },
         "@array.get" => {
             let values = array(&arguments[0], span, name)?;
             let index = index(&arguments[1], span, name)?;
@@ -698,12 +686,12 @@ pub fn run_primitive(
                 return Err(out_of_bounds(index, values.len(), span));
             };
             *slot = arguments[2].clone();
-            Ok(Value::Array(values))
+            Ok(Value::Array(values.into()))
         }
         "@array.push" => {
             let mut values = array(&arguments[0], span, name)?.to_vec();
             values.push(arguments[1].clone());
-            Ok(Value::Array(values))
+            Ok(Value::Array(values.into()))
         }
         "@array.indexed" => Ok(Value::Shape(OrderedFields::from([
             ("state".to_owned(), Value::Int(BigInt::zero())),
@@ -1739,7 +1727,7 @@ fn type_of(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(values) => Value::Array(values.iter().map(type_of).collect()),
-        Value::EmptyArray { element } => Value::Array(vec![(**element).clone()]),
+        Value::EmptyArray { element } => Value::Array(vec![(**element).clone()].into()),
         Value::Tag {
             name,
             payload: Some(payload),
@@ -1795,7 +1783,7 @@ fn reflect(value: &Value) -> Value {
                 ),
             ])),
         ),
-        Value::Union(members) => tagged("Union", Value::Array(members.clone())),
+        Value::Union(members) => tagged("Union", Value::Array(members.clone().into())),
         Value::Shape(_) => tagged("Shape", value.clone()),
         Value::Array(_) | Value::EmptyArray { .. } => tagged("Array", value.clone()),
         Value::Arrow {
@@ -1818,7 +1806,7 @@ fn reflect(value: &Value) -> Value {
                     ),
                     ("domain".to_owned(), (**domain).clone()),
                     ("codomain".to_owned(), (**codomain).clone()),
-                    ("effects".to_owned(), Value::Array(reflected_effects)),
+                    ("effects".to_owned(), Value::Array(reflected_effects.into())),
                 ])),
             )
         }
@@ -1966,9 +1954,9 @@ fn split(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
         return Err(out_of_bounds(index, values.len(), span));
     };
     Ok(tuple(vec![
-        Value::Array(values[..index].to_vec()),
+        Value::Array(values[..index].to_vec().into()),
         value,
-        Value::Array(values[index + 1..].to_vec()),
+        Value::Array(values[index + 1..].to_vec().into()),
     ]))
 }
 
@@ -2024,7 +2012,7 @@ fn json_to_value(value: serde_json::Value, span: Span) -> Result<Value, Diagnost
             .into_iter()
             .map(|value| json_to_value(value, span))
             .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
+            .map(|values| Value::Array(values.into())),
         serde_json::Value::Object(fields) => fields
             .into_iter()
             .map(|(name, value)| json_to_value(value, span).map(|value| (name, value)))

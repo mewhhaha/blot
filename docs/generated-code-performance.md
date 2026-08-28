@@ -219,8 +219,10 @@ for its declared `F32x4` host boundary, which is the specified ABI 2 SIMD
 restriction rather than a residual-lowering gap.
 
 This status paragraph does not refresh the historical timings or artifact sizes
-above. Use `TASKS.md` for current architectural work and rerun the benchmark
-before making a new performance claim.
+above. Use the generated
+[current implementation report](../generated/CURRENT_IMPLEMENTATION.md) for the
+implemented boundary and rerun the benchmark before making a new performance
+claim.
 
 The complete machine-readable report includes source and artifact hashes,
 artifact sizes and boundary-relative marginal sizes, flags, calibrated
