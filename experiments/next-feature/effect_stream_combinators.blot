@@ -1,0 +1,26 @@
+open import "blot:prelude"
+open import "./effect_stream_support.blot"
+
+const Source = @effect { .emit = Int -> Unit; }
+const Mapped = @effect { .emit = Int -> Unit; }
+
+const double = map_with (Mapped.emit, fn value => value * 2)
+const sum = fold (0, fn (value, rest) => value + rest)
+
+let stream_sum :: Int -> Int
+let stream_sum = fn seed => do:
+  let produce = fn () => do:
+    use Source.emit (seed + 1)
+    use Source.emit (seed + 2)
+    use Source.emit (seed + 3)
+    return ()
+
+  let streamed =
+    produce
+      |> @handle (Source, double)
+      |> @handle (Mapped, sum)
+
+  use result <- streamed
+  return result
+
+return { .run = stream_sum; }

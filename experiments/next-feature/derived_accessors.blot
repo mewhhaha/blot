@@ -1,0 +1,23 @@
+// Comptime evaluation derives a statically typed namespace from an ordinary
+// shape value. No macro sees syntax and no type-level sublanguage exists.
+
+open import "blot:prelude"
+
+const derive_accessors = fn shape => do:
+  let accessors = shape
+  for name in Iter.items (@shape.names shape):
+    accessors := @type.attach accessors name (fn value => do:
+      return @shape.get value name
+    )
+
+  return accessors
+
+const User = derive_accessors { .name = Text; .score = Int; }
+
+let project :: User -> { .name = Text; .score = Int; }
+let project = fn user => {
+  .name = User.name user;
+  .score = User.score user;
+}
+
+return { .project = project; }

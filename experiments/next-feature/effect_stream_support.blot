@@ -1,0 +1,20 @@
+const map_with = fn (emit, transform) => {
+  .emit = fn (value, ?resume) => do:
+    use emit (transform value)
+    use result <- resume ()
+    return result
+  ;
+}
+
+const fold = fn (initial, combine) => {
+  .emit = fn (value, ?resume) => do:
+    use rest <- resume ()
+    return combine (value, rest)
+  ;
+  .return = fn () => initial;
+}
+
+return {
+  .map_with = map_with;
+  .fold = fold;
+}
