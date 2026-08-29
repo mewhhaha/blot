@@ -171,6 +171,14 @@ struct AbiImport {
     ownership: RuntimeOperationOwnership,
 }
 
+#[derive(Clone, Serialize)]
+struct AbiLink {
+    unit: String,
+    name: String,
+    module: String,
+    function: AbiFunction,
+}
+
 #[derive(Serialize)]
 struct AbiManifest {
     format: &'static str,
@@ -178,6 +186,8 @@ struct AbiManifest {
     source: String,
     exports: Vec<AbiExport>,
     imports: Vec<AbiImport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    links: Vec<AbiLink>,
 }
 
 pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
@@ -341,6 +351,46 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
         }
     }
     let required_features = required_wasm_features(module)?;
+    let links = module
+        .links
+        .iter()
+        .map(|link| {
+            let signature = module.signatures.get(link.signature).ok_or_else(|| {
+                format!(
+                    "{}: development link {}.{} references unknown signature {}",
+                    module.source, link.unit, link.name, link.signature
+                )
+            })?;
+            Ok(AbiLink {
+                unit: link.unit.clone(),
+                name: link.name.clone(),
+                module: format!("blot:dev/{}", link.unit),
+                function: AbiFunction {
+                    parameters: signature
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(index, type_id)| {
+                            canonical_type(module, *type_id, &mut Vec::new()).map_err(|error| {
+                                format!(
+                                    "development link '{}.{}' parameter {index} is unsupported: {error}",
+                                    link.unit, link.name
+                                )
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    result: canonical_type(module, signature.result, &mut Vec::new()).map_err(
+                        |error| {
+                            format!(
+                                "development link '{}.{}' result is unsupported: {error}",
+                                link.unit, link.name
+                            )
+                        },
+                    )?,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
@@ -359,6 +409,7 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
         source: module.source.clone(),
         exports,
         imports,
+        links,
     })
 }
 
@@ -809,11 +860,32 @@ fn emit_dynamic_module(
             EntityType::Function(type_index),
         );
     }
+    for link in &manifest.links {
+        let mut parameters = link
+            .function
+            .parameters
+            .iter()
+            .flat_map(flattened_type)
+            .collect::<Vec<_>>();
+        let flattened_results = flattened_type(&link.function.result);
+        let results = if flattened_results.len() <= 1 {
+            flattened_results
+        } else {
+            parameters.push(ValType::I32);
+            Vec::new()
+        };
+        let type_index = add_function_type(&mut types, parameters, results);
+        imports.import(
+            &link.module,
+            &format!("blot:dev:{}", link.name),
+            EntityType::Function(type_index),
+        );
+    }
 
     let mut functions = FunctionSection::new();
     let mut code = CodeSection::new();
     let mut branch_hints = BranchHints::new();
-    let imported_function_count = manifest.imports.len() as u32;
+    let imported_function_count = (manifest.imports.len() + manifest.links.len()) as u32;
     let realloc_type = add_function_type(
         &mut types,
         vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
@@ -923,7 +995,7 @@ fn emit_dynamic_module(
     } else {
         None
     };
-    let utf8_validator_index = if has_operation("host.call") {
+    let utf8_validator_index = if has_operation("host.call") || has_operation("call.external") {
         let type_index =
             add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
         let function_index = imported_function_count + functions.len();
@@ -1538,32 +1610,55 @@ fn emit_dynamic_operation(
                     .local_set(result[0]);
             }
         },
-        "host.call" => {
+        "host.call" | "call.external" => {
             let utf8_validator = helpers.utf8_validator.ok_or_else(|| {
-                format!("{}: host.call omitted the UTF-8 validator", module.source)
+                format!(
+                    "{}: {} omitted the UTF-8 validator",
+                    module.source, operation.kind
+                )
             })?;
-            let capability = operation
-                .capability
-                .as_deref()
-                .ok_or_else(|| format!("{}: host.call omitted its capability", module.source))?;
-            let name = operation
-                .operation
-                .as_deref()
-                .ok_or_else(|| format!("{}: host.call omitted its operation", module.source))?;
-            let (import_index, imported) = manifest
-                .imports
-                .iter()
-                .enumerate()
-                .find(|(_, imported)| {
-                    imported.capability == capability && imported.operation == name
-                })
-                .ok_or_else(|| {
-                    format!("{}: manifest omitted {capability}.{name}", module.source)
-                })?;
+            let capability = operation.capability.as_deref().ok_or_else(|| {
+                format!(
+                    "{}: {} omitted its capability",
+                    module.source, operation.kind
+                )
+            })?;
+            let name = operation.operation.as_deref().ok_or_else(|| {
+                format!(
+                    "{}: {} omitted its operation",
+                    module.source, operation.kind
+                )
+            })?;
+            let (import_index, imported) = if operation.kind == "host.call" {
+                let (index, imported) = manifest
+                    .imports
+                    .iter()
+                    .enumerate()
+                    .find(|(_, imported)| {
+                        imported.capability == capability && imported.operation == name
+                    })
+                    .ok_or_else(|| {
+                        format!("{}: manifest omitted {capability}.{name}", module.source)
+                    })?;
+                (index, &imported.function)
+            } else {
+                let (index, link) = manifest
+                    .links
+                    .iter()
+                    .enumerate()
+                    .find(|(_, link)| link.unit == capability && link.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: development manifest omitted {capability}.{name}",
+                            module.source
+                        )
+                    })?;
+                (manifest.imports.len() + index, &link.function)
+            };
             for operand in &operation.operands {
                 emit_local_values(instructions, locals_for(module, value_locals, *operand)?);
             }
-            let flattened_result = flattened_type(&imported.function.result);
+            let flattened_result = flattened_type(&imported.result);
             if flattened_result.len() <= 1 {
                 instructions.call(import_index as u32);
                 if let Some(local) = result.first() {
@@ -1574,26 +1669,28 @@ fn emit_dynamic_operation(
                     .i32_const(0)
                     .i32_const(0)
                     .i32_const(4)
-                    .i32_const(memory_layout(&imported.function.result).size as i32)
+                    .i32_const(memory_layout(&imported.result).size as i32)
                     .call(helpers.realloc)
                     .local_tee(scratch_pointer)
                     .call(import_index as u32);
                 emit_load_canonical_result(
                     instructions,
-                    &imported.function.result,
+                    &imported.result,
                     result,
                     scratch_pointer,
                     0,
                 )?;
-                let mut flat_index = 0;
-                emit_validate_canonical_texts(
-                    instructions,
-                    &imported.function.result,
-                    result,
-                    &mut flat_index,
-                    scratch_length,
-                    utf8_validator,
-                )?;
+                if operation.kind == "host.call" {
+                    let mut flat_index = 0;
+                    emit_validate_canonical_texts(
+                        instructions,
+                        &imported.result,
+                        result,
+                        &mut flat_index,
+                        scratch_length,
+                        utf8_validator,
+                    )?;
+                }
             }
         }
         "call.direct" => {

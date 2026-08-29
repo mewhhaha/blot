@@ -3203,17 +3203,26 @@ fn apply_with_expected(
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
             };
-            if self_name.is_some()
+            let crosses_development_boundary = runtime.residual.as_ref().is_some_and(|trace| {
+                trace
+                    .borrow()
+                    .crosses_development_boundary(runtime.module.as_str(), closure_module.as_str())
+            });
+            if (self_name.is_some() || crosses_development_boundary)
                 && let Some(trace) = runtime.residual.clone()
             {
-                let name = self_name.as_deref().expect("checked recursive closure");
-                let call = trace.borrow_mut().begin_recursive_function(
+                let name = self_name.clone().unwrap_or_else(|| {
+                    let definition = loaded.arena.expression_span(body);
+                    format!("{closure_module}@{}", definition.start)
+                });
+                let call = trace.borrow_mut().begin_residual_function(
                     crate::hir::ResidualClosure {
                         context: &context,
                         module: &closure_module,
                         parameter,
                         body,
                         name,
+                        self_name: self_name.as_deref(),
                         environment: &environment,
                         signature: signature.as_deref(),
                         reuse: reuse_assertion.is_some(),
@@ -3340,7 +3349,7 @@ fn apply_with_expected(
                         };
                         match trace
                             .borrow_mut()
-                            .finish_recursive_function(compilation, value)
+                            .finish_residual_function(compilation, value)
                         {
                             Ok(value) => Computation::value(value),
                             Err(error) => Computation::error(error),

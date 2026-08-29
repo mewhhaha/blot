@@ -1,6 +1,7 @@
 mod ast;
 mod backend;
 mod cst;
+mod development;
 mod diagnostic;
 mod eval;
 mod fixity;
@@ -33,6 +34,7 @@ static LOWER_RESULT: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 thread_local! {
     static SESSIONS: RefCell<Vec<Option<CompilerSession>>> = const { RefCell::new(Vec::new()) };
     static COMPILED_MODULE: RefCell<Option<backend::CompiledModule>> = const { RefCell::new(None) };
+    static DEVELOPMENT_PROGRAM: RefCell<Option<development::CompiledDevelopmentProgram>> = const { RefCell::new(None) };
     static MODULE_SNAPSHOT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -707,6 +709,143 @@ pub unsafe extern "C" fn compile_compiler_session_module(
         }
     };
     write_result(serde_json::to_vec(&result).expect("compile result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+/// Compiles one configured source graph into independently reloadable development units.
+///
+/// # Safety
+///
+/// Both pointers must address their declared number of initialized `i32`
+/// words in this module's linear memory for the duration of the call.
+pub unsafe extern "C" fn compile_compiler_session_development_program(
+    handle: u32,
+    path_pointer: *const i32,
+    path_unit_count: u32,
+    configuration_pointer: *const i32,
+    configuration_unit_count: u32,
+) -> u32 {
+    let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
+    let configuration_words = unsafe {
+        std::slice::from_raw_parts(configuration_pointer, configuration_unit_count as usize)
+    };
+    let compiled = decode_utf16_words(path_words, "module path")
+        .and_then(|path| {
+            decode_utf16_words(configuration_words, "development configuration")
+                .map(|configuration| (path, configuration))
+        })
+        .and_then(|(path, configuration)| {
+            let configuration: serde_json::Value = serde_json::from_str(&configuration)
+                .map_err(|error| format!("development configuration is not JSON: {error}"))?;
+            let entry_unit = configuration
+                .get("entryUnit")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "development configuration has no entryUnit text".to_owned())?;
+            let units = configuration
+                .get("units")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| "development configuration has no units object".to_owned())?
+                .iter()
+                .map(|(name, root)| {
+                    root.as_str()
+                        .map(|root| (name.clone(), root.to_owned()))
+                        .ok_or_else(|| format!("development unit {name:?} has no source path"))
+                })
+                .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
+            let index = session_index(handle)?;
+            SESSIONS.with(|sessions| {
+                let sessions = sessions.borrow();
+                let session = sessions
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+                session
+                    .compile_development_program(&path, entry_unit, &units)
+                    .map_err(|diagnostic| {
+                        serde_json::to_string(&compiler_failure_json(
+                            diagnostic,
+                            "development backend emission",
+                        ))
+                        .expect("development backend failure serialization failed")
+                    })
+            })
+        });
+    let result = match compiled {
+        Ok(program) => {
+            let units = program
+                .units
+                .iter()
+                .map(|unit| {
+                    serde_json::json!({
+                        "name": unit.name,
+                        "root": unit.root,
+                        "capabilities": unit.compiled.capabilities,
+                        "implementationKey": unit.implementation_key,
+                        "artifactSource": if unit.reused { "unit-cache" } else { "compiled" },
+                    })
+                })
+                .collect::<Vec<_>>();
+            let result = serde_json::json!({
+                "ok": true,
+                "entryUnit": program.entry_unit,
+                "units": units,
+                "edges": program.edges,
+            });
+            DEVELOPMENT_PROGRAM.with(|slot| *slot.borrow_mut() = Some(program));
+            result
+        }
+        Err(message) => {
+            DEVELOPMENT_PROGRAM.with(|slot| *slot.borrow_mut() = None);
+            if let Ok(failure) = serde_json::from_str::<serde_json::Value>(&message) {
+                failure
+            } else {
+                serde_json::json!({ "ok": false, "message": message })
+            }
+        }
+    };
+    write_result(
+        serde_json::to_vec(&result).expect("development compile result serialization failed"),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn development_unit_wasm_pointer(index: u32) -> *const u8 {
+    DEVELOPMENT_PROGRAM.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|program| program.units.get(index as usize))
+            .map_or(std::ptr::null(), |unit| unit.compiled.wasm.as_ptr())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn development_unit_wasm_length(index: u32) -> u32 {
+    DEVELOPMENT_PROGRAM.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|program| program.units.get(index as usize))
+            .map_or(0, |unit| unit.compiled.wasm.len() as u32)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn development_unit_manifest_pointer(index: u32) -> *const u8 {
+    DEVELOPMENT_PROGRAM.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|program| program.units.get(index as usize))
+            .map_or(std::ptr::null(), |unit| unit.compiled.manifest.as_ptr())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn development_unit_manifest_length(index: u32) -> u32 {
+    DEVELOPMENT_PROGRAM.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|program| program.units.get(index as usize))
+            .map_or(0, |unit| unit.compiled.manifest.len() as u32)
+    })
 }
 
 #[unsafe(no_mangle)]

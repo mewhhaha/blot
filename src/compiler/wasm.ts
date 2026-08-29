@@ -103,10 +103,21 @@ interface CompilerWasmExports {
     pathPointer: number,
     pathUnits: number,
   ): number;
+  compile_compiler_session_development_program(
+    handle: number,
+    pathPointer: number,
+    pathUnits: number,
+    configurationPointer: number,
+    configurationUnits: number,
+  ): number;
   compiled_wasm_pointer(): number;
   compiled_wasm_length(): number;
   compiled_manifest_pointer(): number;
   compiled_manifest_length(): number;
+  development_unit_wasm_pointer(index: number): number;
+  development_unit_wasm_length(index: number): number;
+  development_unit_manifest_pointer(index: number): number;
+  development_unit_manifest_length(index: number): number;
 }
 
 export type CompilerLoweringResult =
@@ -381,6 +392,31 @@ export type CompilerCompilationResult =
   }
   | CompilerTransportFailure;
 
+export interface CompilerDevelopmentUnit {
+  readonly name: string;
+  readonly root: string;
+  readonly wasm: Uint8Array;
+  readonly manifestBytes: Uint8Array;
+  readonly capabilities: readonly string[];
+  readonly implementationKey: string;
+  readonly artifactSource: "compiled" | "unit-cache";
+}
+
+export interface CompilerDevelopmentEdge {
+  readonly consumer: string;
+  readonly provider: string;
+  readonly name: string;
+}
+
+export type CompilerDevelopmentCompilationResult =
+  | {
+    readonly ok: true;
+    readonly entryUnit: string;
+    readonly units: readonly CompilerDevelopmentUnit[];
+    readonly edges: readonly CompilerDevelopmentEdge[];
+  }
+  | CompilerTransportFailure;
+
 export class CompilerWasm {
   readonly #exports: CompilerWasmExports;
   readonly #pathIds = new Map<number, Map<string, number>>();
@@ -510,7 +546,7 @@ export class CompilerWasm {
     if (missing.length > 0) {
       const frame = new BinaryEncoder();
       frame.u32(compilerBinaryFrameMagic);
-      frame.u32(COMPILER_HOST_ABI_VERSION);
+      frame.u32(compilerBinaryFrameSchema);
       frame.u32(missing.length);
       for (const path of missing) frame.string(path);
       const allocation = this.#allocateBytes(frame.finish());
@@ -574,7 +610,7 @@ export class CompilerWasm {
     };
     const encoder = new BinaryEncoder();
     encoder.u32(compilerBinaryFrameMagic);
-    encoder.u32(COMPILER_HOST_ABI_VERSION);
+    encoder.u32(compilerBinaryFrameSchema);
     encoder.u32(deltas.length);
     for (const delta of deltas) {
       encoder.u32(moduleId(delta.path));
@@ -840,6 +876,73 @@ export class CompilerWasm {
     }
   }
 
+  compileCompilerSessionDevelopmentProgram(
+    handle: number,
+    path: string,
+    entryUnit: string,
+    units: ReadonlyMap<string, string>,
+  ): CompilerDevelopmentCompilationResult {
+    const pathAllocation = this.#allocate(textWords(path));
+    const configuration = JSON.stringify({
+      entryUnit,
+      units: Object.fromEntries(
+        [...units].sort(([left], [right]) => left.localeCompare(right)),
+      ),
+    });
+    const configurationAllocation = this.#allocate(textWords(configuration));
+    try {
+      const length = this.#exports
+        .compile_compiler_session_development_program(
+          handle,
+          pathAllocation.pointer,
+          pathAllocation.wordCount,
+          configurationAllocation.pointer,
+          configurationAllocation.wordCount,
+        );
+      const result = this.#readResult(length) as
+        | {
+          readonly ok: true;
+          readonly entryUnit: string;
+          readonly units: readonly {
+            readonly name: string;
+            readonly root: string;
+            readonly capabilities: readonly string[];
+            readonly implementationKey: string;
+            readonly artifactSource: "compiled" | "unit-cache";
+          }[];
+          readonly edges: readonly CompilerDevelopmentEdge[];
+        }
+        | Exclude<CompilerDevelopmentCompilationResult, { readonly ok: true }>;
+      if (!result.ok) return result;
+      const compiledUnits = result.units.map((unit, index) => ({
+        name: unit.name,
+        root: unit.root,
+        wasm: new Uint8Array(
+          this.#exports.memory.buffer,
+          this.#exports.development_unit_wasm_pointer(index),
+          this.#exports.development_unit_wasm_length(index),
+        ).slice(),
+        manifestBytes: new Uint8Array(
+          this.#exports.memory.buffer,
+          this.#exports.development_unit_manifest_pointer(index),
+          this.#exports.development_unit_manifest_length(index),
+        ).slice(),
+        capabilities: unit.capabilities.slice(),
+        implementationKey: unit.implementationKey,
+        artifactSource: unit.artifactSource,
+      }));
+      return {
+        ok: true,
+        entryUnit: result.entryUnit,
+        units: compiledUnits,
+        edges: result.edges.slice(),
+      };
+    } finally {
+      this.#free(configurationAllocation);
+      this.#free(pathAllocation);
+    }
+  }
+
   #allocate(words: Int32Array): Allocation {
     const pointer = this.#exports.allocate_words(words.length);
     new Int32Array(this.#exports.memory.buffer, pointer, words.length).set(
@@ -884,9 +987,9 @@ export class CompilerWasm {
       throw new Error(`compiler returned binary frame magic ${magic}`);
     }
     const schema = decoder.u32("response schema");
-    if (schema !== COMPILER_HOST_ABI_VERSION) {
+    if (schema !== compilerBinaryFrameSchema) {
       throw new Error(
-        `compiler returned binary frame schema ${schema}, expected ${COMPILER_HOST_ABI_VERSION}`,
+        `compiler returned binary frame schema ${schema}, expected ${compilerBinaryFrameSchema}`,
       );
     }
     const ok = decoder.u32("response success") === 1;
@@ -917,6 +1020,7 @@ interface ByteAllocation {
 }
 
 const compilerBinaryFrameMagic = 0x33544c42;
+const compilerBinaryFrameSchema = 3;
 const compilerAnalysisFactMask = 0xffff_ffff;
 
 class BinaryEncoder {

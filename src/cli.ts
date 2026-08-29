@@ -3,7 +3,7 @@
 // Every semantic command hosts the same Rust/Wasm compiler artifact. Formatting
 // and AST inspection remain syntax-only Node tools over Baba's parser.
 
-import { resolve } from "@std/path";
+import { dirname, resolve } from "@std/path";
 import { BlotError, locate, render } from "./diagnostic.ts";
 import { parse } from "./syntax/parse.ts";
 import { evaluateFile as run, show } from "./run.ts";
@@ -11,6 +11,7 @@ import { loadedSource, LoadError } from "./load.ts";
 import { testFile, type TestOutcome } from "./test.ts";
 import { buildPackage } from "./package.ts";
 import { Compiler } from "./compiler.ts";
+import { DevelopmentProject } from "./development.ts";
 import { formatSource } from "./tooling/formatter.ts";
 import { runLanguageServer } from "./lsp.ts";
 
@@ -27,6 +28,15 @@ if (command === "lsp") {
     Deno.exit(2);
   }
   await runLanguageServer();
+  Deno.exit(0);
+}
+
+if (command === "dev") {
+  if (rest.length !== 1) {
+    printUsage();
+    Deno.exit(2);
+  }
+  await watchDevelopmentProject(rest[0]);
   Deno.exit(0);
 }
 
@@ -99,7 +109,47 @@ function printUsage(): void {
   console.error("       blot fmt [--check] <file.blot>...");
   console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
+  console.error("       blot dev <blot.json>");
   console.error("       blot lsp");
+}
+
+async function watchDevelopmentProject(manifestPath: string): Promise<void> {
+  let project = await DevelopmentProject.create(manifestPath);
+  const watcher = Deno.watchFs(dirname(project.manifest.path), {
+    recursive: true,
+  });
+  try {
+    await reportDevelopmentBuild(project);
+    for await (const event of watcher) {
+      if (event.kind === "access") continue;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      try {
+        if (event.paths.some((path) => resolve(path) === project.manifest.path)) {
+          const replacement = await DevelopmentProject.create(manifestPath);
+          project.destroy();
+          project = replacement;
+        }
+        await reportDevelopmentBuild(project);
+      } catch (error) {
+        report(project.manifest.path, error);
+      }
+    }
+  } finally {
+    watcher.close();
+    project.destroy();
+  }
+}
+
+async function reportDevelopmentBuild(
+  project: DevelopmentProject,
+): Promise<void> {
+  const build = await project.build();
+  const changed = build.changedUnits.map((unit) => unit.name).join(", ");
+  const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
+  const removed = build.removedUnits.join(", ");
+  console.log(
+    `${build.revision.slice(0, 12)}: changed [${changed}], retained [${retained}], removed [${removed}], ${build.durationMilliseconds.toFixed(1)} ms`,
+  );
 }
 
 async function formatFiles(arguments_: readonly string[]): Promise<number> {

@@ -71,6 +71,12 @@ export type BlotAbiManifest = {
       readonly result: BlotEffectOwnership;
     };
   }[];
+  readonly links?: readonly {
+    readonly unit: string;
+    readonly name: string;
+    readonly module: string;
+    readonly function: BlotAbiFunction;
+  }[];
 };
 
 export function buildBlotAbiManifest(

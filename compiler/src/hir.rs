@@ -577,6 +577,7 @@ pub struct RuntimeModule {
 
 pub(crate) struct ResidualTrace {
     source: String,
+    development_units: Option<Rc<HashSet<String>>>,
     types: Vec<RuntimeType>,
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
@@ -752,7 +753,8 @@ pub(crate) struct ResidualClosure<'a> {
     pub(crate) module: &'a str,
     pub(crate) parameter: crate::ast::PatternId,
     pub(crate) body: crate::ast::ExpressionId,
-    pub(crate) name: &'a str,
+    pub(crate) name: String,
+    pub(crate) self_name: Option<&'a str>,
     pub(crate) environment: &'a Environment,
     pub(crate) signature: Option<&'a Value>,
     pub(crate) reuse: bool,
@@ -778,6 +780,7 @@ pub(crate) struct ResidualFunctionCompilation {
     name: String,
     reuse: bool,
     span: crate::ast::Span,
+    source_span: crate::ast::Span,
 }
 
 fn integer_simd_layout(name: &str) -> (&'static str, u8) {
@@ -814,6 +817,14 @@ pub(crate) struct ResidualSwitch {
 }
 
 impl ResidualTrace {
+    pub(crate) fn crosses_development_boundary(&self, caller: &str, callee: &str) -> bool {
+        caller != callee
+            && self
+                .development_units
+                .as_ref()
+                .is_some_and(|units| units.contains(callee))
+    }
+
     pub(crate) fn begin_reuse_scope(&self) -> ResidualReuseScope {
         ResidualReuseScope {
             operation_counts: self
@@ -854,8 +865,20 @@ impl ResidualTrace {
     }
 
     pub(crate) fn new(source: &str) -> Self {
+        Self::with_development_units(source, None)
+    }
+
+    pub(crate) fn development(source: &str, units: Rc<HashSet<String>>) -> Self {
+        Self::with_development_units(source, Some(units))
+    }
+
+    fn with_development_units(
+        source: &str,
+        development_units: Option<Rc<HashSet<String>>>,
+    ) -> Self {
         let mut trace = Self {
             source: source.to_owned(),
+            development_units,
             types: Vec::new(),
             type_ids: HashMap::new(),
             signatures: Vec::new(),
@@ -3325,7 +3348,7 @@ impl ResidualTrace {
         )
     }
 
-    pub(crate) fn begin_recursive_function(
+    pub(crate) fn begin_residual_function(
         &mut self,
         closure: ResidualClosure<'_>,
         argument: &Value,
@@ -3339,6 +3362,7 @@ impl ResidualTrace {
             parameter: closure_parameter,
             body,
             name,
+            self_name,
             environment,
             signature,
             reuse,
@@ -3348,8 +3372,14 @@ impl ResidualTrace {
             parameter: closure_parameter,
             body,
             environment,
-            self_name: Some(name),
+            self_name,
         };
+        let source_span = context
+            .modules
+            .borrow()
+            .get(module)
+            .map(|loaded| loaded.module.arena.expression_span(body))
+            .ok_or_else(|| hir_error("A residual closure lost its source expression."))?;
         let staged_array_capture = closure_free_names(
             context,
             lexical_closure.module,
@@ -3388,7 +3418,7 @@ impl ResidualTrace {
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
-                    "Residual recursive closure `{name}` at {module} expression {} has no settled function signature.",
+                    "Residual closure `{name}` at {module} expression {} has no settled function signature.",
                     body.0
                 ),
                 span,
@@ -3445,7 +3475,7 @@ impl ResidualTrace {
             .lower_residual_argument(argument, domain, &substitutions, span)
             .map_err(|mut diagnostic| {
                 diagnostic.message = format!(
-                    "{} Recursive closure `{name}` argument {} against {}; result {}, context {}.",
+                    "{} Residual closure `{name}` argument {} against {}; result {}, context {}.",
                     diagnostic.message,
                     crate::value::show(argument),
                     crate::value::show(domain),
@@ -3642,9 +3672,10 @@ impl ResidualTrace {
             result_type,
             result_ownership,
             caller_arguments,
-            name: name.to_owned(),
+            name,
             reuse,
             span,
+            source_span,
         }))
     }
 
@@ -3680,7 +3711,7 @@ impl ResidualTrace {
         };
         if contract_parameter != parameter {
             return Err(hir_error(
-                "A recursive closure ownership contract changed its parameter.",
+                "A residual closure ownership contract changed its parameter.",
             ));
         }
         let loaded = context
@@ -3688,14 +3719,14 @@ impl ResidualTrace {
             .borrow()
             .get(module)
             .map(|loaded| loaded.module.clone())
-            .ok_or_else(|| hir_error("A recursive closure lost its source module."))?;
+            .ok_or_else(|| hir_error("A residual closure lost its source module."))?;
         let value = value_at_pattern(&loaded, parameter, source, argument).ok_or_else(|| {
-            hir_error("A recursive closure ownership result is absent from its argument pattern.")
+            hir_error("A residual closure ownership result is absent from its argument pattern.")
         })?;
         self.value_type(&value).map(Some)
     }
 
-    pub(crate) fn finish_recursive_function(
+    pub(crate) fn finish_residual_function(
         &mut self,
         compilation: ResidualFunctionCompilation,
         value: Value,
@@ -3754,7 +3785,7 @@ impl ResidualTrace {
                 reuse: compilation.reuse.then_some("checked"),
                 entry_block: 0,
                 blocks,
-                span: self.span(compilation.span),
+                span: self.span(compilation.source_span),
             }),
         );
         let frame = self
@@ -5003,6 +5034,13 @@ impl ResidualTrace {
                 name,
                 payload: None,
             } if name == "True" || name == "False" => Ok(1),
+            Value::Tag { name, payload } => {
+                let payload_type = match payload {
+                    Some(payload) => self.value_type(payload)?,
+                    None => 0,
+                };
+                Ok(self.sum_type(std::slice::from_ref(name), &[payload_type]))
+            }
             Value::Shape(fields) => self.product_type(fields),
             Value::ClosureChoice { alternatives, .. } => {
                 Err(hir_error(&closure_choice_refusal(alternatives.len())))
@@ -5188,6 +5226,7 @@ impl ResidualTrace {
     ) -> Result<(), Diagnostic> {
         if let Ok(type_id) = self.value_type(actual) {
             representation_facts.record(expected, type_id);
+            self.record_runtime_type_substitutions(expected, type_id, substitutions)?;
         }
         match expected {
             Value::TypeVariable(variable) => {
@@ -5276,6 +5315,7 @@ impl ResidualTrace {
     ) -> Result<(), Diagnostic> {
         if let Ok(type_id) = self.type_from_type_value(checked_actual) {
             representation_facts.record(expected, type_id);
+            self.record_runtime_type_substitutions(expected, type_id, substitutions)?;
         }
         match (expected, checked_actual) {
             (Value::TypeVariable(variable), checked_actual) => {
@@ -5350,6 +5390,83 @@ impl ResidualTrace {
                     substitutions,
                     representation_facts,
                 )?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn record_runtime_type_substitutions(
+        &self,
+        expected: &Value,
+        actual_type: usize,
+        substitutions: &mut HashMap<u32, usize>,
+    ) -> Result<(), Diagnostic> {
+        if let Value::TypeVariable(variable) = expected {
+            if let Some(previous) = substitutions.insert(*variable, actual_type)
+                && previous != actual_type
+            {
+                return Err(hir_error(
+                    "A residual type variable received incompatible runtime representations.",
+                ));
+            }
+            return Ok(());
+        }
+        let runtime = self.types.get(actual_type).ok_or_else(|| {
+            hir_error("A residual call-site representation references an absent runtime type.")
+        })?;
+        match (expected, runtime) {
+            (Value::Shape(expected_fields), RuntimeType::Product { fields, .. }) => {
+                for (name, expected_field) in expected_fields {
+                    let Some(actual_field) = fields.iter().find(|field| field.name == *name) else {
+                        continue;
+                    };
+                    self.record_runtime_type_substitutions(
+                        expected_field,
+                        actual_field.type_id,
+                        substitutions,
+                    )?;
+                }
+            }
+            (Value::Array(expected), RuntimeType::Store { element_type }) => {
+                let expected = expected
+                    .first()
+                    .ok_or_else(|| hir_error("A residual Array type omitted its element type."))?;
+                self.record_runtime_type_substitutions(expected, *element_type, substitutions)?;
+            }
+            (Value::ScratchType(expected), RuntimeType::Scratch { element_type }) => {
+                self.record_runtime_type_substitutions(expected, *element_type, substitutions)?;
+            }
+            (Value::RegionType(expected), RuntimeType::Indirect { target_type })
+            | (
+                Value::Sealed {
+                    inner: expected, ..
+                },
+                RuntimeType::Sealed {
+                    representation_type: target_type,
+                    ..
+                },
+            ) => {
+                self.record_runtime_type_substitutions(expected, *target_type, substitutions)?;
+            }
+            (Value::Union(expected_members), RuntimeType::Sum { cases, .. }) => {
+                for expected_member in expected_members {
+                    let Value::Tag { name, payload } = expected_member else {
+                        continue;
+                    };
+                    let Some(actual_case) = cases.iter().find(|case_| case_.name == *name) else {
+                        continue;
+                    };
+                    let payload = compiler_tag_payload(payload.as_deref());
+                    self.record_runtime_type_substitutions(
+                        &payload,
+                        actual_case.payload_type,
+                        substitutions,
+                    )?;
+                }
+            }
+            (Value::Extended { inner, .. } | Value::Forall { body: inner, .. }, _) => {
+                self.record_runtime_type_substitutions(inner, actual_type, substitutions)?;
             }
             _ => {}
         }
@@ -8190,6 +8307,24 @@ pub fn elaborate(
     path: &str,
     checked: CheckedModule,
 ) -> Result<RuntimeModule, Diagnostic> {
+    elaborate_with_development_units(context, path, checked, None)
+}
+
+pub(crate) fn elaborate_development(
+    context: Rc<Context>,
+    path: &str,
+    checked: CheckedModule,
+    units: HashSet<String>,
+) -> Result<RuntimeModule, Diagnostic> {
+    elaborate_with_development_units(context, path, checked, Some(Rc::new(units)))
+}
+
+fn elaborate_with_development_units(
+    context: Rc<Context>,
+    path: &str,
+    checked: CheckedModule,
+    development_units: Option<Rc<HashSet<String>>>,
+) -> Result<RuntimeModule, Diagnostic> {
     let (result_is_shape, result_span) = {
         let modules = context.modules.borrow();
         let loaded = modules
@@ -8214,7 +8349,7 @@ pub fn elaborate(
     let (value, host_calls) = match complete_host_calls(computation) {
         Ok(completed) => completed,
         Err(error) if error.code == "BLOT_DYNAMIC_HOST_RESULT" && !result_is_shape => {
-            return prepare_residual(context, path, checked);
+            return prepare_residual(context, path, checked, development_units);
         }
         Err(error) => return Err(error),
     };
@@ -8237,7 +8372,7 @@ pub fn elaborate(
             crate::ast::Span { start: 0, end: 0 },
         ));
     }
-    prepare_exports(context, path, staged, host_calls)
+    prepare_exports(context, path, staged, host_calls, development_units)
 }
 
 fn prepare_exports(
@@ -8245,6 +8380,7 @@ fn prepare_exports(
     path: &str,
     staged: Vec<StagedExport>,
     host_calls: Vec<HostCall>,
+    development_units: Option<Rc<HashSet<String>>>,
 ) -> Result<RuntimeModule, Diagnostic> {
     let mut value_exports = Vec::new();
     let mut function_exports = Vec::new();
@@ -8263,7 +8399,12 @@ fn prepare_exports(
         modules.push(HirBuilder::new(path).build(value_exports, host_calls)?);
     }
     for exported in function_exports {
-        modules.push(prepare_function_export(context.clone(), path, exported)?);
+        modules.push(prepare_function_export(
+            context.clone(),
+            path,
+            exported,
+            development_units.clone(),
+        )?);
     }
     merge_runtime_modules(path, modules)
 }
@@ -8272,6 +8413,7 @@ fn prepare_function_export(
     context: Rc<Context>,
     path: &str,
     exported: StagedExport,
+    development_units: Option<Rc<HashSet<String>>>,
 ) -> Result<RuntimeModule, Diagnostic> {
     let Some((mut function, mut type_)) = exported.runtime else {
         return Err(hir_error("A function export lost its runtime value."));
@@ -8299,7 +8441,10 @@ fn prepare_function_export(
             end: 0,
         },
     ));
-    let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
+    let trace = Rc::new(std::cell::RefCell::new(match development_units {
+        Some(units) => ResidualTrace::development(path, units),
+        None => ResidualTrace::new(path),
+    }));
     let runtime = Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone());
     let mut parameter_types = Vec::new();
     while let Type::Function {
@@ -8507,8 +8652,12 @@ fn prepare_residual(
     context: Rc<Context>,
     path: &str,
     checked: CheckedModule,
+    development_units: Option<Rc<HashSet<String>>>,
 ) -> Result<RuntimeModule, Diagnostic> {
-    let trace = Rc::new(std::cell::RefCell::new(ResidualTrace::new(path)));
+    let trace = Rc::new(std::cell::RefCell::new(match development_units {
+        Some(units) => ResidualTrace::development(path, units),
+        None => ResidualTrace::new(path),
+    }));
     let argument = module_argument(&checked.parameter)?;
     let computation = evaluate_checked_module(
         context,

@@ -227,6 +227,7 @@ export type BlotRuntimeOperation =
       readonly kind: "call.external";
       readonly capability: string;
       readonly operation: string;
+      readonly signature: number;
     }
     | {
       readonly kind: "closure.make";
@@ -651,13 +652,38 @@ export function validateBlotRuntimeModule(
       );
     }
   }
+  const linkOperations = new Map<string, number>();
+  for (const link of module.links) {
+    if (link.unit.length === 0 || link.name.length === 0) {
+      throw new TypeError(
+        `${module.source}: development links require non-empty unit and operation names`,
+      );
+    }
+    const key = `${link.unit}\u0000${link.name}`;
+    if (linkOperations.has(key)) {
+      throw new TypeError(
+        `${module.source}: development link ${link.unit}.${link.name} is repeated`,
+      );
+    }
+    requireSignature(
+      module,
+      link.signature,
+      `development link ${link.unit}.${link.name}`,
+    );
+    linkOperations.set(key, link.signature);
+  }
   module.functions.forEach((function_, functionId) => {
     if (function_.id !== functionId) {
       throw new TypeError(
         `${module.source}: function table index ${functionId} contains ID ${function_.id}`,
       );
     }
-    validateFunction(module, function_, capabilityOperations);
+    validateFunction(
+      module,
+      function_,
+      capabilityOperations,
+      linkOperations,
+    );
   });
   validateEffectClosure(module);
   requireUniqueNames(
@@ -771,6 +797,7 @@ function validateFunction(
   module: BlotRuntimeModule,
   function_: BlotRuntimeFunction,
   capabilityOperations: ReadonlyMap<string, number>,
+  linkOperations: ReadonlyMap<string, number>,
 ): void {
   if (function_.reuse !== undefined && function_.reuse !== "checked") {
     throw new TypeError(
@@ -868,6 +895,7 @@ function validateFunction(
         function_,
         operation,
         capabilityOperations,
+        linkOperations,
         values,
       );
       if (
@@ -1016,6 +1044,7 @@ function validateOperation(
   function_: BlotRuntimeFunction,
   operation: BlotRuntimeOperation,
   capabilityOperations: ReadonlyMap<string, number>,
+  linkOperations: ReadonlyMap<string, number>,
   values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
   if (operation.kind.startsWith("scratch.")) {
@@ -1103,6 +1132,21 @@ function validateOperation(
     if (!functionEffects.includes(requiredEffect)) {
       throw new TypeError(
         `${module.source}: function ${function_.name} calls ${operation.capability}.${operation.operation} outside capability ${requiredEffect} in its effect row`,
+      );
+    }
+  }
+  if (operation.kind === "call.external") {
+    const signature = linkOperations.get(
+      `${operation.capability}\u0000${operation.operation}`,
+    );
+    if (signature === undefined) {
+      throw new TypeError(
+        `${module.source}: external call ${operation.capability}.${operation.operation} is not declared`,
+      );
+    }
+    if (signature !== operation.signature) {
+      throw new TypeError(
+        `${module.source}: external call ${operation.capability}.${operation.operation} declares signature ${operation.signature}, expected ${signature}`,
       );
     }
   }
@@ -1273,6 +1317,10 @@ function validateEffectClosure(
           );
         } else if (operation.kind === "call.direct") {
           directCalls[function_.id].add(operation.function);
+        } else if (operation.kind === "call.external") {
+          module.signatures[operation.signature].effects.forEach((effect) =>
+            observed[function_.id].add(effect)
+          );
         } else if (operation.kind === "call.indirect") {
           module.signatures[operation.signature].effects.forEach((effect) =>
             observed[function_.id].add(effect)

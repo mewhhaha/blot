@@ -8,6 +8,10 @@ use crate::ast::{
     AstArena, Declaration, DeclarationId, Expression, ExpressionId, Module, Pattern, PatternId,
 };
 use crate::backend::{ClosedProgram, CompiledModule};
+use crate::development::{
+    CompiledDevelopmentProgram, CompiledDevelopmentUnit, development_module_key,
+    split_runtime_module,
+};
 use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
     Computation, Context, IncludedFile, LoadedModule, Phase, Runtime, evaluate_expression,
@@ -59,6 +63,7 @@ pub struct CompilerSession {
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
     closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
+    development_artifacts: RefCell<HashMap<(String, String, String), (String, CompiledModule)>>,
     published_boundaries: RefCell<HashMap<String, PublishedBoundary>>,
     next_boundary_id: Cell<u64>,
     dirty_modules: RefCell<HashSet<String>>,
@@ -107,6 +112,7 @@ impl Default for CompilerSession {
             module_analyses,
             checker,
             closed_programs: RefCell::new(HashMap::new()),
+            development_artifacts: RefCell::new(HashMap::new()),
             published_boundaries: RefCell::new(HashMap::new()),
             next_boundary_id: Cell::new(0),
             dirty_modules: RefCell::new(HashSet::new()),
@@ -895,6 +901,80 @@ impl CompilerSession {
         })
     }
 
+    pub fn compile_development_program(
+        &self,
+        path: &str,
+        entry_unit: &str,
+        units: &BTreeMap<String, String>,
+    ) -> Result<CompiledDevelopmentProgram, Diagnostic> {
+        let program = self.close_development_program(path, units)?;
+        let split =
+            split_runtime_module(program.runtime(), entry_unit, units).map_err(|message| {
+                Diagnostic::new(
+                    "BLOT_TARGET_REFUSAL",
+                    message,
+                    crate::ast::Span { start: 0, end: 0 },
+                )
+                .at(path)
+            })?;
+        let mut compiled_units = Vec::with_capacity(split.units.len());
+        for unit in split.units {
+            let implementation_key = development_module_key(&unit.module).map_err(|message| {
+                Diagnostic::new(
+                    "BLOT_BACKEND_ERROR",
+                    message,
+                    crate::ast::Span { start: 0, end: 0 },
+                )
+                .at(path)
+            })?;
+            let cache_key = (path.to_owned(), unit.name.clone(), unit.root.clone());
+            let cached = self
+                .development_artifacts
+                .borrow()
+                .get(&cache_key)
+                .filter(|(key, _)| key == &implementation_key)
+                .map(|(_, compiled)| compiled.clone());
+            let reused = cached.is_some();
+            let compiled = if let Some(compiled) = cached {
+                compiled
+            } else {
+                let compiled = crate::backend::close(unit.module)
+                    .and_then(|program| program.compile())
+                    .map_err(|message| {
+                        let code = if message.contains("development link")
+                            && message.contains("unsupported")
+                        {
+                            "BLOT_TARGET_REFUSAL"
+                        } else {
+                            "BLOT_BACKEND_ERROR"
+                        };
+                        Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 })
+                            .at(path)
+                    })?;
+                self.development_artifacts
+                    .borrow_mut()
+                    .insert(cache_key, (implementation_key.clone(), compiled.clone()));
+                compiled
+            };
+            compiled_units.push(CompiledDevelopmentUnit {
+                name: unit.name,
+                root: unit.root,
+                compiled,
+                implementation_key,
+                reused,
+            });
+        }
+        let active_units = units.keys().collect::<HashSet<_>>();
+        self.development_artifacts
+            .borrow_mut()
+            .retain(|(root, unit, _), _| root != path || active_units.contains(unit));
+        Ok(CompiledDevelopmentProgram {
+            entry_unit: split.entry_unit,
+            units: compiled_units,
+            edges: split.edges,
+        })
+    }
+
     fn close_program(&self, path: &str) -> Result<Rc<ClosedProgram>, Diagnostic> {
         self.begin_semantic_request(path)?;
         if let Some(program) = self.closed_programs.borrow().get(path) {
@@ -918,6 +998,33 @@ impl CompilerSession {
             .borrow_mut()
             .insert(path.to_owned(), program.clone());
         Ok(program)
+    }
+
+    fn close_development_program(
+        &self,
+        path: &str,
+        units: &BTreeMap<String, String>,
+    ) -> Result<ClosedProgram, Diagnostic> {
+        self.begin_semantic_request(path)?;
+        let checked = self
+            .checker
+            .check(path)
+            .map_err(|diagnostic| diagnostic.at(path))?;
+        let runtime = crate::hir::elaborate_development(
+            self.context.clone(),
+            path,
+            checked,
+            units.values().cloned().collect(),
+        )
+        .map_err(|diagnostic| diagnostic.at(path))?;
+        crate::backend::close(runtime).map_err(|message| {
+            Diagnostic::new(
+                "BLOT_BACKEND_ERROR",
+                message,
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .at(path)
+        })
     }
 
     fn begin_semantic_request(&self, path: &str) -> Result<(), Diagnostic> {

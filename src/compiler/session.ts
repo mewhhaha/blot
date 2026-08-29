@@ -45,6 +45,7 @@ import {
 } from "./revision.ts";
 import {
   type AddedCompilerModuleResult,
+  type CompilerDevelopmentEdge,
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
   type CompilerReadabilityFact,
@@ -89,6 +90,30 @@ export interface CompilerArtifact {
   readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
   readonly artifactSource: "compiled" | "revision-cache";
+}
+
+export interface DevelopmentCompilationRequest {
+  readonly entryPath: string;
+  readonly entryUnit: string;
+  readonly units: ReadonlyMap<string, string>;
+}
+
+export interface DevelopmentUnitArtifact {
+  readonly name: string;
+  readonly root: string;
+  readonly wasm: Uint8Array;
+  readonly manifestBytes: Uint8Array;
+  readonly capabilities: readonly string[];
+  readonly interfaceDigest: string;
+  readonly implementationDigest: string;
+  readonly artifactSource: "compiled" | "unit-cache";
+}
+
+export interface DevelopmentCompilation {
+  readonly revision: string;
+  readonly entryUnit: string;
+  readonly units: readonly DevelopmentUnitArtifact[];
+  readonly edges: readonly CompilerDevelopmentEdge[];
 }
 
 export interface CompilerSyntaxSnapshot {
@@ -149,6 +174,9 @@ export interface CompilerHost {
   syntaxSnapshot(path: string, source: string): Promise<CompilerSyntaxSnapshot>;
   prepare(path: string): Promise<BlotRuntimeModule>;
   compile(path: string): Promise<CompilerArtifact>;
+  compileDevelopment(
+    request: DevelopmentCompilationRequest,
+  ): Promise<DevelopmentCompilation>;
   destroy(): void;
 }
 
@@ -511,6 +539,83 @@ export class Compiler implements CompilerHost {
       };
       revision.artifact = artifact;
       return copiedArtifact(artifact, "compiled");
+    });
+  }
+
+  async compileDevelopment(
+    request: DevelopmentCompilationRequest,
+  ): Promise<DevelopmentCompilation> {
+    return await this.#request(async () => {
+      const entryPath = resolve(request.entryPath);
+      const unitRoots = new Map(
+        [...request.units].map(([name, root]) =>
+          [name, resolve(root)] as const
+        ),
+      );
+      const loaded = await this.#workspace.refresh(entryPath);
+      this.#syncLoaded(loaded);
+      const graph = collectGraph(loaded);
+      for (const [name, root] of unitRoots) {
+        if (graph.has(root)) continue;
+        throw new Error(
+          `development unit ${JSON.stringify(name)} root ${
+            JSON.stringify(root)
+          } is not reachable from ${JSON.stringify(entryPath)}`,
+        );
+      }
+      const result = this.#compiler.compileCompilerSessionDevelopmentProgram(
+        this.#handle,
+        entryPath,
+        request.entryUnit,
+        unitRoots,
+      );
+      if (!result.ok) {
+        this.#throwFailure(result, entryPath, "development backend emission");
+      }
+      const artifacts = await Promise.all(result.units.map(async (unit) => ({
+        name: unit.name,
+        root: unit.root,
+        wasm: unit.wasm.slice(),
+        manifestBytes: unit.manifestBytes.slice(),
+        capabilities: unit.capabilities.slice(),
+        interfaceDigest: await sha256(unit.manifestBytes),
+        implementationDigest: unit.implementationKey,
+        artifactSource: unit.artifactSource,
+      })));
+      const revision = await sha256(
+        new TextEncoder().encode(JSON.stringify({
+          entryUnit: result.entryUnit,
+          units: artifacts.map((unit) => ({
+            name: unit.name,
+            interfaceDigest: unit.interfaceDigest,
+            implementationDigest: unit.implementationDigest,
+          })),
+        })),
+      );
+      return {
+        revision,
+        entryUnit: result.entryUnit,
+        units: artifacts,
+        edges: result.edges.slice(),
+      };
+    });
+  }
+
+  async setOverlay(
+    path: string,
+    source: string,
+    version?: number,
+  ): Promise<void> {
+    await this.#request(async () => {
+      this.#syncLoaded(
+        await this.#workspace.updateOverlay(path, source, version),
+      );
+    });
+  }
+
+  async clearOverlay(path: string): Promise<void> {
+    await this.#request(async () => {
+      this.#syncLoaded(await this.#workspace.closeOverlay(path));
     });
   }
 
