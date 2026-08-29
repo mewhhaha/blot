@@ -1323,6 +1323,9 @@ fn walk(
                 .collect(),
         ),
         Expression::Array { elements, span } => {
+            if elements.is_empty() {
+                return Produced::EmptyStore;
+            }
             let mut values = Vec::new();
             for element in elements {
                 let produced = walk(element.value, scope, analysis, Use::Move);

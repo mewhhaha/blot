@@ -2080,6 +2080,7 @@ mod tests {
     use super::*;
     use crate::ast::{AstArena, Expression, ResultEffects, Span};
     use crate::eval::{ApplicationSite, apply};
+    use std::collections::BTreeSet;
 
     const TOP_LEVEL_FAULT_SOURCE: &str = "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"snapshot\"\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return { .action = action; .origin = @shape.get (@type.members Extended) \"origin\"; }\u{e000}\n";
     const CLOSURE_LOCAL_FAULT_SOURCE: &str = "let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  const Extended = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members Extended) \"origin\"\n  use result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\n";
@@ -2578,6 +2579,7 @@ mod tests {
             "ownership",
             "specializations",
             "simplifications",
+            "readability",
         ] {
             assert_eq!(
                 occupied_analysis[field], fresh_analysis[field],
@@ -2916,6 +2918,57 @@ mod tests {
 
         assert!(
             error.contains("simplification references missing expression"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_readability_fact_outside_its_ast() {
+        const PATH: &str = "snapshot:missing-readability-expression";
+        let bytes = snapshot_from_source(PATH, "let empty = @array.empty\nreturn empty\n");
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        encoded["certificate"]["readability"][0]["expression"] = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("missing readability expression should be rejected");
+
+        assert!(
+            error.contains("readability fact references missing expression"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_conflicting_readability_payloads_for_one_kind() {
+        const PATH: &str = "snapshot:conflicting-readability";
+        let bytes = snapshot_from_source(PATH, "let count = 0\nlet count = 1\nreturn count\n");
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        let mut conflicting = encoded["certificate"]["readability"][0].clone();
+        conflicting["name"] = serde_json::json!("other");
+        encoded["certificate"]["readability"]
+            .as_array_mut()
+            .expect("readability certificate should be an array")
+            .push(conflicting);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("conflicting readability payloads should be rejected");
+
+        assert!(
+            error.contains("repeats StableShadow readability fact"),
             "{error}"
         );
     }
@@ -3630,6 +3683,414 @@ mod tests {
             1,
             "{analysis}"
         );
+    }
+
+    #[test]
+    fn analysis_reports_semantically_proved_readability_facts() {
+        let source_text = concat!(
+            "const run = fn () => 1\n",
+            "let direct = fn () => do:\n",
+            "  use value <- run ()\n",
+            "  return value\n\n",
+            "let forced = fn () => do:\n",
+            "  use value <- run\n",
+            "  return value\n\n",
+            "const Arrays = { .empty = @array.empty; }\n",
+            "let empty = Arrays.empty\n",
+            "let count = 0\n",
+            "let count = 1\n",
+            "let source = { .first = 1; .second = 2; .third = 3; }\n",
+            "let rebuilt = {\n",
+            "  .first = source.first;\n",
+            "  .second = count;\n",
+            "  .third = source.third;\n",
+            "}\n",
+            "const First = { .chosen = 1; .other = 2; }\n",
+            "const Second = { .chosen = 3; }\n",
+            "open First\n",
+            "open Second\n",
+            "let selected = chosen\n",
+            "open { .ignored = 4; }\n",
+            "const Types = { .Number = @type.int; }\n",
+            "open Types\n",
+            "let typed :: Number\n",
+            "let typed = 4\n",
+            "return (direct, forced, empty, rebuilt, selected, typed)\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("readability source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("readability source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        let readability = analysis["readability"]
+            .as_array()
+            .expect("analysis should contain readability facts");
+        let source_for = |fact: &serde_json::Value| {
+            let start = fact["span"]["start"].as_u64().unwrap() as usize;
+            let end = fact["span"]["end"].as_u64().unwrap() as usize;
+            &source_text[start..end]
+        };
+        assert!(readability.iter().any(|fact| {
+            fact["kind"] == "direct-effect-computation" && source_for(fact) == "run ()"
+        }));
+        assert!(!readability.iter().any(|fact| {
+            fact["kind"] == "direct-effect-computation" && source_for(fact) == "run"
+        }));
+        assert!(
+            readability.iter().any(|fact| {
+                fact["kind"] == "empty-array" && source_for(fact) == "Arrays.empty"
+            })
+        );
+        assert!(readability.iter().any(|fact| {
+            fact["kind"] == "stable-shadow" && fact["name"] == "count" && source_for(fact) == "1"
+        }));
+        let reconstruction = readability
+            .iter()
+            .find(|fact| fact["kind"] == "record-reconstruction")
+            .expect("record reconstruction should be proved");
+        assert_eq!(reconstruction["retained"], serde_json::json!(["second"]));
+        let source_start = reconstruction["source"]["start"].as_u64().unwrap() as usize;
+        let source_end = reconstruction["source"]["end"].as_u64().unwrap() as usize;
+        assert_eq!(&source_text[source_start..source_end], "source");
+        assert!(readability.iter().any(|fact| {
+            fact["kind"] == "open-usage"
+                && fact["used"] == serde_json::json!(["chosen"])
+                && fact["shadowed"] == serde_json::json!(["chosen"])
+        }));
+        assert!(readability.iter().any(|fact| {
+            fact["kind"] == "open-usage"
+                && fact["used"] == serde_json::json!(["Number"])
+                && fact["shadowed"] == serde_json::json!([])
+        }));
+        assert!(
+            readability.iter().any(|fact| {
+                fact["kind"] == "open-usage" && fact["used"] == serde_json::json!([])
+            })
+        );
+    }
+
+    #[test]
+    fn analysis_allows_distinct_readability_kinds_for_one_expression() {
+        let source_text = concat!(
+            "let values = @array.empty\n",
+            "let values = @array.empty\n",
+            "return values\n",
+        );
+        let replacement_start = source_text
+            .rfind("@array.empty")
+            .expect("replacement expression should be present")
+            as u64;
+        let replacement_end = replacement_start + "@array.empty".len() as u64;
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("overlapping readability source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("overlapping readability source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        let kinds = analysis["readability"]
+            .as_array()
+            .expect("analysis should contain readability facts")
+            .iter()
+            .filter(|fact| {
+                fact["span"]["start"] == replacement_start && fact["span"]["end"] == replacement_end
+            })
+            .map(|fact| fact["kind"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(kinds, BTreeSet::from(["empty-array", "stable-shadow"]));
+    }
+
+    #[test]
+    fn empty_array_readability_requires_comptime_stable_provenance() {
+        let source_text = concat!(
+            "const Arrays = { .empty = @array.empty; }\n",
+            "let stable = Arrays.empty\n",
+            "let collect = fn value => do:\n",
+            "  let store = @array.empty\n",
+            "  store := @array.push store value\n",
+            "  return store\n",
+            "let collect_field = fn value => do:\n",
+            "  let state = { .items = @array.empty; }\n",
+            "  state := { .items = @array.push state.items value; }\n",
+            "  return state.items\n",
+            "return (stable, collect, collect_field)\n",
+        );
+        let stable_start = source_text
+            .find("Arrays.empty")
+            .expect("stable empty expression should be present") as u64;
+        let runtime_start = source_text
+            .rfind("store\n")
+            .expect("runtime store result should be present") as u64;
+        let runtime_field_start = source_text
+            .rfind("state.items\n")
+            .expect("runtime field result should be present")
+            as u64;
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("empty provenance source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("empty provenance source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        let empty_spans = analysis["readability"]
+            .as_array()
+            .expect("analysis should contain readability facts")
+            .iter()
+            .filter(|fact| fact["kind"] == "empty-array")
+            .map(|fact| fact["span"]["start"].as_u64().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert!(empty_spans.contains(&stable_start), "{analysis}");
+        assert!(!empty_spans.contains(&runtime_start), "{analysis}");
+        assert!(!empty_spans.contains(&runtime_field_start), "{analysis}");
+    }
+
+    #[test]
+    fn runtime_loop_fields_do_not_reuse_pre_loop_readability_provenance() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let source_text = concat!(
+                "open import \"blot:prelude\"\n",
+                "let state = {\n",
+                "  .items = [];\n",
+                "  .source = { .first = 0; .second = 0; };\n",
+                "}\n",
+                "for value in Iter.items [1, 2]:\n",
+                "  state := {\n",
+                "    .items = [...state.items, value];\n",
+                "    .source = { .second = value; .first = value; };\n",
+                "  }\n",
+                "let rebuilt = { .first = state.source.first; .second = state.source.second; }\n",
+                "return (state.items, rebuilt)\n",
+            );
+            let loop_start = source_text
+                .find("for value")
+                .expect("loop should be present") as u64;
+            let rebuilt_start = source_text
+                .find("{ .first = state.source.first")
+                .expect("record reconstruction should be present")
+                as u64;
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(source_text))
+                .expect("loop provenance source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("loop provenance source should configure");
+
+            let analysis = session.analyze_module("main.blot");
+
+            assert_eq!(analysis["ok"], true, "{analysis}");
+            let readability = analysis["readability"]
+                .as_array()
+                .expect("analysis should contain readability facts");
+            assert!(
+                !readability.iter().any(|fact| {
+                    fact["kind"] == "empty-array"
+                        && fact["span"]["start"]
+                            .as_u64()
+                            .is_some_and(|start| start >= loop_start)
+                }),
+                "{analysis}"
+            );
+            assert!(
+                !readability.iter().any(|fact| {
+                    fact["kind"] == "record-reconstruction"
+                        && fact["span"]["start"] == rebuilt_start
+                }),
+                "{analysis}"
+            );
+        });
+    }
+
+    #[test]
+    fn direct_effect_readability_requires_every_specialization_to_avoid_forcing() {
+        let source_text = concat!(
+            "const forward = fn computation => do:\n",
+            "  use value <- computation\n",
+            "  return value\n",
+            "let direct = forward 1\n",
+            "let forced = forward (fn () => 2)\n",
+            "return (direct, forced)\n",
+        );
+        let operand_start = source_text
+            .find("computation\n")
+            .expect("effect operand should be present") as u64;
+        let operand_end = operand_start + "computation".len() as u64;
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("specialized effect source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("specialized effect source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert!(
+            !analysis["readability"]
+                .as_array()
+                .expect("analysis should contain readability facts")
+                .iter()
+                .any(|fact| {
+                    fact["kind"] == "direct-effect-computation"
+                        && fact["span"]["start"] == operand_start
+                        && fact["span"]["end"] == operand_end
+                }),
+            "{analysis}"
+        );
+    }
+
+    #[test]
+    fn record_reconstruction_uses_runtime_local_exact_order() {
+        let source_text = concat!(
+            "let rebuild = fn runtime => do:\n",
+            "  let source = { .first = runtime; .second = 2; .third = 3; }\n",
+            "  return { .first = source.first; .second = runtime; .third = source.third; }\n",
+            "return rebuild\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("runtime reconstruction source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("runtime reconstruction source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        let reconstruction = analysis["readability"]
+            .as_array()
+            .expect("analysis should contain readability facts")
+            .iter()
+            .find(|fact| fact["kind"] == "record-reconstruction")
+            .expect("runtime-local exact order should prove reconstruction");
+        assert_eq!(reconstruction["retained"], serde_json::json!(["second"]));
+        let source_start = reconstruction["source"]["start"].as_u64().unwrap() as usize;
+        let source_end = reconstruction["source"]["end"].as_u64().unwrap() as usize;
+        assert_eq!(&source_text[source_start..source_end], "source");
+    }
+
+    #[test]
+    fn record_reconstruction_requires_proved_source_order() {
+        let source_text = concat!(
+            "let outer = { .first = 1; .second = 2; }\n",
+            "let rebuild = fn runtime => do:\n",
+            "  let wrapped = do:\n",
+            "    let outer = { .second = runtime; .first = 0; }\n",
+            "    return outer\n",
+            "  return { .first = wrapped.first; .second = wrapped.second; }\n",
+            "return (outer, rebuild)\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("record-order source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("record-order source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert!(
+            !analysis["readability"]
+                .as_array()
+                .expect("analysis should contain readability facts")
+                .iter()
+                .any(|fact| fact["kind"] == "record-reconstruction")
+        );
+    }
+
+    #[test]
+    fn record_reconstruction_rejects_stale_runtime_order() {
+        let source_text = concat!(
+            "let rebuild_direct = fn replacement => do:\n",
+            "  let source = { .first = 1; .second = 2; }\n",
+            "  source := replacement\n",
+            "  return { .first = source.first; .second = source.second; }\n",
+            "let rebuild_field = fn replacement => do:\n",
+            "  let state = { .source = { .first = 1; .second = 2; }; }\n",
+            "  state := replacement\n",
+            "  return { .first = state.source.first; .second = state.source.second; }\n",
+            "return (rebuild_direct, rebuild_field)\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(source_text))
+            .expect("runtime record provenance source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("runtime record provenance source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        assert!(
+            !analysis["readability"]
+                .as_array()
+                .expect("analysis should contain readability facts")
+                .iter()
+                .any(|fact| fact["kind"] == "record-reconstruction"),
+            "{analysis}"
+        );
+    }
+
+    #[test]
+    fn empty_array_literal_is_reusable_without_shared_store_authority() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(concat!(
+                    "let literal :: [@type.int]\n",
+                    "let literal = []\n",
+                    "let primitive :: [@type.int]\n",
+                    "let primitive = @array.empty\n",
+                    "let literal_one = @array.push literal 1\n",
+                    "let literal_two = @array.push literal 2\n",
+                    "let primitive_one = @array.push primitive 1\n",
+                    "let primitive_two = @array.push primitive 2\n",
+                    "return (literal_one, literal_two, primitive_one, primitive_two)\n",
+                )),
+            )
+            .expect("empty-array source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("empty-array source should configure");
+
+        let checked = session.check_module("main.blot");
+        let evaluated = session.evaluate_module("main.blot");
+        let prepared = session.prepare_runtime_hir("main.blot");
+
+        assert_eq!(checked["ok"], true, "{checked}");
+        assert_eq!(evaluated["display"], "([1], [2], [1], [2])", "{evaluated}");
+        assert_eq!(prepared["ok"], true, "{prepared}");
     }
 
     #[test]

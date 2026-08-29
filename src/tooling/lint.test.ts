@@ -4,6 +4,7 @@ import { DEFAULT_FIXITIES } from "../syntax/fixity.ts";
 import type { Expr, Module } from "../syntax/ast.ts";
 import type { Rule } from "../syntax/cursor.ts";
 import type {
+  CompilerReadabilityFact,
   CompilerSimplificationFact,
   CompilerSpecializationFact,
 } from "../compiler/wasm.ts";
@@ -72,7 +73,11 @@ function rendererSimplificationFacts(
   return facts;
 }
 
-async function applyLintFix(source: string, code: string): Promise<string> {
+async function applyLintFix(
+  source: string,
+  code: string,
+  readability: readonly CompilerReadabilityFact[] = [],
+): Promise<string> {
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error(`lint fixture for ${code} did not parse`);
   const diagnostic = lintModule(
@@ -86,6 +91,7 @@ async function applyLintFix(source: string, code: string): Promise<string> {
         source,
         parsed.cst,
       ),
+      readability,
     },
   ).find(
     (candidate) => candidate.code === code,
@@ -368,8 +374,46 @@ return run
   assertEquals(
     await applyLintFix(source, "BLOT_LINT_DISCARDED_BOOLEAN_CASE"),
     `let run = fn hidden => do:
-  if not (hidden):
+  if hidden:
+    use ()
+  else:
     use draw ()
+  return ()
+return run
+`,
+  );
+});
+
+Deno.test("a discarded Boolean case preserves text literal whitespace", async () => {
+  const source = `let run = fn ready => do:
+  use case accepts "a  b" of
+    #True => draw ()
+    #False => hide ()
+  return ()
+return run
+`;
+  const fixed = await applyLintFix(
+    source,
+    "BLOT_LINT_DISCARDED_BOOLEAN_CASE",
+  );
+  assert(fixed.includes('if accepts "a  b":'));
+});
+
+Deno.test("a discarded two-effect Boolean case becomes an if-else", async () => {
+  const source = `let run = fn ready => do:
+  use case ready of
+    #False => hide ()
+    #True => draw ()
+  return ()
+return run
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_DISCARDED_BOOLEAN_CASE"),
+    `let run = fn ready => do:
+  if ready:
+    use draw ()
+  else:
+    use hide ()
   return ()
 return run
 `,
@@ -393,6 +437,144 @@ return 1
   );
 });
 
+Deno.test("a single-return do block becomes its returned expression", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let increment = fn value => do:
+  return value + 1
+return increment
+`,
+      "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    ),
+    `let increment = fn value => (value + 1)
+return increment
+`,
+  );
+});
+
+Deno.test("a redundant do fix preserves operator grouping", async () => {
+  assertEquals(
+    await applyLintFix(
+      `open import "blot:prelude"
+return 2 * do:
+  return 3 + 4
+`,
+      "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    ),
+    `open import "blot:prelude"
+return 2 * (3 + 4)
+`,
+  );
+});
+
+Deno.test("a redundant do fix dedents a multiline expression", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let pair = fn value => do:
+  return (
+    value,
+    value + 1
+  )
+return pair
+`,
+      "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    ),
+    `let pair = fn value => (
+  value,
+  value + 1
+)
+return pair
+`,
+  );
+});
+
+Deno.test("a do block with a declaration keeps its return scope", async () => {
+  const source = `let increment = fn value => do:
+  let next = value + 1
+  return next
+return increment
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("nontrivial do fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_REDUNDANT_DO_BLOCK"
+    ),
+    [],
+  );
+});
+
+Deno.test("an early return makes its terminal else redundant", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let label = fn value => do:
+  if value == 0:
+    return "zero"
+  else:
+    let next = value + 1
+    return Text.of_int next
+return label
+`,
+      "BLOT_LINT_REDUNDANT_TERMINAL_ELSE",
+    ),
+    `let label = fn value => do:
+  if value == 0:
+    return "zero"
+  let next = value + 1
+  return Text.of_int next
+return label
+`,
+  );
+});
+
+Deno.test("a nonterminal else keeps its local bindings scoped", async () => {
+  const source = `let choose = fn ready => do:
+  let value = 0
+  if ready:
+    return 1
+  else:
+    let hidden = 2
+    value := hidden
+  return value
+return choose
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("nonterminal else fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_REDUNDANT_TERMINAL_ELSE"
+    ),
+    [],
+  );
+});
+
+Deno.test("a nested conditional retains the ladder-specific action", async () => {
+  const source = `let choose = fn value => do:
+  if first value:
+    return 1
+  else:
+    if second value:
+      return 2
+    else:
+      return 3
+return choose
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("nested conditional fixture did not parse");
+  const diagnostics = lintModule(parsed.module, source, parsed.cst);
+  assert(
+    diagnostics.some((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
+    ),
+  );
+  assertEquals(
+    diagnostics.filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_REDUNDANT_TERMINAL_ELSE"
+    ),
+    [],
+  );
+});
+
 Deno.test("an empty left append returns the right array", async () => {
   assertEquals(
     await applyLintFix(
@@ -402,6 +584,860 @@ Deno.test("an empty left append returns the right array", async () => {
     ),
     `return values
 `,
+  );
+});
+
+Deno.test("an unused lambda parameter becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return fn forgotten => 1
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `return fn _ => 1
+`,
+  );
+});
+
+Deno.test("an unused module parameter becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `module with forgotten
+return 1
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `module with _
+return 1
+`,
+  );
+});
+
+Deno.test("an unused name in a compound parameter becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return fn (used, forgotten) => used
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `return fn (used, _) => used
+`,
+  );
+});
+
+Deno.test("an unused name in a destructuring binding becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let (used, forgotten) = pair
+return used
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `let (used, _) = pair
+return used
+`,
+  );
+});
+
+Deno.test("an owned sibling keeps an unused destructured name visible", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let (!owned, forgotten) = pair
+return consume (!owned)
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `let (!owned, _) = pair
+return consume (!owned)
+`,
+  );
+});
+
+Deno.test("a wholly unused destructuring binding prefers removal", async () => {
+  const source = `let (first, second) = pair
+return 0
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("unused destructuring fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNUSED_PATTERN_NAME"
+    ),
+    [],
+  );
+});
+
+Deno.test("an unused effect destructuring name becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `use (first, second) <- effect ()
+return ()
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `use (_, second) <- effect ()
+return ()
+`,
+  );
+});
+
+Deno.test("an unused loop pattern name becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let values = []
+for forgotten in inputs:
+  values := [...values, 0]
+return values
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `let values = []
+for _ in inputs:
+  values := [...values, 0]
+return values
+`,
+  );
+});
+
+Deno.test("an unused refutable loop pattern name becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `for case #Some forgotten in inputs:
+  use draw ()
+return ()
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `for case #Some _ in inputs:
+  use draw ()
+return ()
+`,
+  );
+});
+
+Deno.test("an unused case payload becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return case option of
+  #Some forgotten => 1
+  #None => 0
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `return case option of
+  #Some _ => 1
+  #None => 0
+`,
+  );
+});
+
+Deno.test("an unused parameter in a computed field name becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return { .[(fn forgotten => "field") ()] = 1; }
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `return { .[(fn _ => "field") ()] = 1; }
+`,
+  );
+});
+
+Deno.test("an unused multi-subject case name becomes a wildcard", async () => {
+  assertEquals(
+    await applyLintFix(
+      `return case first, second of
+  used, forgotten => used
+`,
+      "BLOT_LINT_UNUSED_PATTERN_NAME",
+    ),
+    `return case first, second of
+  used, _ => used
+`,
+  );
+});
+
+Deno.test("read and semantically qualified parameters stay named", async () => {
+  const source = `let read = fn value => value
+let owned = fn !value => 0
+let deferred = fn ~value => 0
+let computed = fn name => { .[name] = 1; }
+return (read, owned, deferred, computed)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("used pattern fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNUSED_PATTERN_NAME"
+    ),
+    [],
+  );
+});
+
+Deno.test("a nonrecursive function without a signature drops rec", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let rec identity = fn value => value
+return identity
+`,
+      "BLOT_LINT_UNNECESSARY_REC",
+    ),
+    `let identity = fn value => value
+return identity
+`,
+  );
+});
+
+Deno.test("a nonrecursive function drops rec from its signature and binding", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let rec identity :: Int -> Int
+let rec identity = fn value => value
+return identity
+`,
+      "BLOT_LINT_UNNECESSARY_REC",
+    ),
+    `let identity :: Int -> Int
+let identity = fn value => value
+return identity
+`,
+  );
+});
+
+Deno.test("an independent recursive group drops every rec marker", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let rec first = fn value => value
+let rec second = fn value => value
+return (first, second)
+`,
+      "BLOT_LINT_UNNECESSARY_REC",
+    ),
+    `let first = fn value => value
+let second = fn value => value
+return (first, second)
+`,
+  );
+});
+
+Deno.test("self and mutually recursive functions keep rec", async () => {
+  const source = `let rec loop = fn value => loop value
+let separator = 0
+let rec even = fn value => odd value
+let rec odd = fn value => even value
+return (loop, separator, even, odd)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("necessary rec fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNNECESSARY_REC"
+    ),
+    [],
+  );
+});
+
+Deno.test("an inner recursive binding does not keep an outer rec", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let rec f = fn () => do:
+  let rec f = fn () => f ()
+  return f
+return f
+`,
+      "BLOT_LINT_UNNECESSARY_REC",
+    ),
+    `let f = fn () => do:
+  let rec f = fn () => f ()
+  return f
+return f
+`,
+  );
+});
+
+Deno.test("five positional parameters suggest named fields without a fix", async () => {
+  const source = `return fn (a, b, c, d, e) => (a, b, c, d, e)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("large positional tuple fixture did not parse");
+  }
+
+  const diagnostics = lintModule(parsed.module, source, parsed.cst).filter(
+    (diagnostic) => diagnostic.code === "BLOT_LINT_LARGE_POSITIONAL_TUPLE",
+  );
+  assertEquals(diagnostics.length, 1);
+  assertEquals(diagnostics[0]?.fix, null);
+});
+
+Deno.test("five positional module parameters suggest named fields", async () => {
+  const source = `module with (a, b, c, d, e)
+return (a, b, c, d, e)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("large positional module fixture did not parse");
+  }
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_LARGE_POSITIONAL_TUPLE"
+    ).length,
+    1,
+  );
+});
+
+Deno.test("a proved terminal effect result is returned directly", async () => {
+  const source = `let run = fn () => do:
+  use result <- load ()
+  return result
+return run
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("terminal effect fixture did not parse");
+  const run = parsed.module.declarations[0];
+  if (
+    run === undefined || run.tag !== "binding" ||
+    run.value.tag !== "lambda" || run.value.body.tag !== "block"
+  ) {
+    throw new Error("terminal effect fixture did not contain the run block");
+  }
+  const effect = run.value.body.declarations[0];
+  if (effect === undefined || effect.tag !== "binding") {
+    throw new Error("terminal effect fixture did not contain the effect");
+  }
+  const readability = [{
+    kind: "direct-effect-computation",
+    span: effect.value.span,
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(
+      source,
+      "BLOT_LINT_TERMINAL_EFFECT_FORWARDING",
+      readability,
+    ),
+    `let run = fn () => do:
+  return load ()
+return run
+`,
+  );
+});
+
+Deno.test("terminal effect forwarding requires a compiler fact", async () => {
+  const source = `let run = fn () => do:
+  use result <- load ()
+  return result
+return run
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("unproved terminal effect fixture did not parse");
+  }
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_TERMINAL_EFFECT_FORWARDING"
+    ),
+    [],
+  );
+});
+
+Deno.test("a bare effect value is not forwarded without compiler proof", async () => {
+  const source = `let run = fn () => do:
+  use result <- load
+  return result
+return run
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("bare terminal effect fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_TERMINAL_EFFECT_FORWARDING"
+    ),
+    [],
+  );
+});
+
+Deno.test("a compiler-proved empty array uses literal spelling", async () => {
+  const source = `return Array.empty
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("proved empty array fixture did not parse");
+  const readability = [{
+    kind: "empty-array",
+    span: parsed.module.result.span,
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EMPTY_ARRAY_SPELLING", readability),
+    `return []
+`,
+  );
+});
+
+Deno.test("an empty array literal is already in canonical form", async () => {
+  const source = `return []
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("empty array literal fixture did not parse");
+  const readability = [{
+    kind: "empty-array",
+    span: parsed.module.result.span,
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst, DEFAULT_LINT_RULES, {
+      readability,
+    }).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_EMPTY_ARRAY_SPELLING"
+    ),
+    [],
+  );
+});
+
+Deno.test("a named empty array stays named", async () => {
+  const source = `return empty
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("named empty array fixture did not parse");
+  const readability = [{
+    kind: "empty-array",
+    span: parsed.module.result.span,
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst, DEFAULT_LINT_RULES, {
+      readability,
+    }).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_EMPTY_ARRAY_SPELLING"
+    ),
+    [],
+  );
+});
+
+Deno.test("readability facts never target synthetic loop expressions", async () => {
+  const source = `let values = []
+for value in inputs:
+  values := [...values, value]
+return values
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("loop readability fixture did not parse");
+  const loopSpan = {
+    start: source.indexOf("for value"),
+    end: source.indexOf("return values"),
+  };
+  const copiedSourceStart = source.indexOf("values", source.indexOf("[..."));
+  const readability: readonly CompilerReadabilityFact[] = [{
+    kind: "empty-array",
+    span: loopSpan,
+  }, {
+    kind: "record-reconstruction",
+    span: loopSpan,
+    source: {
+      start: copiedSourceStart,
+      end: copiedSourceStart + "values".length,
+    },
+    retained: [],
+  }];
+
+  assertEquals(
+    lintModule(
+      parsed.module,
+      source,
+      parsed.cst,
+      DEFAULT_LINT_RULES,
+      { readability },
+    ).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_EMPTY_ARRAY_SPELLING" ||
+      diagnostic.code === "BLOT_LINT_RECORD_RECONSTRUCTION"
+    ),
+    [],
+  );
+});
+
+Deno.test("a proved same-suite shadow uses stable rebinding", async () => {
+  const source = `let count = 0
+let next = count
+let count = next
+return count
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("stable shadow fixture did not parse");
+  const shadow = parsed.module.declarations[2];
+  if (shadow === undefined || shadow.tag !== "binding") {
+    throw new Error("stable shadow fixture did not contain the second binding");
+  }
+  const readability = [{
+    kind: "stable-shadow",
+    span: shadow.value.span,
+    name: "count",
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_STABLE_SHADOWING", readability),
+    `let count = 0
+let next = count
+count := next
+return count
+`,
+  );
+});
+
+Deno.test("a dead binding is removed instead of made stable", async () => {
+  const source = `let count = 0
+let count = next
+return count
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("dead stable shadow fixture did not parse");
+  const shadow = parsed.module.declarations[1];
+  if (shadow === undefined || shadow.tag !== "binding") {
+    throw new Error("dead stable shadow fixture lost its second binding");
+  }
+  const readability = [{
+    kind: "stable-shadow",
+    span: shadow.value.span,
+    name: "count",
+  }] satisfies readonly CompilerReadabilityFact[];
+  const diagnostics = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    { readability },
+  );
+
+  assert(
+    diagnostics.some((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNUSED_BINDING"
+    ),
+  );
+  assertEquals(
+    diagnostics.filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_STABLE_SHADOWING"
+    ),
+    [],
+  );
+});
+
+Deno.test("an unread destructured name is not made stable", async () => {
+  const source = `let (count, other) = pair
+let count = 1
+return (count, other)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("partial stable shadow fixture did not parse");
+  }
+  const shadow = parsed.module.declarations[1];
+  if (shadow === undefined || shadow.tag !== "binding") {
+    throw new Error("partial stable shadow fixture lost its shadow");
+  }
+  const readability = [{
+    kind: "stable-shadow",
+    span: shadow.value.span,
+    name: "count",
+  }] satisfies readonly CompilerReadabilityFact[];
+  const diagnostics = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    { readability },
+  );
+
+  assert(
+    diagnostics.some((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNUSED_PATTERN_NAME"
+    ),
+  );
+  assertEquals(
+    diagnostics.filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_STABLE_SHADOWING"
+    ),
+    [],
+  );
+});
+
+Deno.test("a stable shadow inside statement control flow stays explicit", async () => {
+  const source = `if ready:
+  let count = 0
+  let count = next
+return ()
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("nested stable shadow fixture did not parse");
+  const control = parsed.module.declarations[0];
+  if (
+    control === undefined || control.tag !== "binding" ||
+    control.value.tag !== "if"
+  ) {
+    throw new Error(
+      "nested stable shadow fixture did not contain the conditional",
+    );
+  }
+  const consequence = control.value.branches[0]?.consequence;
+  if (consequence === undefined || consequence.tag !== "block") {
+    throw new Error(
+      "nested stable shadow fixture did not contain the consequence",
+    );
+  }
+  const shadow = consequence.declarations[1];
+  if (shadow === undefined || shadow.tag !== "binding") {
+    throw new Error("nested stable shadow fixture did not contain the shadow");
+  }
+  const readability = [{
+    kind: "stable-shadow",
+    span: shadow.value.span,
+    name: "count",
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst, DEFAULT_LINT_RULES, {
+      readability,
+    }).filter((diagnostic) => diagnostic.code === "BLOT_LINT_STABLE_SHADOWING"),
+    [],
+  );
+});
+
+Deno.test("a type-changing shadow without a compiler fact stays a let", async () => {
+  const source = `let value = 0
+let value = "zero"
+return value
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("type-changing shadow fixture did not parse");
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_STABLE_SHADOWING"
+    ),
+    [],
+  );
+});
+
+Deno.test("an unchanged record reconstruction uses its source", async () => {
+  const source = `return { .x = original.x; .y = original.y; }
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("record identity fixture did not parse");
+  const record = parsed.module.result;
+  if (record.tag !== "shape") {
+    throw new Error("record identity fixture did not contain a record");
+  }
+  const first = record.members[0];
+  if (
+    first === undefined || first.tag !== "field" ||
+    first.value.tag !== "field"
+  ) {
+    throw new Error("record identity fixture did not contain the source field");
+  }
+  const readability = [{
+    kind: "record-reconstruction",
+    span: record.span,
+    source: first.value.target.span,
+    retained: [],
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(
+      source,
+      "BLOT_LINT_RECORD_RECONSTRUCTION",
+      readability,
+    ),
+    `return original
+`,
+  );
+});
+
+Deno.test("a changed record reconstruction spreads its source", async () => {
+  const source = `return { .x = original.x; .y = replacement; }
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("record spread fixture did not parse");
+  const record = parsed.module.result;
+  if (record.tag !== "shape") {
+    throw new Error("record spread fixture did not contain a record");
+  }
+  const first = record.members[0];
+  if (
+    first === undefined || first.tag !== "field" ||
+    first.value.tag !== "field"
+  ) {
+    throw new Error("record spread fixture did not contain the source field");
+  }
+  const readability = [{
+    kind: "record-reconstruction",
+    span: record.span,
+    source: first.value.target.span,
+    retained: ["y"],
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(
+      source,
+      "BLOT_LINT_RECORD_RECONSTRUCTION",
+      readability,
+    ),
+    `return { ...original; .y = replacement; }
+`,
+  );
+});
+
+Deno.test("an unused open is removed when the compiler observes no names", async () => {
+  const source = `let Scope = { .hidden = 1; }
+open Scope
+return 0
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("unused open fixture did not parse");
+  const open = parsed.module.declarations[1];
+  if (open === undefined || open.tag !== "open") {
+    throw new Error("unused open fixture did not contain the open declaration");
+  }
+  const readability = [{
+    kind: "open-usage",
+    span: open.value.span,
+    used: [],
+    shadowed: [],
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_UNUSED_OPEN", readability),
+    `let Scope = { .hidden = 1; }
+return 0
+`,
+  );
+});
+
+Deno.test("an unused open is removed from a nonempty statement suite", async () => {
+  const source = `if ready:
+  open Scope
+  use draw ()
+return ()
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("suite open fixture did not parse");
+  const control = parsed.module.declarations[0];
+  if (
+    control === undefined || control.tag !== "binding" ||
+    control.value.tag !== "if"
+  ) throw new Error("suite open fixture lost its conditional");
+  const consequence = control.value.branches[0]?.consequence;
+  if (consequence === undefined || consequence.tag !== "block") {
+    throw new Error("suite open fixture lost its consequence");
+  }
+  const open = consequence.declarations[0];
+  if (open === undefined || open.tag !== "open") {
+    throw new Error("suite open fixture lost its opening");
+  }
+  const readability = [{
+    kind: "open-usage",
+    span: open.value.span,
+    used: [],
+    shadowed: [],
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_UNUSED_OPEN", readability),
+    `if ready:
+  use draw ()
+return ()
+`,
+  );
+});
+
+Deno.test("an unused open keeps an empty statement suite valid", async () => {
+  const source = `if ready:
+  open Scope
+return ()
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("sole open fixture did not parse");
+  const control = parsed.module.declarations[0];
+  if (
+    control === undefined || control.tag !== "binding" ||
+    control.value.tag !== "if"
+  ) throw new Error("sole open fixture lost its conditional");
+  const consequence = control.value.branches[0]?.consequence;
+  if (consequence === undefined || consequence.tag !== "block") {
+    throw new Error("sole open fixture lost its consequence");
+  }
+  const open = consequence.declarations[0];
+  if (open === undefined || open.tag !== "open") {
+    throw new Error("sole open fixture lost its opening");
+  }
+  const readability = [{
+    kind: "open-usage",
+    span: open.value.span,
+    used: [],
+    shadowed: [],
+  }] satisfies readonly CompilerReadabilityFact[];
+  const diagnostic = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    { readability },
+  ).find((candidate) => candidate.code === "BLOT_LINT_UNUSED_OPEN");
+
+  assertEquals(diagnostic?.fix, null);
+});
+
+Deno.test("open shadowing reports only names the compiler observed", async () => {
+  const source = `let value = 0
+let silent = 0
+let Scope = { .value = 1; .silent = 2; }
+open Scope
+return value
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("open shadow fixture did not parse");
+  const open = parsed.module.declarations[3];
+  if (open === undefined || open.tag !== "open") {
+    throw new Error("open shadow fixture did not contain the open declaration");
+  }
+  const readability = [{
+    kind: "open-usage",
+    span: open.value.span,
+    used: ["value"],
+    shadowed: ["value"],
+  }] satisfies readonly CompilerReadabilityFact[];
+
+  const diagnostics = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    { readability },
+  ).filter((diagnostic) => diagnostic.code === "BLOT_LINT_OPEN_SHADOW");
+  assertEquals(diagnostics.length, 1);
+  assertEquals(
+    diagnostics[0]?.message,
+    "This `open` shadows the previously visible name `value`.",
+  );
+  assertEquals(diagnostics[0]?.fix, null);
+});
+
+Deno.test("four positional parameters stay below the readability limit", async () => {
+  const source = `return fn (a, b, c, d) => (a, b, c, d)
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("small positional tuple fixture did not parse");
+  }
+
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_LARGE_POSITIONAL_TUPLE"
+    ),
+    [],
   );
 });
 
@@ -493,6 +1529,25 @@ if flag:
   return 1
 else:
   return 1
+`,
+  },
+  {
+    name: "a single-return do block is only its returned expression",
+    code: "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    source: `let increment = fn value => do:
+  return value + 1
+return increment
+`,
+  },
+  {
+    name: "an early return makes a terminal else redundant",
+    code: "BLOT_LINT_REDUNDANT_TERMINAL_ELSE",
+    source: `let label = fn value => do:
+  if value == 0:
+    return "zero"
+  else:
+    return "other"
+return label
 `,
   },
   {

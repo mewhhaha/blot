@@ -1,6 +1,7 @@
 import type { Decl, Expr, Module, Pattern } from "../../syntax/ast.ts";
 import type { Rule } from "../../syntax/cursor.ts";
 import type {
+  CompilerReadabilityFact,
   CompilerSimplificationFact,
   CompilerSpecializationFact,
 } from "../../compiler/wasm.ts";
@@ -22,6 +23,7 @@ export function lintModule(
   compilerFacts: {
     readonly specializations?: readonly CompilerSpecializationFact[];
     readonly simplifications?: readonly CompilerSimplificationFact[];
+    readonly readability?: readonly CompilerReadabilityFact[];
   } = {},
 ): readonly LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
@@ -33,6 +35,7 @@ export function lintModule(
       cst,
       specializations: compilerFacts.specializations || [],
       simplifications: compilerFacts.simplifications || [],
+      readability: compilerFacts.readability || [],
       sourceText: (node) => source.slice(node.span.start, node.span.end).trim(),
       report: (report) =>
         diagnostics.push({
@@ -45,12 +48,17 @@ export function lintModule(
       fix: (span, title, replacement, validation = "parse") => {
         const replaced = source.slice(span.start, span.end);
         if (replaced.includes("//")) return null;
+        let rendered = replacement;
+        if (
+          rendered.length > 0 && replaced.endsWith("\n") &&
+          !rendered.endsWith("\n")
+        ) {
+          rendered += "\n";
+        }
         return {
           title,
           span,
-          replacement: replaced.endsWith("\n") && !replacement.endsWith("\n")
-            ? `${replacement}\n`
-            : replacement,
+          replacement: rendered,
           validation,
         };
       },
@@ -170,6 +178,9 @@ function visitExpression(
       return;
     case "shape":
       for (const member of expression.members) {
+        if (member.tag === "computed") {
+          visitExpression(member.name, expression, nested, visitors);
+        }
         visitExpression(member.value, expression, nested, visitors);
       }
       return;

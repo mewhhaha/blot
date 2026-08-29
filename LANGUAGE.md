@@ -849,6 +849,12 @@ empty origin contributes no inhabitant alternative of its own: yielded or pushed
 values constrain the same element variable. The array may still be empty at
 runtime because array types do not encode cardinality.
 
+`[]` and `@array.empty` denote the same allocation-free polymorphic empty array.
+An empty array has no backing Store authority to consume, so it may be reused
+without `freeze` or `Array.copy`. The first operation that introduces an element
+constructs a fresh Store for that result; separate growths from the same empty
+value therefore cannot alias mutable implementation storage.
+
 An array spread must evaluate to an array. Arrays have immutable value
 semantics: `@array.set` and `@array.push` return successor arrays and never make
 an earlier source binding observe the change. Their implementation may update a

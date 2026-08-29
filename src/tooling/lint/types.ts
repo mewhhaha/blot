@@ -2,6 +2,7 @@ import type { Diagnostic, DiagnosticCode } from "../../diagnostic.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import type { Rule } from "../../syntax/cursor.ts";
 import type {
+  CompilerReadabilityFact,
   CompilerSimplificationFact,
   CompilerSpecializationFact,
 } from "../../compiler/wasm.ts";
@@ -40,6 +41,7 @@ export interface LintRuleContext {
   readonly cst: Rule;
   readonly specializations: readonly CompilerSpecializationFact[];
   readonly simplifications: readonly CompilerSimplificationFact[];
+  readonly readability: readonly CompilerReadabilityFact[];
   sourceText(node: { readonly span: Span }): string;
   report(report: LintReport): void;
   fix(

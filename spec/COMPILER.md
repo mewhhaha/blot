@@ -235,8 +235,21 @@ types, and demand behavior; a callee's printed name is never evidence. These
 facts are stored by module-local expression identity in the checked-module
 certificate so aliases, resident caches, and snapshot installation preserve the
 same answer. They do not enter the sealed public boundary or emitted artifact.
-The host may render a source rewrite from a fact and recheck that rewrite, but it
-must not derive an equivalence fact itself.
+The host may render a source rewrite from a fact and recheck that rewrite, but
+it must not derive an equivalence fact itself.
+
+Editor readability facts form another finite certificate catalog. They expose
+semantic premises for source-style diagnostics without adding those diagnostics
+to checking: whether a `use` operand was already a direct computation, whether
+an expression denotes the polymorphic empty array, whether a lexical shadow
+preserves its stable type, whether an explicit shape reconstructs one exact
+ordered record, and which names a pure `open` actually supplied. The facts are
+stored in the checked-module certificate by module-local expression identity.
+Different fact kinds may overlap at one expression, but one certificate has at
+most one payload for each `(kind, expression)` pair. The host may combine a fact
+with syntax-local premises and recheck a proposed edit; it must not infer these
+semantic premises itself. Readability facts enter neither Runtime HIR nor an
+emitted artifact.
 
 ## 7. Safety checking
 

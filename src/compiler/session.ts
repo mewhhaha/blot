@@ -47,6 +47,7 @@ import {
   type AddedCompilerModuleResult,
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
+  type CompilerReadabilityFact,
   type CompilerSimplificationFact,
   type CompilerSourceDiagnostic,
   type CompilerSpecializationFact,
@@ -115,6 +116,7 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly ownership: readonly CompilerOwnershipFact[];
   readonly specializations: readonly CompilerSpecializationFact[];
   readonly simplifications: readonly CompilerSimplificationFact[];
+  readonly readability: readonly CompilerReadabilityFact[];
   readonly work: CompilerWork | null;
   readonly invalidation: CompilerInvalidationTelemetry;
   readonly targetPreflight: CompilerTargetPreflight;
@@ -721,6 +723,7 @@ export class Compiler implements CompilerHost {
       ownership: result.ownership.slice(),
       specializations: result.specializations.slice(),
       simplifications: result.simplifications.slice(),
+      readability: result.readability.slice(),
       work: result.work,
       invalidation: result.invalidation,
       targetPreflight: result.targetPreflight,

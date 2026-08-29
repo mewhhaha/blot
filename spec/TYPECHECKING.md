@@ -924,7 +924,8 @@ flat arena:
 FlatTypeId = u32
 FlatNode   = tag + child FlatTypeId values
 Interface = <arena, result, effects, parameter, evaluated-value-certificate,
-             expression-types, closure-signatures, ownership-contracts>
+             expression-types, closure-signatures, ownership-contracts,
+             simplifications, readability>
 ```
 
 Encoding rejects every inference variable and every rigid not bound by an
@@ -1087,6 +1088,52 @@ expression. Immutable aliases and record projections are recognized through
 their resolved compile-time values rather than source spelling. The editor may
 compose the primitive facts into a larger decision-matrix suggestion, but the
 TypeScript host neither resolves equality nor proves demand behavior.
+
+Editor readability facts occupy a certificate field separate from simplification
+facts. They certify premises that require semantic authority but do not by
+themselves authorize a source rewrite:
+
+- `direct-effect-computation(e)` records an effect-declaration operand only when
+  every visit and specialization settles to a closed type for which effect
+  declaration elaboration did not perform implicit nullary forcing. One visit
+  that forces a suspended `Unit` function suppresses the fact.
+- `empty-array(e)` records a non-literal expression whose resolved compile-time
+  value is an empty `Array` or polymorphic `EmptyArray` and whose provenance is
+  an intrinsic, compile-time binding, or field chain rooted in one. A runtime
+  binding is ineligible even when partial evaluation retains an older empty
+  value for it. The allocation-free ownership meaning of `[]` and `@array.empty`
+  is identical; the host still rechecks the edited expression in its surrounding
+  type context.
+- `stable-shadow(e, name)` records the replacement value of an untagged,
+  non-recursive same-frame `let` shadow only when the previous and replacement
+  types are closed and equal after the stable-rebinding literal widening rule.
+  Every specialization must prove the same name and type relation. Source-form
+  checks that distinguish an explicit repeated `let` from lowered control flow
+  remain the host's responsibility.
+- `record-reconstruction(e, source, retained)` records an explicit shape whose
+  unique field names reproduce the complete proved insertion order of `source`,
+  with at least two `.field = source.field` projections and only ordered
+  retained overrides or extensions. Exact order comes either from a resolved
+  compile-time `Shape` with compile-time-stable provenance or lexical provenance
+  through exact shape construction, aliases, static computed names, and exact
+  spreads. A runtime rebinding cannot recover order from an older evaluator
+  value. A block forwards lexical provenance only when it declares no bindings.
+  `source` is an expression identity and `retained` is the ordered set of
+  explicit members that are not identical source projections.
+- `open-usage(e, used, shadowed)` records a pure `open` expression. `used` is
+  the ordered set of names whose type or compile-time value lookup resolved
+  through that open; both environments update one shared provenance set.
+  `shadowed` is `used` intersected with the names that displaced an earlier
+  visible binding or open; a same-frame explicit binding wins lookup and is not
+  reported as displaced.
+
+Readability facts are specialization-stable. If visits produce incompatible
+payloads, the checker emits no fact of that kind for the expression. Different
+kinds may share one expression, but certificate schema 16 permits at most one
+fact for each `(kind, expression)` pair and validates every referenced
+expression against the installed AST. Resident interfaces and snapshots carry
+the facts unchanged. They do not enter subtype propagation, Runtime HIR, the
+sealed public boundary, or emitted code.
 
 The checked declaration signature remains authoritative across compile-time
 re-evaluation; a provisional inferred closure type cannot replace it before

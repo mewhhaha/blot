@@ -1,5 +1,6 @@
 import type { Decl, Expr, Pattern, Span } from "../../syntax/ast.ts";
-import { patternNames } from "../../syntax/ast.ts";
+import { patternNames, recursiveGroups } from "../../syntax/ast.ts";
+import { field, fieldList, isRule, type Rule } from "../../syntax/cursor.ts";
 
 export function spanKey(span: Span): string {
   return `${span.start}:${span.end}`;
@@ -9,6 +10,23 @@ export function trailingWhitespace(source: string, span: Span): string {
   const match = /\s*$/.exec(source.slice(span.start, span.end));
   if (match === null || match[0] === undefined) return "";
   return match[0];
+}
+
+export function fieldRule(rule: Rule, name: string): Rule | null {
+  const value = field(rule, name);
+  if (value === null || !isRule(value)) return null;
+  return value;
+}
+
+export function fieldRules(rule: Rule, name: string): readonly Rule[] {
+  return fieldList(rule, name).filter(isRule);
+}
+
+export function directRule(rule: Rule, name: string): Rule | null {
+  for (const child of rule.children()) {
+    if (isRule(child) && child.name === name) return child;
+  }
+  return null;
 }
 
 export function producedExpression(expression: Expr): Expr {
@@ -73,9 +91,13 @@ export function expressionReads(
         expressionReads(element.value, names)
       );
     case "shape":
-      return expression.members.some((member) =>
-        expressionReads(member.value, names)
-      );
+      return expression.members.some((member) => {
+        if (
+          member.tag === "computed" &&
+          expressionReads(member.name, names)
+        ) return true;
+        return expressionReads(member.value, names);
+      });
     case "if":
       return expression.branches.some((branch) =>
         expressionReads(branch.condition, names) ||
@@ -109,7 +131,18 @@ export function declarationSequenceReads(
   names: ReadonlySet<string>,
 ): boolean {
   let visible = names;
+  const groups = recursiveGroups(declarations);
+  const enteredGroups = new Set<NonNullable<ReturnType<typeof groups.get>>>();
   for (const declaration of declarations) {
+    const group = groups.get(declaration);
+    if (group !== undefined && !enteredGroups.has(group)) {
+      visible = without(
+        visible,
+        group.map((member) => member.name),
+      );
+      enteredGroups.add(group);
+      if (visible.size === 0) return false;
+    }
     if (expressionReads(declaration.value, visible)) return true;
     if (declaration.tag === "binding") {
       if (patternReads(declaration.pattern, visible)) return true;
@@ -117,7 +150,9 @@ export function declarationSequenceReads(
         if (expressionReads(tag.descriptor, visible)) return true;
       }
     }
-    visible = without(visible, declarationNames(declaration));
+    if (group === undefined) {
+      visible = without(visible, declarationNames(declaration));
+    }
     if (visible.size === 0) return false;
   }
   return expressionReads(result, visible);

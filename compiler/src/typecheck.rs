@@ -719,6 +719,7 @@ struct TypeEnvironment {
     phases: Rc<BTreeMap<String, Phase>>,
     stable_names: Rc<BTreeMap<String, Typing>>,
     exact_records: Rc<BTreeSet<String>>,
+    exact_record_orders: Rc<BTreeMap<String, Vec<String>>>,
     opens: Rc<Vec<OpenedTypes>>,
     forward: Rc<BTreeSet<String>>,
     parent: Option<Rc<TypeEnvironment>>,
@@ -729,6 +730,7 @@ struct OpenedTypes {
     inferred: TypeList<(String, Type)>,
     values: OrderedFields,
     resolved: Rc<RefCell<HashMap<String, Type>>>,
+    used: Rc<RefCell<BTreeSet<String>>>,
 }
 
 impl OpenedTypes {
@@ -736,6 +738,7 @@ impl OpenedTypes {
         if !self.values.contains_key(target) {
             return None;
         }
+        self.used.borrow_mut().insert(target.to_owned());
         if let Some(type_) = self.resolved.borrow().get(target) {
             return Some(type_.clone());
         }
@@ -768,6 +771,7 @@ impl TypeEnvironment {
             phases: Rc::new(BTreeMap::new()),
             stable_names: Rc::new(BTreeMap::new()),
             exact_records: Rc::new(BTreeSet::new()),
+            exact_record_orders: Rc::new(BTreeMap::new()),
             opens: Rc::new(Vec::new()),
             forward: Rc::new(BTreeSet::new()),
             parent: Some(parent),
@@ -820,6 +824,33 @@ impl TypeEnvironment {
             .is_some_and(|parent| parent.is_exact_record(name))
     }
 
+    fn exact_record_order(&self, name: &str) -> Option<Vec<String>> {
+        if self.names.contains_key(name) {
+            return self.exact_record_orders.get(name).cloned();
+        }
+        self.parent.as_ref()?.exact_record_order(name)
+    }
+
+    fn contains_binding(&self, name: &str) -> bool {
+        self.names.contains_key(name)
+            || self.opens.iter().rev().any(|opened| opened.contains(name))
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.contains_binding(name))
+    }
+
+    fn open_shadows(&self, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        self.opens.iter().rev().any(|opened| opened.contains(name))
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.contains_binding(name))
+    }
+
     fn is_forward(&self, name: &str) -> bool {
         self.forward.contains(name)
             || self
@@ -840,6 +871,7 @@ pub struct CheckedModule {
     pub recursive_closures: Vec<ExpressionId>,
     pub ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     pub simplifications: Vec<SimplificationFact>,
+    pub readability: Vec<ReadabilityFact>,
 }
 
 #[derive(Clone)]
@@ -854,6 +886,7 @@ pub struct CachedModuleInterface {
     recursive_closures: Vec<ExpressionId>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     simplifications: Vec<SimplificationFact>,
+    readability: Vec<ReadabilityFact>,
 }
 
 pub(crate) use crate::protocol::CHECKED_MODULE_CERTIFICATE_SCHEMA;
@@ -870,6 +903,7 @@ pub struct CheckedModuleCertificate {
     recursive_closures: Vec<ExpressionId>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     simplifications: Vec<SimplificationFact>,
+    readability: Vec<ReadabilityFact>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -885,6 +919,40 @@ pub enum SimplificationFact {
         left: ExpressionId,
         right: ExpressionId,
     },
+}
+
+#[derive(Clone, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ReadabilityFact {
+    DirectEffectComputation {
+        expression: ExpressionId,
+    },
+    EmptyArray {
+        expression: ExpressionId,
+    },
+    StableShadow {
+        expression: ExpressionId,
+        name: String,
+    },
+    RecordReconstruction {
+        expression: ExpressionId,
+        source: ExpressionId,
+        retained: Vec<String>,
+    },
+    OpenUsage {
+        expression: ExpressionId,
+        used: Vec<String>,
+        shadowed: Vec<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ReadabilityFactKind {
+    DirectEffectComputation,
+    EmptyArray,
+    StableShadow,
+    RecordReconstruction,
+    OpenUsage,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -921,6 +989,37 @@ impl SimplificationFact {
                 left,
                 right,
             } => vec![*expression, *left, *right],
+        }
+    }
+}
+
+impl ReadabilityFact {
+    fn kind(&self) -> ReadabilityFactKind {
+        match self {
+            Self::DirectEffectComputation { .. } => ReadabilityFactKind::DirectEffectComputation,
+            Self::EmptyArray { .. } => ReadabilityFactKind::EmptyArray,
+            Self::StableShadow { .. } => ReadabilityFactKind::StableShadow,
+            Self::RecordReconstruction { .. } => ReadabilityFactKind::RecordReconstruction,
+            Self::OpenUsage { .. } => ReadabilityFactKind::OpenUsage,
+        }
+    }
+
+    fn expression(&self) -> ExpressionId {
+        match self {
+            Self::DirectEffectComputation { expression }
+            | Self::EmptyArray { expression }
+            | Self::StableShadow { expression, .. }
+            | Self::RecordReconstruction { expression, .. }
+            | Self::OpenUsage { expression, .. } => *expression,
+        }
+    }
+
+    fn referenced_expressions(&self) -> Vec<ExpressionId> {
+        match self {
+            Self::RecordReconstruction {
+                expression, source, ..
+            } => vec![*expression, *source],
+            fact => vec![fact.expression()],
         }
     }
 }
@@ -1098,6 +1197,7 @@ impl CachedModuleInterface {
             recursive_closures: checked.recursive_closures.clone(),
             ownership_contracts: checked.ownership_contracts.clone(),
             simplifications: checked.simplifications.clone(),
+            readability: checked.readability.clone(),
         })
     }
 
@@ -1113,6 +1213,7 @@ impl CachedModuleInterface {
             recursive_closures: self.recursive_closures.clone(),
             ownership_contracts: self.ownership_contracts.clone(),
             simplifications: self.simplifications.clone(),
+            readability: self.readability.clone(),
         }
     }
 
@@ -1131,6 +1232,7 @@ impl CachedModuleInterface {
             recursive_closures: certificate.recursive_closures,
             ownership_contracts: certificate.ownership_contracts,
             simplifications: certificate.simplifications,
+            readability: certificate.readability,
         })
     }
 
@@ -1384,6 +1486,16 @@ impl CheckedModuleCertificate {
                 ));
             }
         }
+        let mut readability_facts = HashSet::new();
+        for fact in &self.readability {
+            if !readability_facts.insert((fact.kind(), fact.expression())) {
+                return Err(format!(
+                    "checked-module certificate repeats {:?} readability fact for expression {}",
+                    fact.kind(),
+                    fact.expression().0,
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -1493,6 +1605,29 @@ struct SpecializationKey {
     call_sites: Vec<(String, Span)>,
 }
 
+#[derive(Clone)]
+struct StableShadowCandidate {
+    name: String,
+    previous: Type,
+    replacement: Type,
+}
+
+#[derive(Clone)]
+struct DirectEffectCandidate {
+    forced: bool,
+    type_: Type,
+}
+
+#[derive(Clone)]
+struct OpenUsageCandidate {
+    effects: Type,
+    used: Rc<RefCell<BTreeSet<String>>>,
+    shadowed: BTreeSet<String>,
+}
+
+type StructuralReadabilityCandidates =
+    HashMap<(String, ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
+
 const SPECIALIZATION_SOFT_LIMIT: usize = 2;
 const SPECIALIZATION_HARD_LIMIT: usize = 256;
 
@@ -1529,6 +1664,12 @@ pub struct Checker {
     ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
     specializations: RefCell<HashMap<(String, ExpressionId), SpecializationBinding>>,
     simplifications: RefCell<HashMap<(String, ExpressionId), SimplificationFact>>,
+    readability: RefCell<HashMap<(String, ExpressionId), Vec<ReadabilityFact>>>,
+    conflicting_readability: RefCell<HashSet<(String, ExpressionId, ReadabilityFactKind)>>,
+    structural_readability_candidates: RefCell<StructuralReadabilityCandidates>,
+    stable_shadow_candidates: RefCell<HashMap<(String, ExpressionId), Vec<StableShadowCandidate>>>,
+    direct_effect_candidates: RefCell<HashMap<(String, ExpressionId), Vec<DirectEffectCandidate>>>,
+    open_usage_candidates: RefCell<HashMap<(String, ExpressionId), Vec<OpenUsageCandidate>>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -1584,6 +1725,12 @@ impl Checker {
             ownership_facts: RefCell::new(HashMap::new()),
             specializations: RefCell::new(HashMap::new()),
             simplifications: RefCell::new(HashMap::new()),
+            readability: RefCell::new(HashMap::new()),
+            conflicting_readability: RefCell::new(HashSet::new()),
+            structural_readability_candidates: RefCell::new(HashMap::new()),
+            stable_shadow_candidates: RefCell::new(HashMap::new()),
+            direct_effect_candidates: RefCell::new(HashMap::new()),
+            open_usage_candidates: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -1873,6 +2020,16 @@ impl Checker {
                 }
             }
         }
+        for fact in &interface.readability {
+            for expression in fact.referenced_expressions() {
+                if expression.0 as usize >= module.arena.expressions.len() {
+                    return Err(format!(
+                        "checked-module certificate readability fact references missing expression {}",
+                        expression.0
+                    ));
+                }
+            }
+        }
         crate::ownership::validate_contracts(&module, &interface.ownership_contracts)?;
         Ok(())
     }
@@ -1928,6 +2085,24 @@ impl Checker {
                 });
                 !binding.keys.is_empty()
             });
+        self.readability
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.conflicting_readability
+            .borrow_mut()
+            .retain(|(path, _, _)| !paths.contains(path));
+        self.structural_readability_candidates
+            .borrow_mut()
+            .retain(|(path, _, _), _| !paths.contains(path));
+        self.stable_shadow_candidates
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.direct_effect_candidates
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
+        self.open_usage_candidates
+            .borrow_mut()
+            .retain(|(path, _), _| !paths.contains(path));
         self.module_work
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
@@ -2129,6 +2304,45 @@ impl Checker {
                 }),
             })
             .collect::<Vec<_>>();
+        let readability = checked
+            .readability
+            .iter()
+            .map(|fact| match fact {
+                ReadabilityFact::DirectEffectComputation { expression } => serde_json::json!({
+                    "kind": "direct-effect-computation",
+                    "span": module.arena.expression_span(*expression),
+                }),
+                ReadabilityFact::EmptyArray { expression } => serde_json::json!({
+                    "kind": "empty-array",
+                    "span": module.arena.expression_span(*expression),
+                }),
+                ReadabilityFact::StableShadow { expression, name } => serde_json::json!({
+                    "kind": "stable-shadow",
+                    "span": module.arena.expression_span(*expression),
+                    "name": name,
+                }),
+                ReadabilityFact::RecordReconstruction {
+                    expression,
+                    source,
+                    retained,
+                } => serde_json::json!({
+                    "kind": "record-reconstruction",
+                    "span": module.arena.expression_span(*expression),
+                    "source": module.arena.expression_span(*source),
+                    "retained": retained,
+                }),
+                ReadabilityFact::OpenUsage {
+                    expression,
+                    used,
+                    shadowed,
+                } => serde_json::json!({
+                    "kind": "open-usage",
+                    "span": module.arena.expression_span(*expression),
+                    "used": used,
+                    "shadowed": shadowed,
+                }),
+            })
+            .collect::<Vec<_>>();
         serde_json::json!({
             "ok": true,
             "type": self.show(&checked.result),
@@ -2138,12 +2352,177 @@ impl Checker {
             "ownership": ownership,
             "specializations": specializations,
             "simplifications": simplifications,
+            "readability": readability,
             "work": self.module_work.borrow().get(path),
         })
     }
 
     pub(crate) fn effects_are_empty(&self, effects: &Type) -> bool {
         empty_effects(&self.settle(effects.clone(), true))
+    }
+
+    fn record_readability(&self, path: &str, fact: ReadabilityFact) {
+        let expression = fact.expression();
+        let kind = fact.kind();
+        let key = (path.to_owned(), expression, kind);
+        if self.conflicting_readability.borrow().contains(&key) {
+            return;
+        }
+        let mut readability = self.readability.borrow_mut();
+        let facts = readability
+            .entry((path.to_owned(), expression))
+            .or_default();
+        let existing = facts.iter().position(|candidate| candidate.kind() == kind);
+        let Some(existing) = existing else {
+            facts.push(fact);
+            return;
+        };
+        if facts[existing] != fact {
+            facts.remove(existing);
+            self.conflicting_readability.borrow_mut().insert(key);
+        }
+    }
+
+    fn record_structural_readability_candidate(
+        &self,
+        path: &str,
+        expression: ExpressionId,
+        kind: ReadabilityFactKind,
+        candidate: Option<ReadabilityFact>,
+    ) {
+        if let Some(fact) = &candidate {
+            assert_eq!(fact.expression(), expression);
+            assert_eq!(fact.kind(), kind);
+        }
+        self.structural_readability_candidates
+            .borrow_mut()
+            .entry((path.to_owned(), expression, kind))
+            .or_default()
+            .push(candidate);
+    }
+
+    fn finalize_readability(&self, path: &str) {
+        let structural_candidates = self
+            .structural_readability_candidates
+            .borrow()
+            .iter()
+            .filter(|((module, _, _), _)| module == path)
+            .map(|(_, candidates)| candidates.clone())
+            .collect::<Vec<_>>();
+        for candidates in structural_candidates {
+            let Some(Some(first)) = candidates.first() else {
+                continue;
+            };
+            if candidates
+                .iter()
+                .all(|candidate| candidate.as_ref() == Some(first))
+            {
+                self.record_readability(path, first.clone());
+            }
+        }
+
+        let direct_candidates = self
+            .direct_effect_candidates
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .collect::<Vec<_>>();
+        for (expression, candidates) in direct_candidates {
+            let proved = !candidates.is_empty()
+                && candidates.iter().all(|candidate| {
+                    let type_ = self.settle(candidate.type_.clone(), true);
+                    !candidate.forced
+                        && closed_checked_type(&type_, &mut HashSet::new())
+                        && self.effect_value_signature(&type_).is_none()
+                });
+            if proved {
+                self.record_readability(
+                    path,
+                    ReadabilityFact::DirectEffectComputation { expression },
+                );
+            }
+        }
+
+        let stable_candidates = self
+            .stable_shadow_candidates
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .collect::<Vec<_>>();
+        for (expression, candidates) in stable_candidates {
+            let Some(first) = candidates.first() else {
+                continue;
+            };
+            if candidates
+                .iter()
+                .any(|candidate| candidate.name != first.name)
+            {
+                continue;
+            }
+            let proved = candidates.iter().all(|candidate| {
+                let previous = stable_rebinding_type(self.settle(candidate.previous.clone(), true));
+                let replacement =
+                    stable_rebinding_type(self.settle(candidate.replacement.clone(), true));
+                closed_checked_type(&previous, &mut HashSet::new())
+                    && closed_checked_type(&replacement, &mut HashSet::new())
+                    && same_type(&previous, &replacement)
+            });
+            if proved {
+                self.record_readability(
+                    path,
+                    ReadabilityFact::StableShadow {
+                        expression,
+                        name: first.name.clone(),
+                    },
+                );
+            }
+        }
+
+        let open_candidates = self
+            .open_usage_candidates
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .collect::<Vec<_>>();
+        for (expression, candidates) in open_candidates {
+            if candidates.is_empty()
+                || !candidates
+                    .iter()
+                    .all(|candidate| self.effects_are_empty(&candidate.effects))
+            {
+                continue;
+            }
+            let payloads = candidates
+                .iter()
+                .map(|candidate| {
+                    let used = candidate.used.borrow().clone();
+                    let shadowed = candidate
+                        .shadowed
+                        .intersection(&used)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    (used.into_iter().collect::<Vec<_>>(), shadowed)
+                })
+                .collect::<Vec<_>>();
+            let Some(first) = payloads.first() else {
+                continue;
+            };
+            if payloads.iter().any(|candidate| candidate != first) {
+                continue;
+            }
+            let (used, shadowed) = first.clone();
+            self.record_readability(
+                path,
+                ReadabilityFact::OpenUsage {
+                    expression,
+                    used,
+                    shadowed,
+                },
+            );
+        }
     }
 
     fn deferred_call(&self, function: &Type) -> bool {
@@ -2218,6 +2597,24 @@ impl Checker {
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
         self.simplifications
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.readability
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.conflicting_readability
+            .borrow_mut()
+            .retain(|(module, _, _)| module != path);
+        self.structural_readability_candidates
+            .borrow_mut()
+            .retain(|(module, _, _), _| module != path);
+        self.stable_shadow_candidates
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.direct_effect_candidates
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
+        self.open_usage_candidates
             .borrow_mut()
             .retain(|(module, _), _| module != path);
         let loaded = self
@@ -2444,6 +2841,7 @@ impl Checker {
                 .iter()
                 .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
         );
+        self.finalize_readability(path);
         let mut simplifications = self
             .simplifications
             .borrow()
@@ -2452,6 +2850,29 @@ impl Checker {
             .map(|((_, expression), fact)| (*expression, fact.clone()))
             .collect::<Vec<_>>();
         simplifications.sort_by_key(|(expression, _)| expression.0);
+        let mut readability = self
+            .readability
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .flat_map(|((_, expression), facts)| {
+                facts
+                    .iter()
+                    .cloned()
+                    .map(|fact| (*expression, fact))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        readability.sort_by_key(|(expression, fact)| {
+            let kind = match fact {
+                ReadabilityFact::DirectEffectComputation { .. } => 0,
+                ReadabilityFact::EmptyArray { .. } => 1,
+                ReadabilityFact::StableShadow { .. } => 2,
+                ReadabilityFact::RecordReconstruction { .. } => 3,
+                ReadabilityFact::OpenUsage { .. } => 4,
+            };
+            (expression.0, kind)
+        });
         let checked = CheckedModule {
             result: self.settle(inferred.type_, true),
             effects,
@@ -2462,6 +2883,7 @@ impl Checker {
             recursive_closures,
             ownership_contracts: analyses.ownership_contracts,
             simplifications: simplifications.into_iter().map(|(_, fact)| fact).collect(),
+            readability: readability.into_iter().map(|(_, fact)| fact).collect(),
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -2657,6 +3079,7 @@ impl Checker {
             recursive_closures: cached.recursive_closures,
             ownership_contracts: cached.ownership_contracts,
             simplifications: cached.simplifications,
+            readability: cached.readability,
         }
     }
 
@@ -3117,6 +3540,7 @@ impl Checker {
                 value,
                 span,
             } => {
+                let tagged = !tags.is_empty();
                 let mut tag_names = Vec::new();
                 for tag in tags {
                     let descriptor = self
@@ -3139,6 +3563,22 @@ impl Checker {
                     module.arena.expressions[value.0 as usize],
                     Expression::Rec { .. }
                 );
+                let stable_shadow = if kind == DeclarationKind::Let && !tagged && !recursive {
+                    match &module.arena.patterns[pattern.0 as usize] {
+                        Pattern::Name {
+                            name,
+                            qualifier: Qualifier::None,
+                            ..
+                        } => types
+                            .names
+                            .get(name)
+                            .cloned()
+                            .map(|previous| (name.clone(), self.instantiate(previous))),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 if recursive {
                     let Expression::Rec { lambda, .. } = module.arena.expressions[value.0 as usize]
                     else {
@@ -3227,10 +3667,33 @@ impl Checker {
                     }
                     Err(error) => return Err(error),
                 };
-                if kind == DeclarationKind::Effect
-                    && let Some((suspended_effects, result)) =
-                        self.effect_value_signature(&inferred.type_)
-                {
+                if let Some((name, previous)) = stable_shadow {
+                    self.stable_shadow_candidates
+                        .borrow_mut()
+                        .entry((path.to_owned(), value))
+                        .or_default()
+                        .push(StableShadowCandidate {
+                            name,
+                            previous,
+                            replacement: inferred.type_.clone(),
+                        });
+                }
+                let suspended = if kind == DeclarationKind::Effect {
+                    self.effect_value_signature(&inferred.type_)
+                } else {
+                    None
+                };
+                if kind == DeclarationKind::Effect {
+                    self.direct_effect_candidates
+                        .borrow_mut()
+                        .entry((path.to_owned(), value))
+                        .or_default()
+                        .push(DirectEffectCandidate {
+                            forced: suspended.is_some(),
+                            type_: inferred.type_.clone(),
+                        });
+                }
+                if let Some((suspended_effects, result)) = suspended {
                     inferred.effects = self.join_effects(inferred.effects, suspended_effects)?;
                     inferred.type_ = result;
                 }
@@ -3404,12 +3867,19 @@ impl Checker {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
                 let exact_record = self.exact_record_expression(module, value, types);
+                let exact_record_order =
+                    self.exact_record_order_expression(module, value, types, values);
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize] {
                     if exact_record {
                         Rc::make_mut(&mut types.exact_records).insert(name.clone());
                     } else {
                         Rc::make_mut(&mut types.exact_records).remove(name);
+                    }
+                    if let Some(order) = exact_record_order {
+                        Rc::make_mut(&mut types.exact_record_orders).insert(name.clone(), order);
+                    } else {
+                        Rc::make_mut(&mut types.exact_record_orders).remove(name);
                     }
                 }
                 let binding_phase = if kind == DeclarationKind::Const {
@@ -3482,12 +3952,19 @@ impl Checker {
                 self.constrain(inferred_type.clone(), previous.clone(), span)?;
                 self.constrain(previous.clone(), inferred_type, span)?;
                 let exact_record = self.exact_record_expression(module, value, types);
+                let exact_record_order =
+                    self.exact_record_order_expression(module, value, types, values);
                 Rc::make_mut(&mut types.names).insert(name.clone(), Typing::Mono(previous));
                 Rc::make_mut(&mut types.phases).insert(name.clone(), Phase::Runtime);
                 if exact_record {
                     Rc::make_mut(&mut types.exact_records).insert(name.clone());
                 } else {
                     Rc::make_mut(&mut types.exact_records).remove(&name);
+                }
+                if let Some(order) = exact_record_order {
+                    Rc::make_mut(&mut types.exact_record_orders).insert(name.clone(), order);
+                } else {
+                    Rc::make_mut(&mut types.exact_record_orders).remove(&name);
                 }
                 match self.evaluate(path, value, values, Phase::Runtime) {
                     Ok(value_) => {
@@ -3547,12 +4024,31 @@ impl Checker {
                         _ => Vec::new().into(),
                     },
                 };
+                let shadowed = fields
+                    .keys()
+                    .filter(|name| types.open_shadows(name))
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let used = Rc::new(RefCell::new(BTreeSet::new()));
+                self.open_usage_candidates
+                    .borrow_mut()
+                    .entry((path.to_owned(), value))
+                    .or_default()
+                    .push(OpenUsageCandidate {
+                        effects: inferred.effects.clone(),
+                        used: used.clone(),
+                        shadowed,
+                    });
                 Rc::make_mut(&mut types.opens).push(OpenedTypes {
                     inferred: inferred_fields,
                     values: fields.clone(),
                     resolved: Rc::new(RefCell::new(HashMap::new())),
+                    used: used.clone(),
                 });
-                values.opens.borrow_mut().push(OpenedValues::new(fields));
+                values
+                    .opens
+                    .borrow_mut()
+                    .push(OpenedValues::tracked(fields, used));
                 Ok(inferred.effects)
             }
         }
@@ -3583,6 +4079,40 @@ impl Checker {
                 self.simplifications
                     .borrow_mut()
                     .insert((path.to_owned(), expression_id), fact);
+            }
+            if matches!(
+                &module.arena.expressions[expression_id.0 as usize],
+                Expression::Var { .. } | Expression::Intrinsic { .. } | Expression::Field { .. }
+            ) {
+                let static_value = comptime_expression_value(module, expression_id, values);
+                let candidate = (comptime_stable_expression(module, expression_id, environment)
+                    && self.effects_are_empty(&inferred.effects)
+                    && static_value.as_ref().is_some_and(|value| {
+                        matches!(value, Value::Array(elements) if elements.is_empty())
+                            || matches!(value, Value::EmptyArray { .. })
+                    }))
+                .then_some(ReadabilityFact::EmptyArray {
+                    expression: expression_id,
+                });
+                self.record_structural_readability_candidate(
+                    path,
+                    expression_id,
+                    ReadabilityFactKind::EmptyArray,
+                    candidate,
+                );
+            }
+            if matches!(
+                &module.arena.expressions[expression_id.0 as usize],
+                Expression::Shape { .. }
+            ) {
+                let candidate =
+                    self.record_reconstruction_fact(module, expression_id, environment, values);
+                self.record_structural_readability_candidate(
+                    path,
+                    expression_id,
+                    ReadabilityFactKind::RecordReconstruction,
+                    candidate,
+                );
             }
         }
         if let Ok(inferred) = &inferred
@@ -4639,6 +5169,142 @@ impl Checker {
             }
             _ => false,
         }
+    }
+
+    fn exact_record_order_expression(
+        &self,
+        module: &Module,
+        expression: ExpressionId,
+        environment: &TypeEnvironment,
+        values: &ValueEnvironment,
+    ) -> Option<Vec<String>> {
+        if comptime_stable_expression(module, expression, environment)
+            && let Some(Value::Shape(fields)) =
+                comptime_expression_value(module, expression, values)
+        {
+            return Some(fields.keys().cloned().collect());
+        }
+        match &module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => environment.exact_record_order(name),
+            Expression::Shape { members, .. } => {
+                let mut order = Vec::new();
+                for member in members {
+                    let names = match member {
+                        ShapeMember::Field { name, .. } => vec![name.clone()],
+                        ShapeMember::Computed { name, .. } => {
+                            let Value::Text(name) =
+                                comptime_expression_value(module, *name, values)?
+                            else {
+                                return None;
+                            };
+                            vec![name]
+                        }
+                        ShapeMember::Spread { value } => {
+                            self.exact_record_order_expression(module, *value, environment, values)?
+                        }
+                    };
+                    for name in names {
+                        if !order.contains(&name) {
+                            order.push(name);
+                        }
+                    }
+                }
+                Some(order)
+            }
+            Expression::Intrinsic { name, .. } if name == "@shape.empty" => Some(Vec::new()),
+            Expression::Block {
+                declarations,
+                result,
+                ..
+            } if declarations.is_empty() => {
+                self.exact_record_order_expression(module, *result, environment, values)
+            }
+            _ => None,
+        }
+    }
+
+    fn record_reconstruction_fact(
+        &self,
+        module: &Module,
+        expression: ExpressionId,
+        environment: &TypeEnvironment,
+        values: &ValueEnvironment,
+    ) -> Option<ReadabilityFact> {
+        let Expression::Shape { members, .. } = &module.arena.expressions[expression.0 as usize]
+        else {
+            return None;
+        };
+        let fields = members
+            .iter()
+            .map(|member| match member {
+                ShapeMember::Field { name, value } => Some((name.clone(), *value)),
+                ShapeMember::Computed { .. } | ShapeMember::Spread { .. } => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        let mut sources = Vec::<(Vec<String>, ExpressionId, usize)>::new();
+        for (name, value) in &fields {
+            let Expression::Field {
+                target,
+                name: projected,
+                ..
+            } = &module.arena.expressions[value.0 as usize]
+            else {
+                continue;
+            };
+            if projected != name {
+                continue;
+            }
+            let Some(path) = expression_field_path(module, *target) else {
+                continue;
+            };
+            if let Some((_, _, count)) = sources
+                .iter_mut()
+                .find(|(candidate, _, _)| candidate == &path)
+            {
+                *count += 1;
+            } else {
+                sources.push((path, *target, 1));
+            }
+        }
+        let (_, source, copied) = sources.into_iter().max_by_key(|(_, _, count)| *count)?;
+        if copied < 2 {
+            return None;
+        }
+        let source_order =
+            self.exact_record_order_expression(module, source, environment, values)?;
+        if fields.len() < source_order.len()
+            || !fields
+                .iter()
+                .map(|(name, _)| name)
+                .take(source_order.len())
+                .eq(source_order.iter())
+        {
+            return None;
+        }
+        let source_path = expression_field_path(module, source)?;
+        let retained = fields
+            .iter()
+            .filter_map(|(name, value)| {
+                let copied = match &module.arena.expressions[value.0 as usize] {
+                    Expression::Field {
+                        target,
+                        name: projected,
+                        ..
+                    } => {
+                        projected == name
+                            && expression_field_path(module, *target).as_ref() == Some(&source_path)
+                    }
+                    _ => false,
+                };
+                (!copied).then_some(name.clone())
+            })
+            .collect();
+        Some(ReadabilityFact::RecordReconstruction {
+            expression,
+            source,
+            retained,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8815,6 +9481,7 @@ fn comptime_expression_value(
 ) -> Option<Value> {
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Var { name, .. } => lookup(values, name),
+        Expression::Intrinsic { name, .. } => crate::primitives::constant(name),
         Expression::Field { target, name, .. } => {
             let target = comptime_expression_value(module, *target, values)?;
             match target {
@@ -8826,6 +9493,33 @@ fn comptime_expression_value(
                 },
                 _ => None,
             }
+        }
+        _ => None,
+    }
+}
+
+fn comptime_stable_expression(
+    module: &Module,
+    expression: ExpressionId,
+    environment: &TypeEnvironment,
+) -> bool {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Intrinsic { .. } => true,
+        Expression::Var { name, .. } => environment.binding_phase(name) == Some(Phase::Comptime),
+        Expression::Field { target, .. } => {
+            comptime_stable_expression(module, *target, environment)
+        }
+        _ => false,
+    }
+}
+
+fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Vec<String>> {
+    match &module.arena.expressions[expression.0 as usize] {
+        Expression::Var { name, .. } => Some(vec![name.clone()]),
+        Expression::Field { target, name, .. } => {
+            let mut path = expression_field_path(module, *target)?;
+            path.push(name.clone());
+            Some(path)
         }
         _ => None,
     }
@@ -11340,6 +12034,7 @@ mod tests {
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a quantified closed interface is cacheable");
@@ -11379,6 +12074,7 @@ mod tests {
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a closed interface should be cacheable");
@@ -11432,6 +12128,7 @@ mod tests {
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let first = CachedModuleInterface::from_checked(&interface(7, Type::Unit))
             .expect("first interface should close")
@@ -11461,6 +12158,7 @@ mod tests {
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let first = CachedModuleInterface::from_checked(&interface(Type::Unit))
             .expect("first interface should close")
@@ -11486,6 +12184,7 @@ mod tests {
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
 
         assert!(CachedModuleInterface::from_checked(&checked).is_none());
@@ -11503,6 +12202,7 @@ mod tests {
             recursive_closures: vec![ExpressionId(8)],
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let cached =
             CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
@@ -11535,6 +12235,7 @@ mod tests {
                 },
             )],
             simplifications: Vec::new(),
+            readability: Vec::new(),
         };
         let cached =
             CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");

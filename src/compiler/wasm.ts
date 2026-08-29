@@ -274,6 +274,33 @@ export type CompilerSimplificationFact =
     readonly right: { readonly start: number; readonly end: number };
   };
 
+export type CompilerReadabilityFact =
+  | {
+    readonly kind: "direct-effect-computation";
+    readonly span: { readonly start: number; readonly end: number };
+  }
+  | {
+    readonly kind: "empty-array";
+    readonly span: { readonly start: number; readonly end: number };
+  }
+  | {
+    readonly kind: "stable-shadow";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly name: string;
+  }
+  | {
+    readonly kind: "record-reconstruction";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly source: { readonly start: number; readonly end: number };
+    readonly retained: readonly string[];
+  }
+  | {
+    readonly kind: "open-usage";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly used: readonly string[];
+    readonly shadowed: readonly string[];
+  };
+
 export interface CompilerWork {
   readonly schema: 3;
   readonly typeNodes: number;
@@ -318,6 +345,7 @@ export type CompilerAnalysisResult =
     readonly ownership: readonly CompilerOwnershipFact[];
     readonly specializations: readonly CompilerSpecializationFact[];
     readonly simplifications: readonly CompilerSimplificationFact[];
+    readonly readability: readonly CompilerReadabilityFact[];
     readonly work: CompilerWork | null;
     readonly invalidation: CompilerInvalidationTelemetry;
     readonly targetPreflight: CompilerTargetPreflight;

@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 3,
-    "checkedModuleCertificate": 15,
+    "checkedModuleCertificate": 16,
     "runtimeHir": 6
   },
   "operators": [
@@ -246,24 +246,35 @@
     "BLOT_LINT_BOOLEAN_IDENTITY_CONDITIONAL",
     "BLOT_LINT_DISCARDED_BOOLEAN_CASE",
     "BLOT_LINT_EMPTY_ARRAY_APPEND",
+    "BLOT_LINT_EMPTY_ARRAY_SPELLING",
     "BLOT_LINT_EQUALITY_CASE",
     "BLOT_LINT_GUARD_SHAPED_CASE",
     "BLOT_LINT_IDENTICAL_CONDITIONAL_BRANCHES",
     "BLOT_LINT_IF_CHAIN",
+    "BLOT_LINT_LARGE_POSITIONAL_TUPLE",
     "BLOT_LINT_NESTED_CASE_CHAIN",
     "BLOT_LINT_NESTED_IF_CHAIN",
     "BLOT_LINT_NOOP_REBINDING",
+    "BLOT_LINT_OPEN_SHADOW",
     "BLOT_LINT_OPERATOR_SPELLING",
     "BLOT_LINT_PERSISTENT_ARRAY_COPY",
     "BLOT_LINT_PROVED_ARRAY_LOOKUP",
     "BLOT_LINT_QUADRATIC_ARRAY_APPEND",
+    "BLOT_LINT_RECORD_RECONSTRUCTION",
+    "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    "BLOT_LINT_REDUNDANT_TERMINAL_ELSE",
     "BLOT_LINT_SINGLETON_ARRAY_APPEND",
     "BLOT_LINT_SPECIALIZATION_COUNT",
+    "BLOT_LINT_STABLE_SHADOWING",
+    "BLOT_LINT_TERMINAL_EFFECT_FORWARDING",
     "BLOT_LINT_TEST_CHOSEN_NAME",
     "BLOT_LINT_TEST_SURFACE_COVERAGE",
+    "BLOT_LINT_UNNECESSARY_REC",
     "BLOT_LINT_UNREACHABLE_CASE_ARM",
     "BLOT_LINT_UNUSED_BINDING",
     "BLOT_LINT_UNUSED_EFFECT_RESULT",
+    "BLOT_LINT_UNUSED_OPEN",
+    "BLOT_LINT_UNUSED_PATTERN_NAME",
     "BLOT_MISPLACED_REC",
     "BLOT_NON_ASSOCIATIVE_CHAIN",
     "BLOT_NOT_CALLABLE",
@@ -709,7 +720,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 11956
+      "lines": 12657
     },
     {
       "path": "compiler/src/hir.rs",
@@ -717,7 +728,7 @@
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6499
+      "lines": 6502
     },
     {
       "path": "compiler/src/backend.rs",
@@ -725,7 +736,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 5342
+      "lines": 5803
     },
     {
       "path": "compiler/src/eval.rs",
@@ -752,20 +763,20 @@
       "lines": 2117
     },
     {
+      "path": "src/tooling/lint.test.ts",
+      "lines": 1967
+    },
+    {
       "path": "src/runtime/hir.ts",
       "lines": 1653
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1621
+      "lines": 1633
     },
     {
       "path": "src/language_service.ts",
-      "lines": 1413
-    },
-    {
-      "path": "compiler/src/safety.rs",
-      "lines": 1400
+      "lines": 1414
     }
   ]
 }

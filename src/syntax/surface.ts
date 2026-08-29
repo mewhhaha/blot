@@ -92,10 +92,15 @@ function elaborateExpression(expression: Expr): Expr {
     case "shape":
       return {
         ...expression,
-        members: expression.members.map((member) => ({
-          ...member,
-          value: elaborateExpression(member.value),
-        })),
+        members: expression.members.map((member) => {
+          const value = elaborateExpression(member.value);
+          if (member.tag !== "computed") return { ...member, value };
+          return {
+            ...member,
+            name: elaborateExpression(member.name),
+            value,
+          };
+        }),
       };
     case "if":
       return {

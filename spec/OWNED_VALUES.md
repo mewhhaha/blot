@@ -23,6 +23,14 @@ freeze(Own(S, E)) : Shared(S)       when freeze(E) is defined
 borrow(Own(S, E)) : &S              without consuming Own(S, E)
 ```
 
+The empty-array value has no Store identity and carries no affine authority.
+Both `[]` and `@array.empty` produce this `EmptyStore` ownership state
+independently of their eventual element representation. It is unrestricted and
+may be used repeatedly. Pushing the first element allocates a fresh Store and
+produces `Own(S, E)`; two pushes from the same empty value therefore produce
+distinct authorities. Copying an empty value is the explicit operation that
+materializes an owned empty Store.
+
 The transition to shared is one-way. A compiler may prove that an explicit
 `Array.copy` can steal a last Store reference, but source never turns a possibly
 shared value back into owned authority without naming that potentially linear

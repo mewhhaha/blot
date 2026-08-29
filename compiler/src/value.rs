@@ -200,15 +200,27 @@ pub(crate) fn opened_members(value: &Value) -> Option<OrderedFields> {
 #[derive(Clone, Debug)]
 pub struct OpenedValues {
     fields: OrderedFields,
+    used: Option<Rc<RefCell<BTreeSet<String>>>>,
 }
 
 impl OpenedValues {
     pub fn new(fields: OrderedFields) -> Self {
-        Self { fields }
+        Self { fields, used: None }
+    }
+
+    pub(crate) fn tracked(fields: OrderedFields, used: Rc<RefCell<BTreeSet<String>>>) -> Self {
+        Self {
+            fields,
+            used: Some(used),
+        }
     }
 
     pub fn get(&self, target: &str) -> Option<&Value> {
-        self.fields.get(target)
+        let value = self.fields.get(target)?;
+        if let Some(used) = &self.used {
+            used.borrow_mut().insert(target.to_owned());
+        }
+        Some(value)
     }
 
     pub(crate) fn fields(&self) -> &OrderedFields {

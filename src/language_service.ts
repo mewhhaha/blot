@@ -764,6 +764,7 @@ export class LanguageService {
       {
         specializations: analysis?.specializations,
         simplifications: analysis?.simplifications,
+        readability: analysis?.readability,
       },
     );
     if (

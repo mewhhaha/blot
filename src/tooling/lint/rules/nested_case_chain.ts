@@ -1,5 +1,10 @@
 import type { Rule } from "../../../syntax/cursor.ts";
-import { spanKey, trailingWhitespace } from "../syntax.ts";
+import {
+  fieldRule,
+  fieldRules,
+  spanKey,
+  trailingWhitespace,
+} from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
 interface FlattenedArm {
@@ -155,24 +160,6 @@ function caseArms(rule: Rule): readonly Rule[] {
   const first = fieldRule(rule, "first");
   if (first === null) return [];
   return [first, ...fieldRules(rule, "rest")];
-}
-
-function fieldRule(rule: Rule, name: string): Rule | null {
-  const value = rule.field(name);
-  if (value === undefined || value === null || Array.isArray(value)) {
-    return null;
-  }
-  if (typeof value !== "object" || !("type" in value)) return null;
-  if (value.type !== "rule") return null;
-  return value as Rule;
-}
-
-function fieldRules(rule: Rule, name: string): readonly Rule[] {
-  const value = rule.field(name);
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is Rule =>
-    entry !== null && entry !== undefined && entry.type === "rule"
-  );
 }
 
 function patternMayBind(pattern: string): boolean {

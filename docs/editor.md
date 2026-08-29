@@ -107,10 +107,19 @@ rule does not add another recursive compiler pass.
 
 The default correctness and readability rules report:
 
-- unread pure bindings, unread effect results, no-op rebindings, and unreachable
-  `case` arms;
+- unread pure bindings and effect results, plus unused names in parameters,
+  destructuring patterns, loop patterns, and `case` patterns; no-op rebindings,
+  unnecessary `rec` markers, and unreachable `case` arms;
+- terminal `use name <- computation` / `return name` pairs that can return the
+  computation directly, and discarded Boolean cases better written as statement
+  `if` suites;
+- same-type `let` shadowing better written with `:=`, exact empty values better
+  written as `[]`, manual exact-record reconstruction better written with a
+  spread, and unused or observed-shadowing `open` declarations;
 - equality `if` chains better written as one `case`, identical branches, and
   conditionals that only reproduce a Boolean condition;
+- single-return `do:` blocks and terminal `else` suites whose preceding branch
+  already returns;
 - discarded value conditionals better written as statement suites and
   Option-shaped terminal matches that can become `if let` guards;
 - singleton `Array.append` calls inside folds, retained aliases that force a
@@ -118,7 +127,8 @@ The default correctness and readability rules report:
   `Array.push`, empty appends, and total array lookups that can become proved
   direct accesses;
 - explicit calls with an active conventional infix or prefix operator spelling;
-  and
+- positional parameter tuples with five or more entries, where field names would
+  make calls easier to read; and
 - functions whose Rust checker reports several runtime representations,
   including the compiler-confirmed keys and call sites. This is not a syntax
   estimate of direct calls.
@@ -139,6 +149,14 @@ terminal suites can still collapse when both returned values make the control
 flow redundant. That collapse evaluates the original condition before returning
 the shared value, preserving deferred demands and traps.
 
+Control-flow flattening follows the written CST rather than compiler-generated
+return plumbing. A `do:` disappears only when its sole direct statement is a
+`return`, and compound replacements retain the grouping that `do:` supplied. An
+`else` is dedented only when its conditional is last in the enclosing statement
+suite and the preceding branch ends in a direct `return`, so bindings cannot
+leak into later source. Nested conditional ladders remain owned by the more
+specific ladder rule.
+
 Equality rewrites also require compiler facts from the accepted revision. The
 checker recognizes the resolved comparison closure, so immutable aliases and
 record projections retain equality semantics while a shadowed `Int.eq` spelling
@@ -147,6 +165,15 @@ Boolean function both has the `and` truth table and proves that its deferred
 right operand is skipped or demanded on the corresponding branch. The later
 check of the replacement guards the rendered edit; it is not used as a proof of
 equivalence.
+
+Effect forwarding, empty values, stable shadowing, record reconstruction, and
+`open` usage likewise require readability facts from the accepted revision. The
+checker certifies whether sequencing implicitly forced a computation, whether a
+value is exactly empty, whether two same-frame bindings have the same closed
+stable type, whether a record source has an exact ordered field set, and which
+opened fields actually won name resolution. The host renders only those
+certified candidates and rechecks every replacement; it does not infer these
+properties from names or printed types.
 
 Operator spelling is checked against the complete fixed operator table. The
 default-rule test enumerates every infix and prefix target, including function

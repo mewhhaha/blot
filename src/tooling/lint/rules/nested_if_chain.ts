@@ -1,6 +1,12 @@
 import type { Branch, Expr, Span } from "../../../syntax/ast.ts";
 import type { Rule } from "../../../syntax/cursor.ts";
-import { producedExpression, spanKey } from "../syntax.ts";
+import {
+  directRule,
+  fieldRule,
+  fieldRules,
+  producedExpression,
+  spanKey,
+} from "../syntax.ts";
 import type { AstNode, LintRule, LintRuleContext } from "../types.ts";
 import { prefersEqualityCase } from "./equality_if_chain.ts";
 
@@ -220,31 +226,6 @@ function reindentFragment(
     result.push(line);
   }
   return result.join("\n");
-}
-
-function fieldRule(rule: Rule, name: string): Rule | null {
-  const value = rule.field(name);
-  if (value === undefined || value === null || Array.isArray(value)) {
-    return null;
-  }
-  if (typeof value !== "object" || !("type" in value)) return null;
-  if (value.type !== "rule") return null;
-  return value as Rule;
-}
-
-function fieldRules(rule: Rule, name: string): readonly Rule[] {
-  const value = rule.field(name);
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is Rule =>
-    entry !== null && entry !== undefined && entry.type === "rule"
-  );
-}
-
-function directRule(rule: Rule, name: string): Rule | null {
-  for (const child of rule.children()) {
-    if (child.type === "rule" && child.name === name) return child;
-  }
-  return null;
 }
 
 function isTerminalStatement(

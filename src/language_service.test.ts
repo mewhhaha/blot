@@ -247,7 +247,7 @@ Deno.test("a recursive value receives a recursive signature header", async () =>
   const uri = "untitled:add-recursive-signature.blot";
   const source = `let rec identity = fn value => value
 return identity
-`;
+  `;
   try {
     service.open(uri, source, 1);
     const actions = await service.codeActions(uri, {
@@ -681,6 +681,141 @@ return (identity #True, same #True, pushed, unchanged)
   }
 });
 
+Deno.test("control-flow flattening actions preserve the checked interface", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:control-flow-lints.blot";
+  const source = `open import "blot:prelude"
+let increment :: Int -> Int
+let increment = fn value => do:
+  return value + 1
+let label :: Int -> Text
+let label = fn value => do:
+  if value == 0:
+    return "zero"
+  else:
+    return "other"
+return (increment, label)
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 10, character: 25 },
+    });
+    const redundantDo = actions.find((action) =>
+      action.title === "Remove redundant `do:` block"
+    );
+    assertEquals(
+      redundantDo?.edit.documentChanges[0].edits[0]?.newText,
+      "(value + 1)\n",
+    );
+    const redundantElse = actions.find((action) =>
+      action.title === "Remove redundant terminal `else`"
+    );
+    assertEquals(
+      redundantElse?.edit.documentChanges[0].edits[0]?.newText,
+      `if value == 0:
+    return "zero"
+  return "other"
+`,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("compiler readability facts publish checked source actions", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:readability-facts.blot";
+  const source = `const run = fn () => 1
+let direct = fn () => do:
+  use value <- run ()
+  return value
+const Arrays = { .empty = @array.empty; }
+let empty = Arrays.empty
+let count = 0
+let initial = count
+let count = @int.add initial 1
+let source = { .first = 1; .second = 2; .third = 3; }
+let rebuilt = {
+  .first = source.first;
+  .second = count;
+  .third = source.third;
+}
+const First = { .chosen = 1; .other = 2; }
+const Second = { .chosen = 3; }
+open First
+open Second
+let selected = chosen
+open { .ignored = 4; }
+return (direct, empty, initial, rebuilt, selected)
+`;
+  try {
+    service.open(uri, source, 1);
+    const diagnostics = await service.diagnostics(uri);
+    assert(
+      diagnostics.some((diagnostic) =>
+        diagnostic.code === "BLOT_LINT_OPEN_SHADOW"
+      ),
+      "missing compiler-proved open-shadow diagnostic",
+    );
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 22, character: 53 },
+    });
+    const titles = actions.map((action) => action.title);
+    for (
+      const title of [
+        "Return computation directly",
+        "Replace with empty array literal",
+        "Rebind `count` with `:=`",
+        "Spread `source` instead of copying its fields",
+      ]
+    ) {
+      assert(titles.includes(title), `missing readability action: ${title}`);
+    }
+    assertEquals(
+      titles.filter((title) => title === "Remove unused `open`").length,
+      2,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("runtime loop fields publish no stale readability actions", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:runtime-readability-provenance.blot";
+  const source = `open import "blot:prelude"
+let state = {
+  .items = [];
+  .source = { .first = 0; .second = 0; };
+}
+for value in Iter.items [1, 2]:
+  state := {
+    .items = [...state.items, value];
+    .source = { .second = value; .first = value; };
+  }
+let rebuilt = { .first = state.source.first; .second = state.source.second; }
+return (state.items, rebuilt)
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 0, character: 0 },
+      end: { line: 11, character: 29 },
+    });
+    const titles = actions.map((action) => action.title);
+    assertEquals(titles.includes("Replace with empty array literal"), false);
+    assertEquals(
+      titles.some((title) => title.startsWith("Spread `state.source`")),
+      false,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("conjoined equality checks publish a checked decision-matrix rewrite", async () => {
   const service = new LanguageService();
   const uri = "untitled:conjoined-equality-case.blot";
@@ -718,7 +853,8 @@ return case x == 0 && y == 0 of
 Deno.test("a shadowed equality spelling publishes no decision-matrix rewrite", async () => {
   const service = new LanguageService();
   const uri = "untitled:shadowed-equality-case.blot";
-  const source = `const not_greater = fn left => fn right => case @int.cmp left right of
+  const source =
+    `const not_greater = fn left => fn right => case @int.cmp left right of
   #Less => #True
   #Equal => #True
   #Greater => #False

@@ -402,6 +402,25 @@ return { .[name] = 1; }
   assertEquals(member.value.tag, "int");
 });
 
+Deno.test("a computed shape field elaborates its name expression", async () => {
+  const parsed = await parse(`return {
+  .[case flag of
+    #True => "enabled"
+    #False => "disabled"
+  ] = 1;
+}
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const result = parsed.module.result;
+  assertEquals(result.tag, "shape");
+  if (result.tag !== "shape") return;
+  const member = result.members[0];
+  assert(member !== undefined && member.tag === "computed");
+  if (member === undefined || member.tag !== "computed") return;
+  assertEquals(member.name.tag, "if");
+});
+
 function handledArguments(expression: Expr): readonly Expr[] | null {
   if (expression.tag !== "lambda" || expression.parameter.tag !== "unit") {
     return null;

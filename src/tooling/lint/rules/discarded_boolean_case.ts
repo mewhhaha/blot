@@ -35,22 +35,58 @@ export const discardedBooleanCase: LintRule = {
         const fallback = producedExpression(expression.fallback);
         const trueDoesNothing = consequence.tag === "unit";
         const falseDoesNothing = fallback.tag === "unit";
-        if (trueDoesNothing === falseDoesNothing) return;
+        if (trueDoesNothing && falseDoesNothing) return;
 
-        const condition = singleLine(
-          context.sourceText(expression.branches[0].condition),
-        );
-        let activeCondition = condition;
-        let activeBody = consequence;
-        if (trueDoesNothing) {
-          activeCondition = `not (${condition})`;
-          activeBody = fallback;
-        }
+        const condition = context.sourceText(expression.branches[0].condition);
         const indent = lineIndent(context.source, declaration.span.start);
-        const replacement =
-          `if ${activeCondition}:\n${
-            renderEffect(activeBody, context, `${indent}  `)
-          }` + trailingWhitespace(context.source, declaration.span);
+        if (!trueDoesNothing && !falseDoesNothing) {
+          if (condition.includes("\n")) {
+            context.report({
+              message:
+                "This discarded Boolean case chooses between effects; use a statement `if`/`else`.",
+              span: declaration.span,
+            });
+            return;
+          }
+          const replacement =
+            `if ${condition}:\n${
+              renderEffect(consequence, context, `${indent}  `)
+            }\n${indent}else:\n${
+              renderEffect(fallback, context, `${indent}  `)
+            }` + trailingWhitespace(context.source, declaration.span);
+          context.report({
+            message:
+              "This discarded Boolean case chooses between effects; use a statement `if`/`else`.",
+            span: declaration.span,
+            fix: context.fix(
+              declaration.span,
+              "Replace discarded Boolean case with `if`/`else`",
+              replacement,
+              "check",
+            ),
+          });
+          return;
+        }
+
+        if (condition.includes("\n")) {
+          context.report({
+            message:
+              "This discarded Boolean case only decides whether an effect runs; use a statement `if`.",
+            span: declaration.span,
+          });
+          return;
+        }
+        let replacement: string;
+        if (trueDoesNothing) {
+          replacement = `if ${condition}:\n${indent}  use ()\n${indent}else:\n${
+            renderEffect(fallback, context, `${indent}  `)
+          }`;
+        } else {
+          replacement = `if ${condition}:\n${
+            renderEffect(consequence, context, `${indent}  `)
+          }`;
+        }
+        replacement += trailingWhitespace(context.source, declaration.span);
         context.report({
           message:
             "This discarded Boolean case only decides whether an effect runs; use a statement `if`.",
@@ -103,10 +139,6 @@ function smallestIndent(lines: readonly string[]): string {
   }
   if (smallest === null) return "";
   return smallest;
-}
-
-function singleLine(source: string): string {
-  return source.replace(/\s+/g, " ").trim();
 }
 
 function lineIndent(source: string, offset: number): string {
