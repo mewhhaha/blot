@@ -5646,6 +5646,7 @@ mod tests {
             signatures: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
+            links: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -5670,6 +5671,7 @@ mod tests {
             signatures: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
+            links: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -5697,6 +5699,7 @@ mod tests {
             signatures: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
+            links: Vec::new(),
             exports: Vec::new(),
         };
 

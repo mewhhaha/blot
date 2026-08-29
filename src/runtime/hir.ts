@@ -224,6 +224,11 @@ export type BlotRuntimeOperation =
       readonly function: number;
     }
     | {
+      readonly kind: "call.external";
+      readonly capability: string;
+      readonly operation: string;
+    }
+    | {
       readonly kind: "closure.make";
       readonly function: number;
     }
@@ -340,6 +345,12 @@ export type BlotRuntimeCapability = {
   }[];
 };
 
+export type BlotRuntimeLink = {
+  readonly unit: string;
+  readonly name: string;
+  readonly signature: number;
+};
+
 export type BlotRuntimeExport =
   | {
     readonly sourceName: string;
@@ -362,6 +373,7 @@ export type BlotRuntimeModule = {
   readonly signatures: readonly BlotRuntimeSignature[];
   readonly functions: readonly BlotRuntimeFunction[];
   readonly capabilities: readonly BlotRuntimeCapability[];
+  readonly links: readonly BlotRuntimeLink[];
   readonly exports: readonly BlotRuntimeExport[];
 };
 

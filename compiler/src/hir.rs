@@ -535,6 +535,13 @@ pub(crate) struct RuntimeCapability {
 }
 
 #[derive(Clone, Serialize)]
+pub(crate) struct RuntimeLink {
+    pub(crate) unit: String,
+    pub(crate) name: String,
+    pub(crate) signature: usize,
+}
+
+#[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub(crate) enum RuntimeExport {
     Runtime {
@@ -564,6 +571,7 @@ pub struct RuntimeModule {
     pub(crate) signatures: Vec<RuntimeSignature>,
     pub(crate) functions: Vec<RuntimeFunction>,
     pub(crate) capabilities: Vec<RuntimeCapability>,
+    pub(crate) links: Vec<RuntimeLink>,
     pub(crate) exports: Vec<RuntimeExport>,
 }
 
@@ -1063,6 +1071,7 @@ impl ResidualTrace {
             signatures: self.signatures,
             functions: self.functions.into_values().collect(),
             capabilities,
+            links: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: name.clone(),
                 phase: "runtime",
@@ -3875,6 +3884,7 @@ impl ResidualTrace {
             signatures: self.signatures,
             functions: self.functions.into_values().collect(),
             capabilities,
+            links: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",
@@ -8400,6 +8410,7 @@ fn merge_runtime_modules(
     let mut signatures = Vec::new();
     let mut functions = Vec::new();
     let mut capabilities = Vec::new();
+    let mut links = Vec::new();
     let mut exports = Vec::new();
     for module in modules {
         let type_offset = types.len();
@@ -8461,6 +8472,10 @@ fn merge_runtime_modules(
             }
             capabilities.push(capability);
         }
+        for mut link in module.links {
+            link.signature += signature_offset;
+            links.push(link);
+        }
         for mut exported in module.exports {
             if let RuntimeExport::Runtime {
                 function,
@@ -8483,6 +8498,7 @@ fn merge_runtime_modules(
         signatures,
         functions,
         capabilities,
+        links,
         exports,
     })
 }
@@ -8911,6 +8927,7 @@ impl HirBuilder {
             signatures: self.signatures,
             functions,
             capabilities,
+            links: Vec::new(),
             exports,
         })
     }

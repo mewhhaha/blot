@@ -2,4 +2,4 @@
 
 pub(crate) const COMPILER_HOST_ABI_VERSION: u32 = 3;
 pub(crate) const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 16;
-pub(crate) const RUNTIME_HIR_SCHEMA: u8 = 6;
+pub(crate) const RUNTIME_HIR_SCHEMA: u8 = 7;
