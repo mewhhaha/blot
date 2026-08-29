@@ -44,6 +44,7 @@ pnpm compiler:build
 pnpm blot check examples/minimal.blot
 pnpm blot run examples/minimal.blot
 pnpm blot build examples/minimal.blot
+pnpm blot dev case-studies/engine/browser.blot.json
 pnpm test
 ```
 
@@ -109,7 +110,7 @@ installing anything.
 
 ## Host ABI
 
-Compiler-host ABI 3 registers UTF-8 paths once and refers to them through stable
+Compiler-host ABI 4 registers UTF-8 paths once and refers to them through stable
 session-local `ModuleId` values. Changed UTF-8 source or compact AST bytes,
 resolved import edges, included bytes, and removals travel in validated batched
 binary delta frames. Trusted compiler-distributed snapshots use a separate
@@ -121,8 +122,11 @@ requested analysis facts remain available in the same versioned response
 envelope.
 
 The compiler also exports session operations for evaluation, tagged test
-execution, canonical AST export, Runtime-HIR preparation, and compilation.
-Transport failures preserve the compiler's three public classes:
+execution, canonical AST export, Runtime-HIR preparation, whole-program
+compilation, and development-unit compilation. ABI 4 adds the development
+compile operation and indexed access to its unit Wasm and manifest bytes. It
+does not change the binary graph-delta frame schema. Transport failures preserve
+the compiler's three public classes:
 
 - located source diagnostics;
 - explicit target refusals;
@@ -146,6 +150,12 @@ included bytes. The Rust session owns semantic caches and invalidates a changed
 module together with its importers. Runtime HIR and artifacts are copied at the
 public boundary so caller mutation cannot poison the cache.
 
+A [`blot-project`](development.md) manifest may keep that session resident while
+the compiler emits independently reloadable units. An implementation-only edit
+behind an unchanged link interface reuses its consumers. A changed interface
+rebuilds direct consumers. The host reports complete changed, retained, and
+removed sets only after the whole development build succeeds.
+
 ## Conformance and benchmark
 
 `pnpm conformance` compares the Rust evaluator with emitted Wasm on the focused
@@ -156,6 +166,10 @@ checking, diagnostics, ownership, staging, and lowering contracts.
 the direct compiler-Wasm transport. Both routes execute the same semantic
 implementation; the comparison measures host overhead and first confirms that
 Runtime HIR and ABI artifacts are identical.
+
+`pnpm benchmark:development` measures 20 warm edits in a generated 5 MiB,
+20-unit project. It requires the known-change path to rebuild only the edited
+unit and keeps p95 below 100 ms on the reference machine.
 
 `pnpm benchmark:compiler-profiles` compares release profiles `s`, `2`, and `3`
 under identical LTO, codegen-unit, panic, strip, and stack controls. It records

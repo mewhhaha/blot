@@ -308,12 +308,14 @@ may fall back to ordinary compilation after validation failure. A compiler-
 distributed snapshot instead reports corrupt distribution when its authority is
 the distribution itself.
 
-Compiler-host ABI 3 exposes trusted-snapshot installation separately from graph
+Compiler-host ABI 4 exposes trusted-snapshot installation separately from graph
 deltas. The bundled host invokes it only after the artifact manifest
 authenticates the prelude digest. A caller supplying a custom compiler and
 snapshot explicitly owns that trust decision. Source, portable-AST,
 configuration, and removal deltas cannot carry snapshot bytes, and registry
-packages cannot reach this authority.
+packages cannot reach this authority. Development-program compilation is a
+separate ABI 4 session operation and does not widen the graph-delta or snapshot
+decoders.
 
 Snapshot preparation is transactional. The AST, interface, compile-time capsule,
 and result evaluation are completed in path-scoped staging state before the

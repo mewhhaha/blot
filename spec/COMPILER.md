@@ -92,7 +92,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 3. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 4. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -101,7 +101,9 @@ generic graph-delta payload. The decoder validates the complete frame before
 mutation, rejects unknown identities and trailing bytes, and reconstructs UTF-16
 source offsets during decoding. Compact success summaries avoid JSON on the
 check hot path; diagnostic and requested analysis payloads retain their
-classified content.
+classified content. ABI 4 adds development-program compilation and indexed
+transport of its unit Wasm and manifest bytes. The graph-delta frame remains
+schema 3.
 
 ## 3. Pass graph
 

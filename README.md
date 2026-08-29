@@ -8,6 +8,8 @@ See [DOCS.md](DOCS.md) for idiomatic Blot, [LANGUAGE.md](LANGUAGE.md) for the
 current language, and the [specification map](spec/README.md) for the language
 model, compiler theorem, typechecking theory, staging, safety, lowering,
 incrementality, and cost model. The
+[development project guide](docs/development.md) covers split Wasm units, watch
+compilation, runtime activation, and the rebuild latency gate. The
 [algorithm memory guide](docs/algorithm-memory.md) records when a consuming
 `Slice -> Slice` formulation is actually appropriate. Executable application
 studies live in [case-studies/](case-studies/): a grep-like file search, an
@@ -184,6 +186,7 @@ pnpm install
 pnpm blot check examples/tour.blot
 pnpm blot build examples/compiled.blot
 pnpm blot ast examples/minimal.blot
+pnpm blot dev case-studies/engine/browser.blot.json
 pnpm test
 ```
 

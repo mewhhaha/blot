@@ -96,9 +96,11 @@ The selected shrubbery stays immutable and spatially stable while the host
 camera moves around it:
 
 ```blot
+const F = import "./lib/frame.blot"
+
 for ever:
   use remaining <- Host.frame ()
-  if remaining <= 0:
+  if F.finished remaining:
     break
 
   use render game
@@ -151,11 +153,25 @@ It presents the current immutable Store after the first voxel and every 256
 additions, so the candidate appears immediately and fills in while its final
 Store is still being built.
 
-### Four modules, and what each of them owns
+The development compiler has two split-unit examples for this source tree:
+`browser.blot.json` assigns `main.blot` and `lib/frame.blot` to separate units,
+while `desktop.blot.json` does the same for `game_loop.blot`. Inspect their
+incremental build sets without launching a graphics host:
+
+```bash
+pnpm blot dev case-studies/engine/browser.blot.json
+pnpm blot dev case-studies/engine/desktop.blot.json
+```
+
+These commands compile and report unit changes. The browser and desktop graphics
+hosts retain their existing candidate-worker reload paths.
+
+### Five modules, and what each of them owns
 
 ```text
 main.blot        the game: its components, its systems, its scene, its loop
 lib/ecs.blot     stores and joins over entities, and no authority at all
+lib/frame.blot   the shared frame-completion policy
 lib/render.blot  the camera, the projection, the cube, and the two draw calls
 lib/math.blot    sine and cosine, indexed by step
 ```
@@ -198,9 +214,11 @@ What the language adds is that the world does not have to be a value. A `for`
 body's `:=` names are its accumulator, so the frame loop _is_ the world:
 
 ```blot
+const F = import "./lib/frame.blot"
+
 for ever:
   use remaining <- Host.frame ()
-  if remaining <= 0:
+  if F.finished remaining:
     break
 
   use current <- Assets.generation ()
