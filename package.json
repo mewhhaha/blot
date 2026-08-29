@@ -58,6 +58,7 @@
     "verify:compiler": "pnpm conformance",
     "compiler:download": "deno run --allow-read --allow-write --allow-run=gh,git scripts/download_compiler.ts",
     "compile:corpus": "deno run --allow-read scripts/compile_corpus.ts",
+    "docs:check": "deno run --allow-read --allow-write --allow-run=deno,bash scripts/check_readme_examples.ts",
     "current:generate": "node --import tsx scripts/generate_current_implementation.ts",
     "current:check": "node --import tsx scripts/generate_current_implementation.ts --check",
     "generate:health": "deno run --allow-read --allow-write scripts/generate_language_health.ts",

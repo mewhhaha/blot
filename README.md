@@ -222,12 +222,12 @@ let name = expr          // runtime binding
 const name = expr        // must evaluate at compile time
 open expr                // spread every field into scope
 for src:                 // loop; see below
-  ...
+  use visit src
 for ever:                // iterate the prelude's infinite iterator
-  ...
+  use tick ()
 break                    // exit the nearest `for`
 if c:                    // conditional control flow
-  ...
+  use act ()
 if let p = x else:       // bind p or leave through the else branch
   return fallback
 name := expr             // shadow a name while preserving its type
@@ -248,7 +248,7 @@ A standalone `if` is surrounding control flow, has an optional `else`, and may
 transfer control:
 
 ```blot
-let describe = fn value =>
+let describe = fn value => do:
   if value < 0:
     return "negative"
   return "non-negative"
@@ -277,9 +277,9 @@ there is no element syntax. A renderer-shaped API can keep the same convention
 explicitly:
 
 ```blot
-let label = fn () =>
+let label = fn () => do:
   use text "Count: "
-let save = fn () =>
+let save = fn () => do:
   use Button { .label = "Save"; .disabled = (); } []
 use div { .class = "counter"; .hidden = hidden; } [label, save]
 ```
@@ -310,9 +310,9 @@ for Iter.range (0, 5):          // run the body once per element
 return x                        // 6
 
 for n in source:                // bind each element
-  ...
+  use visit n
 for #Some n in source:          // bind, and skip what does not match
-  ...
+  use visit n
 
 for ever:
   x := x + 1
@@ -327,7 +327,7 @@ is one arm rather than a second construct.
 A `case` arm may carry a guard, which is a refinement no pattern states:
 
 ```blot
-case n of
+let describe = fn n => case n of
   0 => "zero"
   m if m > 0 => "positive"
   _ => "negative"
@@ -468,9 +468,10 @@ imprecise is not predictable storage.
 `<+` is what attaches the namespace, and it works on any type value:
 
 ```blot
-const Meters = seal ("Meters", I32)
-  <+ { .of = fn n => seal ("Meters", n); }
-  <+ { .unit = "m"; };
+const Meters =
+  seal ("Meters", I32) <+ { .of = fn n => do:
+    return seal ("Meters", n)
+  ; } <+ { .unit = "m"; }
 ```
 
 A shape's fields are in declaration order and `reorder` rebuilds one in any
@@ -524,28 +525,28 @@ so it can be stored before it is executed; `let` remains a pure definition:
 ```blot
 const Terminal = @effect { .read = Unit -> Text; }
 
-let ask = fn () =>
+let ask = fn () => do:
   let effect = Terminal.read
-  use answer <- effect
+  use answer <- effect ()
   return answer <> "!"
 ```
 
 ```blot
 const Console = @effect { .write = Text -> Unit; }
 
-let report = fn () =>
+let report = fn () => do:
   use Console.write "one"
   return "done"
 
 let joining = {
-  .write = fn (message, ?resume) =>
+  .write = fn (message, ?resume) => do:
     use rest <- resume ()
     return message ++ rest
   ;
   .return = fn value => value;
 }
 
-@handle (Console, report, joining)   // "onedone"
+let result = @handle (Console, report, joining)   // "onedone"
 ```
 
 `@handle` names the effect it discharges, which is what lets the checker
@@ -575,7 +576,7 @@ is the program's declared interface rather than something left unhandled:
 
 ```blot
 const Console = @effect.host { .write = Text -> Unit; }
-let report = fn () =>
+let report = fn () => do:
   use result <- Console.write "compiled"
   return result
 // () -> () ~ { Console }
@@ -589,7 +590,7 @@ nothing to import for more:
 module with init
 
 let printing = {
-  .write = fn (message, resume) =>
+  .write = fn (message, ?resume) => do:
     use init.print message     // opaque; the program can only call it
     use result <- resume ()
     return result
@@ -604,10 +605,7 @@ value domain a type is and hands back the parts as an ordinary tagged value:
 
 ```blot
 const element_of = fn t => case reflect t of
-  #Sealed s => if text_eq (s.name, "List"):
-    return Some s.inner
-  else:
-    return None
+  #Sealed s if text_eq (s.name, "List") => Some s.inner
   _ => None
 ```
 

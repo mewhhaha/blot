@@ -65,6 +65,7 @@ check:
   deno fmt --config deno.desktop.json --check case-studies/engine/desktop.ts
   deno lint
   deno lint --config deno.desktop.json case-studies/engine/desktop.ts
+  pnpm run docs:check
   deno task check:generated
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
   cargo fmt --manifest-path compiler/Cargo.toml --check
