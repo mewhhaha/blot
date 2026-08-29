@@ -299,40 +299,38 @@ const draw_face = fn (position, angle, scale, color, camera, face) => do:
   let depths = F32x4.of (za, zb, zc, zd)
   let behind = F32x4.any (F32x4.less depths (F32x4.splat NEAR))
   let hidden = is_greater (F32.cmp outward ZERO)
-  use case behind || hidden of
-    #True => ()
-    #False => do:
-      // Fixed-point screen coordinates are the last place a float exists in
-      // this function. `Canvas` is a module import, so its record is the
-      // boundary a float cannot cross.
-      let pixel = fn point => {
-        .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
-        .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
-      }
-      let pa = pixel (to_screen (a, camera))
-      let pb = pixel (to_screen (b, camera))
-      let pc = pixel (to_screen (c, camera))
-      let pd = pixel (to_screen (d, camera))
-      let millimetres = lane 1000.0
-      let shade = shade_of normal
-      use Canvas.tri {
-        .ax = pa.x; .ay = pa.y;
-        .az = F32.truncate (F32.mul za millimetres);
-        .bx = pb.x; .by = pb.y;
-        .bz = F32.truncate (F32.mul zb millimetres);
-        .cx = pc.x; .cy = pc.y;
-        .cz = F32.truncate (F32.mul zc millimetres);
-        .shade = shade; .color = color;
-      }
-      use Canvas.tri {
-        .ax = pa.x; .ay = pa.y;
-        .az = F32.truncate (F32.mul za millimetres);
-        .bx = pc.x; .by = pc.y;
-        .bz = F32.truncate (F32.mul zc millimetres);
-        .cx = pd.x; .cy = pd.y;
-        .cz = F32.truncate (F32.mul zd millimetres);
-        .shade = shade; .color = color;
-      }
+  if not (behind || hidden):
+    // Fixed-point screen coordinates are the last place a float exists in
+    // this function. `Canvas` is a module import, so its record is the
+    // boundary a float cannot cross.
+    let pixel = fn point => {
+      .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
+      .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
+    }
+    let pa = pixel (to_screen (a, camera))
+    let pb = pixel (to_screen (b, camera))
+    let pc = pixel (to_screen (c, camera))
+    let pd = pixel (to_screen (d, camera))
+    let millimetres = lane 1000.0
+    let shade = shade_of normal
+    use Canvas.tri {
+      .ax = pa.x; .ay = pa.y;
+      .az = F32.truncate (F32.mul za millimetres);
+      .bx = pb.x; .by = pb.y;
+      .bz = F32.truncate (F32.mul zb millimetres);
+      .cx = pc.x; .cy = pc.y;
+      .cz = F32.truncate (F32.mul zc millimetres);
+      .shade = shade; .color = color;
+    }
+    use Canvas.tri {
+      .ax = pa.x; .ay = pa.y;
+      .az = F32.truncate (F32.mul za millimetres);
+      .bx = pc.x; .by = pc.y;
+      .bz = F32.truncate (F32.mul zc millimetres);
+      .cx = pd.x; .cy = pd.y;
+      .cz = F32.truncate (F32.mul zd millimetres);
+      .shade = shade; .color = color;
+    }
 
 // A box. Six faces, each culled on its own, which is the whole of the mesh
 // path — an application that wants a second shape adds geometry here rather
@@ -350,20 +348,18 @@ const draw_mesh = fn (position, angle, scale, color, camera) => do:
 const draw_sprite = fn (position, scale, texture, camera) => do:
   let view = to_view (position, camera)
   let depth = F32x4.z view
-  use case is_less (F32.cmp depth NEAR) of
-    #True => ()
-    #False => do:
-      let point = to_screen (view, camera)
-      let size = case camera.lens of
-        #Perspective => F32.div (F32.mul scale FOCAL) depth
-        #Orthographic => F32.mul scale camera.zoom
-      use Canvas.sprite {
-        .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
-        .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
-        .size = F32.truncate (F32.mul size SCREEN_SCALE);
-        .depth = F32.truncate (F32.mul depth (lane 1000.0));
-        .texture = texture;
-      }
+  if not (is_less (F32.cmp depth NEAR)):
+    let point = to_screen (view, camera)
+    let size = case camera.lens of
+      #Perspective => F32.div (F32.mul scale FOCAL) depth
+      #Orthographic => F32.mul scale camera.zoom
+    use Canvas.sprite {
+      .x = F32.truncate (F32.mul (F32x4.x point) SCREEN_SCALE);
+      .y = F32.truncate (F32.mul (F32x4.y point) SCREEN_SCALE);
+      .size = F32.truncate (F32.mul size SCREEN_SCALE);
+      .depth = F32.truncate (F32.mul depth (lane 1000.0));
+      .texture = texture;
+    }
 
 // A frame: clear, read the camera the host is holding, let the application say
 // what is in the world, and present. The camera stays inside this module and

@@ -839,6 +839,7 @@ pub struct CheckedModule {
     pub closure_signatures: Vec<(ExpressionId, Type)>,
     pub recursive_closures: Vec<ExpressionId>,
     pub ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
+    pub simplifications: Vec<SimplificationFact>,
 }
 
 #[derive(Clone)]
@@ -852,6 +853,7 @@ pub struct CachedModuleInterface {
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
     recursive_closures: Vec<ExpressionId>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
+    simplifications: Vec<SimplificationFact>,
 }
 
 pub(crate) use crate::protocol::CHECKED_MODULE_CERTIFICATE_SCHEMA;
@@ -867,6 +869,60 @@ pub struct CheckedModuleCertificate {
     closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
     recursive_closures: Vec<ExpressionId>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
+    simplifications: Vec<SimplificationFact>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SimplificationFact {
+    IntegerEquality {
+        expression: ExpressionId,
+        subject: ExpressionId,
+        pattern: IntegerEqualityPattern,
+    },
+    ShortCircuitAnd {
+        expression: ExpressionId,
+        left: ExpressionId,
+        right: ExpressionId,
+    },
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum IntegerEqualityPattern {
+    Literal { expression: ExpressionId },
+    Pin { name: String },
+}
+
+impl SimplificationFact {
+    fn expression(&self) -> ExpressionId {
+        match self {
+            Self::IntegerEquality { expression, .. } | Self::ShortCircuitAnd { expression, .. } => {
+                *expression
+            }
+        }
+    }
+
+    fn referenced_expressions(&self) -> Vec<ExpressionId> {
+        match self {
+            Self::IntegerEquality {
+                expression,
+                subject,
+                pattern,
+            } => {
+                let mut expressions = vec![*expression, *subject];
+                if let IntegerEqualityPattern::Literal { expression } = pattern {
+                    expressions.push(*expression);
+                }
+                expressions
+            }
+            Self::ShortCircuitAnd {
+                expression,
+                left,
+                right,
+            } => vec![*expression, *left, *right],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -1041,6 +1097,7 @@ impl CachedModuleInterface {
             closure_signatures,
             recursive_closures: checked.recursive_closures.clone(),
             ownership_contracts: checked.ownership_contracts.clone(),
+            simplifications: checked.simplifications.clone(),
         })
     }
 
@@ -1055,6 +1112,7 @@ impl CachedModuleInterface {
             closure_signatures: self.closure_signatures.clone(),
             recursive_closures: self.recursive_closures.clone(),
             ownership_contracts: self.ownership_contracts.clone(),
+            simplifications: self.simplifications.clone(),
         }
     }
 
@@ -1072,6 +1130,7 @@ impl CachedModuleInterface {
             closure_signatures: certificate.closure_signatures,
             recursive_closures: certificate.recursive_closures,
             ownership_contracts: certificate.ownership_contracts,
+            simplifications: certificate.simplifications,
         })
     }
 
@@ -1316,6 +1375,15 @@ impl CheckedModuleCertificate {
                 ));
             }
         }
+        let mut simplification_expressions = HashSet::new();
+        for fact in &self.simplifications {
+            if !simplification_expressions.insert(fact.expression()) {
+                return Err(format!(
+                    "checked-module certificate repeats simplification expression {}",
+                    fact.expression().0
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -1460,6 +1528,7 @@ pub struct Checker {
     declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
     ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
     specializations: RefCell<HashMap<(String, ExpressionId), SpecializationBinding>>,
+    simplifications: RefCell<HashMap<(String, ExpressionId), SimplificationFact>>,
     recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
@@ -1514,6 +1583,7 @@ impl Checker {
             declaration_tags: RefCell::new(HashMap::new()),
             ownership_facts: RefCell::new(HashMap::new()),
             specializations: RefCell::new(HashMap::new()),
+            simplifications: RefCell::new(HashMap::new()),
             recursive_closure_bodies: RefCell::new(HashSet::new()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
@@ -1793,6 +1863,16 @@ impl Checker {
                 ));
             }
         }
+        for fact in &interface.simplifications {
+            for expression in fact.referenced_expressions() {
+                if expression.0 as usize >= module.arena.expressions.len() {
+                    return Err(format!(
+                        "checked-module certificate simplification references missing expression {}",
+                        expression.0
+                    ));
+                }
+            }
+        }
         crate::ownership::validate_contracts(&module, &interface.ownership_contracts)?;
         Ok(())
     }
@@ -2009,6 +2089,46 @@ impl Checker {
             .into_iter()
             .map(|(_, _, fact)| fact)
             .collect::<Vec<_>>();
+        let simplifications = checked
+            .simplifications
+            .iter()
+            .map(|fact| match fact {
+                SimplificationFact::IntegerEquality {
+                    expression,
+                    subject,
+                    pattern,
+                } => {
+                    let pattern = match pattern {
+                        IntegerEqualityPattern::Literal {
+                            expression: pattern_expression,
+                        } => serde_json::json!({
+                            "kind": "integer-literal",
+                            "span": module.arena.expression_span(*pattern_expression),
+                        }),
+                        IntegerEqualityPattern::Pin { name } => serde_json::json!({
+                            "kind": "integer-pin",
+                            "name": name,
+                        }),
+                    };
+                    serde_json::json!({
+                        "kind": "integer-equality",
+                        "span": module.arena.expression_span(*expression),
+                        "subject": module.arena.expression_span(*subject),
+                        "pattern": pattern,
+                    })
+                }
+                SimplificationFact::ShortCircuitAnd {
+                    expression,
+                    left,
+                    right,
+                } => serde_json::json!({
+                    "kind": "short-circuit-and",
+                    "span": module.arena.expression_span(*expression),
+                    "left": module.arena.expression_span(*left),
+                    "right": module.arena.expression_span(*right),
+                }),
+            })
+            .collect::<Vec<_>>();
         serde_json::json!({
             "ok": true,
             "type": self.show(&checked.result),
@@ -2017,6 +2137,7 @@ impl Checker {
             "tags": tags,
             "ownership": ownership,
             "specializations": specializations,
+            "simplifications": simplifications,
             "work": self.module_work.borrow().get(path),
         })
     }
@@ -2096,6 +2217,9 @@ impl Checker {
     }
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
+        self.simplifications
+            .borrow_mut()
+            .retain(|(module, _), _| module != path);
         let loaded = self
             .context
             .modules
@@ -2320,6 +2444,14 @@ impl Checker {
                 .iter()
                 .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
         );
+        let mut simplifications = self
+            .simplifications
+            .borrow()
+            .iter()
+            .filter(|((module, _), _)| module == path)
+            .map(|((_, expression), fact)| (*expression, fact.clone()))
+            .collect::<Vec<_>>();
+        simplifications.sort_by_key(|(expression, _)| expression.0);
         let checked = CheckedModule {
             result: self.settle(inferred.type_, true),
             effects,
@@ -2329,6 +2461,7 @@ impl Checker {
             closure_signatures,
             recursive_closures,
             ownership_contracts: analyses.ownership_contracts,
+            simplifications: simplifications.into_iter().map(|(_, fact)| fact).collect(),
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -2523,6 +2656,7 @@ impl Checker {
             closure_signatures: Vec::new(),
             recursive_closures: cached.recursive_closures,
             ownership_contracts: cached.ownership_contracts,
+            simplifications: cached.simplifications,
         }
     }
 
@@ -3445,6 +3579,11 @@ impl Checker {
             self.analysis_expression_types
                 .borrow_mut()
                 .insert((path.to_owned(), expression_id), inferred.type_.clone());
+            if let Some(fact) = simplification_fact(module, expression_id, values, &self.context) {
+                self.simplifications
+                    .borrow_mut()
+                    .insert((path.to_owned(), expression_id), fact);
+            }
         }
         if let Ok(inferred) = &inferred
             && matches!(
@@ -8336,6 +8475,69 @@ fn application_spine_ids(
     (callee, arguments)
 }
 
+fn simplification_fact(
+    module: &Module,
+    expression: ExpressionId,
+    values: &ValueEnvironment,
+    context: &Rc<Context>,
+) -> Option<SimplificationFact> {
+    let (callee, arguments) = application_spine_ids(module, expression);
+    if arguments.len() != 2 {
+        return None;
+    }
+    let function = comptime_expression_value(module, callee, values)?;
+    let equality = crate::recognise::comparison(context, &function);
+    if equality == Some(BTreeSet::from([crate::recognise::Ordering::Equal])) {
+        let (subject, pattern) = integer_equality_pattern(module, &arguments, values)?;
+        return Some(SimplificationFact::IntegerEquality {
+            expression,
+            subject,
+            pattern,
+        });
+    }
+    if crate::recognise::short_circuit_junction(context, &function)
+        == Some(crate::recognise::Junction::And)
+    {
+        return Some(SimplificationFact::ShortCircuitAnd {
+            expression,
+            left: arguments[0],
+            right: arguments[1],
+        });
+    }
+    None
+}
+
+fn integer_equality_pattern(
+    module: &Module,
+    arguments: &[ExpressionId],
+    values: &ValueEnvironment,
+) -> Option<(ExpressionId, IntegerEqualityPattern)> {
+    let left = arguments[0];
+    let right = arguments[1];
+    let left_expression = &module.arena.expressions[left.0 as usize];
+    let right_expression = &module.arena.expressions[right.0 as usize];
+    match (left_expression, right_expression) {
+        (Expression::Int { .. }, Expression::Int { .. }) => None,
+        (_, Expression::Int { .. }) => {
+            Some((left, IntegerEqualityPattern::Literal { expression: right }))
+        }
+        (Expression::Int { .. }, _) => {
+            Some((right, IntegerEqualityPattern::Literal { expression: left }))
+        }
+        (_, Expression::Var { name, .. })
+            if matches!(lookup(values, name), Some(Value::Int(_))) =>
+        {
+            Some((left, IntegerEqualityPattern::Pin { name: name.clone() }))
+        }
+        (Expression::Var { name, .. }, _)
+            if matches!(lookup(values, name), Some(Value::Int(_))) =>
+        {
+            Some((right, IntegerEqualityPattern::Pin { name: name.clone() }))
+        }
+        _ => None,
+    }
+}
+
 fn comparison_refinements(
     module: &Module,
     expression: ExpressionId,
@@ -11137,6 +11339,7 @@ mod tests {
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a quantified closed interface is cacheable");
@@ -11175,6 +11378,7 @@ mod tests {
             closure_signatures: vec![(ExpressionId(8), Type::Unit)],
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
         let cached = CachedModuleInterface::from_checked(&checked)
             .expect("a closed interface should be cacheable");
@@ -11227,6 +11431,7 @@ mod tests {
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
         let first = CachedModuleInterface::from_checked(&interface(7, Type::Unit))
             .expect("first interface should close")
@@ -11255,6 +11460,7 @@ mod tests {
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
         let first = CachedModuleInterface::from_checked(&interface(Type::Unit))
             .expect("first interface should close")
@@ -11279,6 +11485,7 @@ mod tests {
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
 
         assert!(CachedModuleInterface::from_checked(&checked).is_none());
@@ -11295,6 +11502,7 @@ mod tests {
             closure_signatures: vec![(ExpressionId(7), Type::Unit)],
             recursive_closures: vec![ExpressionId(8)],
             ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
         };
         let cached =
             CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
@@ -11326,6 +11534,7 @@ mod tests {
                     callback_requirements: Vec::new(),
                 },
             )],
+            simplifications: Vec::new(),
         };
         let cached =
             CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");

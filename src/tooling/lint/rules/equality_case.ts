@@ -1,14 +1,13 @@
 import type { Expr } from "../../../syntax/ast.ts";
 import {
   binaryCall,
-  calleePath,
   producedExpression,
   trailingWhitespace,
 } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
 interface EqualityMatch {
-  readonly subject: Expr;
+  readonly subject: string;
   readonly pattern: string;
 }
 
@@ -33,16 +32,17 @@ export const equalityCase: LintRule = {
           )
         ) return;
 
-        const comparison = equalityMatch(
+        const comparisons = equalityMatches(
           expression.branches[0].condition,
           context,
         );
-        if (comparison === null) return;
-        const subject = singleLine(context.sourceText(comparison.subject));
+        if (comparisons === null) return;
+        const subjects = comparisons.map((comparison) => comparison.subject);
+        const subjectList = subjects.join(", ");
         const indent = lineIndent(context.source, expression.span.start);
         const replacement = renderCase(
-          subject,
-          comparison.pattern,
+          subjects,
+          comparisons.map((comparison) => comparison.pattern),
           expression.branches[0].consequence,
           expression.fallback,
           context,
@@ -50,11 +50,11 @@ export const equalityCase: LintRule = {
         ) + trailingWhitespace(context.source, expression.span);
         context.report({
           message:
-            `Match ${subject} directly instead of matching the Boolean result of its equality comparison.`,
+            `Match ${subjectList} directly instead of matching a derived Boolean.`,
           span: expression.span,
           fix: context.fix(
             expression.span,
-            "Match the compared value directly",
+            "Match the compared values directly",
             replacement,
             "check",
           ),
@@ -64,59 +64,67 @@ export const equalityCase: LintRule = {
   },
 };
 
-function equalityMatch(
+function equalityMatches(
   condition: Expr,
   context: LintRuleContext,
-): EqualityMatch | null {
-  const call = binaryCall(condition);
-  if (call === null || calleePath(call.callee)?.join(".") !== "Int.eq") {
-    return null;
-  }
-  const operator = context.source.slice(
-    call.left.span.end,
-    call.right.span.start,
-  )
-    .trim();
-  if (operator !== "==") return null;
-  const leftPattern = call.left.tag === "int";
-  const rightPattern = call.right.tag === "int";
-  if (leftPattern !== rightPattern) {
-    if (rightPattern) {
-      return {
-        subject: call.left,
-        pattern: singleLine(context.sourceText(call.right)),
-      };
+): readonly EqualityMatch[] | null {
+  const fact = context.simplifications.find((candidate) =>
+    sameSpan(candidate.span, condition.span)
+  );
+  if (fact?.kind === "integer-equality") {
+    let pattern: string;
+    if (fact.pattern.kind === "integer-literal") {
+      pattern = singleLine(
+        context.source.slice(fact.pattern.span.start, fact.pattern.span.end),
+      );
+    } else {
+      pattern = `^${fact.pattern.name}`;
     }
-    return {
-      subject: call.right,
-      pattern: singleLine(context.sourceText(call.left)),
-    };
+    return [{
+      subject: singleLine(
+        context.source.slice(fact.subject.start, fact.subject.end),
+      ),
+      pattern,
+    }];
   }
-  if (call.left.tag === "var" && isComputedSubject(call.right)) {
-    return { subject: call.right, pattern: `^${call.left.name}` };
-  }
-  if (call.right.tag === "var" && isComputedSubject(call.left)) {
-    return { subject: call.left, pattern: `^${call.right.name}` };
-  }
-  return null;
+  if (fact?.kind !== "short-circuit-and") return null;
+
+  const conjunction = binaryCall(condition);
+  if (conjunction === null) return null;
+  if (
+    !sameSpan(conjunction.left.span, fact.left) ||
+    !sameSpan(conjunction.right.span, fact.right)
+  ) return null;
+
+  const left = equalityMatches(conjunction.left, context);
+  if (left === null) return null;
+  const right = equalityMatches(conjunction.right, context);
+  if (right === null) return null;
+  return [...left, ...right];
 }
 
-function isComputedSubject(expression: Expr): boolean {
-  return expression.tag === "apply" || expression.tag === "field";
+function sameSpan(
+  left: { readonly start: number; readonly end: number },
+  right: { readonly start: number; readonly end: number },
+): boolean {
+  return left.start === right.start && left.end === right.end;
 }
 
 function renderCase(
-  subject: string,
-  pattern: string,
+  subjects: readonly string[],
+  patterns: readonly string[],
   consequence: Expr,
   fallback: Expr,
   context: LintRuleContext,
   indent: string,
 ): string {
   const armIndent = `${indent}  `;
-  return `case ${subject} of\n${
-    renderArm(pattern, consequence, context, armIndent)
-  }\n${renderArm("_", fallback, context, armIndent)}`;
+  const subjectList = subjects.join(", ");
+  const matchedPatterns = patterns.join(", ");
+  const fallbackPatterns = subjects.map(() => "_").join(", ");
+  return `case ${subjectList} of\n${
+    renderArm(matchedPatterns, consequence, context, armIndent)
+  }\n${renderArm(fallbackPatterns, fallback, context, armIndent)}`;
 }
 
 function renderArm(

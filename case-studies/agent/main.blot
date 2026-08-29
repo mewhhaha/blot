@@ -22,7 +22,7 @@ for ever:
 
   let request = transcript <> "\nUser: " <> prompt <> "\nAssistant:"
   use reply <- Model.complete request
-  use Terminal.write (Text.append "Agent: " reply)
+  use Terminal.write ("Agent: " <> reply)
   transcript := request <> " " <> reply
   turns := turns + 1
 

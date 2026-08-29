@@ -1070,6 +1070,24 @@ shareable; this refinement changes neither the source Array type nor the
 certificate. Consequently direct, aliased, and record-member calls consume or
 share the same concrete Store authority without recognizing an exported name.
 
+The checked-module certificate also carries editor simplification facts keyed by
+the expression that was proved. An integer-equality fact requires the resolved
+closure to factor its two arguments through exactly one `@int.cmp`, use each
+argument once, and return true for exactly `#Equal` when probed across all three
+orderings. Its replacement pattern is limited to a written integer literal or a
+pin whose binding evaluates to an integer at compile time; two unresolved
+runtime operands produce no fact. A short-circuit-conjunction fact requires both
+the complete Boolean truth table and an operational demand probe proving that a
+deferred right operand is skipped for `#False` and demanded exactly once for
+`#True`. Truth-table equivalence alone is insufficient.
+
+These facts refer to module-local expression identities, and installation
+rejects any reference outside the installed AST or a duplicate fact for one
+expression. Immutable aliases and record projections are recognized through
+their resolved compile-time values rather than source spelling. The editor may
+compose the primitive facts into a larger decision-matrix suggestion, but the
+TypeScript host neither resolves equality nor proves demand behavior.
+
 The checked declaration signature remains authoritative across compile-time
 re-evaluation; a provisional inferred closure type cannot replace it before
 ownership certification. A recursive Array result is a checked ownership fixed

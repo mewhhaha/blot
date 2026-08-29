@@ -80,14 +80,11 @@ const sin_steps = fn steps => do:
   let a = (steps % TURN + TURN) % TURN
   let quadrant = a / QUARTER
   let step = a % QUARTER
-  if quadrant == 0:
-    return table_at step
-  else if quadrant == 1:
-    return table_at (QUARTER - step)
-  else if quadrant == 2:
-    return F32.negate $ table_at step
-  else:
-    return F32.negate $ table_at (QUARTER - step)
+  return case quadrant of
+    0 => table_at step
+    1 => table_at (QUARTER - step)
+    2 => F32.negate $ table_at step
+    _ => F32.negate $ table_at (QUARTER - step)
 
 const cos_steps = fn steps => sin_steps (steps + QUARTER)
 

@@ -2577,6 +2577,7 @@ mod tests {
             "tags",
             "ownership",
             "specializations",
+            "simplifications",
         ] {
             assert_eq!(
                 occupied_analysis[field], fresh_analysis[field],
@@ -2881,6 +2882,42 @@ mod tests {
             .install_trusted_module_snapshot(PATH, &corrupt)
             .expect_err("missing closure body should be rejected");
         assert!(error.contains("missing closure expression"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_rejects_a_simplification_outside_its_ast() {
+        const PATH: &str = "snapshot:missing-simplification-expression";
+        let bytes = snapshot_from_source(
+            PATH,
+            concat!(
+                "const True = #True\n",
+                "const False = #False\n",
+                "const is_equal = fn ordering => case ordering of\n",
+                "  #Less => False\n",
+                "  #Equal => True\n",
+                "  #Greater => False\n\n",
+                "const equal = fn left => fn right => is_equal (@int.cmp left right)\n",
+                "let value = 1\n",
+                "return equal value 0\n",
+            ),
+        );
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+        let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+        encoded["certificate"]["simplifications"][0]["expression"] = serde_json::json!(u32::MAX);
+        let corrupt: ModuleSnapshot =
+            serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
+        let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
+
+        let mut consumer = CompilerSession::default();
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("missing simplification expression should be rejected");
+
+        assert!(
+            error.contains("simplification references missing expression"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3534,6 +3571,64 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn analysis_reports_only_semantically_proved_simplifications() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source(
+                    concat!(
+                        "const True = #True\n",
+                        "const False = #False\n",
+                        "const is_equal = fn ordering => case ordering of\n",
+                        "  #Less => False\n",
+                        "  #Equal => True\n",
+                        "  #Greater => False\n\n",
+                        "const equal = fn left => fn right => is_equal (@int.cmp left right)\n",
+                        "const same = equal\n",
+                        "const and = fn left => fn ~right => case left of\n",
+                        "  #False => False\n",
+                        "  #True => right\n\n",
+                        "const eager_and = fn left => fn right => case left of\n",
+                        "  #False => False\n",
+                        "  #True => right\n\n",
+                        "const fake = fn left => fn right => True\n\n",
+                        "let x = 3\n",
+                        "let y = 4\n",
+                        "return (same x 2, and (equal x 0) (equal y 1), eager_and (equal x 3) (equal y 4), equal x y, fake x 0)\n",
+                    ),
+                ),
+            )
+            .expect("simplification source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("simplification source should configure");
+
+        let analysis = session.analyze_module("main.blot");
+
+        assert_eq!(analysis["ok"], true, "{analysis}");
+        let simplifications = analysis["simplifications"]
+            .as_array()
+            .expect("analysis should contain simplification facts");
+        assert_eq!(
+            simplifications
+                .iter()
+                .filter(|fact| fact["kind"] == "integer-equality")
+                .count(),
+            6,
+            "{analysis}"
+        );
+        assert_eq!(
+            simplifications
+                .iter()
+                .filter(|fact| fact["kind"] == "short-circuit-and")
+                .count(),
+            1,
+            "{analysis}"
         );
     }
 
@@ -4835,6 +4930,97 @@ mod tests {
                     "integer SIMD example omitted {required}: {integer_operators:?}"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn demand_driven_boolean_case_prepares_and_emits_wasm() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const Host = @effect.host {\n",
+                        "  .first = Unit -> Bool;\n",
+                        "  .second = Unit -> Bool;\n",
+                        "}\n",
+                        "use first <- Host.first ()\n",
+                        "use second <- Host.second ()\n",
+                        "return case first, second of\n",
+                        "  #True, _ => 1\n",
+                        "  #False, #True => 2\n",
+                        "  #False, #False => 3\n",
+                    )),
+                )
+                .expect("multi-subject source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("multi-subject source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("multi-subject source should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn wildcard_row_completes_a_multi_subject_literal_case() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const Host = @effect.host {\n",
+                        "  .x = Unit -> Int;\n",
+                        "  .y = Unit -> Int;\n",
+                        "}\n",
+                        "use x <- Host.x ()\n",
+                        "use y <- Host.y ()\n",
+                        "return case x, y of\n",
+                        "  0, 0 => \"origin\"\n",
+                        "  _, _ => \"elsewhere\"\n",
+                    )),
+                )
+                .expect("literal matrix source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("literal matrix source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("literal matrix source should emit Wasm");
         });
     }
 

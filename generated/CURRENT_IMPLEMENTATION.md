@@ -8,7 +8,7 @@
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
 | Compiler-host ABI | 3 |
-| Checked-module certificate | 14 |
+| Checked-module certificate | 15 |
 | Runtime HIR | 6 |
 | Public ABI | 2.0 |
 

@@ -255,6 +255,25 @@ export interface CompilerSpecializationFact {
   }[];
 }
 
+export type CompilerSimplificationFact =
+  | {
+    readonly kind: "integer-equality";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly subject: { readonly start: number; readonly end: number };
+    readonly pattern:
+      | {
+        readonly kind: "integer-literal";
+        readonly span: { readonly start: number; readonly end: number };
+      }
+      | { readonly kind: "integer-pin"; readonly name: string };
+  }
+  | {
+    readonly kind: "short-circuit-and";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly left: { readonly start: number; readonly end: number };
+    readonly right: { readonly start: number; readonly end: number };
+  };
+
 export interface CompilerWork {
   readonly schema: 3;
   readonly typeNodes: number;
@@ -298,6 +317,7 @@ export type CompilerAnalysisResult =
     readonly tags: readonly CompilerTagFact[];
     readonly ownership: readonly CompilerOwnershipFact[];
     readonly specializations: readonly CompilerSpecializationFact[];
+    readonly simplifications: readonly CompilerSimplificationFact[];
     readonly work: CompilerWork | null;
     readonly invalidation: CompilerInvalidationTelemetry;
     readonly targetPreflight: CompilerTargetPreflight;

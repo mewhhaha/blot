@@ -1,7 +1,10 @@
 import type { Diagnostic, DiagnosticCode } from "../../diagnostic.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "../../syntax/ast.ts";
 import type { Rule } from "../../syntax/cursor.ts";
-import type { CompilerSpecializationFact } from "../../compiler/wasm.ts";
+import type {
+  CompilerSimplificationFact,
+  CompilerSpecializationFact,
+} from "../../compiler/wasm.ts";
 
 export type AstNode = Module | Decl | Expr | Pattern;
 
@@ -36,6 +39,7 @@ export interface LintRuleContext {
   readonly source: string;
   readonly cst: Rule;
   readonly specializations: readonly CompilerSpecializationFact[];
+  readonly simplifications: readonly CompilerSimplificationFact[];
   sourceText(node: { readonly span: Span }): string;
   report(report: LintReport): void;
   fix(

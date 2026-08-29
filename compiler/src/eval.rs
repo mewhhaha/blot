@@ -1784,7 +1784,17 @@ fn evaluate_boolean_case(
         child_env(Some(environment)),
         runtime,
     )
-    .and_then(move |consequent| {
+    .map_result(move |consequent_result| {
+        let consequent = match consequent_result {
+            Ok(value) => Some(value),
+            Err(error) if error.code == "BLOT_PANIC" => {
+                alternate_trace
+                    .borrow_mut()
+                    .trap_current_block(&error.message, span);
+                None
+            }
+            Err(error) => return Computation::error(error),
+        };
         let consequent_end = alternate_trace.borrow().current_block();
         alternate_trace
             .borrow_mut()
@@ -1797,19 +1807,48 @@ fn evaluate_boolean_case(
             child_env(Some(alternate_environment)),
             alternate_runtime,
         )
-        .and_then(move |alternate| {
+        .map_result(move |alternate_result| {
+            let alternate = match alternate_result {
+                Ok(value) => Some(value),
+                Err(error) if error.code == "BLOT_PANIC" && consequent.is_some() => {
+                    join_trace
+                        .borrow_mut()
+                        .trap_current_block(&error.message, span);
+                    None
+                }
+                Err(error) => return Computation::error(error),
+            };
             let alternate_end = join_trace.borrow().current_block();
-            match join_trace.borrow_mut().join_conditional(
-                &join_context,
-                branches,
-                consequent_end,
-                consequent,
-                alternate_end,
-                alternate,
-                span,
-            ) {
-                Ok(value) => Computation::value(value),
-                Err(error) => Computation::error(error),
+            match (consequent, alternate) {
+                (Some(consequent), Some(alternate)) => {
+                    match join_trace.borrow_mut().join_conditional(
+                        &join_context,
+                        branches,
+                        consequent_end,
+                        consequent,
+                        alternate_end,
+                        alternate,
+                        span,
+                    ) {
+                        Ok(value) => Computation::value(value),
+                        Err(error) => Computation::error(error),
+                    }
+                }
+                (Some(consequent), None) => {
+                    join_trace
+                        .borrow_mut()
+                        .join_survivor(&branches, consequent_end, span);
+                    Computation::value(consequent)
+                }
+                (None, Some(alternate)) => {
+                    join_trace
+                        .borrow_mut()
+                        .join_survivor(&branches, alternate_end, span);
+                    Computation::value(alternate)
+                }
+                (None, None) => {
+                    unreachable!("a trapped alternate propagates when the consequent trapped")
+                }
             }
         })
     })

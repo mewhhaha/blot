@@ -3396,30 +3396,46 @@ fn multi_case_coverage_column(
     column: usize,
     arena: &mut AstArena,
 ) -> ExpressionId {
-    if column == subject_names.len() {
-        return compiler_panic(
-            "complete multi-subject case reached its failure path",
+    if rows.is_empty() {
+        let target = arena.expression(Expression::Unit { span });
+        return arena.expression(Expression::Case {
+            target,
+            arms: Vec::new(),
             span,
-            arena,
-        );
+        });
+    }
+    if column == subject_names.len() {
+        return arena.expression(Expression::Unit { span });
     }
 
-    let mut groups: Vec<(String, PatternId, Vec<&MultiCaseArm>)> = Vec::new();
+    let mut groups: Vec<(String, PatternId)> = Vec::new();
     for row in rows {
         let pattern = row.patterns[column];
         let key = pattern_structure_key(pattern, arena);
-        if let Some((_, _, grouped)) = groups.iter_mut().find(|group| group.0 == key) {
-            grouped.push(row);
-        } else {
-            groups.push((key, pattern, vec![row]));
+        if groups.iter().all(|group| group.0 != key) {
+            groups.push((key, pattern));
         }
     }
     let arms = groups
         .into_iter()
-        .map(|(_, pattern, rows)| {
+        .map(|(key, pattern)| {
+            let accepted = rows
+                .iter()
+                .copied()
+                .filter(|row| {
+                    let candidate = pattern_structure_key(row.patterns[column], arena);
+                    candidate == key || candidate == "*"
+                })
+                .collect::<Vec<_>>();
             let pattern = erase_binders(pattern, arena);
-            let body =
-                multi_case_coverage_column(&rows, subject_names, cached, span, column + 1, arena);
+            let body = multi_case_coverage_column(
+                &accepted,
+                subject_names,
+                cached,
+                span,
+                column + 1,
+                arena,
+            );
             Arm { pattern, body }
         })
         .collect();

@@ -223,10 +223,20 @@ admits; it is not reported as memory exhaustion. Each fact offers remediation
 through a narrower parameter, public signature, runtime parameter, or explicit
 stable representation.
 
-Type, ownership, specialization, and target facts retain compact provenance
-during checking and materialize ordered explanations only on request. Provenance
-is observational: it does not enter semantic equality, cache keys, certificates,
-or emitted artifacts.
+Type, ownership, specialization, and target explanations retain compact
+provenance during checking and materialize ordered explanations only on request.
+That provenance is observational: it does not enter semantic equality, cache
+keys, certificates, or emitted artifacts.
+
+Editor simplification facts are a separate finite certificate catalog. The
+checker may certify an expression as exact integer equality or as a
+short-circuit conjunction only from the resolved compile-time value, checked
+types, and demand behavior; a callee's printed name is never evidence. These
+facts are stored by module-local expression identity in the checked-module
+certificate so aliases, resident caches, and snapshot installation preserve the
+same answer. They do not enter the sealed public boundary or emitted artifact.
+The host may render a source rewrite from a fact and recheck that rewrite, but it
+must not derive an equivalence fact itself.
 
 ## 7. Safety checking
 

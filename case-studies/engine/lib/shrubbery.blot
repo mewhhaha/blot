@@ -184,13 +184,11 @@ const generate_oak_batch = fn (
         75 * DETAIL * DETAIL
     let edge = Int.abs (x * 19 + y * 31 + z * 43 + seed) % 11
     let visible = index < volume && (trunk || branch || crown && edge > 1)
-    let color = case trunk || branch of
-      #True => oak.bark
-      #False => case edge < 5 of
-        #True => oak.leaf_shadow
-        #False => case edge > 8 of
-          #True => oak.leaf_sun
-          #False => oak.leaf_green
+    let color = case trunk || branch, edge < 5, edge > 8 of
+      #True, _, _ => oak.bark
+      #False, #True, _ => oak.leaf_shadow
+      #False, #False, #True => oak.leaf_sun
+      #False, #False, #False => oak.leaf_green
     let next =
       push_voxel_if (
         ?voxels,
@@ -292,11 +290,10 @@ const generate_flower_batch = fn (
     let stem = x == 0 && z == 0 && y < 3 * DETAIL
     let blossom = y >= 3 * DETAIL && (x == 0 || z == 0)
     let visible = index < volume && (stem || blossom)
-    let color = case stem of
-      #True => flowers.stem
-      #False => case x == 0 && z == 0 of
-        #True => flowers.centre
-        #False => flower.petals
+    let color = case stem, x, z of
+      #True, _, _ => flowers.stem
+      #False, 0, 0 => flowers.centre
+      #False, _, _ => flower.petals
     let next =
       push_voxel_if (
         ?voxels,

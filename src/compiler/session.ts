@@ -47,6 +47,7 @@ import {
   type AddedCompilerModuleResult,
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
+  type CompilerSimplificationFact,
   type CompilerSourceDiagnostic,
   type CompilerSpecializationFact,
   type CompilerSyntaxSnapshot as RustSyntaxSnapshot,
@@ -113,6 +114,7 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly tags: readonly CompilerTagFact[];
   readonly ownership: readonly CompilerOwnershipFact[];
   readonly specializations: readonly CompilerSpecializationFact[];
+  readonly simplifications: readonly CompilerSimplificationFact[];
   readonly work: CompilerWork | null;
   readonly invalidation: CompilerInvalidationTelemetry;
   readonly targetPreflight: CompilerTargetPreflight;
@@ -718,6 +720,7 @@ export class Compiler implements CompilerHost {
       tags: result.tags.slice(),
       ownership: result.ownership.slice(),
       specializations: result.specializations.slice(),
+      simplifications: result.simplifications.slice(),
       work: result.work,
       invalidation: result.invalidation,
       targetPreflight: result.targetPreflight,

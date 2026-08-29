@@ -1,10 +1,11 @@
 import type { Branch, Expr, Span } from "../../../syntax/ast.ts";
-import { binaryCall, calleePath, producedExpression } from "../syntax.ts";
+import type { Rule } from "../../../syntax/cursor.ts";
+import { binaryCall, producedExpression } from "../syntax.ts";
 import type { AstNode, LintRule, LintRuleContext } from "../types.ts";
 
 interface EqualityBranch {
-  readonly subject: Expr;
-  readonly pattern: Expr;
+  readonly subject: string;
+  readonly pattern: string;
   readonly consequence: Expr;
 }
 
@@ -75,27 +76,22 @@ function equalityChain(
   }
   const comparisons: EqualityBranch[] = [];
   for (const branch of flattened.branches) {
-    const comparison = equalityBranch(branch);
+    const comparison = equalityBranch(branch, context);
     if (comparison === null) return null;
     comparisons.push(comparison);
   }
 
   const first = comparisons[0];
   if (first === undefined) return null;
-  const subject = singleLine(context.sourceText(first.subject));
+  const subject = first.subject;
   if (
-    comparisons.some((comparison) =>
-      singleLine(context.sourceText(comparison.subject)) !== subject
-    )
+    comparisons.some((comparison) => comparison.subject !== subject)
   ) return null;
 
-  const fallbackText = context.sourceText(
-    producedExpression(flattened.fallback),
-  );
+  const fallbackText = returnedValue(flattened.fallback, context).text;
   if (
     comparisons.every((comparison) =>
-      context.sourceText(producedExpression(comparison.consequence)) ===
-        fallbackText
+      returnedValue(comparison.consequence, context).text === fallbackText
     )
   ) return null;
   return { subject, branches: comparisons, fallback: flattened.fallback };
@@ -118,32 +114,51 @@ function flattenConditional(
   }
 }
 
-function equalityBranch(branch: Branch): EqualityBranch | null {
+function equalityBranch(
+  branch: Branch,
+  context: LintRuleContext,
+): EqualityBranch | null {
+  const fact = context.simplifications.find((candidate) =>
+    candidate.kind === "integer-equality" &&
+    candidate.span.start === branch.condition.span.start &&
+    candidate.span.end === branch.condition.span.end
+  );
+  if (fact?.kind !== "integer-equality") return null;
   const call = binaryCall(branch.condition);
-  if (call === null || calleePath(call.callee)?.join(".") !== "Int.eq") {
-    return null;
+  if (call === null) return null;
+  let subject: Expr | null = null;
+  if (
+    call.left.span.start === fact.subject.start &&
+    call.left.span.end === fact.subject.end
+  ) {
+    subject = call.left;
   }
-  const leftPattern = isCasePattern(call.left);
-  const rightPattern = isCasePattern(call.right);
-  if (leftPattern === rightPattern) return null;
-  if (rightPattern) {
-    return {
-      subject: call.left,
-      pattern: call.right,
-      consequence: branch.consequence,
-    };
+  if (
+    call.right.span.start === fact.subject.start &&
+    call.right.span.end === fact.subject.end
+  ) {
+    subject = call.right;
+  }
+  if (subject === null || !isStableSubject(subject)) return null;
+  let pattern: string;
+  if (fact.pattern.kind === "integer-literal") {
+    pattern = singleLine(
+      context.source.slice(fact.pattern.span.start, fact.pattern.span.end),
+    );
+  } else {
+    pattern = `^${fact.pattern.name}`;
   }
   return {
-    subject: call.right,
-    pattern: call.left,
+    subject: singleLine(context.sourceText(subject)),
+    pattern,
     consequence: branch.consequence,
   };
 }
 
-function isCasePattern(expression: Expr): boolean {
-  return expression.tag === "int" || expression.tag === "float" ||
-    expression.tag === "text" || expression.tag === "tag" ||
-    expression.tag === "unit";
+function isStableSubject(expression: Expr): boolean {
+  if (expression.tag === "var") return true;
+  if (expression.tag === "field") return isStableSubject(expression.target);
+  return false;
 }
 
 function equalityCase(
@@ -154,7 +169,7 @@ function equalityCase(
   const armIndent = `${indent}  `;
   const arms = chain.branches.map((branch) =>
     caseArm(
-      singleLine(context.sourceText(branch.pattern)),
+      branch.pattern,
       branch.consequence,
       context,
       armIndent,
@@ -171,24 +186,24 @@ function caseArm(
   indent: string,
 ): string {
   const body = producedExpression(expression);
-  const bodyText = context.sourceText(body);
+  const returned = returnedValue(expression, context);
+  const bodyText = returned.text;
   if (body.tag !== "block" && !bodyText.includes("\n")) {
     return `${indent}${pattern} => ${bodyText}`;
   }
   return `${indent}${pattern} =>\n${
-    valueLines(body, context.source, `${indent}  `).join("\n")
+    valueLines(body, returned, context.source, `${indent}  `).join("\n")
   }`;
 }
 
 function valueLines(
   expression: Expr,
+  returned: { readonly text: string; readonly span: Span },
   source: string,
   indent: string,
 ): readonly string[] {
-  const text = source.slice(expression.span.start, expression.span.end)
-    .trimEnd();
-  const originalIndent = lineIndent(source, expression.span.start);
-  const lines = text.split("\n");
+  const originalIndent = lineIndent(source, returned.span.start);
+  const lines = returned.text.split("\n");
   const result: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
@@ -201,6 +216,50 @@ function valueLines(
     result.push(`${indent}${prefix}${line}`.trimEnd());
   }
   return result;
+}
+
+function returnedValue(
+  expression: Expr,
+  context: LintRuleContext,
+): { readonly text: string; readonly span: Span } {
+  const produced = producedExpression(expression);
+  const candidates: Rule[] = [];
+  const visit = (rule: Rule): void => {
+    if (
+      rule.span.start > produced.span.start ||
+      rule.span.end < produced.span.end
+    ) return;
+    if (rule.name === "result") {
+      const value = rule.field("value");
+      if (
+        value !== undefined && value !== null && !Array.isArray(value) &&
+        typeof value === "object" && "type" in value && value.type === "rule"
+      ) {
+        const candidate = value as Rule;
+        if (
+          candidate.span.start <= produced.span.start &&
+          candidate.span.end >= produced.span.end
+        ) candidates.push(candidate);
+      }
+    }
+    for (const child of rule.children()) {
+      if (child.type === "rule") visit(child);
+    }
+  };
+  visit(context.cst);
+  candidates.sort((left, right) =>
+    left.span.end - left.span.start - (right.span.end - right.span.start)
+  );
+  const closest = candidates[0];
+  if (closest === undefined) {
+    throw new Error(
+      `an equality chain branch at ${produced.span.start}..${produced.span.end} lost its returned value`,
+    );
+  }
+  return {
+    text: context.source.slice(closest.span.start, closest.span.end).trimEnd(),
+    span: closest.span,
+  };
 }
 
 function belongsToLargerEqualityChain(

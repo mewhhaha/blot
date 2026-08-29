@@ -181,7 +181,11 @@ targets, and its fallback names the wildcard or final closed-sum arm. Sum
 lowering reads the constructor index once and projects a payload only inside the
 selected block. Surviving arms branch to one join whose parameter uses the
 checked result representation; trapping arms terminate without manufacturing a
-value. Compiler-local control envelopes may merge disjoint single-constructor
+value. Residual Boolean branches follow the same rule: a compiler-local
+impossible arm becomes a trap terminator, and the surviving arm supplies the
+join value. This preserves the left-to-right demand probes emitted for a
+multi-subject case without evaluating a subject the selected row does not
+demand. Compiler-local control envelopes may merge disjoint single-constructor
 representations into the closed constructor set already established by surface
 lowering. Dense `integer-32` switches emit `br_table`; other switches emit a
 balanced comparison tree.

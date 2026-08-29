@@ -68,6 +68,15 @@ the accepted editor revision. The TypeScript Baba parser remains only as a
 fresh-equivalence oracle and for validating proposed formatted or quick-fix
 candidate text before publication.
 
+Semantic lints consume compiler facts attached to that same accepted revision.
+The tooling layer may check concrete syntax, preserve comments, and render a
+replacement, but a rule that depends on resolved functions, types, effects, or
+demand behavior remains silent when its compiler fact is absent. Rechecking a
+rendered candidate validates the edit; it is not evidence that the original and
+replacement are equivalent. A renderer may impose stricter source conditions;
+for example, collapsing an equality ladder requires one repeated immutable
+variable or field path so the rewrite does not change how often a subject runs.
+
 ## 3. Fixed operator folding
 
 The grammar emits flat operator chains. Folding uses the generated table derived
@@ -197,8 +206,9 @@ Surface elaboration lowers rich control to the smaller Core owned by
   accumulator even when rebound with `:=`;
 - comma-separated case subjects become affine deferred parameters whose first
   demanded reads are cached before ordinary nested cases inspect them; a
-  non-executed tree over the unguarded rows carries the same subject identities
-  through the checker's existing coverage judgement;
+  non-executed decision tree over the unguarded rows carries the same subject
+  identities through the checker's existing coverage judgement, with an
+  irrefutable row propagated into every specific pattern branch it overlaps;
 - statement `return` and `break` become compiler-local control results before
   ordinary Core control is reconstructed;
 - handler syntax becomes explicit handler Core; and

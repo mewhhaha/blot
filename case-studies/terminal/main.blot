@@ -13,5 +13,5 @@ if text_eq (name, ""):
   use Terminal.write "Hello, stranger."
   return ()
 
-use result <- Terminal.write (Text.append "Hello, " name)
+use result <- Terminal.write ("Hello, " <> name)
 return result

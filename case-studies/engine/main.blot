@@ -113,15 +113,15 @@ let render = fn (transforms, models) => do:
           transforms,
           models,
           fn (transform, model) => do:
-            use case model.kind == KIND_MESH of
-              #True => draw.mesh {
+            use case model.kind of
+              ^KIND_MESH => draw.mesh {
                 .position = transform.position;
                 .angle = transform.angle;
                 .scale = transform.scale;
                 .color = model.color;
               }
 
-              #False => draw.sprite {
+              _ => draw.sprite {
                 .position = transform.position;
                 .scale = transform.scale;
                 .texture = model.texture;

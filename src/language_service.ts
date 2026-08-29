@@ -761,7 +761,10 @@ export class LanguageService {
       document.source,
       parsed.cst,
       DEFAULT_LINT_RULES,
-      analysis?.specializations,
+      {
+        specializations: analysis?.specializations,
+        simplifications: analysis?.simplifications,
+      },
     );
     if (
       !diagnostics.some((diagnostic) =>

@@ -58,6 +58,7 @@ export function expressionReads(
     case "field":
       return expressionReads(expression.target, names);
     case "lambda": {
+      if (patternReads(expression.parameter, names)) return true;
       const visible = without(names, patternNames(expression.parameter));
       return expressionReads(expression.body, visible);
     }
@@ -84,9 +85,13 @@ export function expressionReads(
           expressionReads(expression.fallback, names));
     case "case":
       if (expressionReads(expression.target, names)) return true;
-      return expression.arms.some((arm) =>
-        expressionReads(arm.body, without(names, patternNames(arm.pattern)))
-      );
+      return expression.arms.some((arm) => {
+        if (patternReads(arm.pattern, names)) return true;
+        return expressionReads(
+          arm.body,
+          without(names, patternNames(arm.pattern)),
+        );
+      });
     case "block":
       return declarationSequenceReads(
         expression.declarations,
@@ -107,6 +112,7 @@ export function declarationSequenceReads(
   for (const declaration of declarations) {
     if (expressionReads(declaration.value, visible)) return true;
     if (declaration.tag === "binding") {
+      if (patternReads(declaration.pattern, visible)) return true;
       for (const tag of declaration.tags) {
         if (expressionReads(tag.descriptor, visible)) return true;
       }
@@ -115,6 +121,25 @@ export function declarationSequenceReads(
     if (visible.size === 0) return false;
   }
   return expressionReads(result, visible);
+}
+
+function patternReads(
+  pattern: Pattern,
+  names: ReadonlySet<string>,
+): boolean {
+  switch (pattern.tag) {
+    case "pin":
+      return names.has(pattern.name);
+    case "tuple":
+    case "array":
+      return pattern.elements.some((element) => patternReads(element, names));
+    case "constructor":
+      return pattern.payload !== null && patternReads(pattern.payload, names);
+    case "shape":
+      return pattern.fields.some((field) => patternReads(field.pattern, names));
+    default:
+      return false;
+  }
 }
 
 export function patternKey(pattern: Pattern): string | null {

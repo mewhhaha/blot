@@ -24,18 +24,20 @@ export const provedArrayLookup: LintRule = {
         const some = expression.arms.find((arm) => constructor(arm, "Some"));
         if (some === undefined || !returnsPayload(some)) return;
         if (!expression.arms.some((arm) => constructor(arm, "None"))) return;
+        const fix = context.fix(
+          expression.span,
+          "Replace proved lookup with direct indexed access",
+          `@array.get ${context.sourceText(lookup.array)} ${
+            context.sourceText(lookup.index)
+          }`,
+          "check",
+        );
+        if (fix === null) return;
         context.report({
           message:
             "The compiler can prove this total lookup succeeds; use the direct indexed access.",
           span: expression.span,
-          fix: context.fix(
-            expression.span,
-            "Replace proved lookup with direct indexed access",
-            `@array.get ${context.sourceText(lookup.array)} ${
-              context.sourceText(lookup.index)
-            }`,
-            "check",
-          ),
+          fix,
         });
       },
     };

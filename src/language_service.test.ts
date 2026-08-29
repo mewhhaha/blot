@@ -681,6 +681,70 @@ return (identity #True, same #True, pushed, unchanged)
   }
 });
 
+Deno.test("conjoined equality checks publish a checked decision-matrix rewrite", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:conjoined-equality-case.blot";
+  const source = `open import "blot:prelude"
+const Host = @effect.host {
+  .x = Unit -> Int;
+  .y = Unit -> Int;
+}
+use x <- Host.x ()
+use y <- Host.y ()
+return case x == 0 && y == 0 of
+  #True => "origin"
+  #False => "elsewhere"
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 7, character: 0 },
+      end: { line: 9, character: 24 },
+    });
+    const action = actions.find((candidate) =>
+      candidate.title === "Match the compared values directly"
+    );
+    assertEquals(
+      action?.edit.documentChanges[0].edits[0]?.newText,
+      `case x, y of
+  0, 0 => "origin"
+  _, _ => "elsewhere"`,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("a shadowed equality spelling publishes no decision-matrix rewrite", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:shadowed-equality-case.blot";
+  const source = `const not_greater = fn left => fn right => case @int.cmp left right of
+  #Less => #True
+  #Equal => #True
+  #Greater => #False
+const Int = { .eq = not_greater; }
+let classify = fn value => case value == 0 of
+  #True => "not greater"
+  #False => "greater"
+return classify
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 6, character: 0 },
+      end: { line: 8, character: 21 },
+    });
+    assertEquals(
+      actions.some((action) =>
+        action.title === "Match the compared values directly"
+      ),
+      false,
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("a direct array access action is published only after compiler proof", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "proved-lookup.blot");
@@ -710,6 +774,31 @@ return case Array.get ([1], 0) of
     assertEquals(
       action?.edit.documentChanges[0].edits[0]?.newText,
       "@array.get [1] 0",
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("an unproved array lookup does not publish a direct access hint", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "unproved-lookup.blot");
+  const source = `open import "blot:prelude"
+let at = fn (values, index) => case Array.get (values, index) of
+  #Some value => value
+  #None => 0
+return at
+`;
+  await Deno.writeTextFile(path, source);
+  const uri = toFileUrl(path).href;
+  const service = new LanguageService();
+  try {
+    service.open(uri, source, 1);
+    const diagnostics = await service.diagnostics(uri);
+    assert(
+      !diagnostics.some((diagnostic) =>
+        diagnostic.code === "BLOT_LINT_PROVED_ARRAY_LOOKUP"
+      ),
     );
   } finally {
     await service.destroy();

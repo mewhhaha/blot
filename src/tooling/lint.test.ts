@@ -1,14 +1,93 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseConcrete } from "../syntax/parse.ts";
 import { DEFAULT_FIXITIES } from "../syntax/fixity.ts";
-import type { CompilerSpecializationFact } from "../compiler/wasm.ts";
+import type { Expr, Module } from "../syntax/ast.ts";
+import type { Rule } from "../syntax/cursor.ts";
+import type {
+  CompilerSimplificationFact,
+  CompilerSpecializationFact,
+} from "../compiler/wasm.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import type { LintRule } from "./lint.ts";
+import { binaryCall } from "./lint/syntax.ts";
+
+function rendererSimplificationFacts(
+  module: Module,
+  source: string,
+  cst: Rule,
+): readonly CompilerSimplificationFact[] {
+  const expressions: Expr[] = [];
+  const collector: LintRule = {
+    name: "collect-renderer-expressions",
+    code: "BLOT_LINT_EQUALITY_CASE",
+    severity: "hint",
+    create() {
+      return { expression: (path) => expressions.push(path.node) };
+    },
+  };
+  lintModule(module, source, cst, [collector]);
+  const facts: CompilerSimplificationFact[] = [];
+  for (const expression of expressions) {
+    const call = binaryCall(expression);
+    if (call === null) continue;
+    const operator = source.slice(call.left.span.end, call.right.span.start)
+      .trim();
+    if (operator === "&&") {
+      facts.push({
+        kind: "short-circuit-and",
+        span: expression.span,
+        left: call.left.span,
+        right: call.right.span,
+      });
+      continue;
+    }
+    if (operator !== "==") continue;
+    if (call.right.tag === "int" && call.left.tag !== "int") {
+      facts.push({
+        kind: "integer-equality",
+        span: expression.span,
+        subject: call.left.span,
+        pattern: { kind: "integer-literal", span: call.right.span },
+      });
+      continue;
+    }
+    if (call.left.tag === "int" && call.right.tag !== "int") {
+      facts.push({
+        kind: "integer-equality",
+        span: expression.span,
+        subject: call.right.span,
+        pattern: { kind: "integer-literal", span: call.left.span },
+      });
+      continue;
+    }
+    if (call.right.tag === "var") {
+      facts.push({
+        kind: "integer-equality",
+        span: expression.span,
+        subject: call.left.span,
+        pattern: { kind: "integer-pin", name: call.right.name },
+      });
+    }
+  }
+  return facts;
+}
 
 async function applyLintFix(source: string, code: string): Promise<string> {
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error(`lint fixture for ${code} did not parse`);
-  const diagnostic = lintModule(parsed.module, source, parsed.cst).find(
+  const diagnostic = lintModule(
+    parsed.module,
+    source,
+    parsed.cst,
+    DEFAULT_LINT_RULES,
+    {
+      simplifications: rendererSimplificationFacts(
+        parsed.module,
+        source,
+        parsed.cst,
+      ),
+    },
+  ).find(
     (candidate) => candidate.code === code,
   );
   if (diagnostic === undefined) throw new Error(`${code} was not reported`);
@@ -35,9 +114,13 @@ return label
   const parsed = await parseConcrete(source);
   if (!parsed.ok) throw new Error("terminal equality fixture did not parse");
   assertEquals(
-    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
-      diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
-    ),
+    lintModule(parsed.module, source, parsed.cst, DEFAULT_LINT_RULES, {
+      simplifications: rendererSimplificationFacts(
+        parsed.module,
+        source,
+        parsed.cst,
+      ),
+    }).filter((diagnostic) => diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"),
     [],
   );
   const fixed = await applyLintFix(source, "BLOT_LINT_IF_CHAIN");
@@ -60,6 +143,29 @@ return label
       diagnostic.code === "BLOT_LINT_NESTED_IF_CHAIN"
     ),
     [],
+  );
+});
+
+Deno.test("an equality ladder fix preserves grouped branch expressions", async () => {
+  const source = `let select = fn quadrant => do:
+  if quadrant == 0:
+    return table_at step
+  else if quadrant == 1:
+    return table_at (quarter - step)
+  else:
+    return negate (table_at step)
+return select
+`;
+
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_IF_CHAIN"),
+    `let select = fn quadrant => do:
+  return case quadrant of
+    0 => table_at step
+    1 => table_at (quarter - step)
+    _ => negate (table_at step)
+return select
+`,
   );
 });
 
@@ -166,7 +272,21 @@ Deno.test("a Boolean equality case matches the compared value directly", async (
   );
 });
 
-Deno.test("a named equality call remains an explicit Boolean case", async () => {
+Deno.test("conjoined equality checks become one demand-driven case", async () => {
+  const source = `return case x == 0 && y == 0 of
+  #True => "origin"
+  #False => "elsewhere"
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EQUALITY_CASE"),
+    `return case x, y of
+  0, 0 => "origin"
+  _, _ => "elsewhere"
+`,
+  );
+});
+
+Deno.test("a named equality call without compiler facts remains explicit", async () => {
   const source = `return case Int.eq value 0 of
   #True => "zero"
   #False => "nonzero"
@@ -218,6 +338,22 @@ return case record.kind of
   ^expected => "expected"
   _ => "other"
 `,
+  );
+});
+
+Deno.test("a pinned case pattern reads its existing binding", async () => {
+  const source = `let expected = 0
+return case value of
+  ^expected => "expected"
+  _ => "other"
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("pinned pattern fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_UNUSED_BINDING"
+    ),
+    [],
   );
 });
 
@@ -424,7 +560,19 @@ for (const ruleCase of RULE_CASES) {
         `lint fixture did not parse: ${parsed.diagnostics[0]?.message}`,
       );
     }
-    const diagnostics = lintModule(parsed.module, ruleCase.source, parsed.cst);
+    const diagnostics = lintModule(
+      parsed.module,
+      ruleCase.source,
+      parsed.cst,
+      DEFAULT_LINT_RULES,
+      {
+        simplifications: rendererSimplificationFacts(
+          parsed.module,
+          ruleCase.source,
+          parsed.cst,
+        ),
+      },
+    );
     assert(
       diagnostics.some((diagnostic) => diagnostic.code === ruleCase.code),
       `${ruleCase.code} was absent from ${
@@ -469,7 +617,7 @@ return (first, second)
     source,
     parsed.cst,
     DEFAULT_LINT_RULES,
-    [fact],
+    { specializations: [fact] },
   );
   assert(
     diagnostics.some((diagnostic) =>
@@ -485,7 +633,19 @@ Deno.test("every syntax-only lint fix produces accepted syntax", async () => {
     if (!parsed.ok) {
       throw new Error(`lint fixture ${ruleCase.name} did not parse`);
     }
-    const diagnostics = lintModule(parsed.module, ruleCase.source, parsed.cst);
+    const diagnostics = lintModule(
+      parsed.module,
+      ruleCase.source,
+      parsed.cst,
+      DEFAULT_LINT_RULES,
+      {
+        simplifications: rendererSimplificationFacts(
+          parsed.module,
+          ruleCase.source,
+          parsed.cst,
+        ),
+      },
+    );
     for (const diagnostic of diagnostics) {
       const fix = diagnostic.fix;
       if (fix === null || fix.validation !== "parse") continue;
@@ -513,7 +673,19 @@ Deno.test("every actionable default rule provides a fix", async () => {
     if (!parsed.ok) {
       throw new Error(`lint fixture ${ruleCase.name} did not parse`);
     }
-    const diagnostic = lintModule(parsed.module, ruleCase.source, parsed.cst)
+    const diagnostic = lintModule(
+      parsed.module,
+      ruleCase.source,
+      parsed.cst,
+      DEFAULT_LINT_RULES,
+      {
+        simplifications: rendererSimplificationFacts(
+          parsed.module,
+          ruleCase.source,
+          parsed.cst,
+        ),
+      },
+    )
       .find((candidate) => candidate.code === ruleCase.code);
     assert(diagnostic !== undefined, `${ruleCase.code} has no diagnostic`);
     assert(diagnostic.fix !== null, `${ruleCase.code} has no fix`);
@@ -531,6 +703,23 @@ Deno.test("a compiler-proved rewrite requests semantic validation", async () => 
     (candidate) => candidate.code === "BLOT_LINT_PROVED_ARRAY_LOOKUP",
   );
   assertEquals(diagnostic?.fix?.validation, "check");
+});
+
+Deno.test("a proved lookup is silent when its rewrite cannot preserve comments", async () => {
+  const source = `return case Array.get ([1], 0) of
+  #Some value => value
+  #None => do:
+    // The fallback documents why this lookup remains total.
+    return 0
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("commented lookup fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_PROVED_ARRAY_LOOKUP"
+    ),
+    [],
+  );
 });
 
 Deno.test("a registered rule receives typed AST and concrete syntax visits", async () => {

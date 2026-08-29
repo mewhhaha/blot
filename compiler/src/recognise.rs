@@ -59,6 +59,50 @@ pub fn junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
     }
 }
 
+pub fn short_circuit_junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
+    if !has_deferred_second(context, value) {
+        return None;
+    }
+    let junction = junction(context, value)?;
+    let skipped_left = match junction {
+        Junction::And => false,
+        Junction::Or => true,
+    };
+    let demanded_left = !skipped_left;
+    let (skipped_answer, skipped_right, skipped_demands) =
+        probe_deferred_bool(context, value, skipped_left)?;
+    let (demanded_answer, demanded_right, demanded_demands) =
+        probe_deferred_bool(context, value, demanded_left)?;
+    let expected_skipped = skipped_left;
+    if skipped_answer != expected_skipped
+        || skipped_demands != 0
+        || demanded_answer != demanded_right
+        || skipped_right != demanded_right
+        || demanded_demands != 1
+    {
+        return None;
+    }
+    Some(junction)
+}
+
+fn has_deferred_second(context: &Context, value: &Value) -> bool {
+    let Value::Closure { module, body, .. } = value else {
+        return false;
+    };
+    let Some(module) = context
+        .modules
+        .borrow()
+        .get(module.as_str())
+        .map(|loaded| loaded.module.clone())
+    else {
+        return false;
+    };
+    matches!(
+        module.arena.expressions[body.0 as usize],
+        Expression::Lambda { deferred: true, .. }
+    )
+}
+
 pub fn negation(context: &Rc<Context>, value: &Value) -> bool {
     probe_bool_unary(context, value, true) == Some(false)
         && probe_bool_unary(context, value, false) == Some(true)
@@ -341,6 +385,82 @@ fn probe_bool(context: &Rc<Context>, value: &Value, left: bool, right: bool) -> 
         application.compiler(CompilerApplication::RecognitionArgument { probe, position: 1 }),
     )))?;
     boolean(answer)
+}
+
+fn probe_deferred_bool(
+    context: &Rc<Context>,
+    value: &Value,
+    left: bool,
+) -> Option<(bool, bool, usize)> {
+    let runtime = probe_runtime(value);
+    let application = probe_application(context, value)?;
+    let first_probe = RecognitionProbe::Boolean { left, right: false };
+    let partial = recognition_result(run(apply(
+        context.clone(),
+        value.clone(),
+        boolean_value(left),
+        nowhere(),
+        runtime.clone(),
+        application
+            .clone()
+            .compiler(CompilerApplication::RecognitionArgument {
+                probe: first_probe,
+                position: 0,
+            }),
+    )))?;
+    let Value::Closure {
+        module,
+        environment,
+        deferred: true,
+        ..
+    } = &partial
+    else {
+        return None;
+    };
+    let (right_expression, right_value) = boolean_expression(context, module)?;
+    let probe = RecognitionProbe::Boolean {
+        left,
+        right: right_value,
+    };
+    let demands = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let argument = Value::Deferred {
+        module: module.clone(),
+        expression: right_expression,
+        environment: environment.clone(),
+        demands: demands.clone(),
+    };
+    let application = probe_application(context, &partial)?
+        .compiler(CompilerApplication::RecognitionArgument { probe, position: 1 });
+    let answer = recognition_result(run(apply(
+        context.clone(),
+        partial,
+        argument,
+        nowhere(),
+        runtime,
+        application,
+    )))?;
+    let demand_count = demands.borrow().len();
+    Some((boolean(answer)?, right_value, demand_count))
+}
+
+fn boolean_expression(context: &Context, module: &str) -> Option<(ExpressionId, bool)> {
+    let module = context.modules.borrow().get(module)?.module.clone();
+    module
+        .arena
+        .expressions
+        .iter()
+        .enumerate()
+        .find_map(|(index, expression)| {
+            let Expression::Tag { name, .. } = expression else {
+                return None;
+            };
+            let value = match name.as_str() {
+                "True" => true,
+                "False" => false,
+                _ => return None,
+            };
+            Some((ExpressionId(index as u32), value))
+        })
 }
 
 fn probe_bool_unary(context: &Rc<Context>, value: &Value, argument: bool) -> Option<bool> {

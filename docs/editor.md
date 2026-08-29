@@ -139,6 +139,15 @@ terminal suites can still collapse when both returned values make the control
 flow redundant. That collapse evaluates the original condition before returning
 the shared value, preserving deferred demands and traps.
 
+Equality rewrites also require compiler facts from the accepted revision. The
+checker recognizes the resolved comparison closure, so immutable aliases and
+record projections retain equality semantics while a shadowed `Int.eq` spelling
+does not acquire them. Conjoined comparisons collapse only when the resolved
+Boolean function both has the `and` truth table and proves that its deferred
+right operand is skipped or demanded on the corresponding branch. The later
+check of the replacement guards the rendered edit; it is not used as a proof of
+equivalence.
+
 Operator spelling is checked against the complete fixed operator table. The
 default-rule test enumerates every infix and prefix target, including function
 arrows, effect rows, numeric and comparison operations, set algebra, and
