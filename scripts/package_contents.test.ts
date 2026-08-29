@@ -122,17 +122,23 @@ test("npm package is a runnable distribution", async (context) => {
     "declarations resolve without repository development types",
     async () => {
       const source = [
-        'import { Compiler, buildPackage, parse } from "@mewhhaha/blot";',
-        'import type { BuiltPackageExport } from "@mewhhaha/blot";',
+        'import { Compiler, DevelopmentProject, DevelopmentRuntime, buildPackage, parse } from "@mewhhaha/blot";',
+        'import type { BuiltPackageExport, DevelopmentBuild } from "@mewhhaha/blot";',
         'import { Compiler as CompilerEntry } from "@mewhhaha/blot/compiler";',
         'import type { CompilerHost } from "@mewhhaha/blot/compiler";',
         'const parsed: Awaited<ReturnType<typeof parse>> = await parse("return 42\\n");',
         "const compiler: CompilerHost = await Compiler.create();",
+        "const runtime = new DevelopmentRuntime();",
+        "const projectClass: typeof DevelopmentProject = DevelopmentProject;",
+        "const build: DevelopmentBuild | undefined = undefined;",
         "const compilerEntry: typeof Compiler = CompilerEntry;",
         "const built: readonly BuiltPackageExport[] =",
         '  await buildPackage("./blot.json");',
         "compiler.destroy();",
         "void parsed;",
+        "void runtime;",
+        "void projectClass;",
+        "void build;",
         "void compilerEntry;",
         "void built;",
       ].join("\n");
@@ -159,9 +165,11 @@ test("npm package is a runnable distribution", async (context) => {
 
   await context.test("entry points run in plain Node", async () => {
     const program = [
-      'import { Compiler, parse } from "@mewhhaha/blot";',
+      'import { Compiler, DevelopmentProject, DevelopmentRuntime, parse } from "@mewhhaha/blot";',
       'import { Compiler as CompilerEntry } from "@mewhhaha/blot/compiler";',
       'if (Compiler !== CompilerEntry) throw new Error("compiler exports differ");',
+      'if (typeof DevelopmentProject !== "function") throw new Error("development project export is missing");',
+      'if (typeof DevelopmentRuntime !== "function") throw new Error("development runtime export is missing");',
       'const parsed = await parse("return 42\\n");',
       'if (!parsed.ok) throw new Error("packed parser rejected minimal source");',
       "const compiler = await Compiler.create();",

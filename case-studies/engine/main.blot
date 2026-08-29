@@ -33,6 +33,7 @@
 open import "blot:prelude"
 
 const E = import "./lib/ecs.blot"
+const F = import "./lib/frame.blot"
 const M = import "./lib/math.blot"
 const R = import "./lib/render.blot"
 
@@ -181,7 +182,7 @@ let frames = 0
 
 for ever:
   use remaining <- Host.frame ()
-  if remaining <= 0:
+  if F.finished remaining:
     break
 
   // Hot reload. The host bumps its generation when a watched file changes, and

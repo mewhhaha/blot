@@ -7,6 +7,7 @@
 open import "blot:prelude"
 
 const R = import "./lib/render.blot"
+const F = import "./lib/frame.blot"
 
 const Host =
   @effect.host {
@@ -50,7 +51,7 @@ let game = { .meshes = meshes; }
 let frames = 0
 for ever:
   use remaining <- Host.frame ()
-  if remaining <= 0:
+  if F.finished remaining:
     break
 
   use render game

@@ -54,6 +54,18 @@ struct PublishedBoundary {
     fingerprint: BoundaryFingerprint,
 }
 
+#[derive(Eq, Hash, PartialEq)]
+struct DevelopmentArtifactCacheKey {
+    program_root: String,
+    unit_name: String,
+    unit_root: String,
+}
+
+struct CachedDevelopmentArtifact {
+    implementation_key: String,
+    compiled: CompiledModule,
+}
+
 pub struct CompilerSession {
     context: Rc<Context>,
     registered_paths: Vec<String>,
@@ -63,7 +75,7 @@ pub struct CompilerSession {
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
     closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
-    development_artifacts: RefCell<HashMap<(String, String, String), (String, CompiledModule)>>,
+    development_artifacts: RefCell<HashMap<DevelopmentArtifactCacheKey, CachedDevelopmentArtifact>>,
     published_boundaries: RefCell<HashMap<String, PublishedBoundary>>,
     next_boundary_id: Cell<u64>,
     dirty_modules: RefCell<HashSet<String>>,
@@ -927,13 +939,17 @@ impl CompilerSession {
                 )
                 .at(path)
             })?;
-            let cache_key = (path.to_owned(), unit.name.clone(), unit.root.clone());
+            let cache_key = DevelopmentArtifactCacheKey {
+                program_root: path.to_owned(),
+                unit_name: unit.name.clone(),
+                unit_root: unit.root.clone(),
+            };
             let cached = self
                 .development_artifacts
                 .borrow()
                 .get(&cache_key)
-                .filter(|(key, _)| key == &implementation_key)
-                .map(|(_, compiled)| compiled.clone());
+                .filter(|cached| cached.implementation_key == implementation_key)
+                .map(|cached| cached.compiled.clone());
             let reused = cached.is_some();
             let compiled = if let Some(compiled) = cached {
                 compiled
@@ -951,9 +967,13 @@ impl CompilerSession {
                         Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 })
                             .at(path)
                     })?;
-                self.development_artifacts
-                    .borrow_mut()
-                    .insert(cache_key, (implementation_key.clone(), compiled.clone()));
+                self.development_artifacts.borrow_mut().insert(
+                    cache_key,
+                    CachedDevelopmentArtifact {
+                        implementation_key: implementation_key.clone(),
+                        compiled: compiled.clone(),
+                    },
+                );
                 compiled
             };
             compiled_units.push(CompiledDevelopmentUnit {
@@ -967,7 +987,7 @@ impl CompilerSession {
         let active_units = units.keys().collect::<HashSet<_>>();
         self.development_artifacts
             .borrow_mut()
-            .retain(|(root, unit, _), _| root != path || active_units.contains(unit));
+            .retain(|key, _| key.program_root != path || active_units.contains(&key.unit_name));
         Ok(CompiledDevelopmentProgram {
             entry_unit: split.entry_unit,
             units: compiled_units,
@@ -1014,7 +1034,11 @@ impl CompilerSession {
             self.context.clone(),
             path,
             checked,
-            units.values().cloned().collect(),
+            units
+                .values()
+                .filter(|root| root.as_str() != path)
+                .cloned()
+                .collect(),
         )
         .map_err(|diagnostic| diagnostic.at(path))?;
         crate::backend::close(runtime).map_err(|message| {
@@ -5609,6 +5633,10 @@ mod tests {
                     include_str!("../../case-studies/engine/lib/math.blot"),
                 ),
                 (
+                    "case-studies/engine/lib/frame.blot",
+                    include_str!("../../case-studies/engine/lib/frame.blot"),
+                ),
+                (
                     "case-studies/engine/lib/render.blot",
                     include_str!("../../case-studies/engine/lib/render.blot"),
                 ),
@@ -5648,6 +5676,13 @@ mod tests {
                     BTreeMap::new(),
                 )
                 .expect("math should configure");
+            session
+                .configure_module(
+                    "case-studies/engine/lib/frame.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("frame should configure");
             session
                 .configure_module(
                     "case-studies/engine/lib/render.blot",
@@ -5712,6 +5747,10 @@ mod tests {
                         (
                             "./lib/math.blot".to_owned(),
                             "case-studies/engine/lib/math.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/frame.blot".to_owned(),
+                            "case-studies/engine/lib/frame.blot".to_owned(),
                         ),
                         (
                             "./lib/render.blot".to_owned(),

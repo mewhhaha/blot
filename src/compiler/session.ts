@@ -177,6 +177,7 @@ export interface CompilerHost {
   compileDevelopment(
     request: DevelopmentCompilationRequest,
   ): Promise<DevelopmentCompilation>;
+  markChanged(path: string): Promise<void>;
   destroy(): void;
 }
 
@@ -206,6 +207,7 @@ export class Compiler implements CompilerHost {
   readonly #inspectedSources = new Map<string, InspectedSource>();
   readonly #workspace: WorkspaceGraph;
   #requests: Promise<void> = Promise.resolve();
+  #developmentChangesKnown = false;
   #destroyed = false;
 
   private constructor(
@@ -552,7 +554,11 @@ export class Compiler implements CompilerHost {
           [name, resolve(root)] as const
         ),
       );
-      const loaded = await this.#workspace.refresh(entryPath);
+      let loaded: Loaded;
+      if (this.#developmentChangesKnown) {
+        loaded = await this.#workspace.refreshAfterKnownChanges(entryPath);
+        this.#developmentChangesKnown = false;
+      } else loaded = await this.#workspace.refresh(entryPath);
       this.#syncLoaded(loaded);
       const graph = collectGraph(loaded);
       for (const [name, root] of unitRoots) {
@@ -613,6 +619,13 @@ export class Compiler implements CompilerHost {
     });
   }
 
+  async markChanged(path: string): Promise<void> {
+    await this.#request(() => {
+      this.#workspace.markDirty(path);
+      this.#developmentChangesKnown = true;
+    });
+  }
+
   async clearOverlay(path: string): Promise<void> {
     await this.#request(async () => {
       this.#syncLoaded(await this.#workspace.closeOverlay(path));
@@ -625,7 +638,7 @@ export class Compiler implements CompilerHost {
     this.#compiler.destroyCompilerSession(this.#handle);
   }
 
-  async #request<T>(operation: () => Promise<T>): Promise<T> {
+  async #request<T>(operation: () => T | Promise<T>): Promise<T> {
     this.#requireActive();
     const result = this.#requests.then(operation);
     this.#requests = result.then(

@@ -1,0 +1,9 @@
+{
+  "schema": "blot-project",
+  "version": 1,
+  "entryUnit": "engine",
+  "units": {
+    "engine": "./main.blot",
+    "frame": "./lib/frame.blot"
+  }
+}

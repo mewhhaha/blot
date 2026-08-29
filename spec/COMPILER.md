@@ -553,6 +553,47 @@ directly shared closure-bearing module result.
 
 A cache hit and fresh compilation produce equivalent results; only work changes.
 
+### 15.1 Development-unit reuse
+
+Development compilation begins with the same checked, staged, specialized, and
+validated program as a fresh production compilation. A versioned project
+manifest supplies a named entry unit and a one-to-one map from unit names to
+reachable module roots. It does not change resolution or introduce a second
+module system.
+
+After representation-closing specialization, the development splitter assigns
+each demanded residual function to the configured root containing its stable
+source definition. A direct call between different assignments becomes a
+`RuntimeLink`; local calls remain direct. A closure creation whose definition
+belongs to another unit is refused because it would move a function value over
+the boundary. Each link carries one closed first-order signature derived from
+the checker facts. The splitter does not infer a replacement signature from
+backend layout.
+
+For development unit `U`, the implementation key contains the complete
+normalized Runtime-HIR module for `U`, including link signatures, link targets,
+capabilities, and exports within one resident compiler and target-policy
+session. The interface key is the canonical ABI manifest bytes. Reuse requires
+both the configured root identity and an equal implementation key. Consequently,
+an implementation-only provider edit can reuse its consumers, while a changed
+link signature changes and rebuilds every direct consumer. Reverse invalidation
+continues only after publication of a changed checked-module boundary.
+
+The development compiler returns every current unit identity plus whether its
+emitted artifact was reused. The host compares interface and implementation keys
+with the previous successful build to publish changed, retained, and removed
+sets. It must not publish a partial build after any checking, splitting,
+validation, or emission failure. Release compilation does not consume these unit
+artifacts and retains the whole-program cache and artifact contract.
+
+The reference development benchmark is a 5 MiB, 20-unit reachable project with
+one currently demanded gameplay unit. It edits that unit without changing its
+interface, notifies the resident graph of the known path change, performs 20
+warm rebuilds, requires exactly that unit to change, and requires wall-clock p95
+below 100 ms on the project reference machine. This benchmark is a named
+development-mode boundary; it does not claim the same latency when an edit
+changes the demanded graph or a public unit interface.
+
 ## 16. Artifact production
 
 Generated parser plans, prelude snapshots, certificate schemas, compiler Wasm,

@@ -1,6 +1,5 @@
 import type {
   BlotAbiFunction,
-  BlotAbiManifest,
   BlotAbiType,
 } from "./compiler/backend/runtime/abi.ts";
 import { flattenedAbiType } from "./compiler/backend/runtime/abi.ts";
@@ -18,9 +17,23 @@ type Reallocate = (
   newSize: number,
 ) => number;
 
-type DevelopmentManifest = BlotAbiManifest & {
-  readonly links: NonNullable<BlotAbiManifest["links"]>;
-};
+interface DevelopmentManifest {
+  readonly source: string;
+  readonly abi: {
+    readonly memoryExport: "memory";
+  };
+  readonly exports: readonly {
+    readonly name: string | null;
+    readonly function: BlotAbiFunction | null;
+    readonly postReturn: string | null;
+  }[];
+  readonly links: readonly {
+    readonly unit: string;
+    readonly name: string;
+    readonly module: string;
+    readonly function: BlotAbiFunction;
+  }[];
+}
 
 interface UnitActivation {
   readonly artifact: DevelopmentUnitArtifact;
@@ -76,15 +89,27 @@ export class DevelopmentRuntime {
   }
 
   async activate(build: DevelopmentBuild): Promise<void> {
+    validateBuildTransition(build, this.#units);
     this.#requireRetainedUnits(build.retainedUnits);
     const compiled = await Promise.all(
-      build.changedUnits.map(async (artifact) => ({
-        artifact,
-        manifest: decodeManifest(artifact),
-        module: await WebAssembly.compile(
-          Uint8Array.from(artifact.wasm) as BufferSource,
-        ),
-      })),
+      build.changedUnits.map(async (artifact) => {
+        const manifest = decodeManifest(artifact);
+        const interfaceDigest = await sha256(artifact.manifestBytes);
+        if (interfaceDigest !== artifact.interfaceDigest) {
+          throw new Error(
+            `development unit ${
+              JSON.stringify(artifact.name)
+            } manifest digest ${interfaceDigest} differs from declared digest ${
+              JSON.stringify(artifact.interfaceDigest)
+            }`,
+          );
+        }
+        const module = await WebAssembly.compile(
+          Uint8Array.from(artifact.wasm),
+        );
+        requireEmbeddedManifest(module, artifact);
+        return { artifact, manifest, module };
+      }),
     );
     const candidates = new Map<string, UnitActivation>();
     for (const prepared of compiled) {
@@ -132,15 +157,15 @@ export class DevelopmentRuntime {
       });
     }
 
-    for (const removed of build.removedUnits) this.#units.delete(removed);
-    for (const [name, active] of candidates) this.#units.set(name, active);
-    if (!this.#units.has(build.entryUnit)) {
+    if (candidates.size !== build.changedUnits.length) {
       throw new Error(
         `development build ${
           JSON.stringify(build.revision)
-        } omitted entry unit ${JSON.stringify(build.entryUnit)}`,
+        } prepared ${candidates.size} changed units, expected ${build.changedUnits.length}`,
       );
     }
+    for (const removed of build.removedUnits) this.#units.delete(removed);
+    for (const [name, active] of candidates) this.#units.set(name, active);
     this.#entryUnit = build.entryUnit;
     this.#revision = build.revision;
   }
@@ -225,6 +250,7 @@ function decodeManifest(
       { cause },
     );
   }
+  const position = `development unit ${JSON.stringify(artifact.name)} manifest`;
   if (!isRecord(decoded) || decoded.format !== "blot-core-wasm") {
     throw new TypeError(
       `development unit ${
@@ -232,24 +258,437 @@ function decodeManifest(
       } has an unknown ABI manifest format`,
     );
   }
-  const manifest = decoded as BlotAbiManifest;
-  if (manifest.abi?.major !== 2 || !Array.isArray(manifest.exports)) {
+  const abi = requireRecord(decoded.abi, `${position}.abi`);
+  if (
+    abi.major !== 2 || abi.minor !== 0 || abi.memory !== "memory32" ||
+    abi.stringEncoding !== "utf-8" || abi.maximumFlatParameters !== 16 ||
+    abi.maximumFlatResults !== 1 || abi.memoryExport !== "memory" ||
+    abi.reallocExport !== "cabi_realloc"
+  ) {
     throw new TypeError(
       `development unit ${
         JSON.stringify(artifact.name)
       } has an incompatible ABI manifest`,
     );
   }
-  const links = manifest.links;
-  if (links !== undefined && !Array.isArray(links)) {
+  const source = requireString(decoded.source, `${position}.source`);
+  if (source !== artifact.root) {
     throw new TypeError(
-      `development unit ${
-        JSON.stringify(artifact.name)
-      } has invalid development links`,
+      `${position} names source ${JSON.stringify(source)}, expected ${
+        JSON.stringify(artifact.root)
+      }`,
     );
   }
-  if (links === undefined) return { ...manifest, links: [] };
-  return { ...manifest, links };
+  const exports = requireArray(decoded.exports, `${position}.exports`).map(
+    (value, index) => parseExport(value, `${position}.exports[${index}]`),
+  );
+  requireArray(decoded.imports, `${position}.imports`);
+  let links: DevelopmentManifest["links"] = [];
+  if (decoded.links !== undefined) {
+    links = requireArray(decoded.links, `${position}.links`).map(
+      (value, index) => parseLink(value, `${position}.links[${index}]`),
+    );
+  }
+  return { source, abi: { memoryExport: "memory" }, exports, links };
+}
+
+function validateBuildTransition(
+  build: DevelopmentBuild,
+  activeUnits: ReadonlyMap<string, UnitActivation>,
+): void {
+  if (!isRecord(build)) {
+    throw new TypeError("development build must be an object");
+  }
+  const revision = requireString(build.revision, "development build revision");
+  const entryUnit = requireString(
+    build.entryUnit,
+    `development build ${JSON.stringify(revision)} entry unit`,
+  );
+  if (
+    !Array.isArray(build.changedUnits) ||
+    !Array.isArray(build.retainedUnits) ||
+    !Array.isArray(build.removedUnits) || !Array.isArray(build.edges)
+  ) {
+    throw new TypeError(
+      `development build ${JSON.stringify(revision)} has invalid unit sets`,
+    );
+  }
+  if (
+    typeof build.durationMilliseconds !== "number" ||
+    !Number.isFinite(build.durationMilliseconds) ||
+    build.durationMilliseconds < 0
+  ) {
+    throw new TypeError(
+      `development build ${JSON.stringify(revision)} has invalid duration ${
+        String(build.durationMilliseconds)
+      }`,
+    );
+  }
+
+  const classifications = new Map<
+    string,
+    "changed" | "retained" | "removed"
+  >();
+  const classify = (
+    name: unknown,
+    classification: "changed" | "retained" | "removed",
+  ): string => {
+    const unitName = requireString(
+      name,
+      `${classification} unit in development build ${JSON.stringify(revision)}`,
+    );
+    const previous = classifications.get(unitName);
+    if (previous !== undefined) {
+      throw new TypeError(
+        `development build ${JSON.stringify(revision)} classifies unit ${
+          JSON.stringify(unitName)
+        } as both ${previous} and ${classification}`,
+      );
+    }
+    classifications.set(unitName, classification);
+    return unitName;
+  };
+
+  for (const artifact of build.changedUnits) {
+    if (!isRecord(artifact)) {
+      throw new TypeError(
+        `changed unit in development build ${
+          JSON.stringify(revision)
+        } must be an object`,
+      );
+    }
+    const name = classify(artifact.name, "changed");
+    requireString(
+      artifact.root,
+      `root for changed unit ${JSON.stringify(name)}`,
+    );
+    requireString(
+      artifact.interfaceDigest,
+      `interface digest for changed unit ${JSON.stringify(name)}`,
+    );
+    requireString(
+      artifact.implementationDigest,
+      `implementation digest for changed unit ${JSON.stringify(name)}`,
+    );
+    if (
+      !(artifact.wasm instanceof Uint8Array) ||
+      !(artifact.manifestBytes instanceof Uint8Array)
+    ) {
+      throw new TypeError(
+        `changed unit ${JSON.stringify(name)} has non-binary artifacts`,
+      );
+    }
+  }
+  for (const retained of build.retainedUnits) {
+    if (!isRecord(retained)) {
+      throw new TypeError(
+        `retained unit in development build ${
+          JSON.stringify(revision)
+        } must be an object`,
+      );
+    }
+    const name = classify(retained.name, "retained");
+    if (!activeUnits.has(name)) {
+      throw new Error(
+        `development build ${JSON.stringify(revision)} retains inactive unit ${
+          JSON.stringify(name)
+        }`,
+      );
+    }
+    requireString(
+      retained.interfaceDigest,
+      `interface digest for retained unit ${JSON.stringify(name)}`,
+    );
+    requireString(
+      retained.implementationDigest,
+      `implementation digest for retained unit ${JSON.stringify(name)}`,
+    );
+  }
+  for (const removed of build.removedUnits) {
+    const name = classify(removed, "removed");
+    if (!activeUnits.has(name)) {
+      throw new Error(
+        `development build ${JSON.stringify(revision)} removes inactive unit ${
+          JSON.stringify(name)
+        }`,
+      );
+    }
+  }
+  for (const active of activeUnits.keys()) {
+    if (classifications.has(active)) continue;
+    throw new Error(
+      `development build ${JSON.stringify(revision)} omits active unit ${
+        JSON.stringify(active)
+      } from its delta`,
+    );
+  }
+
+  const finalUnits = new Set(activeUnits.keys());
+  for (const removed of build.removedUnits) finalUnits.delete(removed);
+  for (const changed of build.changedUnits) finalUnits.add(changed.name);
+  if (!finalUnits.has(entryUnit)) {
+    throw new Error(
+      `development build ${JSON.stringify(revision)} omitted entry unit ${
+        JSON.stringify(entryUnit)
+      }`,
+    );
+  }
+  const edges = new Set<string>();
+  for (const edge of build.edges) {
+    if (!isRecord(edge)) {
+      throw new TypeError(
+        `development edge in build ${
+          JSON.stringify(revision)
+        } must be an object`,
+      );
+    }
+    const consumer = requireString(
+      edge.consumer,
+      `development edge consumer in build ${JSON.stringify(revision)}`,
+    );
+    const provider = requireString(
+      edge.provider,
+      `development edge provider in build ${JSON.stringify(revision)}`,
+    );
+    const name = requireString(
+      edge.name,
+      `development edge name in build ${JSON.stringify(revision)}`,
+    );
+    if (!finalUnits.has(consumer) || !finalUnits.has(provider)) {
+      throw new Error(
+        `development edge ${JSON.stringify(name)} in build ${
+          JSON.stringify(revision)
+        } connects ${JSON.stringify(consumer)} to ${
+          JSON.stringify(provider)
+        }, but the final units are [${[...finalUnits].sort().join(", ")}]`,
+      );
+    }
+    const identity = JSON.stringify([consumer, provider, name]);
+    if (edges.has(identity)) {
+      throw new Error(
+        `development build ${JSON.stringify(revision)} repeats edge ${
+          JSON.stringify(name)
+        } from ${JSON.stringify(consumer)} to ${JSON.stringify(provider)}`,
+      );
+    }
+    edges.add(identity);
+  }
+}
+
+function parseExport(
+  value: unknown,
+  position: string,
+): DevelopmentManifest["exports"][number] {
+  const encoded = requireRecord(value, position);
+  const phase = requireString(encoded.phase, `${position}.phase`);
+  if (phase === "comptime") {
+    if (
+      encoded.name !== null || encoded.function !== null ||
+      encoded.postReturn !== null
+    ) {
+      throw new TypeError(
+        `${position} has runtime fields for a comptime export`,
+      );
+    }
+    return { name: null, function: null, postReturn: null };
+  }
+  if (phase !== "runtime") {
+    throw new TypeError(`${position}.phase is ${JSON.stringify(phase)}`);
+  }
+  const name = requireString(encoded.name, `${position}.name`);
+  const function_ = parseFunction(encoded.function, `${position}.function`);
+  let postReturn: string | null = null;
+  if (encoded.postReturn !== null) {
+    postReturn = requireString(encoded.postReturn, `${position}.postReturn`);
+  }
+  return { name, function: function_, postReturn };
+}
+
+function parseLink(
+  value: unknown,
+  position: string,
+): DevelopmentManifest["links"][number] {
+  const encoded = requireRecord(value, position);
+  const unit = requireString(encoded.unit, `${position}.unit`);
+  const name = requireString(encoded.name, `${position}.name`);
+  const module = requireString(encoded.module, `${position}.module`);
+  if (module !== `blot:dev/${unit}`) {
+    throw new TypeError(
+      `${position}.module is ${JSON.stringify(module)}, expected ${
+        JSON.stringify(`blot:dev/${unit}`)
+      }`,
+    );
+  }
+  return {
+    unit,
+    name,
+    module,
+    function: parseFunction(encoded.function, `${position}.function`),
+  };
+}
+
+function parseFunction(value: unknown, position: string): BlotAbiFunction {
+  const encoded = requireRecord(value, position);
+  return {
+    parameters: requireArray(encoded.parameters, `${position}.parameters`).map(
+      (parameter, index) =>
+        parseAbiType(parameter, `${position}.parameters[${index}]`, 0),
+    ),
+    result: parseAbiType(encoded.result, `${position}.result`, 0),
+  };
+}
+
+function parseAbiType(
+  value: unknown,
+  position: string,
+  depth: number,
+): BlotAbiType {
+  if (depth > 64) {
+    throw new TypeError(`${position} exceeds 64 nested ABI types`);
+  }
+  const encoded = requireRecord(value, position);
+  const kind = requireString(encoded.kind, `${position}.kind`);
+  if (kind === "unit") return { kind: "unit" };
+  if (kind === "signed-integer-64") return { kind: "signed-integer-64" };
+  if (kind === "float-32") return { kind: "float-32" };
+  if (kind === "float-64") return { kind: "float-64" };
+  if (kind === "boolean") return { kind: "boolean" };
+  if (kind === "text") return { kind: "text" };
+  if (kind === "array") {
+    return {
+      kind: "array",
+      element: parseAbiType(encoded.element, `${position}.element`, depth + 1),
+    };
+  }
+  if (kind === "sealed") {
+    return {
+      kind: "sealed",
+      name: requireString(encoded.name, `${position}.name`),
+      inner: parseAbiType(encoded.inner, `${position}.inner`, depth + 1),
+    };
+  }
+  if (kind === "record") {
+    let previousName: string | undefined;
+    const fields = requireArray(encoded.fields, `${position}.fields`).map(
+      (field, index) => {
+        const fieldPosition = `${position}.fields[${index}]`;
+        const encodedField = requireRecord(field, fieldPosition);
+        const name = requireString(encodedField.name, `${fieldPosition}.name`);
+        if (previousName !== undefined && previousName >= name) {
+          throw new TypeError(
+            `${position} fields are not in unique canonical order at ${
+              JSON.stringify(name)
+            }`,
+          );
+        }
+        previousName = name;
+        return {
+          name,
+          type: parseAbiType(
+            encodedField.type,
+            `${fieldPosition}.type`,
+            depth + 1,
+          ),
+        };
+      },
+    );
+    return { kind: "record", fields };
+  }
+  if (kind === "variant") {
+    let previousName: string | undefined;
+    const cases = requireArray(encoded.cases, `${position}.cases`).map(
+      (case_, index) => {
+        const casePosition = `${position}.cases[${index}]`;
+        const encodedCase = requireRecord(case_, casePosition);
+        const name = requireString(encodedCase.name, `${casePosition}.name`);
+        if (previousName !== undefined && previousName >= name) {
+          throw new TypeError(
+            `${position} cases are not in unique canonical order at ${
+              JSON.stringify(name)
+            }`,
+          );
+        }
+        previousName = name;
+        if (!Object.hasOwn(encodedCase, "payload")) return { name };
+        return {
+          name,
+          payload: parseAbiType(
+            encodedCase.payload,
+            `${casePosition}.payload`,
+            depth + 1,
+          ),
+        };
+      },
+    );
+    if (cases.length === 0) {
+      throw new TypeError(`${position} has no variant cases`);
+    }
+    return { kind: "variant", cases };
+  }
+  throw new TypeError(
+    `${position}.kind is unsupported ${JSON.stringify(kind)}`,
+  );
+}
+
+function requireEmbeddedManifest(
+  module: WebAssembly.Module,
+  artifact: DevelopmentUnitArtifact,
+): void {
+  const sections = WebAssembly.Module.customSections(module, "blot:abi");
+  if (sections.length !== 1) {
+    throw new Error(
+      `development unit ${
+        JSON.stringify(artifact.name)
+      } has ${sections.length} embedded ABI manifests, expected one`,
+    );
+  }
+  const embedded = new Uint8Array(sections[0]);
+  if (!equalBytes(embedded, artifact.manifestBytes)) {
+    throw new Error(
+      `development unit ${
+        JSON.stringify(artifact.name)
+      } sidecar and embedded ABI manifests differ`,
+    );
+  }
+}
+
+async function sha256(value: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", Uint8Array.from(value)),
+  );
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function requireRecord(
+  value: unknown,
+  position: string,
+): Record<string, unknown> {
+  if (!isRecord(value)) throw new TypeError(`${position} must be an object`);
+  return value;
+}
+
+function requireArray(value: unknown, position: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${position} must be an array`);
+  }
+  return value;
+}
+
+function requireString(value: unknown, position: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(
+      `${position} must be non-empty text, found ${String(value)}`,
+    );
+  }
+  return value;
 }
 
 function invokeLink(
@@ -667,7 +1106,7 @@ function allocate(
 
 function requiredMemory(
   instance: WebAssembly.Instance,
-  manifest: BlotAbiManifest,
+  manifest: DevelopmentManifest,
   unit: string,
 ): WebAssembly.Memory {
   const memory = instance.exports[manifest.abi.memoryExport];

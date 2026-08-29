@@ -5206,6 +5206,16 @@ impl ResidualTrace {
                 }
                 Ok(first)
             }
+            Value::Sealed { name, inner } => {
+                let representation_type = self.type_from_type_value(inner)?;
+                Ok(self.insert_type(
+                    &format!("sealed:{name}:{representation_type}"),
+                    RuntimeType::Sealed {
+                        name: name.clone(),
+                        representation_type,
+                    },
+                ))
+            }
             Value::Extended { inner, .. } => self.type_from_type_value(inner),
             _ => Err(hir_error(&format!(
                 "{} is outside the Rust residual type calculus while lowering {}.",

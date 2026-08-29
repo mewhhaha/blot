@@ -138,6 +138,7 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
           project = replacement;
           continue;
         }
+        for (const path of event.paths) await project.markChanged(path);
         await reportDevelopmentBuild(project);
       } catch (error) {
         report(project.manifest.path, error);

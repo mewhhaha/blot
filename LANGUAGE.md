@@ -288,7 +288,50 @@ open import "blot:prelude"
 At compilation, imported module bodies are specialized and inlined. This does
 not alter module-instance identity or top-level execution order.
 
-### 3.1 Included files
+### 3.1 Development projects
+
+A development project may assign reachable module roots to independently
+reloadable units with a `blot-project` manifest:
+
+```json
+{
+  "schema": "blot-project",
+  "version": 1,
+  "entryUnit": "game",
+  "units": {
+    "game": "./main.blot",
+    "simulation": "./simulation.blot"
+  }
+}
+```
+
+Unit names begin with a lowercase letter and contain only lowercase letters,
+digits, and `-`. Source paths are relative to and confined within the project
+directory. Every unit root is unique and reachable from the entry root through
+ordinary imports.
+
+The manifest adds no source namespace or import form. Imports, inference,
+staging, demand, effects, and ownership have their ordinary whole-program
+meaning. The development compiler specializes demanded polymorphic functions at
+their call sites, then turns a residual direct call whose definition belongs to
+another configured root into a unit link. A closed first-order ABI value may
+cross that link: unit, integers, floats, booleans, text, arrays, records,
+variants, and seals. Functions, compiler-private storage or indirection,
+continuations, and unresolved source effects cannot cross a reload boundary. The
+development target refuses such a checked program rather than assigning it new
+source semantics.
+
+Each unit has independent runtime memory and module state. Activating a changed
+unit creates a fresh instance, so its state resets. An unchanged unit retains
+its existing instance. Values passed over a link are copied according to the
+Core Wasm ABI; neither unit obtains an alias into the other's memory. A changed
+link interface rebuilds its consumers. An implementation change behind an
+unchanged interface replaces only the provider.
+
+Development compilation and linking are an operational mode. `blot build`
+continues to specialize and emit one whole-program production artifact.
+
+### 3.2 Included files
 
 `@include` makes a non-Blot file available to an ordinary compile-time Blot
 function:

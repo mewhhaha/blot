@@ -1,8 +1,8 @@
 {
   "protocol": {
-    "compilerHostAbi": 3,
+    "compilerHostAbi": 4,
     "checkedModuleCertificate": 16,
-    "runtimeHir": 6
+    "runtimeHir": 7
   },
   "operators": [
     {
@@ -724,7 +724,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 10321
+      "lines": 10497
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -732,15 +732,15 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 5900
+      "lines": 6000
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 5803
+      "lines": 5949
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 5080
+      "lines": 5089
     },
     {
       "path": "compiler/src/lower.rs",
@@ -768,7 +768,7 @@
     },
     {
       "path": "src/runtime/hir.ts",
-      "lines": 1653
+      "lines": 1713
     },
     {
       "path": "compiler/src/value.rs",

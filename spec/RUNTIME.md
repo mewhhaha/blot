@@ -85,6 +85,30 @@ It contains no:
 - unchecked proof-required operation; or
 - private capability object crossing ABI 2.
 
+### 1.1 Development links
+
+A development Runtime-HIR module may contain `links` after whole-program
+specialization has closed every representation. Each link names a provider unit,
+a stable compiler-generated export name, and one existing closed signature. A
+`call.external` operation names that link instead of a local function.
+Production Runtime HIR has no links.
+
+Splitting preserves the original direct-call observation. The provider wrapper
+executes the same residual function, and the consumer observes the same return,
+host request, specified trap, or divergence. Link arguments and results use only
+the ABI-admissible first-order subset. A function value, Scratch,
+compiler-private indirection, continuation, vector, mask, capability value, or
+open representation at the boundary is a `TargetRefusal` before unit emission.
+
+Each emitted unit owns one memory. The runtime bridge canonically lowers a
+consumer value, copies its complete nested representation into provider memory,
+calls the provider, then copies the result into consumer memory. Parameter
+copies are borrowed for that synchronous call; the provider result is released
+with its declared post-return function after copying. Source arrays, text, and
+nested aggregates never share backing storage across unit memories. Replacing a
+unit therefore resets only that unit's runtime state and cannot invalidate an
+alias retained by another unit.
+
 ## 2. Validation
 
 Write:
@@ -108,8 +132,8 @@ Validation independently checks at least:
 8. every capability operation has one closed input type, one closed result type,
    and an exact normalized ownership contract whose structural fields match
    those types;
-9. every public boundary has an admissible closed source type and adapter
-   policy;
+9. every public or development-link boundary has an admissible closed source
+   type and adapter policy;
 10. no compile-time or proof-only value remains; and
 11. every target feature used is admitted by the selected production policy.
 

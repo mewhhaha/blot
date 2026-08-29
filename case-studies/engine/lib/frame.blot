@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+let finished :: Int -> Bool
+let finished = fn remaining => remaining <= 0
+
+return { .finished = finished; }

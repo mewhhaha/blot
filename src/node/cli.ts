@@ -104,6 +104,9 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
           project = replacement;
           continue;
         }
+        if (change.filename !== null) {
+          await project.markChanged(resolve(projectRoot, change.filename));
+        }
         await reportDevelopmentBuild(project);
       } catch (error) {
         report(project.manifest.path, error);

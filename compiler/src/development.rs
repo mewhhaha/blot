@@ -225,7 +225,7 @@ fn build_unit_module(
         .map(|(next, previous)| (*previous, next))
         .collect::<HashMap<_, _>>();
     let mut links = Vec::<RuntimeLink>::new();
-    let mut link_indices = HashMap::<(String, String), usize>::new();
+    let mut linked_imports = HashSet::<(String, String)>::new();
     let mut functions = Vec::with_capacity(function_ids.len());
     for previous_id in function_ids {
         let previous = functions_by_id.get(previous_id).ok_or_else(|| {
@@ -250,7 +250,7 @@ fn build_unit_module(
                 unit_by_root,
                 link_names,
                 &mut links,
-                &mut link_indices,
+                &mut linked_imports,
             )?;
         }
         functions.push(function);
@@ -294,7 +294,7 @@ fn build_unit_module(
                 unit_by_root,
                 link_names,
                 &mut links,
-                &mut link_indices,
+                &mut linked_imports,
             )?;
         }
         let exported_function = wrapper.id;
@@ -545,7 +545,7 @@ fn rewrite_operation(
     unit_by_root: &HashMap<String, String>,
     link_names: &BTreeMap<LinkDemand, String>,
     links: &mut Vec<RuntimeLink>,
-    link_indices: &mut HashMap<(String, String), usize>,
+    linked_imports: &mut HashSet<(String, String)>,
 ) -> Result<(), String> {
     let Some(target) = operation.function else {
         return Ok(());
@@ -571,14 +571,12 @@ fn rewrite_operation(
             )
         })?;
         let key = (provider.clone(), link_name.clone());
-        if !link_indices.contains_key(&key) {
-            let index = links.len();
+        if linked_imports.insert(key) {
             links.push(RuntimeLink {
                 unit: provider.clone(),
                 name: link_name.clone(),
                 signature: target_function.signature,
             });
-            link_indices.insert(key, index);
         }
         operation.kind = "call.external";
         operation.function = None;
@@ -794,6 +792,25 @@ mod tests {
                 assert_eq!(manifest["links"][0]["unit"], "math");
             }
         }
+    }
+
+    #[test]
+    fn function_values_cannot_cross_development_boundaries() {
+        let mut original = scalar_program(41);
+        original.functions[0].blocks[0].operations[0].kind = "closure.make";
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+        ]);
+
+        let Err(error) = split_runtime_module(&original, "game", &configured) else {
+            panic!("a cross-unit closure should be refused");
+        };
+
+        assert!(
+            error.contains("functions may be called through a reload boundary"),
+            "{error}"
+        );
     }
 
     fn scalar_program(value: i64) -> RuntimeModule {

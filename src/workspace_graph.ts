@@ -67,6 +67,12 @@ export class WorkspaceGraph {
     return await this.#loadCurrent(absolute);
   }
 
+  async refreshAfterKnownChanges(path: string): Promise<Loaded> {
+    const absolute = resolve(path);
+    this.#roots.add(absolute);
+    return await this.#loadCurrent(absolute);
+  }
+
   async updateOverlay(
     path: string,
     source: string,

@@ -1,0 +1,9 @@
+{
+  "schema": "blot-project",
+  "version": 1,
+  "entryUnit": "game-loop",
+  "units": {
+    "game-loop": "./game_loop.blot",
+    "frame": "./lib/frame.blot"
+  }
+}

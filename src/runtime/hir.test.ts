@@ -126,6 +126,7 @@ function acceptedModule(): BlotRuntimeModule {
         ownership: { input: "unrestricted", result: "unrestricted" },
       }],
     }],
+    links: [],
     exports: [{
       sourceName: "default",
       phase: "runtime",

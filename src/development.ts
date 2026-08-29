@@ -10,6 +10,8 @@ import {
 } from "./project_format.ts";
 import type { CompilerDevelopmentEdge } from "./compiler/wasm.ts";
 
+const developmentBuildBrand: unique symbol = Symbol("DevelopmentBuild");
+
 export interface RetainedDevelopmentUnit {
   readonly name: string;
   readonly interfaceDigest: string;
@@ -17,6 +19,7 @@ export interface RetainedDevelopmentUnit {
 }
 
 export interface DevelopmentBuild {
+  readonly [developmentBuildBrand]: true;
   readonly revision: string;
   readonly entryUnit: string;
   readonly changedUnits: readonly DevelopmentUnitArtifact[];
@@ -60,6 +63,11 @@ export class DevelopmentProject {
     await this.#compiler.clearOverlay(path);
   }
 
+  async markChanged(path: string): Promise<void> {
+    this.#requireActive();
+    await this.#compiler.markChanged(path);
+  }
+
   async build(): Promise<DevelopmentBuild> {
     this.#requireActive();
     const started = performance.now();
@@ -92,6 +100,7 @@ export class DevelopmentProject {
     );
     this.#units = next;
     return {
+      [developmentBuildBrand]: true,
       revision: compiled.revision,
       entryUnit: compiled.entryUnit,
       changedUnits,

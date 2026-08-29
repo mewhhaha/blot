@@ -51,6 +51,7 @@
     "benchmark:compiler-startup": "tsx experiments/compiler-startup/benchmark.ts",
     "benchmark:compiler-soak": "tsx experiments/compiler-soak.ts",
     "benchmark:compiler-profiles": "tsx experiments/compiler-profile-matrix.ts",
+    "benchmark:development": "deno run --allow-read --allow-write --allow-env experiments/development-bench/benchmark.ts",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
     "test:compiler": "cargo test --manifest-path compiler/Cargo.toml && deno run --allow-read scripts/verify_runtime.ts",
     "conformance": "deno run --allow-read scripts/verify_runtime.ts",

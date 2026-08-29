@@ -181,6 +181,19 @@ The manifest records:
 - canonical host import modules, names, function types, and exact input/result
   ownership contracts.
 
+A development-unit manifest may additionally contain `links`. Each entry names
+the provider unit, its compiler-generated `blot:dev:*` export, the corresponding
+`blot:dev/<unit>` import module, and the canonical function type. These names
+are private to one successful development build and are not a stable package or
+production ABI. Production artifacts omit `links`.
+
+Development units retain ABI 2's one-memory module contract, so linked units do
+not import or share memories. A development host copies parameters and results
+recursively through canonical layouts, calls an indirect result's post-return
+export after copying, and never exposes one unit's pointers to another. The
+source ownership contract remains distinct from these temporary canonical
+copies.
+
 The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
 seal names, so compatibility is structural under the declared contract rather
