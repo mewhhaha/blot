@@ -124,10 +124,19 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
       if (event.kind === "access") continue;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
       try {
-        if (event.paths.some((path) => resolve(path) === project.manifest.path)) {
+        if (
+          event.paths.some((path) => resolve(path) === project.manifest.path)
+        ) {
           const replacement = await DevelopmentProject.create(manifestPath);
+          try {
+            await reportDevelopmentBuild(replacement);
+          } catch (error) {
+            replacement.destroy();
+            throw error;
+          }
           project.destroy();
           project = replacement;
+          continue;
         }
         await reportDevelopmentBuild(project);
       } catch (error) {
@@ -148,7 +157,11 @@ async function reportDevelopmentBuild(
   const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
   const removed = build.removedUnits.join(", ");
   console.log(
-    `${build.revision.slice(0, 12)}: changed [${changed}], retained [${retained}], removed [${removed}], ${build.durationMilliseconds.toFixed(1)} ms`,
+    `${
+      build.revision.slice(0, 12)
+    }: changed [${changed}], retained [${retained}], removed [${removed}], ${
+      build.durationMilliseconds.toFixed(1)
+    } ms`,
   );
 }
 
