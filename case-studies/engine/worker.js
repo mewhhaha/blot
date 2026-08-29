@@ -247,7 +247,13 @@ self.onmessage = async (event) => {
   lastTick = Atomics.load(shared, TICK);
   scene = message.scene;
 
-  const module = await WebAssembly.compile(message.wasm);
+  let module = message.module;
+  if (!(module instanceof WebAssembly.Module)) {
+    if (!(message.wasm instanceof ArrayBuffer)) {
+      throw new Error("engine worker requires a compiled module or Wasm bytes");
+    }
+    module = await WebAssembly.compile(message.wasm);
+  }
   instance = await WebAssembly.instantiate(module, imports);
 
   const frames = instance.exports[message.export]();

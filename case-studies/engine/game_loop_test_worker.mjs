@@ -3,8 +3,8 @@ import { parentPort, workerData as executionInput } from "node:worker_threads";
 if (parentPort === null) {
   throw new Error("game loop test worker requires a parent port");
 }
-if (!(executionInput.wasm instanceof Uint8Array)) {
-  throw new Error("game loop test worker requires Wasm bytes");
+if (!(executionInput.module instanceof WebAssembly.Module)) {
+  throw new Error("game loop test worker requires a compiled Wasm module");
 }
 if (!Number.isInteger(executionInput.selection)) {
   throw new Error(
@@ -16,8 +16,7 @@ let remainingFrames = 1;
 let streamedBatches = 0;
 let uploadedBatches = 0;
 let redraws = 0;
-const module = await WebAssembly.compile(executionInput.wasm);
-const instance = await WebAssembly.instantiate(module, {
+const instance = await WebAssembly.instantiate(executionInput.module, {
   "blot:host/Canvas": {
     clear() {},
     tri() {},

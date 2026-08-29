@@ -24,7 +24,7 @@ for (
   });
 }
 
-Deno.test("game_loop.blot streams every shrubbery without spending render frames", async () => {
+Deno.test("game_loop.blot streams every shrubbery in parallel without spending render frames", async () => {
   const compiler = await Compiler.create();
   let artifact;
   try {
@@ -32,10 +32,11 @@ Deno.test("game_loop.blot streams every shrubbery without spending render frames
   } finally {
     compiler.destroy();
   }
-  for (const selection of [1, 2, 3, 4, 5]) {
+  const module = await WebAssembly.compile(artifact.wasm as BufferSource);
+  const observe = async (selection: number) => {
     const worker = new Worker(
       new URL("./engine/game_loop_test_worker.mjs", import.meta.url),
-      { workerData: { wasm: artifact.wasm, selection } },
+      { workerData: { module, selection } },
     );
     let observation;
     try {
@@ -51,6 +52,10 @@ Deno.test("game_loop.blot streams every shrubbery without spending render frames
     } finally {
       await worker.terminate();
     }
+    return { selection, observation };
+  };
+  const observations = await Promise.all([1, 2, 3, 4, 5].map(observe));
+  for (const { selection, observation } of observations) {
     assertEquals(observation.frames, 1n, `selection ${selection} frame count`);
     assertEquals(
       observation.streamedBatches > 0,

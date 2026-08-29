@@ -1,6 +1,8 @@
 import type { LintRule } from "./types.ts";
 import { booleanIdentityConditional } from "./rules/boolean_identity_conditional.ts";
+import { discardedBooleanCase } from "./rules/discarded_boolean_case.ts";
 import { emptyArrayAppend } from "./rules/empty_array_append.ts";
+import { equalityCase } from "./rules/equality_case.ts";
 import { equalityIfChain } from "./rules/equality_if_chain.ts";
 import { guardShapedCase } from "./rules/guard_shaped_case.ts";
 import { identicalConditionalBranches } from "./rules/identical_conditional_branches.ts";
@@ -20,9 +22,11 @@ import { unusedEffectResult } from "./rules/unused_effect_result.ts";
 export const DEFAULT_LINT_RULES: readonly LintRule[] = [
   unusedBinding,
   unusedEffectResult,
+  discardedBooleanCase,
   noopRebinding,
   unreachableCaseArm,
   nestedCaseChain,
+  equalityCase,
   equalityIfChain,
   nestedIfChain,
   identicalConditionalBranches,

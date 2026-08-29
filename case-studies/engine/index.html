@@ -222,29 +222,64 @@
     };
 
     // --- the worker ----------------------------------------------------
-    let worker = null;
+    let activeWorker = null;
+    let candidateWorker = null;
+    let requestedRevision = 0;
     let state = await (await fetch("./state.json")).json();
     Atomics.store(shared, GENERATION, state.generation);
 
     const startWorker = async () => {
-      if (worker !== null) worker.terminate();
-      const wasm = await (await fetch("./main.wasm")).arrayBuffer();
-      worker = new Worker("./worker.js", { type: "module" });
-      worker.onmessage = (event) => {
-        const message = event.data;
-        if (message.kind === "frame") draws = message.draws;
-      };
-      worker.postMessage(
-        {
-          kind: "start",
-          wasm,
-          shared: shared.buffer,
-          export: state.export,
-          scene: state.scene,
-        },
-        [wasm],
+      requestedRevision = state.revision;
+      const revision = requestedRevision;
+      const startedAt = performance.now();
+      if (candidateWorker !== null) candidateWorker.terminate();
+      candidateWorker = null;
+
+      const module = await WebAssembly.compileStreaming(
+        fetch(`./main.wasm?revision=${revision}`),
       );
-      ui.revision.textContent = `r${state.revision}`;
+      if (revision !== requestedRevision) return;
+
+      const candidate = new Worker("./worker.js", { type: "module" });
+      candidateWorker = candidate;
+      candidate.onmessage = (event) => {
+        const message = event.data;
+        if (message.kind !== "frame") return;
+        if (candidateWorker === candidate) {
+          const previous = activeWorker;
+          activeWorker = candidate;
+          candidateWorker = null;
+          draws = message.draws;
+          ui.revision.textContent = `r${revision}`;
+          previous?.terminate();
+          console.log(
+            `activated engine revision ${revision} in ${
+              Math.round(performance.now() - startedAt)
+            } ms`,
+          );
+          return;
+        }
+        if (activeWorker === candidate) draws = message.draws;
+      };
+      candidate.onerror = (event) => {
+        event.preventDefault();
+        if (candidateWorker === candidate) {
+          candidateWorker = null;
+          candidate.terminate();
+          showFailure(`engine revision ${revision} failed: ${event.message}`);
+          return;
+        }
+        if (activeWorker !== candidate) return;
+        activeWorker = null;
+        showFailure(`engine revision ${revision} failed: ${event.message}`);
+      };
+      candidate.postMessage({
+        kind: "start",
+        module,
+        shared: shared.buffer,
+        export: state.export,
+        scene: state.scene,
+      });
     };
 
     const showFailure = (message) => {
@@ -264,7 +299,8 @@
       if (event.data === "assets") {
         // No compile and no restart: hand the guest the new scene and bump
         // the generation it is watching.
-        worker.postMessage({ kind: "scene", scene: state.scene });
+        activeWorker?.postMessage({ kind: "scene", scene: state.scene });
+        candidateWorker?.postMessage({ kind: "scene", scene: state.scene });
         Atomics.store(shared, GENERATION, state.generation);
         ui.generation.textContent = `g${state.generation}`;
         return;

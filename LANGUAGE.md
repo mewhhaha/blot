@@ -1422,9 +1422,9 @@ binding, and emits ordinary nested `case`, `if`, application, and block nodes.
 The checker also sees a non-executed decision tree made from the unguarded rows,
 so exhaustiveness is proved without making the executable path eager. No
 multi-subject case node reaches inference, ownership, evaluation, Runtime HIR,
-or a backend. The editor linter offers this form when at least three nested
-single-subject cases form the same decision matrix without depending on an outer
-arm's bindings.
+or a backend. The editor linter offers this form when nested single-subject
+cases form the same decision matrix without depending on an outer arm's
+bindings.
 
 Coverage reads the columns. The arms taken together must cover the
 cross-product: a combination of columns no arm accepts is

@@ -135,6 +135,111 @@ Deno.test("a nested case decision tree becomes one demand-driven case", async ()
   );
 });
 
+Deno.test("two nested cases become one demand-driven case", async () => {
+  const source = `return case first of
+  #True => 1
+  #False => case second of
+    #True => 2
+    #False => 3
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_NESTED_CASE_CHAIN"),
+    `return case first, second of
+  #True, _ => 1
+  #False, #True => 2
+  #False, #False => 3
+`,
+  );
+});
+
+Deno.test("a Boolean equality case matches the compared value directly", async () => {
+  const source = `return case 0 == value of
+  #False => "nonzero"
+  #True => "zero"
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EQUALITY_CASE"),
+    `return case value of
+  0 => "zero"
+  _ => "nonzero"
+`,
+  );
+});
+
+Deno.test("a named equality call remains an explicit Boolean case", async () => {
+  const source = `return case Int.eq value 0 of
+  #True => "zero"
+  #False => "nonzero"
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("named equality fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_EQUALITY_CASE"
+    ),
+    [],
+  );
+});
+
+Deno.test("an equality case fix preserves multiline arm bodies", async () => {
+  const source = `let classify = fn value => case value == 0 of
+  #True => do:
+    let label = "zero"
+    return label
+  #False => do:
+    let label = "nonzero"
+    return label
+return classify
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EQUALITY_CASE"),
+    `let classify = fn value => case value of
+  0 => do:
+    let label = "zero"
+    return label
+  _ => do:
+    let label = "nonzero"
+    return label
+return classify
+`,
+  );
+});
+
+Deno.test("an equality case pins a stable comparison value", async () => {
+  const source = `let expected = 0
+return case record.kind == expected of
+  #True => "expected"
+  #False => "other"
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EQUALITY_CASE"),
+    `let expected = 0
+return case record.kind of
+  ^expected => "expected"
+  _ => "other"
+`,
+  );
+});
+
+Deno.test("a discarded Boolean case becomes statement control flow", async () => {
+  const source = `let run = fn hidden => do:
+  use case hidden of
+    #True => ()
+    #False => draw ()
+  return ()
+return run
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_DISCARDED_BOOLEAN_CASE"),
+    `let run = fn hidden => do:
+  if not (hidden):
+    use draw ()
+  return ()
+return run
+`,
+  );
+});
+
 Deno.test("an identical-branch rewrite still evaluates its condition", async () => {
   const source = `let flag = #True
 if flag:
@@ -202,6 +307,25 @@ return count
     #More => case third of
       #One => 3
       #More => 4
+`,
+  },
+  {
+    name: "a Boolean equality case matches its subject directly",
+    code: "BLOT_LINT_EQUALITY_CASE",
+    source: `return case value == 0 of
+  #True => "zero"
+  #False => "nonzero"
+`,
+  },
+  {
+    name: "a discarded Boolean case is statement control flow",
+    code: "BLOT_LINT_DISCARDED_BOOLEAN_CASE",
+    source: `let run = fn ready => do:
+  use case ready of
+    #True => draw ()
+    #False => ()
+  return ()
+return run
 `,
   },
   {

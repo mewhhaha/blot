@@ -1,5 +1,5 @@
 import type { Rule } from "../../../syntax/cursor.ts";
-import { spanKey } from "../syntax.ts";
+import { spanKey, trailingWhitespace } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
 interface FlattenedArm {
@@ -24,11 +24,13 @@ export const nestedCaseChain: LintRule = {
         if (rule.name !== "case_expression") return;
         if (covered.has(spanKey(rule.span))) return;
         const flattened = flattenCases(rule, context);
-        if (flattened === null || flattened.cases.length < 3) return;
+        if (flattened === null || flattened.cases.length < 2) return;
         for (const nested of flattened.cases.slice(1)) {
           covered.add(spanKey(nested.span));
         }
         const indent = lineIndent(context.source, rule.span.start);
+        const replacement = renderCases(flattened, context, indent) +
+          trailingWhitespace(context.source, rule.span);
         context.report({
           message:
             "This nested case tree is one decision matrix; match its subjects in a single multi-subject `case`.",
@@ -36,7 +38,8 @@ export const nestedCaseChain: LintRule = {
           fix: context.fix(
             rule.span,
             "Flatten nested cases",
-            renderCases(flattened, context, indent),
+            replacement,
+            "check",
           ),
         });
       },
@@ -185,7 +188,8 @@ function smallestIndent(lines: readonly string[]): string {
     if (match !== null && match[0] !== undefined) indent = match[0];
     if (smallest === null || indent.length < smallest.length) smallest = indent;
   }
-  return smallest ?? "";
+  if (smallest === null) return "";
+  return smallest;
 }
 
 function singleLine(source: string): string {

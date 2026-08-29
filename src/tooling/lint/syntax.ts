@@ -5,6 +5,12 @@ export function spanKey(span: Span): string {
   return `${span.start}:${span.end}`;
 }
 
+export function trailingWhitespace(source: string, span: Span): string {
+  const match = /\s*$/.exec(source.slice(span.start, span.end));
+  if (match === null || match[0] === undefined) return "";
+  return match[0];
+}
+
 export function producedExpression(expression: Expr): Expr {
   let produced = expression;
   while (produced.tag === "block" && produced.declarations.length === 0) {

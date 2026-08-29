@@ -30,6 +30,11 @@ The engine also has a browser host, with hot reload:
 WGPU_BACKENDS=vulkan deno task engine
 ```
 
+The browser compiles each emitted Wasm module once and clones that compiled
+module into a candidate worker. The active worker keeps rendering until the
+candidate produces its first frame, so compilation and guest startup do not
+interrupt the last working revision.
+
 ## grep
 
 `grep/main.blot` owns matching, iteration, output selection, and the exit count.
