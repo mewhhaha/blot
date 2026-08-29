@@ -68,7 +68,7 @@
   "of" @keyword.control.exception)
 
 (do_block
-  phase: _ @keyword.control)
+  "do" @keyword.control)
 
 (lambda_parameter
   "fn" @keyword.function)
