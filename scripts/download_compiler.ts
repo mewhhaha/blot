@@ -45,6 +45,7 @@ try {
     hostAbi: COMPILER_HOST_ABI_VERSION,
     preludeSha256: await sha256(prelude),
     compilerInputsSha256: await compilerInputIdentity(),
+    profile: "production",
   });
   await Deno.mkdir(destination, { recursive: true });
   await Deno.writeFile(new URL("compiler.wasm", destination), bytes);

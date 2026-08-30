@@ -1,9 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
 import { BlotError } from "../../src/diagnostic.ts";
 import { Compiler } from "../../src/compiler/session.ts";
@@ -279,10 +274,15 @@ return add_depth 3
 
   await withSource(source, async (compiler, path) => {
     const hir = await compiler.prepare(path);
-    const recursive = hir.functions.find((fn) =>
-      fn.name.startsWith("blot:recursive:")
+    const recursive = hir.functions.find((function_) =>
+      function_.blocks.some((block) =>
+        block.operations.some((operation) =>
+          operation.kind === "call.direct" &&
+          operation.function === function_.id
+        )
+      )
     );
-    assert(recursive !== undefined);
+    assert(recursive !== undefined, "add_depth lost its recursive call");
     assertEquals(hir.signatures[recursive.signature].parameters.length, 2);
     const artifact = await compiler.compile(path);
     const run = await instantiateDefault(artifact.wasm, {
@@ -297,7 +297,9 @@ Deno.test("Slice copy is elided only for proven private Stores", async () => {
     `open import "blot:prelude"
 const Source = @effect.host { .value = Int -> Int; }
 use x <- Source.value 0
-${owned ? "let !candidate" : "let candidate"} = @array.set [x, 2, 3] 1 2
+${owned ? "let !candidate" : "let candidate"} = ${
+      owned ? "@array.set [x, 2, 3] 1 2" : "freeze (@array.set [x, 2, 3] 1 2)"
+    }
 let region = Slice.copy ${owned ? "(!candidate)" : "candidate"}
 let frozen = Slice.freeze (!region)
 return case Array.get (frozen, 0) of
@@ -401,7 +403,7 @@ return Slice.freeze (!restored)
   assertEquals(error.diagnostic.code, "BLOT_REGION_JOIN_UNPROVED");
 });
 
-Deno.test("live Slice capabilities are refused at Core Wasm ABI 2", async () => {
+Deno.test("module Region roots must be fully frozen", async () => {
   const source = `module with !region
 open import "blot:prelude"
 let size = Slice.length (&region)
@@ -410,9 +412,8 @@ return size + Array.length (&frozen)
 `;
 
   const error = await assertRejects(
-    () => withSource(source, (compiler, path) => compiler.compile(path)),
-    Error,
+    () => withSource(source, (compiler, path) => compiler.check(path)),
+    BlotError,
   );
-  assertStringIncludes(error.message, "live Region");
-  assertStringIncludes(error.message, "ABI 2");
+  assertEquals(error.diagnostic.code, "BLOT_REGION_PARTIAL_FREEZE");
 });

@@ -30,6 +30,8 @@ semantics.
 | [`PAPER.md`](PAPER.md)                                          | Integrated semantic model and theorem map                              |
 | [`CORE_SEMANTICS.md`](CORE_SEMANTICS.md)                        | Demand, application, identities, modules, handlers, and progress       |
 | [`COMPILER.md`](COMPILER.md)                                    | Compiler-wide judgments, pass contracts, and fact ownership            |
+| [`QCORE.md`](QCORE.md)                                          | Shadow QCore arena, structural certificates, scopes, rows, and grades  |
+| [`QCORE_TYPING.md`](QCORE_TYPING.md)                            | Executable pure-QCore typing and conversion shadow                     |
 | [`TYPECHECKING.md`](TYPECHECKING.md)                            | Declarative subtyping, inference, staging facts, and solver invariants |
 | [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)          | Implemented pure predicates normalized into canonical types            |
 | [`AFFINE_ITERATION.md`](AFFINE_ITERATION.md)                    | Affine iterator semantics, Store identity, and lowering acceptance     |

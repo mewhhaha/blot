@@ -33,3 +33,75 @@ test("build never overwrites an extensionless source", async () => {
     await rm(directory, { recursive: true });
   }
 });
+
+test("lint check refuses a file with findings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-cli-"));
+  const path = join(directory, "program.blot");
+  try {
+    await writeFile(
+      path,
+      `open import "blot:prelude"
+return Int.rem 5 2
+`,
+    );
+    await assert.rejects(
+      execute(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          resolve("src/node/cli.ts"),
+          "lint",
+          "--check",
+          path,
+        ],
+      ),
+      /BLOT_LINT_OPERATOR_SPELLING/,
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("lint fix writes only the compiler-checked result", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-node-cli-"));
+  const path = join(directory, "program.blot");
+  try {
+    await writeFile(
+      path,
+      `open import "blot:prelude"
+return Int.rem 5 2
+`,
+    );
+    await execute(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        resolve("src/node/cli.ts"),
+        "lint",
+        "--fix",
+        path,
+      ],
+    );
+    assert.equal(
+      await readFile(path, "utf8"),
+      `open import "blot:prelude"
+return (5 % 2)
+`,
+    );
+    await execute(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        resolve("src/node/cli.ts"),
+        "lint",
+        "--check",
+        path,
+      ],
+    );
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});

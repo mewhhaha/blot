@@ -14,9 +14,10 @@ use crate::typecheck::{CheckedModule, Domain, Scalar, Type, sealed_type, sealed_
 use crate::value::{
     ArrayValues, ChoiceSource, ClosureAlternative, EffectOperationOwnership, EffectOwnership,
     Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env, lookup,
+    recursive_env,
 };
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub(crate) enum RuntimeType {
     Unit,
@@ -310,14 +311,14 @@ fn runtime_type_contains_scratch(
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct RuntimeField {
     pub(crate) name: String,
     #[serde(rename = "type")]
     pub(crate) type_id: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct RuntimeCase {
     pub(crate) name: String,
     #[serde(rename = "payloadType")]
@@ -599,11 +600,21 @@ struct ResidualFunctionIdentity {
     module: String,
     body: crate::ast::ExpressionId,
     argument_type: usize,
+    argument_reuse: StoreReuseWitness,
     result_type: usize,
     capture_types: Vec<usize>,
     signature: Value,
     function: usize,
     runtime_signature: usize,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum StoreReuseWitness {
+    None,
+    Shared,
+    Reusable,
+    Shape(Vec<(String, StoreReuseWitness)>),
+    Tag(String, Option<Box<StoreReuseWitness>>),
 }
 
 struct RecursiveResultIdentity {
@@ -616,12 +627,23 @@ struct RecursiveResultIdentity {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RepresentationShape {
-    Leaf,
+    Unknown,
+    Unit,
+    SignedInteger64,
+    Float32,
+    Float64,
+    Text,
+    FloatVector { lanes: usize },
+    FloatMask { lanes: usize },
+    IntegerVector { bits: u8, lanes: usize },
+    IntegerMask { bits: u8, lanes: usize },
+    Runtime(usize),
     Shape(Vec<(String, RepresentationShape)>),
     Array(Option<Box<RepresentationShape>>),
     Region(Box<RepresentationShape>),
     Scratch(Box<RepresentationShape>),
     Tag(String, Option<Box<RepresentationShape>>),
+    Sealed(String, Box<RepresentationShape>),
 }
 
 #[derive(Default)]
@@ -639,7 +661,7 @@ struct CheckedAggregateRepresentations {
 
 impl CheckedAggregateRepresentations {
     fn record(&mut self, value: &Value, type_id: usize) {
-        if let Some(shape) = representation_shape(value) {
+        if let Some(shape) = checked_representation_shape(value) {
             self.structural
                 .entry(shape)
                 .and_modify(|known| {
@@ -692,7 +714,7 @@ impl CheckedAggregateRepresentations {
         if let Some(known) = exact {
             return known;
         }
-        let shape = representation_shape(value)?;
+        let shape = checked_representation_shape(value)?;
         self.structural.get(&shape).copied().flatten()
     }
 }
@@ -710,7 +732,7 @@ impl RepresentationFacts {
         } else {
             self.exact.push((value.clone(), Some(type_id)));
         }
-        if let Some(shape) = representation_shape(value) {
+        if let Some(shape) = specialization_representation_shape(value) {
             self.shapes
                 .entry(shape)
                 .and_modify(|known| {
@@ -730,7 +752,7 @@ impl RepresentationFacts {
         {
             return Some(*type_id);
         }
-        let shape = representation_shape(value)?;
+        let shape = specialization_representation_shape(value)?;
         self.shapes.get(&shape).copied().flatten()
     }
 }
@@ -1146,6 +1168,7 @@ impl ResidualTrace {
                 .cloned()
                 .ok_or_else(|| hir_error("An ownership marker omitted its value."))?;
             if let Value::Runtime(runtime) = &mut value
+                && !matches!(runtime.meaning, RuntimeMeaning::SharedStore)
                 && matches!(self.types[runtime.type_id], RuntimeType::Store { .. })
             {
                 runtime.meaning = RuntimeMeaning::ReusableStore;
@@ -1162,9 +1185,9 @@ impl ResidualTrace {
                 .ok_or_else(|| hir_error("A runtime marker omitted its value."))?;
             if matches!(name, "@linear.borrow" | "@linear.freeze")
                 && let Value::Runtime(runtime) = &mut value
-                && matches!(runtime.meaning, RuntimeMeaning::ReusableStore)
+                && matches!(self.types[runtime.type_id], RuntimeType::Store { .. })
             {
-                runtime.meaning = RuntimeMeaning::Plain;
+                runtime.meaning = RuntimeMeaning::SharedStore;
             }
             return Ok(Some(value));
         }
@@ -1636,12 +1659,14 @@ impl ResidualTrace {
             "@array.take" if arguments.len() == 2 => {
                 let store = self.lower_value(&arguments[0], span)?;
                 let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
-                self.array_take(store, index, span)?
+                let taken = self.array_take(store, index, span)?;
+                return self.symbolic_value(taken, span).map(Some);
             }
             "@array.split" if arguments.len() == 2 => {
                 let store = self.lower_value(&arguments[0], span)?;
                 let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
-                self.array_split(store, index, span)?
+                let split = self.array_split(store, index, span)?;
+                return self.symbolic_value(split, span).map(Some);
             }
             "@array.len" => {
                 let store = self.lower_primitive_argument(
@@ -3489,7 +3514,7 @@ impl ResidualTrace {
         let recursive_result = context
             .recursive_closures
             .borrow()
-            .contains(&(module.to_owned(), body));
+            .contains_key(module, &body);
         let forwarded_result_type = self.forwarded_parameter_result_type(
             context,
             module,
@@ -3571,13 +3596,15 @@ impl ResidualTrace {
         let (input_ownership, result_ownership) = context
             .ownership_contracts
             .borrow()
-            .get(&(module.to_owned(), body))
+            .get(module, &body)
             .map(|contract| (contract.input.clone(), contract.result.clone()))
             .unwrap_or((Produced::None, Produced::None));
+        let argument_reuse = input_store_reuse_witness(&input_ownership, argument, &self.types);
         if let Some(identity) = self.function_ids.iter().find(|identity| {
             identity.module == module
                 && identity.body == body
                 && identity.argument_type == caller_argument.type_id
+                && identity.argument_reuse == argument_reuse
                 && identity.result_type == result_type
                 && identity.capture_types == capture_types
                 && crate::value::equal(&identity.signature, signature_value)
@@ -3607,6 +3634,7 @@ impl ResidualTrace {
             module: module.to_owned(),
             body,
             argument_type: caller_argument.type_id,
+            argument_reuse: argument_reuse.clone(),
             result_type,
             capture_types: captures.iter().map(|capture| capture.type_id).collect(),
             signature: signature_value.clone(),
@@ -3640,7 +3668,7 @@ impl ResidualTrace {
             },
             span,
         )?;
-        let argument = mark_reusable_stores(&input_ownership, argument, &self.types);
+        let argument = apply_store_reuse_witness(&argument_reuse, argument, &self.types);
         let mut replacements = HashMap::new();
         for capture in &captures {
             let parameter = self.next_value();
@@ -3690,7 +3718,7 @@ impl ResidualTrace {
         let contract = context
             .ownership_contracts
             .borrow()
-            .get(&(module.to_owned(), body))
+            .get(module, &body)
             .cloned();
         let Some(crate::ownership::OwnershipContract {
             parameter: contract_parameter,
@@ -3766,9 +3794,16 @@ impl ResidualTrace {
                 );
             }
         } else if result.type_id != compilation.result_type {
-            return Err(hir_error(
-                "A residual recursive function returned a value outside its signature.",
-            ));
+            return Err(hir_error(&format!(
+                "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
+                compilation.name,
+                compilation.function,
+                result.type_id,
+                self.types[result.type_id],
+                compilation.signature,
+                compilation.result_type,
+                self.types[compilation.result_type],
+            )));
         }
         let end = self.current_block;
         self.blocks[end].terminator = Some(RuntimeTerminator::Return {
@@ -5328,16 +5363,6 @@ impl ResidualTrace {
             self.record_runtime_type_substitutions(expected, type_id, substitutions)?;
         }
         match (expected, checked_actual) {
-            (Value::TypeVariable(variable), checked_actual) => {
-                let type_id = self.type_from_type_value(checked_actual)?;
-                if let Some(previous) = substitutions.insert(*variable, type_id)
-                    && previous != type_id
-                {
-                    return Err(hir_error(
-                        "A checked residual type variable has incompatible call-site representations.",
-                    ));
-                }
-            }
             (Value::Shape(expected_fields), Value::Shape(actual_fields)) => {
                 for (name, expected_field) in expected_fields {
                     if let Some(actual_field) = actual_fields.get(name) {
@@ -6946,6 +6971,130 @@ fn compiler_tag_payload(payload: Option<&Value>) -> Value {
     value.clone()
 }
 
+fn input_store_reuse_witness(
+    input: &Produced,
+    value: &Value,
+    types: &[RuntimeType],
+) -> StoreReuseWitness {
+    fn permits_reuse(input: Option<&Produced>) -> bool {
+        match input {
+            Some(
+                Produced::Leaf(crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine)
+                | Produced::Parameter {
+                    qualifier: crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine,
+                    ..
+                }
+                | Produced::StoreParameter { .. }
+                | Produced::Store(_),
+            ) => true,
+            Some(Produced::Many(inputs)) => inputs.iter().any(|input| permits_reuse(Some(input))),
+            _ => false,
+        }
+    }
+
+    fn visit(input: Option<&Produced>, value: &Value, types: &[RuntimeType]) -> StoreReuseWitness {
+        match value {
+            Value::Runtime(runtime)
+                if matches!(types[runtime.type_id], RuntimeType::Store { .. }) =>
+            {
+                if permits_reuse(input) && matches!(runtime.meaning, RuntimeMeaning::ReusableStore)
+                {
+                    StoreReuseWitness::Reusable
+                } else {
+                    StoreReuseWitness::Shared
+                }
+            }
+            Value::Array(_) | Value::EmptyArray { .. } => {
+                if permits_reuse(input) {
+                    StoreReuseWitness::Reusable
+                } else {
+                    StoreReuseWitness::Shared
+                }
+            }
+            Value::Shape(fields) => StoreReuseWitness::Shape(
+                fields
+                    .iter()
+                    .map(|(name, value)| {
+                        let field_input = match input {
+                            Some(Produced::Shape(inputs)) => inputs.get(name),
+                            Some(Produced::Sequence(inputs)) => name
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|index| inputs.get(index)),
+                            _ => None,
+                        };
+                        (name.clone(), visit(field_input, value, types))
+                    })
+                    .collect(),
+            ),
+            Value::Tag { name, payload } => {
+                let payload_input = match input {
+                    Some(Produced::Variant(input)) => Some(input.as_ref()),
+                    Some(Produced::Choice(inputs)) => {
+                        inputs.get(name).and_then(|input| match input {
+                            Produced::Variant(input) => Some(input.as_ref()),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                StoreReuseWitness::Tag(
+                    name.clone(),
+                    payload
+                        .as_deref()
+                        .map(|payload| Box::new(visit(payload_input, payload, types))),
+                )
+            }
+            Value::Extended { inner, .. }
+            | Value::Sealed { inner, .. }
+            | Value::Forall { body: inner, .. } => visit(input, inner, types),
+            _ => StoreReuseWitness::None,
+        }
+    }
+
+    visit(Some(input), value, types)
+}
+
+fn apply_store_reuse_witness(
+    witness: &StoreReuseWitness,
+    mut value: Value,
+    types: &[RuntimeType],
+) -> Value {
+    match (witness, &mut value) {
+        (StoreReuseWitness::Shared, Value::Runtime(runtime))
+            if matches!(types[runtime.type_id], RuntimeType::Store { .. }) =>
+        {
+            runtime.meaning = RuntimeMeaning::SharedStore;
+        }
+        (StoreReuseWitness::Reusable, Value::Runtime(runtime))
+            if matches!(types[runtime.type_id], RuntimeType::Store { .. }) =>
+        {
+            runtime.meaning = RuntimeMeaning::ReusableStore;
+        }
+        (StoreReuseWitness::Shape(fields), Value::Shape(values)) => {
+            for (name, witness) in fields {
+                if let Some(field) = values.get(name).cloned() {
+                    values.insert(
+                        name.clone(),
+                        apply_store_reuse_witness(witness, field, types),
+                    );
+                }
+            }
+        }
+        (
+            StoreReuseWitness::Tag(_, Some(witness)),
+            Value::Tag {
+                payload: Some(payload),
+                ..
+            },
+        ) => {
+            **payload = apply_store_reuse_witness(witness, (**payload).clone(), types);
+        }
+        _ => {}
+    }
+    value
+}
+
 fn mark_reusable_stores(input: &Produced, mut value: Value, types: &[RuntimeType]) -> Value {
     match input {
         Produced::Leaf(crate::ast::Qualifier::Linear | crate::ast::Qualifier::Affine)
@@ -7073,7 +7222,83 @@ fn contains_static_integer(value: &Value) -> bool {
     }
 }
 
-fn representation_shape(value: &Value) -> Option<RepresentationShape> {
+fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
+    fn shape(value: &Value) -> Option<RepresentationShape> {
+        match value {
+            Value::Unit | Value::Unbounded => Some(RepresentationShape::Unit),
+            Value::Int(_)
+            | Value::Range {
+                domain: Some(crate::value::Domain::Int),
+                ..
+            } => Some(RepresentationShape::SignedInteger64),
+            Value::Float32(_)
+            | Value::Range {
+                domain: Some(crate::value::Domain::Float32),
+                ..
+            } => Some(RepresentationShape::Float32),
+            Value::Float(_)
+            | Value::Range {
+                domain: Some(crate::value::Domain::Float),
+                ..
+            } => Some(RepresentationShape::Float64),
+            Value::Text(_)
+            | Value::Range {
+                domain: Some(crate::value::Domain::Text),
+                ..
+            } => Some(RepresentationShape::Text),
+            Value::Vector(_) => Some(RepresentationShape::FloatVector { lanes: 4 }),
+            Value::VectorMask(_) => Some(RepresentationShape::FloatMask { lanes: 4 }),
+            Value::IntegerVector { bits, lanes } => Some(RepresentationShape::IntegerVector {
+                bits: *bits,
+                lanes: lanes.len(),
+            }),
+            Value::IntegerVectorMask { bits, lanes } => Some(RepresentationShape::IntegerMask {
+                bits: *bits,
+                lanes: lanes.len(),
+            }),
+            Value::Runtime(value) => Some(RepresentationShape::Runtime(value.type_id)),
+            Value::Shape(fields) => Some(RepresentationShape::Shape(
+                fields
+                    .iter()
+                    .map(|(name, value)| Some((name.clone(), shape(value)?)))
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            Value::Array(elements) => Some(RepresentationShape::Array(Some(Box::new(shape(
+                elements.first()?,
+            )?)))),
+            Value::RegionType(element) => {
+                Some(RepresentationShape::Region(Box::new(shape(element)?)))
+            }
+            Value::ScratchType(element) => {
+                Some(RepresentationShape::Scratch(Box::new(shape(element)?)))
+            }
+            Value::Tag { name, payload } => {
+                let payload = match payload.as_deref() {
+                    Some(payload) => Some(Box::new(shape(payload)?)),
+                    None => None,
+                };
+                Some(RepresentationShape::Tag(name.clone(), payload))
+            }
+            Value::Sealed { name, inner } => Some(RepresentationShape::Sealed(
+                name.clone(),
+                Box::new(shape(inner)?),
+            )),
+            Value::Extended { inner, .. } | Value::Forall { body: inner, .. } => shape(inner),
+            _ => None,
+        }
+    }
+
+    let represented = match value {
+        Value::Shape(_) | Value::Array(_) => true,
+        Value::RegionType(element) | Value::ScratchType(element) => {
+            matches!(element.as_ref(), Value::TypeVariable(_))
+        }
+        _ => false,
+    };
+    represented.then(|| shape(value)).flatten()
+}
+
+fn specialization_representation_shape(value: &Value) -> Option<RepresentationShape> {
     fn shape(value: &Value) -> RepresentationShape {
         match value {
             Value::Shape(fields) => RepresentationShape::Shape(
@@ -7094,7 +7319,7 @@ fn representation_shape(value: &Value) -> Option<RepresentationShape> {
             Value::Extended { inner, .. }
             | Value::Sealed { inner, .. }
             | Value::Forall { body: inner, .. } => shape(inner),
-            _ => RepresentationShape::Leaf,
+            _ => RepresentationShape::Unknown,
         }
     }
 
@@ -7320,8 +7545,72 @@ fn replace_closure_environment(
     if let Some(environment) = replaced.get(&identity) {
         return Ok(environment.clone());
     }
-    let result = child_env(Some(closure.environment.clone()));
+    let (result, result_recursive_bindings) = if closure.environment.recursive_bindings.is_some() {
+        let (environment, bindings) = recursive_env(Some(closure.environment.clone()));
+        (environment, Some(bindings))
+    } else {
+        (child_env(Some(closure.environment.clone())), None)
+    };
     replaced.insert(identity, result.clone());
+    if let (Some(source_bindings), Some(result_bindings)) = (
+        closure.environment.recursive_bindings.as_ref(),
+        result_recursive_bindings,
+    ) {
+        let members = source_bindings.values();
+        for (_, member) in &members {
+            let Value::Closure {
+                module,
+                body,
+                environment,
+                ..
+            } = member
+            else {
+                unreachable!("recursive groups contain only closure templates")
+            };
+            replaced.insert(
+                (
+                    module.as_ref().clone(),
+                    body.0,
+                    Rc::as_ptr(environment) as usize,
+                ),
+                result.clone(),
+            );
+        }
+        for (name, member) in &members {
+            let mut member = member.clone();
+            let Value::Closure { environment, .. } = &mut member else {
+                unreachable!("recursive groups contain only closure templates")
+            };
+            *environment = result.clone();
+            result_bindings
+                .insert(name.clone(), member)
+                .expect("recursive groups contain only closure templates");
+        }
+        for (_, member) in members {
+            let Value::Closure {
+                module,
+                parameter,
+                body,
+                environment,
+                self_name,
+                ..
+            } = member
+            else {
+                unreachable!("recursive groups contain only closure templates")
+            };
+            for name in closure_free_names(context, &module, parameter, body, self_name.as_deref())?
+            {
+                if source_bindings.contains(&name) || result.names.borrow().contains_key(&name) {
+                    continue;
+                }
+                if let Some(value) = lookup(&environment, &name) {
+                    let value = replace_value(context, &value, replacements, replaced)?;
+                    result.names.borrow_mut().insert(name, value);
+                }
+            }
+        }
+        return Ok(result);
+    }
     for name in closure_free_names(
         context,
         closure.module,
@@ -8220,6 +8509,9 @@ fn tail_call_suffix_returns(
 
 fn merge_meaning(left: &RuntimeMeaning, right: &RuntimeMeaning) -> RuntimeMeaning {
     match (left, right) {
+        (RuntimeMeaning::SharedStore, _) | (_, RuntimeMeaning::SharedStore) => {
+            RuntimeMeaning::SharedStore
+        }
         (RuntimeMeaning::ReusableStore, RuntimeMeaning::ReusableStore) => {
             RuntimeMeaning::ReusableStore
         }
@@ -8498,7 +8790,7 @@ fn prepare_function_export(
             Value::Closure { module, body, .. } => context
                 .ownership_contracts
                 .borrow()
-                .get(&(module.as_ref().clone(), *body))
+                .get(module, body)
                 .map(|contract| contract.input.clone())
                 .unwrap_or(Produced::None),
             _ => Produced::None,
@@ -9905,6 +10197,157 @@ mod tests {
     use super::*;
 
     #[test]
+    fn online_aggregate_representations_distinguish_runtime_leaf_types() {
+        let store_then_integer = Value::Shape(OrderedFields::from([
+            (
+                "0".to_owned(),
+                Value::Runtime(RuntimeValue {
+                    id: 1,
+                    type_id: 6,
+                    meaning: RuntimeMeaning::Plain,
+                }),
+            ),
+            (
+                "1".to_owned(),
+                Value::Runtime(RuntimeValue {
+                    id: 2,
+                    type_id: 4,
+                    meaning: RuntimeMeaning::Plain,
+                }),
+            ),
+        ]));
+        let integer_pair = Value::Shape(OrderedFields::from([
+            (
+                "0".to_owned(),
+                Value::Runtime(RuntimeValue {
+                    id: 3,
+                    type_id: 4,
+                    meaning: RuntimeMeaning::Plain,
+                }),
+            ),
+            (
+                "1".to_owned(),
+                Value::Runtime(RuntimeValue {
+                    id: 4,
+                    type_id: 4,
+                    meaning: RuntimeMeaning::Plain,
+                }),
+            ),
+        ]));
+        let mut representations = CheckedAggregateRepresentations::default();
+        representations.record(&store_then_integer, 8);
+
+        assert_eq!(representations.get(&integer_pair), None);
+    }
+
+    #[test]
+    fn online_aggregate_representations_distinguish_static_leaf_types() {
+        let integer = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::Int(0.into()),
+        )]));
+        let float = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::Float(0.0),
+        )]));
+        let mut representations = CheckedAggregateRepresentations::default();
+        representations.record(&integer, 4);
+
+        assert_eq!(representations.get(&float), None);
+    }
+
+    #[test]
+    fn residual_function_store_reuse_requires_caller_provenance() {
+        let mut trace = ResidualTrace::new("store-reuse-provenance-test.blot");
+        let integer = trace.region_integer_type();
+        let store_type = trace.insert_type(
+            "store-reuse-provenance",
+            RuntimeType::Store {
+                element_type: integer,
+            },
+        );
+        let input = Produced::StoreParameter {
+            source: crate::ast::PatternId(0),
+            path: Vec::new(),
+            elements_shareable: true,
+            access: crate::ownership::StoreAccess::Shared,
+        };
+        let runtime_value = |id, meaning| {
+            Value::Runtime(RuntimeValue {
+                id,
+                type_id: store_type,
+                meaning,
+            })
+        };
+        let shared = runtime_value(1, RuntimeMeaning::Plain);
+        let reusable = runtime_value(2, RuntimeMeaning::ReusableStore);
+        let shared_witness = input_store_reuse_witness(&input, &shared, &trace.types);
+        let reusable_witness = input_store_reuse_witness(&input, &reusable, &trace.types);
+        assert_ne!(shared_witness, reusable_witness);
+
+        for (source, witness, expected) in [
+            (shared, shared_witness, RuntimeMeaning::SharedStore),
+            (reusable, reusable_witness, RuntimeMeaning::ReusableStore),
+        ] {
+            let parameter = apply_store_reuse_witness(&witness, source, &trace.types);
+            let owned = trace
+                .primitive(
+                    "@linear.own",
+                    &[parameter],
+                    &[],
+                    None,
+                    crate::ast::Span { start: 0, end: 0 },
+                )
+                .expect("ownership marker should lower")
+                .expect("ownership marker should remain residual");
+            let Value::Runtime(owned) = owned else {
+                panic!("ownership marker should preserve the Store value")
+            };
+            assert_eq!(owned.meaning, expected);
+        }
+
+        assert_eq!(
+            merge_meaning(&RuntimeMeaning::SharedStore, &RuntimeMeaning::ReusableStore,),
+            RuntimeMeaning::SharedStore,
+        );
+    }
+
+    #[test]
+    fn online_aggregate_representations_distinguish_float_and_integer_simd() {
+        let float_vector = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::Vector([0.0; 4]),
+        )]));
+        let integer_vector = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::IntegerVector {
+                bits: 32,
+                lanes: vec![0; 4],
+            },
+        )]));
+        let mut representations = CheckedAggregateRepresentations::default();
+        representations.record(&float_vector, 4);
+
+        assert_eq!(representations.get(&integer_vector), None);
+
+        let float_mask = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::VectorMask([false; 4]),
+        )]));
+        let integer_mask = Value::Shape(OrderedFields::from([(
+            "value".to_owned(),
+            Value::IntegerVectorMask {
+                bits: 32,
+                lanes: vec![false; 4],
+            },
+        )]));
+        let mut representations = CheckedAggregateRepresentations::default();
+        representations.record(&float_mask, 4);
+
+        assert_eq!(representations.get(&integer_mask), None);
+    }
+
+    #[test]
     fn float_ordering_guards_trap_unordered_values() {
         let mut trace = ResidualTrace::new("nan-test.blot");
         trace
@@ -9974,14 +10417,28 @@ mod tests {
         let store = trace.array_operation("store.empty", store_type, Vec::new(), span, None);
         let index = trace.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
         let taken = trace
-            .array_take(store.clone(), index.clone(), span)
-            .expect("dynamic take should lower");
+            .primitive(
+                "@array.take",
+                &[Value::Runtime(store.clone()), Value::Runtime(index.clone())],
+                &[None, None],
+                None,
+                span,
+            )
+            .expect("dynamic take should lower")
+            .expect("dynamic take should remain residual");
         let split = trace
-            .array_split(store, index, span)
-            .expect("dynamic split should lower");
+            .primitive(
+                "@array.split",
+                &[Value::Runtime(store), Value::Runtime(index)],
+                &[None, None],
+                None,
+                span,
+            )
+            .expect("dynamic split should lower")
+            .expect("dynamic split should remain residual");
 
-        assert!(matches!(taken.meaning, RuntimeMeaning::Plain));
-        assert!(matches!(split.meaning, RuntimeMeaning::Plain));
+        assert!(matches!(taken, Value::Shape(ref fields) if fields.len() == 2));
+        assert!(matches!(split, Value::Shape(ref fields) if fields.len() == 3));
         let kinds = trace
             .blocks
             .iter()
@@ -9990,6 +10447,7 @@ mod tests {
         assert!(kinds.contains(&"store.length"));
         assert!(kinds.contains(&"store.read"));
         assert!(kinds.contains(&"store.grow"));
+        assert!(kinds.contains(&"product.project"));
         assert!(
             !kinds
                 .iter()

@@ -33,6 +33,14 @@ format file:
 format-check file:
   deno run --allow-read src/cli.ts fmt --check {{file}}
 
+# Refuse accepted Blot source with correctness or readability findings.
+lint-check file:
+  deno run --allow-read src/cli.ts lint --check {{file}}
+
+# Apply compiler-validated lint fixes, then refuse any remaining findings.
+lint-fix file:
+  deno run --allow-read --allow-write src/cli.ts lint --fix {{file}}
+
 # Last-use and linearity facts, for the backend that will consume them.
 ownership file:
   deno run --allow-read src/cli.ts ownership {{file}}
@@ -66,6 +74,7 @@ check:
   deno lint
   deno lint --config deno.desktop.json case-studies/engine/desktop.ts
   pnpm run docs:check
+  pnpm run current:check
   deno task check:generated
   rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
   cargo fmt --manifest-path compiler/Cargo.toml --check

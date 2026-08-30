@@ -2,11 +2,12 @@ import {
   assertEquals,
   assertNotStrictEquals,
   assertRejects,
+  assertStrictEquals,
 } from "@std/assert";
 import { join } from "@std/path";
 import { load, LoadError, refreshLoadedModules } from "./load.ts";
 
-Deno.test("refreshing loaded modules replaces an edited dependency and its importer", async () => {
+Deno.test("refreshing loaded modules rebinds an edited dependency without reparsing its importer", async () => {
   const directory = await Deno.makeTempDir();
   const dependencyPath = join(directory, "dependency.blot");
   const entryPath = join(directory, "entry.blot");
@@ -41,6 +42,7 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
 
   assertNotStrictEquals(secondEntry, firstEntry);
   assertNotStrictEquals(secondDependency, firstDependency);
+  assertStrictEquals(secondEntry.module, firstEntry.module);
   assertEquals(
     secondDependency.source,
     `return 2
@@ -48,7 +50,7 @@ Deno.test("refreshing loaded modules replaces an edited dependency and its impor
   );
 });
 
-Deno.test("refreshing loaded modules replaces an edited include and its importers", async () => {
+Deno.test("refreshing loaded modules rebinds an edited include without reparsing its importer", async () => {
   const directory = await Deno.makeTempDir();
   const includedPath = join(directory, "message.txt");
   const dependencyPath = join(directory, "dependency.blot");
@@ -83,6 +85,7 @@ return message
 
   assertNotStrictEquals(secondEntry, firstEntry);
   assertNotStrictEquals(secondDependency, firstDependency);
+  assertStrictEquals(secondEntry.module, firstEntry.module);
   const secondIncluded = secondDependency.includedFiles.get("./message.txt");
   if (secondIncluded === undefined) {
     throw new Error(`reloaded ${dependencyPath} omitted ${includedPath}`);

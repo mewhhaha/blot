@@ -417,7 +417,14 @@ pub(crate) fn check(
         &module.declarations,
         module.result,
     );
-    walk_declarations(&declarations, &scope, &mut analysis);
+    walk_declarations(
+        &declarations
+            .iter()
+            .map(|declaration| declaration.declaration)
+            .collect::<Vec<_>>(),
+        &scope,
+        &mut analysis,
+    );
     let result = walk(module.result, &scope, &mut analysis, Use::Move);
     if contains_borrow(&result) {
         analysis.report(
@@ -1464,7 +1471,14 @@ fn walk(
                 &declarations,
                 result,
             );
-            walk_declarations(&declarations, &inner, analysis);
+            walk_declarations(
+                &declarations
+                    .iter()
+                    .map(|declaration| declaration.declaration)
+                    .collect::<Vec<_>>(),
+                &inner,
+                analysis,
+            );
             let result = walk(result, &inner, analysis, kind);
             close_scope(&inner, analysis);
             result
@@ -3474,7 +3488,7 @@ fn imported_function_contract(
             .context
             .ownership_contracts
             .borrow()
-            .get(&(module.as_ref().clone(), body))
+            .get(&module, &body)
             .cloned()
     }?;
     Some((

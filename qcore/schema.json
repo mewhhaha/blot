@@ -1,0 +1,445 @@
+{
+  "format": "blot-qcore-schema",
+  "version": 3,
+  "references": [
+    { "name": "ValueId", "representation": "u32" },
+    { "name": "ComputationId", "representation": "u32" },
+    { "name": "EffectRowId", "representation": "u32" },
+    { "name": "GradeId", "representation": "u32" },
+    { "name": "ProofId", "representation": "u32" },
+    { "name": "SourceOriginId", "representation": "u32" },
+    { "name": "DefinitionKey", "representation": "string" },
+    { "name": "SemanticKey", "representation": "string" }
+  ],
+  "records": [
+    {
+      "name": "SourceOrigin",
+      "fields": [
+        { "name": "source", "type": "SemanticKey" },
+        { "name": "start", "type": "u32" },
+        { "name": "end", "type": "u32" }
+      ]
+    },
+    {
+      "name": "DefinitionReference",
+      "fields": [
+        { "name": "definition", "type": "DefinitionKey" },
+        { "name": "semantics", "type": "SemanticKey" },
+        { "name": "origin", "type": "SourceOriginId" }
+      ]
+    },
+    {
+      "name": "GradeInterval",
+      "fields": [
+        { "name": "lower", "type": "u32" },
+        { "name": "upper", "type": "GradeUpperBound" }
+      ]
+    },
+    {
+      "name": "ProofReference",
+      "fields": [
+        { "name": "proof", "type": "ProofId" },
+        { "name": "proposition", "type": "ValueId" },
+        { "name": "origin", "type": "SourceOriginId" }
+      ]
+    },
+    {
+      "name": "ValueNode",
+      "fields": [
+        { "name": "origin", "type": "SourceOriginId" },
+        { "name": "term", "type": "Value" }
+      ]
+    },
+    {
+      "name": "ComputationNode",
+      "fields": [
+        { "name": "origin", "type": "SourceOriginId" },
+        { "name": "term", "type": "Computation" }
+      ]
+    },
+    {
+      "name": "EffectRowNode",
+      "fields": [
+        { "name": "origin", "type": "SourceOriginId" },
+        { "name": "row", "type": "EffectRow" }
+      ]
+    },
+    {
+      "name": "GradeNode",
+      "fields": [
+        { "name": "origin", "type": "SourceOriginId" },
+        { "name": "interval", "type": "GradeInterval" }
+      ]
+    },
+    {
+      "name": "Definition",
+      "fields": [
+        { "name": "reference", "type": "DefinitionReference" },
+        { "name": "body", "type": "DefinitionBody" }
+      ]
+    },
+    {
+      "name": "QArena",
+      "fields": [
+        { "name": "origins", "type": "SourceOrigin[]" },
+        { "name": "values", "type": "ValueNode[]" },
+        { "name": "computations", "type": "ComputationNode[]" },
+        { "name": "effect_rows", "type": "EffectRowNode[]" },
+        { "name": "grades", "type": "GradeNode[]" },
+        { "name": "proofs", "type": "ProofReference[]" }
+      ]
+    },
+    {
+      "name": "QModule",
+      "fields": [
+        { "name": "schema_version", "type": "u32" },
+        { "name": "module", "type": "SemanticKey" },
+        { "name": "effect_parameter_count", "type": "u32" },
+        { "name": "imports", "type": "DefinitionReference[]" },
+        { "name": "definitions", "type": "Definition[]" },
+        { "name": "arena", "type": "QArena" }
+      ]
+    }
+  ],
+  "unions": [
+    {
+      "name": "Universe",
+      "tag_type": "u8",
+      "variants": [
+        {
+          "name": "TypeUniverse",
+          "tag": 0,
+          "fields": [{ "name": "level", "type": "u32" }]
+        },
+        { "name": "Prop", "tag": 1, "fields": [] }
+      ]
+    },
+    {
+      "name": "GradeUpperBound",
+      "tag_type": "u8",
+      "variants": [
+        {
+          "name": "Finite",
+          "tag": 0,
+          "fields": [{ "name": "value", "type": "u32" }]
+        },
+        { "name": "Unbounded", "tag": 1, "fields": [] }
+      ]
+    },
+    {
+      "name": "EffectRow",
+      "tag_type": "u8",
+      "variants": [
+        { "name": "Empty", "tag": 0, "fields": [] },
+        {
+          "name": "Variable",
+          "tag": 1,
+          "fields": [{ "name": "index", "type": "u32" }]
+        },
+        {
+          "name": "Extend",
+          "tag": 2,
+          "fields": [
+            { "name": "effect", "type": "SemanticKey" },
+            { "name": "tail", "type": "EffectRowId" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RangeDomain",
+      "tag_type": "u8",
+      "variants": [
+        { "name": "Integer", "tag": 0, "fields": [] },
+        { "name": "Text", "tag": 1, "fields": [] },
+        { "name": "Float64", "tag": 2, "fields": [] },
+        { "name": "Float32", "tag": 3, "fields": [] }
+      ]
+    },
+    {
+      "name": "ScalarBound",
+      "tag_type": "u8",
+      "variants": [
+        { "name": "Unbounded", "tag": 0, "fields": [] },
+        {
+          "name": "Integer",
+          "tag": 1,
+          "fields": [{ "name": "decimal", "type": "string" }]
+        },
+        {
+          "name": "Text",
+          "tag": 2,
+          "fields": [{ "name": "value", "type": "string" }]
+        }
+      ]
+    },
+    {
+      "name": "Value",
+      "tag_type": "u8",
+      "variants": [
+        {
+          "name": "BoundVariable",
+          "tag": 0,
+          "fields": [{ "name": "index", "type": "u32" }]
+        },
+        {
+          "name": "GlobalDefinition",
+          "tag": 1,
+          "fields": [
+            { "name": "definition", "type": "DefinitionKey" },
+            { "name": "semantics", "type": "SemanticKey" }
+          ]
+        },
+        {
+          "name": "Universe",
+          "tag": 2,
+          "fields": [{ "name": "universe", "type": "Universe" }]
+        },
+        {
+          "name": "DependentPi",
+          "tag": 3,
+          "fields": [
+            { "name": "domain", "type": "ValueId" },
+            { "name": "codomain", "type": "ValueId" },
+            { "name": "effects", "type": "EffectRowId" },
+            { "name": "grade", "type": "GradeId" }
+          ]
+        },
+        {
+          "name": "DependentSigma",
+          "tag": 4,
+          "fields": [
+            { "name": "first", "type": "ValueId" },
+            { "name": "second", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "Lambda",
+          "tag": 5,
+          "fields": [{ "name": "body", "type": "ComputationId" }]
+        },
+        {
+          "name": "Pair",
+          "tag": 6,
+          "fields": [
+            { "name": "first", "type": "ValueId" },
+            { "name": "second", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "FirstProjection",
+          "tag": 7,
+          "fields": [{ "name": "pair", "type": "ValueId" }]
+        },
+        {
+          "name": "SecondProjection",
+          "tag": 8,
+          "fields": [{ "name": "pair", "type": "ValueId" }]
+        },
+        {
+          "name": "Thunk",
+          "tag": 9,
+          "fields": [{ "name": "computation", "type": "ComputationId" }]
+        },
+        {
+          "name": "EffectRow",
+          "tag": 10,
+          "fields": [{ "name": "row", "type": "EffectRowId" }]
+        },
+        {
+          "name": "IntervalGrade",
+          "tag": 11,
+          "fields": [{ "name": "grade", "type": "GradeId" }]
+        },
+        {
+          "name": "Proof",
+          "tag": 12,
+          "fields": [
+            { "name": "proof", "type": "ProofId" },
+            { "name": "proposition", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "StructuralRigid",
+          "tag": 13,
+          "fields": [{ "name": "variable", "type": "u32" }]
+        },
+        {
+          "name": "StructuralForall",
+          "tag": 14,
+          "fields": [
+            { "name": "variables", "type": "u32[]" },
+            { "name": "body", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "StructuralRange",
+          "tag": 15,
+          "fields": [
+            { "name": "domain", "type": "RangeDomain" },
+            { "name": "low", "type": "ScalarBound" },
+            { "name": "high", "type": "ScalarBound" }
+          ]
+        },
+        { "name": "StructuralUnit", "tag": 16, "fields": [] },
+        {
+          "name": "StructuralFunction",
+          "tag": 17,
+          "fields": [
+            { "name": "deferred", "type": "bool" },
+            { "name": "parameter", "type": "ValueId" },
+            { "name": "effects", "type": "ValueId" },
+            { "name": "result", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "StructuralRecord",
+          "tag": 18,
+          "fields": [
+            { "name": "labels", "type": "string[]" },
+            { "name": "field_types", "type": "ValueId[]" }
+          ]
+        },
+        {
+          "name": "StructuralRecordUpdate",
+          "tag": 19,
+          "fields": [
+            { "name": "base", "type": "ValueId" },
+            { "name": "labels", "type": "string[]" },
+            { "name": "field_types", "type": "ValueId[]" }
+          ]
+        },
+        {
+          "name": "StructuralArray",
+          "tag": 20,
+          "fields": [{ "name": "element", "type": "ValueId" }]
+        },
+        {
+          "name": "StructuralRegion",
+          "tag": 21,
+          "fields": [{ "name": "element", "type": "ValueId" }]
+        },
+        {
+          "name": "StructuralScratch",
+          "tag": 22,
+          "fields": [{ "name": "element", "type": "ValueId" }]
+        },
+        {
+          "name": "StructuralVariant",
+          "tag": 23,
+          "fields": [
+            { "name": "labels", "type": "string[]" },
+            { "name": "payload_types", "type": "ValueId[]" },
+            { "name": "open", "type": "bool" }
+          ]
+        },
+        {
+          "name": "StructuralEffects",
+          "tag": 24,
+          "fields": [{ "name": "labels", "type": "string[]" }]
+        },
+        {
+          "name": "StructuralOpenEffects",
+          "tag": 25,
+          "fields": [
+            { "name": "labels", "type": "string[]" },
+            { "name": "tail", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "StructuralUnion",
+          "tag": 26,
+          "fields": [{ "name": "members", "type": "ValueId[]" }]
+        },
+        {
+          "name": "StructuralOpaque",
+          "tag": 27,
+          "fields": [{ "name": "name", "type": "string" }]
+        },
+        { "name": "StructuralTop", "tag": 28, "fields": [] },
+        { "name": "StructuralBottom", "tag": 29, "fields": [] }
+      ]
+    },
+    {
+      "name": "Computation",
+      "tag_type": "u8",
+      "variants": [
+        {
+          "name": "ReturnValue",
+          "tag": 0,
+          "fields": [{ "name": "value", "type": "ValueId" }]
+        },
+        {
+          "name": "LetValue",
+          "tag": 1,
+          "fields": [
+            { "name": "value", "type": "ValueId" },
+            { "name": "body", "type": "ComputationId" }
+          ]
+        },
+        {
+          "name": "Bind",
+          "tag": 2,
+          "fields": [
+            { "name": "first", "type": "ComputationId" },
+            { "name": "body", "type": "ComputationId" }
+          ]
+        },
+        {
+          "name": "Apply",
+          "tag": 3,
+          "fields": [
+            { "name": "function", "type": "ValueId" },
+            { "name": "argument", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "Force",
+          "tag": 4,
+          "fields": [{ "name": "thunk", "type": "ValueId" }]
+        },
+        {
+          "name": "Perform",
+          "tag": 5,
+          "fields": [
+            { "name": "effect", "type": "SemanticKey" },
+            { "name": "operation", "type": "SemanticKey" },
+            { "name": "argument", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "Handle",
+          "tag": 6,
+          "fields": [
+            { "name": "effect", "type": "SemanticKey" },
+            { "name": "body", "type": "ComputationId" },
+            { "name": "handler", "type": "ValueId" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "DefinitionBody",
+      "tag_type": "u8",
+      "variants": [
+        {
+          "name": "Value",
+          "tag": 0,
+          "fields": [
+            { "name": "value", "type": "ValueId" },
+            { "name": "expected_type", "type": "ValueId" }
+          ]
+        },
+        {
+          "name": "Computation",
+          "tag": 1,
+          "fields": [
+            { "name": "computation", "type": "ComputationId" },
+            { "name": "result_type", "type": "ValueId" },
+            { "name": "effects", "type": "EffectRowId" }
+          ]
+        }
+      ]
+    }
+  ]
+}

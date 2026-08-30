@@ -5,15 +5,20 @@ const artifact = new URL(
   "./target/wasm32-unknown-unknown/release/blot_compiler.wasm",
   crateRoot,
 );
-const published = new URL(
-  "../generated/compiler/compiler.wasm",
-  import.meta.url,
-);
+const developmentProfile = Deno.args.includes("--development-profile");
+if (developmentProfile && Deno.args.includes("--check")) {
+  throw new Error("--development-profile cannot be combined with --check");
+}
+let distributionRoot = new URL("../generated/compiler/", import.meta.url);
+if (developmentProfile) {
+  distributionRoot = new URL(
+    "../compiler/target/development-profile/",
+    import.meta.url,
+  );
+}
+const published = new URL("compiler.wasm", distributionRoot);
 const prelude = new URL("../src/prelude/prelude.blot", import.meta.url);
-const preludeSnapshot = new URL(
-  "../generated/compiler/prelude.snapshot",
-  import.meta.url,
-);
+const preludeSnapshot = new URL("prelude.snapshot", distributionRoot);
 const compilerStackBytes = 8 * 1024 * 1024;
 
 await buildCompilerWasm();
@@ -51,7 +56,7 @@ try {
   rust.destroyCompilerSession(session);
 }
 
-await Deno.mkdir(new URL("../generated/compiler/", import.meta.url), {
+await Deno.mkdir(distributionRoot, {
   recursive: true,
 });
 
@@ -96,8 +101,12 @@ async function buildCompilerWasm(): Promise<void> {
     }
     home = `${userHome}/.cargo`;
   }
+  const args = ["build", "--release", "--target", "wasm32-unknown-unknown"];
+  if (developmentProfile) {
+    args.push("--features", "development-profile");
+  }
   const build = await new Deno.Command("cargo", {
-    args: ["build", "--release", "--target", "wasm32-unknown-unknown"],
+    args,
     cwd: crateRoot,
     env: {
       RUSTFLAGS: [

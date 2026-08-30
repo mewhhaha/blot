@@ -6,19 +6,24 @@ import {
 import { compilerInputIdentity } from "./compiler_inputs.ts";
 
 const repository = new URL("../", import.meta.url);
-const compiler = new URL(
-  "../generated/compiler/compiler.wasm",
-  import.meta.url,
-);
-const manifestPath = new URL(
-  "../generated/compiler/compiler-artifact.json",
-  import.meta.url,
-);
+let distributionRoot = new URL("../generated/compiler/", import.meta.url);
+if (Deno.args.includes("--development-profile")) {
+  distributionRoot = new URL(
+    "../compiler/target/development-profile/",
+    import.meta.url,
+  );
+}
+const compiler = new URL("compiler.wasm", distributionRoot);
+const manifestPath = new URL("compiler-artifact.json", distributionRoot);
 
 const bytes = await Deno.readFile(compiler);
 const prelude = await Deno.readFile(
-  new URL("../generated/compiler/prelude.snapshot", import.meta.url),
+  new URL("prelude.snapshot", distributionRoot),
 );
+let profile: CompilerArtifactManifest["profile"] = "production";
+if (Deno.args.includes("--development-profile")) {
+  profile = "development-profile";
+}
 const manifest: CompilerArtifactManifest = await describeCompilerArtifact(
   bytes,
   await commandText("git", "rev-parse", "HEAD"),
@@ -26,6 +31,7 @@ const manifest: CompilerArtifactManifest = await describeCompilerArtifact(
   await commandText("rustc", "--version"),
   await sha256(prelude),
   await compilerInputIdentity(),
+  profile,
 );
 await Deno.writeTextFile(
   manifestPath,

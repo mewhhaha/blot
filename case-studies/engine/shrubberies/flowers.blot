@@ -2,18 +2,16 @@
 
 open import "blot:prelude"
 
-const Color = { .red = Int; .green = Int; .blue = Int; }
-const Flower = { .x = Int; .z = Int; .petals = Color; }
-const FlowerRecipe = { .stem = Color; .centre = Color; .flowers = [Flower]; }
+const C = import "../lib/color.blot"
 
-let fresh_stem :: Color
-let fresh_stem = { .red = 49; .green = 119; .blue = 61; }
-let pollen_centre :: Color
-let pollen_centre = { .red = 105; .green = 67; .blue = 38; }
-let golden_petals :: Color
-let golden_petals = { .red = 255; .green = 188; .blue = 74; }
-let coral_petals :: Color
-let coral_petals = { .red = 244; .green = 113; .blue = 111; }
+const Flower = { .x = Int; .z = Int; .petals = C.Color; }
+const FlowerRecipe =
+  { .stem = C.Color; .centre = C.Color; .flowers = [Flower]; }
+
+let fresh_stem = C.rgb (49, 119, 61)
+let pollen_centre = C.rgb (105, 67, 38)
+let golden_petals = C.rgb (255, 188, 74)
+let coral_petals = C.rgb (244, 113, 111)
 
 let flowers :: FlowerRecipe
 let flowers =

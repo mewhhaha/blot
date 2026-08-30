@@ -1,0 +1,2 @@
+pub(crate) const ARTIFACT_REFERENCE_PATH_LIMIT: usize = 128;
+pub(crate) const ARTIFACT_EXPANDED_REFERENCE_LIMIT: u64 = 1_048_576;

@@ -7,17 +7,36 @@ import { DevelopmentProject } from "../development.ts";
 import { BlotError, render } from "../diagnostic.ts";
 import { LoadError } from "../load.ts";
 import { parse } from "../syntax/parse.ts";
+import {
+  fixLintSource,
+  type LintedSource,
+  type LintMode,
+  lintSource,
+  parseLintArguments,
+} from "../tooling/lint_command.ts";
 import { runArtifact } from "./run.ts";
 
 const [command, ...paths] = process.argv.slice(2);
 if (
   command === undefined ||
   paths.length === 0 ||
-  !["build", "check", "ast", "run", "dev"].includes(command)
+  !["build", "check", "ast", "run", "dev", "lint"].includes(command)
 ) {
-  console.error("usage: pnpm blot <build|check|ast|run> <path>...");
+  console.error(
+    "usage: pnpm blot <build|check|ast|run|lint|dev> <path>...",
+  );
+  console.error("       pnpm blot lint [--check|--fix] <file.blot>...");
   console.error("       pnpm blot dev <blot.json>");
   process.exitCode = 2;
+} else if (command === "lint") {
+  const invocation = parseLintArguments(paths);
+  if (!invocation.ok) {
+    console.error(invocation.message);
+    process.exitCode = 2;
+  } else {
+    const failed = await lintFiles(invocation.mode, invocation.paths);
+    if (failed) process.exitCode = 1;
+  }
 } else if (command === "dev") {
   if (paths.length !== 1) {
     console.error("usage: pnpm blot dev <blot.json>");
@@ -72,6 +91,67 @@ if (
   if (failed) process.exitCode = 1;
 }
 
+async function lintFiles(
+  mode: LintMode,
+  paths: readonly string[],
+): Promise<boolean> {
+  const analysisCompiler = await Compiler.create();
+  let failed = false;
+  try {
+    const validationCompiler = await Compiler.create();
+    try {
+      const lintCompilers = {
+        analysis: analysisCompiler,
+        validation: validationCompiler,
+      };
+      for (const path of paths) {
+        try {
+          const source = await readFile(resolve(path), "utf8");
+          let linted: LintedSource;
+          if (mode === "fix") {
+            linted = await fixLintSource(
+              lintCompilers,
+              path,
+              source,
+            );
+            if (linted.source !== source) {
+              await writeFile(resolve(path), linted.source);
+            }
+            if (linted.appliedFixes > 0) {
+              let noun = "fixes";
+              if (linted.appliedFixes === 1) noun = "fix";
+              console.log(`${path}: applied ${linted.appliedFixes} ${noun}`);
+            }
+          } else {
+            linted = await lintSource(
+              lintCompilers,
+              path,
+              source,
+            );
+          }
+          for (const diagnostic of linted.diagnostics) {
+            console.error(render(path, linted.source, diagnostic));
+          }
+          if (
+            linted.diagnostics.length > 0 &&
+            (mode === "check" || mode === "fix")
+          ) {
+            failed = true;
+          }
+        } catch (error) {
+          failed = true;
+          report(path, error);
+        }
+      }
+    } finally {
+      validationCompiler.destroy();
+    }
+  } finally {
+    analysisCompiler.destroy();
+  }
+  return failed;
+}
+
 async function watchDevelopmentProject(manifestPath: string): Promise<void> {
   let project = await DevelopmentProject.create(manifestPath);
   const projectRoot = dirname(project.manifest.path);
@@ -123,17 +203,23 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
 async function reportDevelopmentBuild(
   project: DevelopmentProject,
 ): Promise<void> {
-  const build = await project.build();
-  const changed = build.changedUnits.map((unit) => unit.name).join(", ");
-  const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
-  const removed = build.removedUnits.join(", ");
-  console.log(
-    `${
-      build.revision.slice(0, 12)
-    }: changed [${changed}], retained [${retained}], removed [${removed}], ${
-      build.durationMilliseconds.toFixed(1)
-    } ms`,
-  );
+  const build = await project.prepareBuild();
+  try {
+    const changed = build.changedUnits.map((unit) => unit.name).join(", ");
+    const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
+    const removed = build.removedUnits.join(", ");
+    console.log(
+      `${
+        build.revision.slice(0, 12)
+      }: changed [${changed}], retained [${retained}], removed [${removed}], ${
+        build.durationMilliseconds.toFixed(1)
+      } ms`,
+    );
+  } catch (error) {
+    project.abortBuild(build);
+    throw error;
+  }
+  project.commitBuild(build);
 }
 
 function bigintJson(_key: string, value: unknown): unknown {

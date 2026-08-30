@@ -93,50 +93,7 @@ return remainder
     { jsonrpc: "2.0", id: 5, method: "shutdown", params: null },
     { jsonrpc: "2.0", method: "exit", params: null },
   ];
-  const encoder = new TextEncoder();
-  const input = new Blob(messages.map((message) => {
-    const body = JSON.stringify(message);
-    return `Content-Length: ${encoder.encode(body).byteLength}\r\n\r\n${body}`;
-  })).stream();
-  const chunks: Uint8Array[] = [];
-  const output = new WritableStream<Uint8Array>({
-    write(chunk) {
-      chunks.push(chunk);
-    },
-  });
-
-  await runLanguageServer(input, output);
-
-  const byteLength = chunks.reduce(
-    (length, chunk) => length + chunk.byteLength,
-    0,
-  );
-  const bytes = new Uint8Array(byteLength);
-  let writeOffset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, writeOffset);
-    writeOffset += chunk.byteLength;
-  }
-  const responses: Record<string, unknown>[] = [];
-  let offset = 0;
-  while (offset < bytes.byteLength) {
-    const remaining = new TextDecoder().decode(bytes.slice(offset));
-    const boundary = remaining.indexOf("\r\n\r\n");
-    if (boundary < 0) throw new Error("LSP response omitted its header body");
-    const header = remaining.slice(0, boundary);
-    const length = Number(/Content-Length:\s*(\d+)/i.exec(header)?.[1]);
-    if (!Number.isInteger(length)) {
-      throw new Error(`LSP response has invalid Content-Length: ${header}`);
-    }
-    const bodyStart = offset + encoder.encode(
-      remaining.slice(0, boundary + 4),
-    ).byteLength;
-    const bodyEnd = bodyStart + length;
-    responses.push(
-      JSON.parse(new TextDecoder().decode(bytes.slice(bodyStart, bodyEnd))),
-    );
-    offset = bodyEnd;
-  }
+  const responses = await exchange(messages);
 
   const initialize = responses.find((response) => response.id === 1) as {
     readonly result: { readonly capabilities: Record<string, unknown> };
@@ -194,3 +151,83 @@ return remainder
   };
   assertEquals(cancelled.error.code, -32800);
 });
+
+Deno.test("document close releases a diskless LSP root", async () => {
+  const uri = "untitled:lsp-close.blot";
+  const responses = await exchange([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: { uri, version: 1, text: "return missing\n" },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didClose",
+      params: { textDocument: { uri } },
+    },
+    { jsonrpc: "2.0", id: 2, method: "shutdown", params: null },
+    { jsonrpc: "2.0", method: "exit", params: null },
+  ]);
+  const diagnostics = responses.filter((response) =>
+    response.method === "textDocument/publishDiagnostics"
+  );
+  assertEquals(diagnostics.at(-1)?.params, { uri, diagnostics: [] });
+  assertEquals(
+    responses.some((response) => response.method === "window/logMessage"),
+    false,
+  );
+});
+
+async function exchange(
+  messages: readonly unknown[],
+): Promise<Record<string, unknown>[]> {
+  const encoder = new TextEncoder();
+  const input = new Blob(messages.map((message) => {
+    const body = JSON.stringify(message);
+    return `Content-Length: ${encoder.encode(body).byteLength}\r\n\r\n${body}`;
+  })).stream();
+  const chunks: Uint8Array[] = [];
+  const output = new WritableStream<Uint8Array>({
+    write(chunk) {
+      chunks.push(chunk);
+    },
+  });
+
+  await runLanguageServer(input, output);
+
+  const byteLength = chunks.reduce(
+    (length, chunk) => length + chunk.byteLength,
+    0,
+  );
+  const bytes = new Uint8Array(byteLength);
+  let writeOffset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+  const responses: Record<string, unknown>[] = [];
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const remaining = new TextDecoder().decode(bytes.slice(offset));
+    const boundary = remaining.indexOf("\r\n\r\n");
+    if (boundary < 0) throw new Error("LSP response omitted its header body");
+    const header = remaining.slice(0, boundary);
+    const length = Number(/Content-Length:\s*(\d+)/i.exec(header)?.[1]);
+    if (!Number.isInteger(length)) {
+      throw new Error(`LSP response has invalid Content-Length: ${header}`);
+    }
+    const bodyStart = offset + encoder.encode(
+      remaining.slice(0, boundary + 4),
+    ).byteLength;
+    const bodyEnd = bodyStart + length;
+    responses.push(
+      JSON.parse(new TextDecoder().decode(bytes.slice(bodyStart, bodyEnd))),
+    );
+    offset = bodyEnd;
+  }
+  return responses;
+}

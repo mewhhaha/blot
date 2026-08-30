@@ -930,6 +930,7 @@ linter for mechanical improvements:
 ```bash
 just check-file path/to/file.blot
 just format path/to/file.blot
+just lint-check path/to/file.blot
 just test
 ```
 

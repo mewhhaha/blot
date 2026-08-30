@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
@@ -10,10 +10,11 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
-    ClosureAlternative, Domain as ValueDomain, EffectOperationOwnership, EffectOwnership,
-    Environment, OpenedValues, OrderedFields, Resume, RuntimeMeaning, RuntimeValue, Value,
-    as_tuple, attach_signature, child_env, equal, lookup, lookup_signature, opened_members, show,
-    tuple,
+    ClosureAlternative, DecodedEnvironmentIdentity, DeferredDemands, Domain as ValueDomain,
+    EffectOperationOwnership, EffectOwnership, Environment, OpenedValues, OrderedFields,
+    RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
+    capture_env, child_env, declaration_env, equal, lookup, lookup_signature, opened_members,
+    recursive_env, reusable_across_module_instances, show, tuple,
 };
 use crate::value_capsule::ValueCapsule;
 
@@ -159,6 +160,191 @@ impl ClosureApplication {
 
 pub type EffectScope = Vec<ClosureApplication>;
 
+pub(crate) const MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT: usize = 64;
+const MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT: usize = 32;
+const MODULE_RESULT_TEMPLATE_PROVENANCE_NODE_LIMIT: usize = 256;
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ModuleResultTemplateInstance {
+    module_instances: Rc<ModuleInstanceScope>,
+    effect_scope: Rc<EffectScope>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct DecodedTemplateProvenance {
+    module_revision: ModuleRevision,
+    template_instance: ModuleResultTemplateInstance,
+}
+
+impl DecodedTemplateProvenance {
+    fn references_module(&self, module: &str) -> bool {
+        self.module_revision.references_module(module)
+            || self.template_instance.references_module(module)
+    }
+}
+
+struct DecodedEnvironmentIdentities {
+    templates: HashMap<DecodedTemplateProvenance, HashMap<usize, Weak<DecodedEnvironmentIdentity>>>,
+    identity_count: usize,
+    next_sweep_at: usize,
+}
+
+const DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP: usize = 64;
+
+impl Default for DecodedEnvironmentIdentities {
+    fn default() -> Self {
+        Self {
+            templates: HashMap::new(),
+            identity_count: 0,
+            next_sweep_at: DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP,
+        }
+    }
+}
+
+impl DecodedEnvironmentIdentities {
+    fn intern(
+        &mut self,
+        provenance: DecodedTemplateProvenance,
+        environment_count: usize,
+    ) -> Vec<Rc<DecodedEnvironmentIdentity>> {
+        if self.identity_count.saturating_add(environment_count) >= self.next_sweep_at {
+            self.prune_dead();
+            self.next_sweep_at = self
+                .identity_count
+                .saturating_add(environment_count)
+                .saturating_mul(2)
+                .max(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP);
+        }
+        let identities = self.templates.entry(provenance).or_default();
+        let mut added = 0;
+        let result = (0..environment_count)
+            .map(|environment| {
+                if let Some(identity) = identities.get(&environment).and_then(Weak::upgrade) {
+                    return identity;
+                }
+                let identity = Rc::new(DecodedEnvironmentIdentity);
+                if identities
+                    .insert(environment, Rc::downgrade(&identity))
+                    .is_none()
+                {
+                    added += 1;
+                }
+                identity
+            })
+            .collect();
+        self.identity_count += added;
+        result
+    }
+
+    fn prune_dead(&mut self) {
+        for identities in self.templates.values_mut() {
+            identities.retain(|_, identity| identity.strong_count() > 0);
+        }
+        self.templates
+            .retain(|_, identities| !identities.is_empty());
+        self.identity_count = self.templates.values().map(HashMap::len).sum();
+    }
+
+    fn remove_modules(&mut self, paths: &HashSet<String>) {
+        self.templates
+            .retain(|provenance, _| !paths.iter().any(|path| provenance.references_module(path)));
+        self.identity_count = self.templates.values().map(HashMap::len).sum();
+        self.next_sweep_at = self
+            .identity_count
+            .saturating_mul(2)
+            .max(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP);
+    }
+
+    fn copy_module_from(&mut self, module: &str, staged: &Self) {
+        for (provenance, identities) in &staged.templates {
+            if !provenance.references_module(module) {
+                continue;
+            }
+            self.identity_count += identities.len();
+            self.templates
+                .insert(provenance.clone(), identities.clone());
+        }
+        self.next_sweep_at = self
+            .identity_count
+            .saturating_mul(2)
+            .max(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP);
+    }
+}
+
+impl ModuleResultTemplateInstance {
+    fn references_module(&self, module: &str) -> bool {
+        self.module_instances
+            .iter()
+            .any(|instance| instance.references_module(module))
+            || self
+                .effect_scope
+                .iter()
+                .any(|frame| frame.references_module(module))
+    }
+
+    fn cacheable(&self) -> bool {
+        if self.module_instances.len() > MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT {
+            return false;
+        }
+        let mut remaining = MODULE_RESULT_TEMPLATE_PROVENANCE_NODE_LIMIT;
+        for instance in self.module_instances.iter() {
+            if remaining == 0 {
+                return false;
+            }
+            remaining -= 1;
+            if !application_provenance_is_bounded(&instance.application, 0, &mut remaining) {
+                return false;
+            }
+        }
+        effect_scope_provenance_is_bounded(&self.effect_scope, 0, &mut remaining)
+    }
+}
+
+fn application_provenance_is_bounded(
+    application: &ApplicationSite,
+    depth: usize,
+    remaining: &mut usize,
+) -> bool {
+    if depth > MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT
+        || application.compiler_steps.len() > MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT
+        || application.compiler_steps.len() > *remaining
+    {
+        return false;
+    }
+    *remaining -= application.compiler_steps.len();
+    application.compiler_steps.iter().all(|step| match step {
+        CompilerApplication::HandleOperation { request, .. } => {
+            application_provenance_is_bounded(request, depth + 1, remaining)
+        }
+        CompilerApplication::ForceEffectDeclaration
+        | CompilerApplication::ForallBody
+        | CompilerApplication::IncludeParser
+        | CompilerApplication::HandleThunk
+        | CompilerApplication::HandleReturn
+        | CompilerApplication::RequirementPredicate
+        | CompilerApplication::RecognitionArgument { .. }
+        | CompilerApplication::RuntimeExportParameter(_) => true,
+    })
+}
+
+fn effect_scope_provenance_is_bounded(
+    scope: &EffectScope,
+    depth: usize,
+    remaining: &mut usize,
+) -> bool {
+    if depth > MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT
+        || scope.len() > MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT
+        || scope.len() > *remaining
+    {
+        return false;
+    }
+    *remaining -= scope.len();
+    scope.iter().all(|frame| {
+        application_provenance_is_bounded(&frame.application, depth, remaining)
+            && effect_scope_provenance_is_bounded(&frame.creation_scope, depth + 1, remaining)
+    })
+}
+
 impl ApplicationSite {
     fn expression(revision: ModuleRevision, expression: ExpressionId) -> Self {
         Self {
@@ -226,6 +412,12 @@ pub struct ModuleInstanceSite {
 
 pub type ModuleInstanceScope = Vec<ModuleInstanceSite>;
 
+impl ModuleInstanceSite {
+    fn references_module(&self, module: &str) -> bool {
+        self.application.references_module(module) || self.imported.references_module(module)
+    }
+}
+
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct EffectIdentity {
     module: String,
@@ -243,10 +435,10 @@ impl EffectIdentity {
                 .scope
                 .iter()
                 .any(|frame| frame.references_module(module))
-            || self.instances.iter().any(|instance| {
-                instance.application.references_module(module)
-                    || instance.imported.references_module(module)
-            })
+            || self
+                .instances
+                .iter()
+                .any(|instance| instance.references_module(module))
     }
 }
 
@@ -256,9 +448,93 @@ type EffectSignatures = Vec<(
     u32,
 )>;
 
-type LiveDeclarations = Rc<Vec<DeclarationId>>;
-type LivenessCache = HashMap<(String, Option<ExpressionId>), LiveDeclarations>;
-type EvaluatedBindings = HashMap<String, HashMap<(PatternId, ExpressionId, Phase), Value>>;
+#[derive(Clone, Copy)]
+pub(crate) struct LiveDeclaration {
+    pub(crate) declaration: DeclarationId,
+    pub(crate) recursive_group: Option<u32>,
+}
+
+pub(crate) type LiveDeclarations = Rc<Vec<LiveDeclaration>>;
+pub(crate) struct ModuleFacts<K, V> {
+    modules: HashMap<String, HashMap<K, V>>,
+}
+
+impl<K, V> Default for ModuleFacts<K, V> {
+    fn default() -> Self {
+        Self {
+            modules: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V> ModuleFacts<K, V> {
+    pub(crate) fn get(&self, module: &str, key: &K) -> Option<&V> {
+        self.modules.get(module)?.get(key)
+    }
+
+    pub(crate) fn contains_key(&self, module: &str, key: &K) -> bool {
+        self.modules
+            .get(module)
+            .is_some_and(|facts| facts.contains_key(key))
+    }
+
+    pub(crate) fn insert(&mut self, module: String, key: K, value: V) -> Option<V> {
+        self.modules.entry(module).or_default().insert(key, value)
+    }
+
+    pub(crate) fn entry(
+        &mut self,
+        module: String,
+        key: K,
+    ) -> std::collections::hash_map::Entry<'_, K, V> {
+        self.modules.entry(module).or_default().entry(key)
+    }
+
+    pub(crate) fn module(&self, module: &str) -> Option<&HashMap<K, V>> {
+        self.modules.get(module)
+    }
+
+    pub(crate) fn replace_module(&mut self, module: String, facts: HashMap<K, V>) {
+        if facts.is_empty() {
+            self.modules.remove(&module);
+            return;
+        }
+        self.modules.insert(module, facts);
+    }
+
+    pub(crate) fn remove_module(&mut self, module: &str) -> Option<HashMap<K, V>> {
+        self.modules.remove(module)
+    }
+
+    pub(crate) fn remove_modules(&mut self, modules: &HashSet<String>) {
+        for module in modules {
+            self.modules.remove(module);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.modules.clear();
+    }
+
+    pub(crate) fn retain_modules(&mut self, keep: impl FnMut(&String, &mut HashMap<K, V>) -> bool) {
+        self.modules.retain(keep);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+}
+
+type LivenessCache = ModuleFacts<Option<ExpressionId>, LiveDeclarations>;
+type EvaluatedBindings =
+    HashMap<String, HashMap<(PatternId, ExpressionId, Phase, usize), CachedEvaluatedBinding>>;
+
+#[derive(Clone)]
+pub(crate) struct CachedEvaluatedBinding {
+    pub(crate) environment: Weak<crate::value::Env>,
+    pub(crate) value: Value,
+}
 
 #[derive(Clone, Default)]
 struct ResidentEffectValue {
@@ -309,17 +585,19 @@ pub struct Context {
     pub(crate) reusable_module_results: RefCell<HashSet<String>>,
     pub(crate) module_result_templates:
         RefCell<HashMap<String, (ModuleRevision, Rc<ValueCapsule>)>>,
+    module_result_template_instances: RefCell<HashMap<ModuleResultTemplateInstance, Environment>>,
+    decoded_environment_identities: RefCell<DecodedEnvironmentIdentities>,
     pub(crate) module_cache: RefCell<Option<(String, Rc<Module>)>>,
     pub(crate) live_declarations: RefCell<LivenessCache>,
     pub(crate) evaluated_bindings: RefCell<EvaluatedBindings>,
     pub(crate) captured_binding_modules: RefCell<HashSet<String>>,
-    pub(crate) expression_types: RefCell<HashMap<(String, ExpressionId), Value>>,
+    pub(crate) expression_types: RefCell<ModuleFacts<ExpressionId, Value>>,
     pub(crate) expression_type_resolvers: RefCell<HashMap<String, RuntimeTypeResolver>>,
-    pub(crate) closure_signatures: RefCell<HashMap<(String, ExpressionId), Value>>,
+    pub(crate) closure_signatures: RefCell<ModuleFacts<ExpressionId, Value>>,
     pub(crate) closure_signature_resolvers: RefCell<HashMap<String, RuntimeTypeResolver>>,
-    pub(crate) recursive_closures: RefCell<HashSet<(String, ExpressionId)>>,
+    pub(crate) recursive_closures: RefCell<ModuleFacts<ExpressionId, ()>>,
     pub(crate) ownership_contracts:
-        RefCell<HashMap<(String, ExpressionId), crate::ownership::OwnershipContract>>,
+        RefCell<ModuleFacts<ExpressionId, crate::ownership::OwnershipContract>>,
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, EffectSignatures>>,
     effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
@@ -328,8 +606,12 @@ pub struct Context {
 
 impl Context {
     pub(crate) fn expression_type(&self, module: &str, expression: ExpressionId) -> Option<Value> {
-        let key = (module.to_owned(), expression);
-        if let Some(type_) = self.expression_types.borrow().get(&key).cloned() {
+        if let Some(type_) = self
+            .expression_types
+            .borrow()
+            .get(module, &expression)
+            .cloned()
+        {
             return Some(type_);
         }
         let resolver = self
@@ -340,13 +622,12 @@ impl Context {
         let type_ = resolver(expression)?;
         self.expression_types
             .borrow_mut()
-            .insert(key, type_.clone());
+            .insert(module.to_owned(), expression, type_.clone());
         Some(type_)
     }
 
     pub(crate) fn closure_signature(&self, module: &str, body: ExpressionId) -> Option<Value> {
-        let key = (module.to_owned(), body);
-        if let Some(signature) = self.closure_signatures.borrow().get(&key).cloned() {
+        if let Some(signature) = self.closure_signatures.borrow().get(module, &body).cloned() {
             return Some(signature);
         }
         let resolver = self
@@ -357,7 +638,7 @@ impl Context {
         let signature = resolver(body)?;
         self.closure_signatures
             .borrow_mut()
-            .insert(key, signature.clone());
+            .insert(module.to_owned(), body, signature.clone());
         Some(signature)
     }
 
@@ -394,6 +675,10 @@ impl Context {
     }
 
     pub(crate) fn commit_staged_snapshot(&self, path: &str, staged: &Self) {
+        self.remove_module_result_template_state(&HashSet::from([path.to_owned()]));
+        self.decoded_environment_identities
+            .borrow_mut()
+            .copy_module_from(path, &staged.decoded_environment_identities.borrow());
         self.next_effect.set(staged.next_effect.get());
         self.next_type_variable.set(staged.next_type_variable.get());
         self.effect_ids
@@ -409,12 +694,13 @@ impl Context {
         );
         *self.effect_values.borrow_mut() = staged.effect_values.borrow().clone();
 
-        self.live_declarations
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.live_declarations
-            .borrow_mut()
-            .extend(staged.live_declarations.borrow_mut().drain());
+        let live_declarations = staged.live_declarations.borrow_mut().remove_module(path);
+        self.live_declarations.borrow_mut().remove_module(path);
+        if let Some(live_declarations) = live_declarations {
+            self.live_declarations
+                .borrow_mut()
+                .replace_module(path.to_owned(), live_declarations);
+        }
         let evaluated_bindings = staged.evaluated_bindings.borrow_mut().remove(path);
         self.evaluated_bindings.borrow_mut().remove(path);
         if let Some(bindings) = evaluated_bindings {
@@ -429,24 +715,26 @@ impl Context {
                 .insert(path.to_owned(), template);
         }
 
-        self.expression_types
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.expression_types
-            .borrow_mut()
-            .extend(staged.expression_types.borrow_mut().drain());
+        let expression_types = staged.expression_types.borrow_mut().remove_module(path);
+        self.expression_types.borrow_mut().remove_module(path);
+        if let Some(expression_types) = expression_types {
+            self.expression_types
+                .borrow_mut()
+                .replace_module(path.to_owned(), expression_types);
+        }
         self.expression_type_resolvers.borrow_mut().remove(path);
         if let Some(resolver) = staged.expression_type_resolvers.borrow().get(path).cloned() {
             self.expression_type_resolvers
                 .borrow_mut()
                 .insert(path.to_owned(), resolver);
         }
-        self.closure_signatures
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.closure_signatures
-            .borrow_mut()
-            .extend(staged.closure_signatures.borrow_mut().drain());
+        let closure_signatures = staged.closure_signatures.borrow_mut().remove_module(path);
+        self.closure_signatures.borrow_mut().remove_module(path);
+        if let Some(closure_signatures) = closure_signatures {
+            self.closure_signatures
+                .borrow_mut()
+                .replace_module(path.to_owned(), closure_signatures);
+        }
         self.closure_signature_resolvers.borrow_mut().remove(path);
         if let Some(resolver) = staged
             .closure_signature_resolvers
@@ -458,18 +746,20 @@ impl Context {
                 .borrow_mut()
                 .insert(path.to_owned(), resolver);
         }
-        self.recursive_closures
-            .borrow_mut()
-            .retain(|(module, _)| module != path);
-        self.recursive_closures
-            .borrow_mut()
-            .extend(staged.recursive_closures.borrow_mut().drain());
-        self.ownership_contracts
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.ownership_contracts
-            .borrow_mut()
-            .extend(staged.ownership_contracts.borrow_mut().drain());
+        let recursive_closures = staged.recursive_closures.borrow_mut().remove_module(path);
+        self.recursive_closures.borrow_mut().remove_module(path);
+        if let Some(recursive_closures) = recursive_closures {
+            self.recursive_closures
+                .borrow_mut()
+                .replace_module(path.to_owned(), recursive_closures);
+        }
+        let ownership_contracts = staged.ownership_contracts.borrow_mut().remove_module(path);
+        self.ownership_contracts.borrow_mut().remove_module(path);
+        if let Some(ownership_contracts) = ownership_contracts {
+            self.ownership_contracts
+                .borrow_mut()
+                .replace_module(path.to_owned(), ownership_contracts);
+        }
         if self
             .module_cache
             .borrow()
@@ -485,25 +775,16 @@ impl Context {
         self.module_results.borrow_mut().remove(path);
         self.reusable_module_results.borrow_mut().remove(path);
         self.module_result_templates.borrow_mut().remove(path);
-        self.live_declarations
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+        self.remove_module_result_template_state(&HashSet::from([path.to_owned()]));
+        self.live_declarations.borrow_mut().remove_module(path);
         self.evaluated_bindings.borrow_mut().remove(path);
         self.captured_binding_modules.borrow_mut().remove(path);
-        self.expression_types
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+        self.expression_types.borrow_mut().remove_module(path);
         self.expression_type_resolvers.borrow_mut().remove(path);
-        self.closure_signatures
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+        self.closure_signatures.borrow_mut().remove_module(path);
         self.closure_signature_resolvers.borrow_mut().remove(path);
-        self.recursive_closures
-            .borrow_mut()
-            .retain(|(module, _)| module != path);
-        self.ownership_contracts
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+        self.recursive_closures.borrow_mut().remove_module(path);
+        self.ownership_contracts.borrow_mut().remove_module(path);
         self.remove_effect_state(&HashSet::from([path.to_owned()]));
         if self
             .module_cache
@@ -627,6 +908,59 @@ impl Context {
         self.effect_values
             .borrow_mut()
             .retain(|id, _| !removed.contains(id));
+    }
+
+    pub(crate) fn decoded_environment_identities(
+        &self,
+        module_revision: &ModuleRevision,
+        module_instances: &ModuleInstanceScope,
+        effect_scope: &Rc<EffectScope>,
+        environment_count: usize,
+    ) -> Vec<Option<Rc<DecodedEnvironmentIdentity>>> {
+        let template_instance = ModuleResultTemplateInstance {
+            module_instances: Rc::new(module_instances.clone()),
+            effect_scope: effect_scope.clone(),
+        };
+        if !template_instance.cacheable() {
+            return vec![None; environment_count];
+        }
+        let provenance = DecodedTemplateProvenance {
+            module_revision: module_revision.clone(),
+            template_instance,
+        };
+        self.decoded_environment_identities
+            .borrow_mut()
+            .intern(provenance, environment_count)
+            .into_iter()
+            .map(Some)
+            .collect()
+    }
+
+    pub(crate) fn remove_module_result_template_state(&self, paths: &HashSet<String>) {
+        self.module_result_template_instances
+            .borrow_mut()
+            .retain(|instance, _| !paths.iter().any(|path| instance.references_module(path)));
+        self.decoded_environment_identities
+            .borrow_mut()
+            .remove_modules(paths);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn module_result_template_instance_count(&self) -> usize {
+        self.module_result_template_instances.borrow().len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn module_result_template_instances_are_sealed(&self) -> bool {
+        self.module_result_template_instances
+            .borrow()
+            .values()
+            .all(|environment| !Rc::ptr_eq(environment, &declaration_env(environment)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decoded_environment_identity_count(&self) -> usize {
+        self.decoded_environment_identities.borrow().identity_count
     }
 
     pub(crate) fn type_variable(&self) -> u32 {
@@ -917,6 +1251,7 @@ pub struct Runtime {
     pub limit: i64,
     pub module: Rc<String>,
     pub residual: Option<Rc<RefCell<crate::hir::ResidualTrace>>>,
+    pub(crate) execution: Rc<()>,
     signature_holes: Option<Rc<SignatureHoles>>,
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
@@ -954,6 +1289,7 @@ impl Runtime {
             limit,
             module: Rc::new(module),
             residual: None,
+            execution: Rc::new(()),
             signature_holes: None,
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
@@ -987,6 +1323,7 @@ impl Runtime {
             limit: self.limit,
             module: self.module.clone(),
             residual: self.residual.clone(),
+            execution: self.execution.clone(),
             signature_holes: self.signature_holes.clone(),
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
@@ -1165,8 +1502,11 @@ fn evaluate_module_with_capture(
     evaluate_declarations(
         context,
         path,
-        live_declarations,
-        0,
+        DeclarationProgress {
+            declarations: live_declarations,
+            index: 0,
+            recursive_bindings: None,
+        },
         environment,
         runtime,
         DeclarationTail {
@@ -1282,7 +1622,9 @@ pub fn evaluate_expression(
                     .residual
                     .as_ref()
                     .map(|trace| trace.borrow().current_block());
-                let conflicts = demands.borrow().iter().any(|prior| match (*prior, block) {
+                let mut demands = demands.borrow_mut();
+                let demands = demands.blocks_for(&runtime.execution);
+                let conflicts = demands.iter().any(|prior| match (*prior, block) {
                     (None, _) | (_, None) => true,
                     (Some(prior), Some(current)) => runtime
                         .residual
@@ -1298,7 +1640,7 @@ pub fn evaluate_expression(
                         span,
                     ));
                 }
-                demands.borrow_mut().push(block);
+                demands.push(block);
                 evaluate_expression(
                     context,
                     suspended_module,
@@ -1378,11 +1720,12 @@ pub fn evaluate_expression(
                     _ => false,
                 };
                 if deferred {
+                    capture_env(&argument_environment);
                     let suspended = Value::Deferred {
                         module: argument_module,
                         expression: argument,
                         environment: argument_environment,
-                        demands: Rc::new(RefCell::new(Vec::new())),
+                        demands: Rc::new(RefCell::new(DeferredDemands::default())),
                     };
                     return apply_with_expected(
                         argument_context,
@@ -1431,6 +1774,7 @@ pub fn evaluate_expression(
             deferred,
             ..
         } => {
+            capture_env(&environment);
             let signature = context
                 .closure_signature(module_path.as_str(), *body)
                 .map(Box::new);
@@ -1563,8 +1907,11 @@ pub fn evaluate_expression(
             evaluate_declarations(
                 context,
                 module_path,
-                declarations,
-                0,
+                DeclarationProgress {
+                    declarations,
+                    index: 0,
+                    recursive_bindings: None,
+                },
                 scope,
                 runtime,
                 DeclarationTail {
@@ -1658,7 +2005,7 @@ fn evaluate_dynamic_case(
             arms,
             span,
         ),
-        RuntimeMeaning::Plain | RuntimeMeaning::ReusableStore => {
+        RuntimeMeaning::Plain | RuntimeMeaning::SharedStore | RuntimeMeaning::ReusableStore => {
             let boolean = runtime
                 .residual
                 .as_ref()
@@ -2678,21 +3025,32 @@ struct DeclarationTail {
     capture: Option<Rc<RefCell<Option<Environment>>>>,
 }
 
+struct DeclarationProgress {
+    declarations: LiveDeclarations,
+    index: usize,
+    recursive_bindings: Option<(u32, Rc<RecursiveBindings>)>,
+}
+
 fn evaluate_declarations(
     context: Rc<Context>,
     module_path: Rc<String>,
-    declarations: LiveDeclarations,
-    index: usize,
+    progress: DeclarationProgress,
     environment: Environment,
     runtime: Runtime,
     tail: DeclarationTail,
 ) -> Computation {
-    let Some(declaration_id) = declarations.get(index).copied() else {
+    let DeclarationProgress {
+        declarations,
+        index,
+        recursive_bindings,
+    } = progress;
+    let Some(live_declaration) = declarations.get(index).copied() else {
         if let Some(capture) = tail.capture {
             *capture.borrow_mut() = Some(environment.clone());
         }
         return evaluate_expression(context, module_path, tail.result, environment, runtime);
     };
+    let declaration_id = live_declaration.declaration;
     let declaration = match module_declaration(&context, &module_path, declaration_id) {
         Ok(declaration) => declaration,
         Err(error) => return Computation::error(error),
@@ -2700,14 +3058,16 @@ fn evaluate_declarations(
     let span = declaration_span(&declaration);
     let next_context = context.clone();
     let next_module = module_path.clone();
-    let next_environment = environment.clone();
     let next_runtime = runtime.clone();
-    let continue_with = move || {
+    let continue_with = move |next_environment, next_recursive_bindings| {
         evaluate_declarations(
             next_context,
             next_module,
-            declarations,
-            index + 1,
+            DeclarationProgress {
+                declarations,
+                index: index + 1,
+                recursive_bindings: next_recursive_bindings,
+            },
             next_environment,
             next_runtime,
             tail,
@@ -2723,7 +3083,7 @@ fn evaluate_declarations(
                 .into_iter()
                 .map(|expression| (expression, context.type_variable()))
                 .collect();
-            let signature_environment = environment.clone();
+            let declaration_environment = environment.clone();
             evaluate_expression(
                 context,
                 module_path,
@@ -2732,11 +3092,12 @@ fn evaluate_declarations(
                 runtime.signature(signature_holes),
             )
             .and_then(move |signature| {
+                let signature_environment = declaration_env(&declaration_environment);
                 signature_environment
                     .signatures
                     .borrow_mut()
                     .insert(name, signature);
-                continue_with()
+                continue_with(signature_environment, recursive_bindings)
             })
         }
         Declaration::Binding {
@@ -2752,8 +3113,40 @@ fn evaluate_declarations(
             };
             let binding_context = context.clone();
             let binding_module = module_path.clone();
-            let binding_environment = environment.clone();
+            let recursive = match module_expression(&context, &module_path, value_id) {
+                Ok(expression) => matches!(expression, Expression::Rec { .. }),
+                Err(error) => return Computation::error(error),
+            };
+            let (
+                binding_environment,
+                next_environment,
+                binding_recursive_bindings,
+                next_recursive_bindings,
+            ) = if recursive {
+                let group = live_declaration
+                    .recursive_group
+                    .expect("a recursive declaration has a source group");
+                let (binding_environment, next_environment, bindings) = match recursive_bindings {
+                    Some((active_group, bindings)) if active_group == group => {
+                        (bindings.environment(), environment, bindings)
+                    }
+                    _ => {
+                        let (environment, bindings) = recursive_env(Some(environment));
+                        (environment.clone(), environment, bindings)
+                    }
+                };
+                (
+                    binding_environment,
+                    next_environment,
+                    Some(bindings.clone()),
+                    Some((group, bindings.clone())),
+                )
+            } else {
+                (environment.clone(), environment, None, None)
+            };
             let binding_phase = binding_runtime.phase;
+            let binding_environment_identity = Rc::as_ptr(&binding_environment) as usize;
+            let binding_environment_reference = Rc::downgrade(&binding_environment);
             let effect_context = context.clone();
             let effect_runtime = binding_runtime.clone();
             let representation_runtime = binding_runtime.clone();
@@ -2762,7 +3155,7 @@ fn evaluate_declarations(
                 module_path,
                 pattern,
                 value_id,
-                environment,
+                binding_environment,
                 binding_runtime,
             )
             .and_then(move |value| {
@@ -2778,19 +3171,35 @@ fn evaluate_declarations(
                     .borrow()
                     .contains(binding_module.as_str())
                 {
+                    let environment_identity = if reusable_across_module_instances(&value) {
+                        0
+                    } else {
+                        binding_environment_identity
+                    };
                     binding_context
                         .evaluated_bindings
                         .borrow_mut()
                         .entry(binding_module.as_ref().clone())
                         .or_default()
-                        .insert((pattern, value_id, binding_phase), value.clone());
+                        .insert(
+                            (pattern, value_id, binding_phase, environment_identity),
+                            CachedEvaluatedBinding {
+                                environment: binding_environment_reference,
+                                value: value.clone(),
+                            },
+                        );
                 }
                 let module = match module(&binding_context, &binding_module) {
                     Ok(module) => module,
                     Err(error) => return Computation::error(error),
                 };
+                let bound_environment = if recursive {
+                    next_environment.clone()
+                } else {
+                    declaration_env(&next_environment)
+                };
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize]
-                    && let Some(signature) = lookup_signature(&binding_environment, name)
+                    && let Some(signature) = lookup_signature(&bound_environment, name)
                 {
                     attach_signature(&mut value, &signature);
                     if let Some(trace) = &representation_runtime.residual {
@@ -2799,14 +3208,32 @@ fn evaluate_declarations(
                             .record_checked_aggregate_representation(&value, &signature);
                     }
                 }
-                if !match_pattern(&module, pattern, &value, &binding_environment) {
+                if recursive {
+                    let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize]
+                    else {
+                        unreachable!("recursive binding patterns are checked before evaluation")
+                    };
+                    if let Err(error) = binding_recursive_bindings
+                        .as_ref()
+                        .expect("a recursive declaration has a recursive group")
+                        .insert(name.clone(), value)
+                    {
+                        return Computation::error(Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            format!(
+                                "A checked recursive binding could not join its group: {error:?}."
+                            ),
+                            span,
+                        ));
+                    }
+                } else if !match_pattern(&module, pattern, &value, &bound_environment) {
                     return Computation::error(Diagnostic::new(
                         "BLOT_BINDING_MISMATCH",
                         format!("{} does not match this pattern.", show(&value)),
                         span,
                     ));
                 }
-                continue_with()
+                continue_with(bound_environment, next_recursive_bindings)
             })
         }
         Declaration::Shadow { name, value, .. } => {
@@ -2817,16 +3244,17 @@ fn evaluate_declarations(
                     span,
                 ));
             }
-            let shadow_environment = environment.clone();
+            let declaration_environment = environment.clone();
             evaluate_expression(context, module_path, value, environment, runtime).and_then(
                 move |value| {
+                    let shadow_environment = declaration_env(&declaration_environment);
                     shadow_environment.names.borrow_mut().insert(name, value);
-                    continue_with()
+                    continue_with(shadow_environment, None)
                 },
             )
         }
         Declaration::Open { value, .. } => {
-            let open_environment = environment.clone();
+            let declaration_environment = environment.clone();
             evaluate_expression(context, module_path, value, environment, runtime).and_then(
                 move |value| {
                     let Some(fields) = opened_members(&value) else {
@@ -2839,11 +3267,12 @@ fn evaluate_declarations(
                             span,
                         ));
                     };
+                    let open_environment = declaration_env(&declaration_environment);
                     open_environment
                         .opens
                         .borrow_mut()
                         .push(OpenedValues::new(fields));
-                    continue_with()
+                    continue_with(open_environment, None)
                 },
             )
         }
@@ -3092,6 +3521,18 @@ fn apply_with_expected(
             if matches!(argument, Value::Unit)
                 && let Some(result_template) = result_template
             {
+                let template_instance = ModuleResultTemplateInstance {
+                    module_instances: module_runtime.module_instances.clone(),
+                    effect_scope: module_runtime.effect_scope.clone(),
+                };
+                if !template_instance.cacheable() {
+                    return evaluate_module(context, module, argument, module_runtime);
+                }
+                let cached_environment = context
+                    .module_result_template_instances
+                    .borrow()
+                    .get(&template_instance)
+                    .cloned();
                 let loaded = match context.modules.borrow().get(&module).cloned() {
                     Some(loaded) => loaded,
                     None => {
@@ -3102,22 +3543,49 @@ fn apply_with_expected(
                         ));
                     }
                 };
-                let environment = match result_template.decode(
-                    &module,
-                    loaded.module.as_ref(),
-                    &imported_revision,
-                    context.as_ref(),
-                    module_runtime.module_instances.as_ref(),
-                    &module_runtime.effect_scope,
-                ) {
-                    Ok(environment) => environment,
-                    Err(error) => {
-                        return Computation::error(Diagnostic::new(
-                            "BLOT_RUST_INVARIANT",
-                            format!("module result template for `{module}` failed: {error}"),
-                            span,
-                        ));
+                let environment = if let Some(environment) = cached_environment {
+                    environment
+                } else {
+                    let reconstruction = match result_template.admit_reconstruction(
+                        module_runtime.module_instances.len(),
+                        module_runtime.effect_scope.len(),
+                    ) {
+                        Ok(Some(reconstruction)) => reconstruction,
+                        Ok(None) => {
+                            return evaluate_module(context, module, argument, module_runtime);
+                        }
+                        Err(error) => {
+                            return Computation::error(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                format!("module result template for `{module}` failed: {error}"),
+                                span,
+                            ));
+                        }
+                    };
+                    let environment = match reconstruction.decode(
+                        &module,
+                        loaded.module.as_ref(),
+                        &imported_revision,
+                        context.as_ref(),
+                        module_runtime.module_instances.as_ref(),
+                        &module_runtime.effect_scope,
+                    ) {
+                        Ok(environment) => environment,
+                        Err(error) => {
+                            return Computation::error(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                format!("module result template for `{module}` failed: {error}"),
+                                span,
+                            ));
+                        }
+                    };
+                    capture_env(&environment);
+                    let mut instances = context.module_result_template_instances.borrow_mut();
+                    if instances.len() >= MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT {
+                        instances.clear();
                     }
+                    instances.insert(template_instance, environment.clone());
+                    environment
                 };
                 return evaluate_expression(
                     context,
@@ -4312,17 +4780,48 @@ pub(crate) fn live_declarations_for(
     declarations: &[DeclarationId],
     result: ExpressionId,
 ) -> LiveDeclarations {
-    let key = (module_path.to_owned(), block);
-    if let Some(live) = context.live_declarations.borrow().get(&key) {
+    if let Some(live) = context.live_declarations.borrow().get(module_path, &block) {
         return live.clone();
     }
+    let mut recursive_group = None;
+    let mut next_recursive_group = 0;
+    let mut recursive_groups = HashMap::new();
+    for declaration_id in declarations {
+        let declaration = &module.arena.declarations[declaration_id.0 as usize];
+        match declaration {
+            Declaration::Signature { .. } => {}
+            Declaration::Binding {
+                kind, tags, value, ..
+            } if matches!(
+                module.arena.expressions[value.0 as usize],
+                Expression::Rec { .. }
+            ) =>
+            {
+                let group = match recursive_group {
+                    Some((active_kind, group)) if active_kind == *kind && tags.is_empty() => group,
+                    _ => {
+                        let group = next_recursive_group;
+                        next_recursive_group += 1;
+                        group
+                    }
+                };
+                recursive_groups.insert(*declaration_id, group);
+                recursive_group = tags.is_empty().then_some((*kind, group));
+            }
+            _ => recursive_group = None,
+        }
+    }
+
     let mut needed = free_names_expression(module, result);
     let mut live = Vec::new();
     for declaration_id in declarations.iter().rev() {
         let declaration = &module.arena.declarations[declaration_id.0 as usize];
         let (bound, reads, forced) = declaration_names(module, declaration);
         if forced || bound.iter().any(|name| needed.contains(name)) {
-            live.push(*declaration_id);
+            live.push(LiveDeclaration {
+                declaration: *declaration_id,
+                recursive_group: recursive_groups.get(declaration_id).copied(),
+            });
             for name in bound {
                 needed.remove(&name);
             }
@@ -4334,7 +4833,7 @@ pub(crate) fn live_declarations_for(
     context
         .live_declarations
         .borrow_mut()
-        .insert(key, live.clone());
+        .insert(module_path.to_owned(), block, live.clone());
     live
 }
 
@@ -4831,6 +5330,61 @@ impl BigIntExt {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
+    struct CountedFactKey {
+        id: u32,
+        hashes: Rc<Cell<usize>>,
+    }
+
+    impl PartialEq for CountedFactKey {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+
+    impl Eq for CountedFactKey {}
+
+    impl std::hash::Hash for CountedFactKey {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.hashes.set(self.hashes.get() + 1);
+            self.id.hash(state);
+        }
+    }
+
+    #[test]
+    fn removing_module_facts_does_not_scan_unrelated_nodes() {
+        let hashes = Rc::new(Cell::new(0));
+        let mut facts = ModuleFacts::default();
+        for id in 0..1_000 {
+            facts.insert(
+                "unchanged.blot".to_owned(),
+                CountedFactKey {
+                    id,
+                    hashes: hashes.clone(),
+                },
+                (),
+            );
+        }
+        facts.insert(
+            "changed.blot".to_owned(),
+            CountedFactKey {
+                id: 1_000,
+                hashes: hashes.clone(),
+            },
+            (),
+        );
+        hashes.set(0);
+
+        facts.remove_modules(&HashSet::from(["changed.blot".to_owned()]));
+
+        assert_eq!(hashes.get(), 0);
+        assert!(facts.module("changed.blot").is_none());
+        assert_eq!(
+            facts.module("unchanged.blot").map(HashMap::len),
+            Some(1_000)
+        );
+    }
+
     fn effect_id_for_instance(
         context: &Context,
         mut runtime: Runtime,
@@ -4983,6 +5537,98 @@ mod tests {
                 false,
             )
         );
+    }
+
+    #[test]
+    fn recursive_provenance_beyond_the_depth_limit_is_not_cacheable() {
+        let revision = ModuleRevision::new("recursive-template.blot");
+        let mut effect_scope = Rc::new(Vec::new());
+        for expression in 0..=MODULE_RESULT_TEMPLATE_PROVENANCE_DEPTH_LIMIT {
+            effect_scope = Rc::new(vec![ClosureApplication {
+                application: ApplicationSite::expression(
+                    revision.clone(),
+                    ExpressionId(expression as u32),
+                ),
+                creation_scope: effect_scope,
+            }]);
+        }
+        let instance = ModuleResultTemplateInstance {
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: effect_scope.clone(),
+        };
+
+        assert!(!instance.cacheable());
+        let context = Context::default();
+        let identities =
+            context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1);
+        assert!(identities[0].is_none());
+        assert_eq!(context.decoded_environment_identity_count(), 0);
+    }
+
+    #[test]
+    fn decoded_environment_ids_are_stable_and_distinct() {
+        let context = Context::default();
+        let revision = ModuleRevision::new("decoded-identities.blot");
+        let effect_scope = Rc::new(Vec::new());
+
+        let first =
+            context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 2);
+        let second =
+            context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 2);
+        let identity = |identities: &[Option<Rc<DecodedEnvironmentIdentity>>], id: usize| {
+            identities[id]
+                .as_ref()
+                .expect("bounded provenance should receive a decoded identity")
+                .clone()
+        };
+
+        assert!(Rc::ptr_eq(&identity(&first, 0), &identity(&second, 0)));
+        assert!(Rc::ptr_eq(&identity(&first, 1), &identity(&second, 1)));
+        assert!(!Rc::ptr_eq(&identity(&first, 0), &identity(&first, 1)));
+    }
+
+    #[test]
+    fn decoded_environment_identity_interner_prunes_dead_keys() {
+        let context = Context::default();
+        let effect_scope = Rc::new(Vec::new());
+        for revision in 0..(DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP * 2) {
+            let identities = context.decoded_environment_identities(
+                &ModuleRevision::new(&format!("decoded-identities-{revision}.blot")),
+                &Vec::new(),
+                &effect_scope,
+                1,
+            );
+            assert!(identities[0].is_some());
+        }
+
+        assert!(
+            context.decoded_environment_identity_count()
+                < DECODED_ENVIRONMENT_IDENTITY_MINIMUM_SWEEP
+        );
+    }
+
+    #[test]
+    fn decoded_environment_identity_is_reminted_after_invalidation() {
+        let context = Context::default();
+        let path = "invalidated-decoded-identity.blot";
+        let revision = ModuleRevision::new(path);
+        let effect_scope = Rc::new(Vec::new());
+        let first =
+            context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1)[0]
+                .as_ref()
+                .expect("bounded provenance should receive a decoded identity")
+                .clone();
+
+        context.remove_module_result_template_state(&HashSet::from([path.to_owned()]));
+
+        assert_eq!(context.decoded_environment_identity_count(), 0);
+        assert_eq!(Rc::strong_count(&first), 1);
+        let repeated =
+            context.decoded_environment_identities(&revision, &Vec::new(), &effect_scope, 1)[0]
+                .as_ref()
+                .expect("bounded provenance should receive a decoded identity")
+                .clone();
+        assert!(!Rc::ptr_eq(&first, &repeated));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "@std/path";
 import { BlotError, type Diagnostic, diagnosticCode } from "../diagnostic.ts";
+import { developmentRevision } from "../development_identity.ts";
 import {
   type Loaded,
   LoadError,
@@ -45,7 +46,6 @@ import {
 } from "./revision.ts";
 import {
   type AddedCompilerModuleResult,
-  type CompilerDevelopmentEdge,
   type CompilerInvalidationTelemetry,
   type CompilerOwnershipFact,
   type CompilerReadabilityFact,
@@ -98,22 +98,53 @@ export interface DevelopmentCompilationRequest {
   readonly units: ReadonlyMap<string, string>;
 }
 
-export interface DevelopmentUnitArtifact {
+export interface DevelopmentEdge {
+  readonly consumer: string;
+  readonly provider: string;
+  readonly name: string;
+}
+
+export interface DevelopmentMemoryCheckpoint {
+  readonly stage: string;
+  readonly pages: number;
+  readonly solver?: {
+    readonly variables: number;
+    readonly constraintTypeNodes: number;
+    readonly constraintTypeInterned: number;
+    readonly settledVariables: number;
+    readonly residualVariables: number;
+  };
+}
+
+export interface DevelopmentMemoryProfile {
+  readonly checkpoints: readonly DevelopmentMemoryCheckpoint[];
+}
+
+export interface DevelopmentUnitIdentity {
   readonly name: string;
   readonly root: string;
-  readonly wasm: Uint8Array;
-  readonly manifestBytes: Uint8Array;
   readonly capabilities: readonly string[];
   readonly interfaceDigest: string;
   readonly implementationDigest: string;
+  readonly wasmDigest: string;
+}
+
+export interface DevelopmentUnitArtifact extends DevelopmentUnitIdentity {
+  readonly wasm: Uint8Array;
+  readonly manifestBytes: Uint8Array;
   readonly artifactSource: "compiled" | "unit-cache";
 }
+
+export type DevelopmentCompilationUnit =
+  | (DevelopmentUnitArtifact & { readonly artifactSource: "compiled" })
+  | (DevelopmentUnitIdentity & { readonly artifactSource: "unit-cache" });
 
 export interface DevelopmentCompilation {
   readonly revision: string;
   readonly entryUnit: string;
-  readonly units: readonly DevelopmentUnitArtifact[];
-  readonly edges: readonly CompilerDevelopmentEdge[];
+  readonly units: readonly DevelopmentCompilationUnit[];
+  readonly edges: readonly DevelopmentEdge[];
+  readonly developmentProfile?: DevelopmentMemoryProfile;
 }
 
 export interface CompilerSyntaxSnapshot {
@@ -177,6 +208,9 @@ export interface CompilerHost {
   compileDevelopment(
     request: DevelopmentCompilationRequest,
   ): Promise<DevelopmentCompilation>;
+  setOverlay(path: string, source: string, version?: number): Promise<void>;
+  clearOverlay(path: string): Promise<void>;
+  releaseRoot(path: string): Promise<void>;
   markChanged(path: string): Promise<void>;
   destroy(): void;
 }
@@ -201,11 +235,17 @@ interface InspectedSource {
 export class Compiler implements CompilerHost {
   readonly #compiler: CompilerWasm;
   readonly #handle: number;
+  readonly #inspectionHandle: number;
   readonly #revisions = new Map<string, ResidentRevision>();
   readonly #sources = new Map<string, string>();
   readonly #installedModules = new Map<string, InstalledModuleRevision>();
   readonly #inspectedSources = new Map<string, InspectedSource>();
+  readonly #developmentArtifacts = new Map<
+    string,
+    Map<string, DevelopmentUnitIdentity>
+  >();
   readonly #workspace: WorkspaceGraph;
+  #inspectionCandidate: Map<string, InspectedSource> | undefined;
   #requests: Promise<void> = Promise.resolve();
   #developmentChangesKnown = false;
   #destroyed = false;
@@ -217,6 +257,7 @@ export class Compiler implements CompilerHost {
   ) {
     this.#compiler = compiler;
     this.#handle = compiler.createCompilerSession();
+    this.#inspectionHandle = compiler.createCompilerSession();
     const sessionHandle = this.#handle;
     compiler.installCompilerSessionTrustedModuleSnapshot(
       this.#handle,
@@ -277,6 +318,7 @@ export class Compiler implements CompilerHost {
             {
               hostAbi: COMPILER_HOST_ABI_VERSION,
               preludeSha256: digest,
+              profile: "production",
             },
           );
           const [, module] = await Promise.all([validation, compilation]);
@@ -343,7 +385,10 @@ export class Compiler implements CompilerHost {
 
   async checkSource(path: string, source: string): Promise<CheckedModule> {
     return await this.#request(async () => {
-      const root = await this.#workspace.updateOverlay(resolve(path), source);
+      const absolute = resolve(path);
+      const root = await this.#loadWorkspaceRevision(
+        () => this.#workspace.updateOverlay(absolute, source),
+      );
       await this.#syncLoaded(root);
       return this.#checkResident(root.path);
     });
@@ -359,7 +404,10 @@ export class Compiler implements CompilerHost {
 
   async analyzeSource(path: string, source: string): Promise<CompilerAnalysis> {
     return await this.#request(async () => {
-      const root = await this.#workspace.updateOverlay(resolve(path), source);
+      const absolute = resolve(path);
+      const root = await this.#loadWorkspaceRevision(
+        () => this.#workspace.updateOverlay(absolute, source),
+      );
       await this.#syncLoaded(root);
       return this.#analyzeResident(root.path);
     });
@@ -407,7 +455,9 @@ export class Compiler implements CompilerHost {
 
   async portableGraph(path: string): Promise<ReadonlyMap<string, string>> {
     return await this.#request(async () => {
-      const root = await this.#workspace.refresh(resolve(path));
+      const root = await this.#loadWorkspaceRevision(
+        () => this.#workspace.refresh(resolve(path)),
+      );
       await this.#syncLoaded(root);
       const modules = new Map<string, string>();
       for (const modulePath of collectGraph(root).keys()) {
@@ -429,12 +479,16 @@ export class Compiler implements CompilerHost {
     source: string,
   ): Promise<CompilerSyntaxSnapshot> {
     return await this.#request(async () => {
-      const root = await this.#workspace.updateOverlay(resolve(path), source);
+      const absolute = resolve(path);
+      const root = await this.#loadWorkspaceRevision(
+        () => this.#workspace.updateOverlay(absolute, source),
+      );
       this.#syncLoaded(root);
       const inspected = this.#inspectedSources.get(root.path);
       const snapshot = inspected?.module.syntaxSnapshot;
       if (
-        inspected === undefined || snapshot === undefined || snapshot === null
+        inspected === undefined || inspected.source !== root.source ||
+        snapshot === undefined || snapshot === null
       ) {
         throw new CompilerInvariantFailure(
           "canonical syntax snapshot",
@@ -556,9 +610,15 @@ export class Compiler implements CompilerHost {
       );
       let loaded: Loaded;
       if (this.#developmentChangesKnown) {
-        loaded = await this.#workspace.refreshAfterKnownChanges(entryPath);
+        loaded = await this.#loadWorkspaceRevision(
+          () => this.#workspace.refreshAfterKnownChanges(entryPath),
+        );
         this.#developmentChangesKnown = false;
-      } else loaded = await this.#workspace.refresh(entryPath);
+      } else {
+        loaded = await this.#loadWorkspaceRevision(
+          () => this.#workspace.refresh(entryPath),
+        );
+      }
       this.#syncLoaded(loaded);
       const graph = collectGraph(loaded);
       for (const [name, root] of unitRoots) {
@@ -578,31 +638,86 @@ export class Compiler implements CompilerHost {
       if (!result.ok) {
         this.#throwFailure(result, entryPath, "development backend emission");
       }
-      const artifacts = await Promise.all(result.units.map(async (unit) => ({
-        name: unit.name,
-        root: unit.root,
-        wasm: unit.wasm.slice(),
-        manifestBytes: unit.manifestBytes.slice(),
-        capabilities: unit.capabilities.slice(),
-        interfaceDigest: await sha256(unit.manifestBytes),
-        implementationDigest: unit.implementationKey,
-        artifactSource: unit.artifactSource,
-      })));
-      const revision = await sha256(
-        new TextEncoder().encode(JSON.stringify({
-          entryUnit: result.entryUnit,
-          units: artifacts.map((unit) => ({
+      let residentArtifacts = this.#developmentArtifacts.get(entryPath);
+      if (residentArtifacts === undefined) {
+        residentArtifacts = new Map<string, DevelopmentUnitIdentity>();
+      }
+      const nextResidentArtifacts = new Map<
+        string,
+        DevelopmentUnitIdentity
+      >();
+      const artifacts: DevelopmentCompilationUnit[] = await Promise.all(
+        result.units.map(async (unit) => {
+          if (unit.artifactSource === "unit-cache") {
+            const retained = residentArtifacts.get(unit.name);
+            if (
+              retained === undefined ||
+              retained.root !== unit.root ||
+              retained.implementationDigest !== unit.implementationKey ||
+              !sameStrings(retained.capabilities, unit.capabilities)
+            ) {
+              throw new CompilerInvariantFailure(
+                "development backend emission",
+                `compiler retained development unit ${
+                  JSON.stringify(unit.name)
+                } without the matching host artifact`,
+              );
+            }
+            nextResidentArtifacts.set(unit.name, retained);
+            return {
+              name: retained.name,
+              root: retained.root,
+              capabilities: retained.capabilities.slice(),
+              interfaceDigest: retained.interfaceDigest,
+              implementationDigest: retained.implementationDigest,
+              wasmDigest: retained.wasmDigest,
+              artifactSource: unit.artifactSource,
+            };
+          }
+          const [interfaceDigest, wasmDigest] = await Promise.all([
+            sha256(unit.manifestBytes),
+            sha256(unit.wasm),
+          ]);
+          const identity: DevelopmentUnitIdentity = {
             name: unit.name,
-            interfaceDigest: unit.interfaceDigest,
-            implementationDigest: unit.implementationDigest,
-          })),
-        })),
+            root: unit.root,
+            capabilities: unit.capabilities.slice(),
+            interfaceDigest,
+            implementationDigest: unit.implementationKey,
+            wasmDigest,
+          };
+          nextResidentArtifacts.set(unit.name, {
+            ...identity,
+            capabilities: unit.capabilities.slice(),
+          });
+          return {
+            ...identity,
+            wasm: unit.wasm,
+            manifestBytes: unit.manifestBytes,
+            artifactSource: unit.artifactSource,
+          };
+        }),
       );
+      const revision = await developmentRevision(result.entryUnit, artifacts);
+      const edges = result.edges.map((edge) => ({ ...edge }));
+      try {
+        this.#compiler.commitCompilerSessionDevelopmentProgram(
+          this.#handle,
+          result.transactionId,
+        );
+      } catch (error) {
+        throw new CompilerInvariantFailure(
+          "development artifact commit",
+          error,
+        );
+      }
+      this.#developmentArtifacts.set(entryPath, nextResidentArtifacts);
       return {
         revision,
         entryUnit: result.entryUnit,
         units: artifacts,
-        edges: result.edges.slice(),
+        edges,
+        developmentProfile: result.developmentProfile,
       };
     });
   }
@@ -613,8 +728,11 @@ export class Compiler implements CompilerHost {
     version?: number,
   ): Promise<void> {
     await this.#request(async () => {
+      const absolute = resolve(path);
       this.#syncLoaded(
-        await this.#workspace.updateOverlay(path, source, version),
+        await this.#loadWorkspaceRevision(
+          () => this.#workspace.updateOverlay(absolute, source, version),
+        ),
       );
     });
   }
@@ -628,13 +746,26 @@ export class Compiler implements CompilerHost {
 
   async clearOverlay(path: string): Promise<void> {
     await this.#request(async () => {
-      this.#syncLoaded(await this.#workspace.closeOverlay(path));
+      const absolute = resolve(path);
+      const roots = await this.#loadWorkspaceRevision(
+        () => this.#workspace.closeOverlay(absolute),
+      );
+      for (const root of roots) this.#syncLoaded(root);
+      this.#removeInactiveModules();
+    });
+  }
+
+  async releaseRoot(path: string): Promise<void> {
+    await this.#request(() => {
+      this.#workspace.releaseRoot(resolve(path));
+      this.#removeInactiveModules();
     });
   }
 
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#compiler.destroyCompilerSession(this.#inspectionHandle);
     this.#compiler.destroyCompilerSession(this.#handle);
   }
 
@@ -648,27 +779,52 @@ export class Compiler implements CompilerHost {
     return await result;
   }
 
+  async #loadWorkspaceRevision<Revision>(
+    loadRevision: () => Promise<Revision>,
+  ): Promise<Revision> {
+    if (this.#inspectionCandidate !== undefined) {
+      throw new CompilerInvariantFailure(
+        "source inspection",
+        new Error("workspace source inspection cannot be nested"),
+      );
+    }
+    const candidate = new Map<string, InspectedSource>();
+    this.#inspectionCandidate = candidate;
+    try {
+      const loaded = await loadRevision();
+      for (const [path, inspected] of candidate) {
+        this.#inspectedSources.set(path, inspected);
+      }
+      return loaded;
+    } catch (error) {
+      for (const [path, inspected] of candidate) {
+        const committed = this.#inspectedSources.get(path);
+        if (committed?.source === inspected.source) continue;
+        this.#compiler.removeCompilerSessionModule(
+          this.#inspectionHandle,
+          path,
+        );
+      }
+      throw error;
+    } finally {
+      this.#inspectionCandidate = undefined;
+    }
+  }
+
   async #sync(path: string): Promise<ResidentRevision> {
-    return await this.#syncLoaded(await this.#workspace.refresh(path));
+    const loaded = await this.#loadWorkspaceRevision(
+      () => this.#workspace.refresh(path),
+    );
+    return await this.#syncLoaded(loaded);
   }
 
   #syncLoaded(root: Loaded): ResidentRevision {
+    this.#removeInactiveModules();
     const key = loadedRevisionKey(root);
     const resident = this.#revisions.get(root.path);
     if (resident !== undefined && resident.key === key) return resident;
 
     const modules = collectGraph(root);
-    const activePaths = this.#workspace.activePaths();
-    const removedPaths = [...this.#installedModules.keys()].filter((path) =>
-      !activePaths.has(path)
-    );
-    for (const path of removedPaths) {
-      this.#compiler.removeCompilerSessionModule(this.#handle, path);
-      this.#installedModules.delete(path);
-      this.#inspectedSources.delete(path);
-      this.#sources.delete(path);
-      this.#revisions.delete(path);
-    }
     for (const loaded of modules.values()) {
       this.#sources.set(loaded.path, loaded.source);
       if (loaded.path === PRELUDE) {
@@ -698,16 +854,11 @@ export class Compiler implements CompilerHost {
       }
       let added;
       if (loaded.storage.tag === "source") {
-        const inspected = this.#inspectedSources.get(loaded.path);
-        if (inspected !== undefined && inspected.source === loaded.source) {
-          added = { ok: true as const, module: inspected.module };
-        } else {
-          added = this.#compiler.addCompilerSessionModule(
-            this.#handle,
-            loaded.path,
-            loaded.source,
-          );
-        }
+        added = this.#compiler.addCompilerSessionModule(
+          this.#handle,
+          loaded.path,
+          loaded.source,
+        );
       } else {
         added = this.#compiler.addCompilerSessionAst(
           this.#handle,
@@ -818,6 +969,22 @@ export class Compiler implements CompilerHost {
     return revision;
   }
 
+  #removeInactiveModules(): void {
+    const activePaths = this.#workspace.activePaths();
+    const removedPaths = [...this.#installedModules.keys()].filter((path) =>
+      !activePaths.has(path)
+    );
+    for (const path of removedPaths) {
+      this.#compiler.removeCompilerSessionModule(this.#handle, path);
+      this.#compiler.removeCompilerSessionModule(this.#inspectionHandle, path);
+      this.#installedModules.delete(path);
+      this.#inspectedSources.delete(path);
+      this.#sources.delete(path);
+      this.#revisions.delete(path);
+      this.#developmentArtifacts.delete(path);
+    }
+  }
+
   #checkResident(path: string): CheckedModule {
     const result = this.#compiler.checkCompilerSessionModule(
       this.#handle,
@@ -879,14 +1046,20 @@ export class Compiler implements CompilerHost {
 
   #inspectSource(path: string, source: string): SourceInspection | undefined {
     if (path === PRELUDE) return undefined;
-    this.#sources.set(path, source);
+    const candidate = this.#inspectionCandidate;
+    if (candidate === undefined) {
+      throw new CompilerInvariantFailure(
+        "source inspection",
+        new Error(`workspace inspected ${path} outside a graph load`),
+      );
+    }
     const added = this.#compiler.addCompilerSessionModule(
-      this.#handle,
+      this.#inspectionHandle,
       path,
       source,
     );
     if (!added.ok) this.#throwSourceLoadFailure(added, path, source);
-    this.#inspectedSources.set(path, { source, module: added.module });
+    candidate.set(path, { source, module: added.module });
     return {
       imports: added.module.importSites,
       includes: added.module.includeSites,
@@ -951,6 +1124,14 @@ export class Compiler implements CompilerHost {
   #requireActive(): void {
     if (this.#destroyed) throw new Error("Compiler session has been destroyed");
   }
+}
+
+function sameStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 let sharedCompiler: Promise<Compiler> | undefined;

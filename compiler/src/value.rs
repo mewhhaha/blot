@@ -1,7 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use num_bigint::BigInt;
 
@@ -9,6 +9,39 @@ use crate::ast::{ExpressionId, PatternId};
 use crate::eval::Computation;
 
 pub type Environment = Rc<Env>;
+
+#[derive(Debug)]
+pub(crate) struct DecodedEnvironmentIdentity;
+
+#[derive(Default)]
+pub struct DeferredDemands {
+    executions: Vec<DeferredExecutionDemands>,
+}
+
+struct DeferredExecutionDemands {
+    execution: Weak<()>,
+    blocks: Vec<Option<usize>>,
+}
+
+impl DeferredDemands {
+    pub(crate) fn blocks_for(&mut self, execution: &Rc<()>) -> &mut Vec<Option<usize>> {
+        self.executions
+            .retain(|demands| demands.execution.strong_count() > 0);
+        let execution = Rc::downgrade(execution);
+        let index = self
+            .executions
+            .iter()
+            .position(|demands| Weak::ptr_eq(&demands.execution, &execution))
+            .unwrap_or_else(|| {
+                self.executions.push(DeferredExecutionDemands {
+                    execution,
+                    blocks: Vec::new(),
+                });
+                self.executions.len() - 1
+            });
+        &mut self.executions[index].blocks
+    }
+}
 
 pub(crate) fn closure_signature(value: &Value) -> Option<Value> {
     let Value::Closure { signature, .. } = value else {
@@ -137,16 +170,348 @@ pub struct Env {
     pub signatures: RefCell<BTreeMap<String, Value>>,
     pub type_substitutions: RefCell<BTreeMap<u32, Value>>,
     pub parent: RefCell<Option<Environment>>,
+    pub(crate) recursive_bindings: Option<Rc<RecursiveBindings>>,
+    decoded_identity: Option<Rc<DecodedEnvironmentIdentity>>,
+    captured: Cell<bool>,
 }
 
 pub fn child_env(parent: Option<Environment>) -> Environment {
+    child_env_with_identity(parent, None)
+}
+
+pub(crate) fn decoded_child_env(
+    parent: Option<Environment>,
+    identity: Rc<DecodedEnvironmentIdentity>,
+) -> Environment {
+    child_env_with_identity(parent, Some(identity))
+}
+
+fn child_env_with_identity(
+    parent: Option<Environment>,
+    decoded_identity: Option<Rc<DecodedEnvironmentIdentity>>,
+) -> Environment {
     Rc::new(Env {
         names: RefCell::new(BTreeMap::new()),
         opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
         type_substitutions: RefCell::new(BTreeMap::new()),
         parent: RefCell::new(parent),
+        recursive_bindings: None,
+        decoded_identity,
+        captured: Cell::new(false),
     })
+}
+
+pub(crate) struct RecursiveBindings {
+    environment: RefCell<Weak<Env>>,
+    closures: RefCell<BTreeMap<String, RecursiveClosure>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RecursiveBindingError {
+    DuplicateName,
+    NotAClosure,
+    DifferentEnvironment,
+    SignatureCapturesClosure,
+}
+
+impl std::fmt::Debug for RecursiveBindings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let closures = self.closures.borrow();
+        formatter
+            .debug_struct("RecursiveBindings")
+            .field("names", &closures.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+struct RecursiveClosure {
+    module: Rc<String>,
+    module_instances: Rc<crate::eval::ModuleInstanceScope>,
+    effect_scope: Rc<crate::eval::EffectScope>,
+    parameter: PatternId,
+    body: ExpressionId,
+    self_name: Option<String>,
+    imports: Option<BTreeMap<String, String>>,
+    signature: Option<Box<Value>>,
+    reuse_assertion: Option<crate::ast::Span>,
+    deferred: bool,
+}
+
+impl RecursiveBindings {
+    pub(crate) fn environment(&self) -> Environment {
+        self.environment
+            .borrow()
+            .upgrade()
+            .expect("a recursive group is owned by its environment")
+    }
+
+    pub(crate) fn insert(&self, name: String, value: Value) -> Result<(), RecursiveBindingError> {
+        if self.closures.borrow().contains_key(&name) {
+            return Err(RecursiveBindingError::DuplicateName);
+        }
+        if !matches!(
+            &value,
+            Value::Closure { environment, .. }
+                if Rc::ptr_eq(environment, &self.environment())
+        ) {
+            return Err(RecursiveBindingError::DifferentEnvironment);
+        }
+        let environment = self.environment();
+        if matches!(
+            &value,
+            Value::Closure {
+                signature: Some(signature),
+                ..
+            } if value_references_environment(signature, &environment)
+        ) {
+            return Err(RecursiveBindingError::SignatureCapturesClosure);
+        }
+        let Value::Closure {
+            module,
+            module_instances,
+            effect_scope,
+            parameter,
+            body,
+            self_name,
+            imports,
+            signature,
+            reuse_assertion,
+            deferred,
+            ..
+        } = value
+        else {
+            return Err(RecursiveBindingError::NotAClosure);
+        };
+        self.closures.borrow_mut().insert(
+            name,
+            RecursiveClosure {
+                module,
+                module_instances,
+                effect_scope,
+                parameter,
+                body,
+                self_name,
+                imports,
+                signature,
+                reuse_assertion,
+                deferred,
+            },
+        );
+        Ok(())
+    }
+
+    fn lookup(&self, name: &str) -> Option<Value> {
+        let closure = self.closures.borrow().get(name).cloned()?;
+        let environment = self.environment();
+        capture_env(&environment);
+        Some(closure.value(environment))
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.closures.borrow().contains_key(name)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.closures.borrow().len()
+    }
+
+    pub(crate) fn values(&self) -> Vec<(String, Value)> {
+        let environment = self.environment();
+        capture_env(&environment);
+        self.closures
+            .borrow()
+            .iter()
+            .map(|(name, closure)| (name.clone(), closure.value(environment.clone())))
+            .collect()
+    }
+}
+
+fn value_references_environment(value: &Value, target: &Environment) -> bool {
+    match value {
+        Value::Closure {
+            environment,
+            signature,
+            ..
+        } => {
+            environment_has_ancestor(environment, target)
+                || signature
+                    .as_deref()
+                    .is_some_and(|value| value_references_environment(value, target))
+        }
+        Value::Deferred { environment, .. } => environment_has_ancestor(environment, target),
+        Value::ClosureChoice { alternatives, .. } => {
+            alternatives
+                .iter()
+                .any(|alternative| match &alternative.source {
+                    ChoiceSource::Lambda {
+                        environment,
+                        signature,
+                        ..
+                    } => {
+                        environment_has_ancestor(environment, target)
+                            || signature
+                                .as_deref()
+                                .is_some_and(|value| value_references_environment(value, target))
+                    }
+                    ChoiceSource::Primitive { applied, .. } => applied
+                        .iter()
+                        .any(|value| value_references_environment(value, target)),
+                })
+        }
+        Value::Continuation { .. } => true,
+        Value::Shape(fields)
+        | Value::Extended {
+            members: fields, ..
+        } => {
+            fields
+                .iter()
+                .any(|(_, value)| value_references_environment(value, target))
+                || matches!(value, Value::Extended { inner, .. } if value_references_environment(inner, target))
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value_references_environment(value, target)),
+        Value::RegionType(value)
+        | Value::ScratchType(value)
+        | Value::DeferredScratch { capacity: value }
+        | Value::EmptyArray { element: value }
+        | Value::Forall { body: value, .. }
+        | Value::Sealed { inner: value, .. } => value_references_environment(value, target),
+        Value::Scratch { values, .. }
+        | Value::IndexedStep { elements: values }
+        | Value::Union(values) => values
+            .iter()
+            .any(|value| value_references_environment(value, target)),
+        Value::Region { .. } | Value::RegionRejoin { .. } => true,
+        Value::Tag { payload, .. } => payload
+            .as_deref()
+            .is_some_and(|value| value_references_environment(value, target)),
+        Value::Primitive { applied, .. } => applied
+            .iter()
+            .any(|value| value_references_environment(value, target)),
+        Value::Range { low, high, .. } => {
+            value_references_environment(low, target) || value_references_environment(high, target)
+        }
+        Value::Arrow {
+            domain,
+            codomain,
+            effects,
+            ..
+        } => {
+            value_references_environment(domain, target)
+                || value_references_environment(codomain, target)
+                || effects
+                    .iter()
+                    .any(|value| value_references_environment(value, target))
+        }
+        Value::Effect { operations, .. } => operations
+            .iter()
+            .any(|(_, value)| value_references_environment(value, target)),
+        Value::Operation { effect, .. } => value_references_environment(effect, target),
+        Value::Int(_)
+        | Value::Float(_)
+        | Value::Float32(_)
+        | Value::Vector(_)
+        | Value::VectorMask(_)
+        | Value::IntegerVector { .. }
+        | Value::IntegerVectorMask { .. }
+        | Value::Text(_)
+        | Value::Unit
+        | Value::ModuleClosure { .. }
+        | Value::Unbounded
+        | Value::TypeVariable(_)
+        | Value::OpaqueType(_)
+        | Value::Runtime(_) => false,
+    }
+}
+
+fn environment_has_ancestor(environment: &Environment, target: &Environment) -> bool {
+    let mut scope = Some(environment.clone());
+    while let Some(current) = scope {
+        if Rc::ptr_eq(&current, target) {
+            return true;
+        }
+        scope = current.parent.borrow().clone();
+    }
+    false
+}
+
+impl RecursiveClosure {
+    fn value(&self, environment: Environment) -> Value {
+        Value::Closure {
+            module: self.module.clone(),
+            module_instances: self.module_instances.clone(),
+            effect_scope: self.effect_scope.clone(),
+            parameter: self.parameter,
+            body: self.body,
+            environment,
+            self_name: self.self_name.clone(),
+            imports: self.imports.clone(),
+            signature: self.signature.clone(),
+            reuse_assertion: self.reuse_assertion,
+            deferred: self.deferred,
+        }
+    }
+}
+
+pub(crate) fn recursive_env(parent: Option<Environment>) -> (Environment, Rc<RecursiveBindings>) {
+    recursive_env_with_identity(parent, None)
+}
+
+pub(crate) fn decoded_recursive_env(
+    parent: Option<Environment>,
+    identity: Rc<DecodedEnvironmentIdentity>,
+) -> (Environment, Rc<RecursiveBindings>) {
+    recursive_env_with_identity(parent, Some(identity))
+}
+
+fn recursive_env_with_identity(
+    parent: Option<Environment>,
+    decoded_identity: Option<Rc<DecodedEnvironmentIdentity>>,
+) -> (Environment, Rc<RecursiveBindings>) {
+    let bindings = Rc::new(RecursiveBindings {
+        environment: RefCell::new(Weak::new()),
+        closures: RefCell::new(BTreeMap::new()),
+    });
+    let environment = Rc::new(Env {
+        names: RefCell::new(BTreeMap::new()),
+        opens: RefCell::new(Vec::new()),
+        signatures: RefCell::new(BTreeMap::new()),
+        type_substitutions: RefCell::new(BTreeMap::new()),
+        parent: RefCell::new(parent),
+        recursive_bindings: Some(bindings.clone()),
+        decoded_identity,
+        captured: Cell::new(false),
+    });
+    *bindings.environment.borrow_mut() = Rc::downgrade(&environment);
+    (environment, bindings)
+}
+
+fn same_closure_source_environment(left: &Environment, right: &Environment) -> bool {
+    match (&left.decoded_identity, &right.decoded_identity) {
+        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+        (None, None) => Rc::ptr_eq(left, right),
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
+pub(crate) fn capture_env(environment: &Environment) {
+    let mut scope = Some(environment.clone());
+    while let Some(current) = scope {
+        if current.captured.replace(true) {
+            break;
+        }
+        scope = current.parent.borrow().clone();
+    }
+}
+
+pub(crate) fn declaration_env(environment: &Environment) -> Environment {
+    if environment.captured.get() || environment.recursive_bindings.is_some() {
+        return child_env(Some(environment.clone()));
+    }
+    environment.clone()
 }
 
 pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> {
@@ -165,6 +530,13 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
     while let Some(current) = scope {
         if let Some(value) = current.names.borrow().get(name) {
             return Some(value.clone());
+        }
+        if let Some(value) = current
+            .recursive_bindings
+            .as_ref()
+            .and_then(|bindings| bindings.lookup(name))
+        {
+            return Some(value);
         }
         for opened in current.opens.borrow().iter().rev() {
             if let Some(value) = opened.get(name) {
@@ -531,7 +903,7 @@ pub enum Value {
         module: Rc<String>,
         expression: ExpressionId,
         environment: Environment,
-        demands: Rc<RefCell<Vec<Option<usize>>>>,
+        demands: Rc<RefCell<DeferredDemands>>,
     },
     ClosureChoice {
         selector: RuntimeValue,
@@ -757,7 +1129,7 @@ impl ClosureAlternative {
             ) => {
                 module == other_module
                     && body.0 == other_body.0
-                    && Rc::ptr_eq(environment, other_environment)
+                    && same_closure_source_environment(environment, other_environment)
             }
             (
                 ChoiceSource::Primitive {
@@ -795,10 +1167,11 @@ fn applied_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum RuntimeMeaning {
     #[default]
     Plain,
+    SharedStore,
     ReusableStore,
     Ordering,
     ScalarOrdering {
@@ -1343,6 +1716,24 @@ mod type_value_tests {
     }
 
     #[test]
+    fn decoded_closure_sources_use_semantic_environment_identity() {
+        let identity = Rc::new(DecodedEnvironmentIdentity);
+        let first = decoded_child_env(None, identity.clone());
+        let repeated = decoded_child_env(None, identity);
+        let different = decoded_child_env(None, Rc::new(DecodedEnvironmentIdentity));
+        let ordinary = child_env(None);
+
+        assert!(same_closure_source_environment(&first, &repeated));
+        assert!(!same_closure_source_environment(&first, &different));
+        assert!(!same_closure_source_environment(&first, &ordinary));
+        assert!(same_closure_source_environment(&ordinary, &ordinary));
+        assert!(!same_closure_source_environment(
+            &ordinary,
+            &child_env(None)
+        ));
+    }
+
+    #[test]
     fn enclosing_values_do_not_degrade_a_closure_signature() {
         let mut closure = Value::Closure {
             module: Rc::new("test.blot".to_owned()),
@@ -1372,6 +1763,39 @@ mod type_value_tests {
 
         let attached = closure_signature(&closure).expect("the closure retains a signature");
         assert!(equal(&attached, &principal));
+    }
+
+    #[test]
+    fn recursive_bindings_reject_signatures_that_capture_their_group() {
+        let (environment, bindings) = recursive_env(None);
+        let captured = Value::Closure {
+            module: Rc::new("test.blot".to_owned()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(Vec::new()),
+            parameter: PatternId(0),
+            body: ExpressionId(0),
+            environment: environment.clone(),
+            self_name: None,
+            imports: None,
+            signature: None,
+            reuse_assertion: None,
+            deferred: false,
+        };
+        let member = Value::Closure {
+            module: Rc::new("test.blot".to_owned()),
+            module_instances: Rc::new(Vec::new()),
+            effect_scope: Rc::new(Vec::new()),
+            parameter: PatternId(1),
+            body: ExpressionId(1),
+            environment,
+            self_name: Some("loop".to_owned()),
+            imports: None,
+            signature: Some(Box::new(captured)),
+            reuse_assertion: None,
+            deferred: false,
+        };
+
+        assert!(bindings.insert("loop".to_owned(), member).is_err());
     }
 
     #[test]

@@ -1,92 +1,194 @@
-import { join } from "@std/path";
 import { DevelopmentProject } from "../../src/development.ts";
+import { DevelopmentRuntime } from "../../src/development_runtime.ts";
+import {
+  captureDevelopmentBenchmarkProvenance,
+  requireStableDevelopmentBenchmarkProvenance,
+} from "./provenance.ts";
+import {
+  type DevelopmentBenchmarkCompilerProfile,
+  developmentBenchmarkCompilerProfiling,
+  developmentBenchmarkMaximumRssGrowthBytes,
+  type DevelopmentBenchmarkReport,
+  type DevelopmentBenchmarkSample,
+  developmentBenchmarkSchema,
+  maximumRssGrowth,
+  summarizeDurations,
+} from "./schema.ts";
+import {
+  developmentBenchmarkTargetBytes,
+  developmentBenchmarkUnitCount,
+  writeDevelopmentBenchmarkWorkload,
+} from "./workload.ts";
 
-const unitCount = 20;
-const measuredBuilds = 20;
-const targetBytes = 5 * 1024 * 1024;
-const directory = await Deno.makeTempDir({ prefix: "blot-development-bench-" });
+interface BenchmarkOptions {
+  readonly samples: number;
+  readonly targetSourceBytes: number;
+  readonly gate: "enforce" | "report-only";
+  readonly output: string | null;
+  readonly compilerProfile: DevelopmentBenchmarkCompilerProfile;
+}
+
+const options = parseOptions(Deno.args);
+const {
+  provenance: initialProvenance,
+  compilerOptions,
+} = await captureDevelopmentBenchmarkProvenance(options.compilerProfile);
+const directory = await Deno.makeTempDir({
+  prefix: "blot-development-bench-",
+});
 
 try {
-  const paddingLength = Math.ceil(targetBytes / (unitCount - 1));
-  const padding = `// ${"x".repeat(paddingLength - 4)}\n`;
-  const units: Record<string, string> = { game: "./main.blot" };
-  const imports: string[] = [];
-  const calls: string[] = [];
-  for (let index = 1; index < unitCount; index += 1) {
-    const name = `unit-${index}`;
-    const fileName = `unit_${index}.blot`;
-    units[name] = `./${fileName}`;
-    imports.push(`const unit_${index} = import "./${fileName}"`);
-    if (index === 1) calls.push(`unit_${index}.add value`);
-    let unitPadding = padding;
-    if (index === 1) unitPadding = "";
-    await Deno.writeTextFile(
-      join(directory, fileName),
-      providerSource(unitPadding, index),
-    );
-  }
-  await Deno.writeTextFile(
-    join(directory, "main.blot"),
-    `${padding}open import "blot:prelude"
-${imports.join("\n")}
-const Source = @effect.host { .value = Unit -> Int; }
-use value <- Source.value ()
-return ${calls.join(" + ")}
-`,
+  const workload = await writeDevelopmentBenchmarkWorkload({
+    directory,
+    targetSourceBytes: options.targetSourceBytes,
+    unitCount: developmentBenchmarkUnitCount,
+  });
+  const project = await DevelopmentProject.create(
+    workload.manifestPath,
+    compilerOptions,
   );
-  const manifestPath = join(directory, "blot.json");
-  await Deno.writeTextFile(
-    manifestPath,
-    JSON.stringify({
-      schema: "blot-project",
-      version: 1,
-      entryUnit: "game",
-      units,
-    }),
-  );
-
-  const project = await DevelopmentProject.create(manifestPath);
+  const runtime = new DevelopmentRuntime(() => ({
+    "blot:host/Source": { value: () => 10n },
+  }));
   try {
-    await project.build();
-    const durations: number[] = [];
-    for (let iteration = 0; iteration < measuredBuilds; iteration += 1) {
-      let increment = 101;
-      if (iteration % 2 === 1) increment = 102;
+    const initialActivationStarted = performance.now();
+    const initial = await project.activate(runtime);
+    const initialActivated = performance.now();
+    const initialHostRssBytes = Deno.memoryUsage().rss;
+    const initialActivationMilliseconds = initialActivated -
+      initialActivationStarted - initial.durationMilliseconds;
+    requireNonNegativeDuration(
+      initialActivationMilliseconds,
+      "initial activation",
+    );
+    const initialObservation = run(runtime.entryInstance);
+    requireObservation(
+      initialObservation,
+      workload.expectedObservation(101),
+      "initial build",
+    );
+
+    const samples: DevelopmentBenchmarkSample[] = [];
+    const sampleProfiles: Array<typeof initial.developmentProfile> = [];
+    for (let iteration = 0; iteration < options.samples; iteration += 1) {
+      let increment = 102;
+      if (iteration % 2 === 1) increment = 101;
+      const committedStarted = performance.now();
       await Deno.writeTextFile(
-        join(directory, "unit_1.blot"),
-        providerSource("", increment),
+        workload.editedProviderPath,
+        workload.editedProviderSource(increment),
       );
-      await project.markChanged(join(directory, "unit_1.blot"));
-      const build = await project.build();
-      const changed = build.changedUnits.map((unit) => unit.name);
-      if (changed.length !== 1 || changed[0] !== "unit-1") {
+      await project.markChanged(workload.editedProviderPath);
+      const activationStarted = performance.now();
+      const build = await project.activate(runtime);
+      const activated = performance.now();
+      const hostRssBytes = Deno.memoryUsage().rss;
+      const committedMilliseconds = activated - committedStarted;
+      const activationMilliseconds = activated - activationStarted -
+        build.durationMilliseconds;
+      requireNonNegativeDuration(
+        activationMilliseconds,
+        `sample ${iteration} activation`,
+      );
+      const changedUnits = build.changedUnits.map((unit) => unit.name);
+      if (changedUnits.length !== 1 || changedUnits[0] !== "unit-1") {
         throw new Error(
           `development benchmark rebuilt [${
-            changed.join(", ")
+            changedUnits.join(", ")
           }], expected only unit-1`,
         );
       }
-      durations.push(build.durationMilliseconds);
+      const observation = run(runtime.entryInstance);
+      requireObservation(
+        observation,
+        workload.expectedObservation(increment),
+        `sample ${iteration}`,
+      );
+      samples.push({
+        iteration,
+        buildMilliseconds: build.durationMilliseconds,
+        activationMilliseconds,
+        committedMilliseconds,
+        changedUnits,
+        retainedUnits: build.retainedUnits.map((unit) => unit.name),
+        transferredWasmBytes: build.changedUnits.reduce(
+          (total, unit) => total + unit.wasm.byteLength,
+          0,
+        ),
+        transferredManifestBytes: build.changedUnits.reduce(
+          (total, unit) => total + unit.manifestBytes.byteLength,
+          0,
+        ),
+        observation: observation.toString(),
+        hostRssBytes,
+      });
+      sampleProfiles.push(build.developmentProfile);
     }
-    durations.sort((left, right) => left - right);
-    const p95Index = Math.ceil(durations.length * 0.95) - 1;
-    const p95 = durations[p95Index];
-    console.log(JSON.stringify(
-      {
-        sourceBytes: await projectBytes(directory),
-        units: unitCount,
-        samples: measuredBuilds,
-        medianMilliseconds: durations[Math.floor(durations.length / 2)],
-        p95Milliseconds: p95,
+
+    const { provenance: finalProvenance } =
+      await captureDevelopmentBenchmarkProvenance(options.compilerProfile);
+    requireStableDevelopmentBenchmarkProvenance(
+      initialProvenance,
+      finalProvenance,
+    );
+    const report: DevelopmentBenchmarkReport = {
+      schema: developmentBenchmarkSchema,
+      ...initialProvenance,
+      compilerProfiling: developmentBenchmarkCompilerProfiling(
+        initialProvenance.compilerProfile,
+        initial.developmentProfile,
+        sampleProfiles,
+      ),
+      workload: {
+        sourceBytes: workload.sourceBytes,
+        editedProviderBytes: workload.editedProviderBytes,
+        unitCount: workload.unitCount,
+        voxelDeclarations: workload.voxelDeclarations,
       },
-      null,
-      2,
-    ));
-    if (p95 >= 100) {
+      initial: {
+        buildMilliseconds: initial.durationMilliseconds,
+        activationMilliseconds: initialActivationMilliseconds,
+        changedUnits: initial.changedUnits.map((unit) => unit.name),
+        observation: initialObservation.toString(),
+        hostRssBytes: initialHostRssBytes,
+      },
+      samples,
+      committed: summarizeDurations(
+        samples.map((sample) => sample.committedMilliseconds),
+      ),
+      build: summarizeDurations(
+        samples.map((sample) => sample.buildMilliseconds),
+      ),
+      activation: summarizeDurations(
+        samples.map((sample) => sample.activationMilliseconds),
+      ),
+      maximumRssGrowthBytes: maximumRssGrowth(
+        initialHostRssBytes,
+        samples,
+      ),
+    };
+    const encoded = `${JSON.stringify(report, null, 2)}\n`;
+    if (options.output === null) {
+      await Deno.stdout.write(new TextEncoder().encode(encoded));
+    } else {
+      await Deno.writeTextFile(options.output, encoded);
+    }
+    if (
+      options.gate === "enforce" &&
+      report.committed.p95Milliseconds >= 100
+    ) {
       throw new Error(
-        `development rebuild p95 was ${
-          p95.toFixed(1)
+        `development edit-through-activation p95 was ${
+          report.committed.p95Milliseconds.toFixed(1)
         } ms, expected less than 100 ms`,
+      );
+    }
+    if (
+      options.gate === "enforce" &&
+      report.maximumRssGrowthBytes >= developmentBenchmarkMaximumRssGrowthBytes
+    ) {
+      throw new Error(
+        `development RSS grew by ${report.maximumRssGrowthBytes} bytes, expected less than ${developmentBenchmarkMaximumRssGrowthBytes} bytes`,
       );
     }
   } finally {
@@ -96,19 +198,70 @@ return ${calls.join(" + ")}
   await Deno.remove(directory, { recursive: true });
 }
 
-function providerSource(padding: string, increment: number): string {
-  return `${padding}open import "blot:prelude"
-let add :: Int -> Int
-let add = fn value => value + ${increment}
-return { .add = add; }
-`;
+function parseOptions(arguments_: readonly string[]): BenchmarkOptions {
+  let samples = 20;
+  let targetSourceBytes = developmentBenchmarkTargetBytes;
+  let gate: BenchmarkOptions["gate"] = "enforce";
+  let output: string | null = null;
+  let compilerProfile: DevelopmentBenchmarkCompilerProfile = "production";
+  for (const argument of arguments_) {
+    if (argument === "--") {
+      continue;
+    } else if (argument.startsWith("--samples=")) {
+      samples = Number(argument.slice("--samples=".length));
+    } else if (argument.startsWith("--target-bytes=")) {
+      targetSourceBytes = Number(argument.slice("--target-bytes=".length));
+    } else if (argument === "--report-only") {
+      gate = "report-only";
+    } else if (argument.startsWith("--output=")) {
+      output = argument.slice("--output=".length);
+    } else if (argument === "--development-profile") {
+      compilerProfile = "development-profile";
+    } else {
+      throw new Error(`unknown development benchmark argument ${argument}`);
+    }
+  }
+  if (!Number.isSafeInteger(samples) || samples < 1) {
+    throw new Error("--samples must be a positive integer");
+  }
+  if (!Number.isSafeInteger(targetSourceBytes) || targetSourceBytes < 1) {
+    throw new Error("--target-bytes must be a positive integer");
+  }
+  return {
+    samples,
+    targetSourceBytes,
+    gate,
+    output,
+    compilerProfile,
+  };
 }
 
-async function projectBytes(directory: string): Promise<number> {
-  let total = 0;
-  for await (const entry of Deno.readDir(directory)) {
-    if (!entry.isFile || !entry.name.endsWith(".blot")) continue;
-    total += (await Deno.stat(join(directory, entry.name))).size;
+function run(instance: WebAssembly.Instance): bigint {
+  const exported = instance.exports["blot:default"];
+  if (typeof exported !== "function") {
+    throw new Error("development entry unit omitted blot:default");
   }
-  return total;
+  const result = exported();
+  if (typeof result !== "bigint") {
+    throw new Error(
+      `development entry unit returned ${typeof result}, expected bigint`,
+    );
+  }
+  return result;
+}
+
+function requireObservation(
+  actual: bigint,
+  expected: bigint,
+  phase: string,
+): void {
+  if (actual === expected) return;
+  throw new Error(`${phase} returned ${actual}, expected ${expected}`);
+}
+
+function requireNonNegativeDuration(duration: number, phase: string): void {
+  if (duration >= 0) return;
+  throw new Error(
+    `development benchmark ${phase} measured ${duration} ms before its build completed`,
+  );
 }

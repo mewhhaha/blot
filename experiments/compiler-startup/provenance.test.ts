@@ -16,6 +16,7 @@ import {
 } from "./invocation.ts";
 
 const exec = promisify(execFile);
+const nodeExecutable = "node";
 
 test("startup source graph identity covers source and prelude snapshot", () => {
   const initial = startupSourceGraphIdentity(
@@ -51,7 +52,7 @@ test("startup child observes the Node flags recorded by provenance", async () =>
       probe,
       "process.stdout.write(JSON.stringify(process.execArgv));\n",
     );
-    const { stdout } = await exec(process.execPath, [
+    const { stdout } = await exec(nodeExecutable, [
       ...compilerStartupChildExecArgv,
       probe,
     ]);

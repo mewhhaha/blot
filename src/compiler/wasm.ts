@@ -110,6 +110,10 @@ interface CompilerWasmExports {
     configurationPointer: number,
     configurationUnits: number,
   ): number;
+  commit_compiler_session_development_program(
+    handle: number,
+    transactionId: number,
+  ): number;
   compiled_wasm_pointer(): number;
   compiled_wasm_length(): number;
   compiled_manifest_pointer(): number;
@@ -392,15 +396,23 @@ export type CompilerCompilationResult =
   }
   | CompilerTransportFailure;
 
-export interface CompilerDevelopmentUnit {
-  readonly name: string;
-  readonly root: string;
-  readonly wasm: Uint8Array;
-  readonly manifestBytes: Uint8Array;
-  readonly capabilities: readonly string[];
-  readonly implementationKey: string;
-  readonly artifactSource: "compiled" | "unit-cache";
-}
+export type CompilerDevelopmentUnit =
+  | {
+    readonly name: string;
+    readonly root: string;
+    readonly wasm: Uint8Array;
+    readonly manifestBytes: Uint8Array;
+    readonly capabilities: readonly string[];
+    readonly implementationKey: string;
+    readonly artifactSource: "compiled";
+  }
+  | {
+    readonly name: string;
+    readonly root: string;
+    readonly capabilities: readonly string[];
+    readonly implementationKey: string;
+    readonly artifactSource: "unit-cache";
+  };
 
 export interface CompilerDevelopmentEdge {
   readonly consumer: string;
@@ -408,12 +420,30 @@ export interface CompilerDevelopmentEdge {
   readonly name: string;
 }
 
+export interface CompilerDevelopmentMemoryCheckpoint {
+  readonly stage: string;
+  readonly pages: number;
+  readonly solver?: {
+    readonly variables: number;
+    readonly constraintTypeNodes: number;
+    readonly constraintTypeInterned: number;
+    readonly settledVariables: number;
+    readonly residualVariables: number;
+  };
+}
+
+export interface CompilerDevelopmentMemoryProfile {
+  readonly checkpoints: readonly CompilerDevelopmentMemoryCheckpoint[];
+}
+
 export type CompilerDevelopmentCompilationResult =
   | {
     readonly ok: true;
+    readonly transactionId: number;
     readonly entryUnit: string;
     readonly units: readonly CompilerDevelopmentUnit[];
     readonly edges: readonly CompilerDevelopmentEdge[];
+    readonly developmentProfile?: CompilerDevelopmentMemoryProfile;
   }
   | CompilerTransportFailure;
 
@@ -902,6 +932,7 @@ export class CompilerWasm {
       const result = this.#readResult(length) as
         | {
           readonly ok: true;
+          readonly transactionId: number;
           readonly entryUnit: string;
           readonly units: readonly {
             readonly name: string;
@@ -911,35 +942,73 @@ export class CompilerWasm {
             readonly artifactSource: "compiled" | "unit-cache";
           }[];
           readonly edges: readonly CompilerDevelopmentEdge[];
+          readonly developmentProfile?: CompilerDevelopmentMemoryProfile;
         }
         | Exclude<CompilerDevelopmentCompilationResult, { readonly ok: true }>;
       if (!result.ok) return result;
-      const compiledUnits = result.units.map((unit, index) => ({
-        name: unit.name,
-        root: unit.root,
-        wasm: new Uint8Array(
-          this.#exports.memory.buffer,
-          this.#exports.development_unit_wasm_pointer(index),
-          this.#exports.development_unit_wasm_length(index),
-        ).slice(),
-        manifestBytes: new Uint8Array(
-          this.#exports.memory.buffer,
-          this.#exports.development_unit_manifest_pointer(index),
-          this.#exports.development_unit_manifest_length(index),
-        ).slice(),
-        capabilities: unit.capabilities.slice(),
-        implementationKey: unit.implementationKey,
-        artifactSource: unit.artifactSource,
-      }));
+      if (
+        !Number.isSafeInteger(result.transactionId) ||
+        result.transactionId < 1 ||
+        result.transactionId > 0xffff_ffff
+      ) {
+        throw new Error(
+          `Rust compiler returned invalid development transaction ${result.transactionId}`,
+        );
+      }
+      const compiledUnits = result.units.map((unit, index) => {
+        if (unit.artifactSource === "unit-cache") {
+          return {
+            name: unit.name,
+            root: unit.root,
+            capabilities: unit.capabilities.slice(),
+            implementationKey: unit.implementationKey,
+            artifactSource: unit.artifactSource,
+          };
+        }
+        return {
+          name: unit.name,
+          root: unit.root,
+          wasm: new Uint8Array(
+            this.#exports.memory.buffer,
+            this.#exports.development_unit_wasm_pointer(index),
+            this.#exports.development_unit_wasm_length(index),
+          ).slice(),
+          manifestBytes: new Uint8Array(
+            this.#exports.memory.buffer,
+            this.#exports.development_unit_manifest_pointer(index),
+            this.#exports.development_unit_manifest_length(index),
+          ).slice(),
+          capabilities: unit.capabilities.slice(),
+          implementationKey: unit.implementationKey,
+          artifactSource: unit.artifactSource,
+        };
+      });
       return {
         ok: true,
+        transactionId: result.transactionId,
         entryUnit: result.entryUnit,
         units: compiledUnits,
         edges: result.edges.slice(),
+        developmentProfile: result.developmentProfile,
       };
     } finally {
       this.#free(configurationAllocation);
       this.#free(pathAllocation);
+    }
+  }
+
+  commitCompilerSessionDevelopmentProgram(
+    handle: number,
+    transactionId: number,
+  ): void {
+    const status = this.#exports.commit_compiler_session_development_program(
+      handle,
+      transactionId,
+    );
+    if (status !== 0) {
+      throw new Error(
+        `Rust compiler session ${handle} rejected development transaction ${transactionId}`,
+      );
     }
   }
 

@@ -9,20 +9,21 @@ thread_local! {
     static UNION_VISITS: Cell<u64> = const { Cell::new(0) };
 }
 
+use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
     PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
-    ApplicationSite, CompilerApplication, Context, Phase, Runtime, apply, closure_free_names,
-    evaluate_binding, evaluate_expression, force_effect_value, match_pattern, run,
-    signature_hole_expressions,
+    ApplicationSite, CompilerApplication, Context, ModuleFacts, Phase, Runtime, apply,
+    closure_free_names, evaluate_binding, evaluate_expression, force_effect_value, match_pattern,
+    run, signature_hole_expressions,
 };
 use crate::value::{
-    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, OrderedFields, Value,
-    attach_signature, child_env, closure_signature, lookup, opened_members,
-    reusable_across_module_instances,
+    Domain as ValueDomain, Environment as ValueEnvironment, OpenedValues, OrderedFields,
+    RecursiveBindings, Value, attach_signature, child_env, closure_signature, declaration_env,
+    lookup, opened_members, recursive_env, reusable_across_module_instances,
 };
 
 type VariableId = u32;
@@ -307,6 +308,12 @@ struct ConstraintTypeArena {
 }
 
 impl ConstraintTypeArena {
+    fn reset(&mut self) {
+        self.nodes.clear();
+        self.interned.clear();
+        self.intern_attempts = 0;
+    }
+
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
         self.intern_attempts += 1;
         let node = match type_ {
@@ -893,17 +900,17 @@ pub(crate) use crate::protocol::CHECKED_MODULE_CERTIFICATE_SCHEMA;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CheckedModuleCertificate {
-    schema: u32,
-    types: Vec<FlatTypeNode>,
-    result: FlatTypeId,
-    effects: FlatTypeId,
-    parameter: Option<FlatTypeId>,
-    expression_types: Vec<(ExpressionId, FlatTypeId)>,
-    closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
-    recursive_closures: Vec<ExpressionId>,
-    ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
-    simplifications: Vec<SimplificationFact>,
-    readability: Vec<ReadabilityFact>,
+    pub(crate) schema: u32,
+    pub(crate) types: Vec<FlatTypeNode>,
+    pub(crate) result: FlatTypeId,
+    pub(crate) effects: FlatTypeId,
+    pub(crate) parameter: Option<FlatTypeId>,
+    pub(crate) expression_types: Vec<(ExpressionId, FlatTypeId)>,
+    pub(crate) closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
+    pub(crate) recursive_closures: Vec<ExpressionId>,
+    pub(crate) ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
+    pub(crate) simplifications: Vec<SimplificationFact>,
+    pub(crate) readability: Vec<ReadabilityFact>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1025,10 +1032,10 @@ impl ReadabilityFact {
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
-struct FlatTypeId(u32);
+pub(crate) struct FlatTypeId(pub(crate) u32);
 
 #[derive(Clone, Deserialize, Eq, Hash, PartialEq, Serialize)]
-enum FlatTypeNode {
+pub(crate) enum FlatTypeNode {
     Rigid(VariableId),
     Forall {
         variables: Vec<VariableId>,
@@ -1069,26 +1076,145 @@ enum FlatTypeNode {
     Bottom,
 }
 
+fn append_flat_type_children(node: &FlatTypeNode, children: &mut Vec<FlatTypeId>) {
+    match node {
+        FlatTypeNode::Forall { body, .. } => children.push(*body),
+        FlatTypeNode::Function {
+            parameter,
+            effects,
+            result,
+            ..
+        } => children.extend([*parameter, *effects, *result]),
+        FlatTypeNode::Record(fields) | FlatTypeNode::Variant { cases: fields, .. } => {
+            children.extend(fields.iter().map(|(_, field)| *field));
+        }
+        FlatTypeNode::RecordUpdate { base, fields } => {
+            children.push(*base);
+            children.extend(fields.iter().map(|(_, field)| *field));
+        }
+        FlatTypeNode::Array(element)
+        | FlatTypeNode::Region(element)
+        | FlatTypeNode::Scratch(element) => children.push(*element),
+        FlatTypeNode::OpenEffects { tail, .. } => children.push(*tail),
+        FlatTypeNode::Union(members) => children.extend(members.iter().copied()),
+        FlatTypeNode::Rigid(_)
+        | FlatTypeNode::Range { .. }
+        | FlatTypeNode::Unit
+        | FlatTypeNode::Effects(_)
+        | FlatTypeNode::Opaque(_)
+        | FlatTypeNode::Top
+        | FlatTypeNode::Bottom => {}
+    }
+}
+
+fn validate_flat_type_reference_budget(
+    artifact: &str,
+    types: &[FlatTypeNode],
+    roots: impl IntoIterator<Item = FlatTypeId>,
+) -> Result<(), String> {
+    let roots = roots.into_iter().collect::<Vec<_>>();
+    let mut reachable = vec![false; types.len()];
+    let mut pending = roots.clone();
+    let mut children = Vec::new();
+    while let Some(type_) = pending.pop() {
+        let index = type_.0 as usize;
+        let node = types
+            .get(index)
+            .ok_or_else(|| format!("{artifact} references missing type {index}"))?;
+        if reachable[index] {
+            continue;
+        }
+        reachable[index] = true;
+        children.clear();
+        append_flat_type_children(node, &mut children);
+        for child in &children {
+            if child.0 >= type_.0 {
+                return Err(format!(
+                    "{artifact} type {} references non-prior type {}",
+                    type_.0, child.0
+                ));
+            }
+            pending.push(*child);
+        }
+    }
+
+    let mut reference_depths = vec![0_usize; types.len()];
+    let mut expanded_references = vec![0_u64; types.len()];
+    let expanded_overflow = ARTIFACT_EXPANDED_REFERENCE_LIMIT + 1;
+    for (index, node) in types.iter().enumerate() {
+        if !reachable[index] {
+            continue;
+        }
+        children.clear();
+        append_flat_type_children(node, &mut children);
+        let mut depth = 0_usize;
+        let mut expanded = 1_u64;
+        for child in &children {
+            let child = child.0 as usize;
+            depth = depth.max(reference_depths[child].saturating_add(1));
+            expanded = expanded
+                .saturating_add(expanded_references[child])
+                .min(expanded_overflow);
+        }
+        reference_depths[index] = depth;
+        expanded_references[index] = expanded;
+    }
+
+    let mut expanded_roots = 0_u64;
+    for root in roots {
+        let index = root.0 as usize;
+        let depth = reference_depths[index];
+        if depth > ARTIFACT_REFERENCE_PATH_LIMIT {
+            return Err(format!(
+                "{artifact} root type {index} has reference-path depth {depth}, maximum is {ARTIFACT_REFERENCE_PATH_LIMIT}"
+            ));
+        }
+        expanded_roots = expanded_roots
+            .saturating_add(expanded_references[index])
+            .min(expanded_overflow);
+        if expanded_roots > ARTIFACT_EXPANDED_REFERENCE_LIMIT {
+            return Err(format!(
+                "{artifact} roots expand to at least {expanded_roots} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn interface_type_roots<'a>(
+    result: FlatTypeId,
+    effects: FlatTypeId,
+    parameter: Option<FlatTypeId>,
+    expression_types: &'a [(ExpressionId, FlatTypeId)],
+    closure_signatures: &'a [(ExpressionId, FlatTypeId)],
+) -> impl Iterator<Item = FlatTypeId> + 'a {
+    std::iter::once(result)
+        .chain(std::iter::once(effects))
+        .chain(parameter)
+        .chain(expression_types.iter().map(|(_, type_)| *type_))
+        .chain(closure_signatures.iter().map(|(_, type_)| *type_))
+}
+
 struct FlatTypeArena {
     nodes: Vec<FlatTypeNode>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SealedModuleBoundary {
-    schema: u32,
-    compiler_semantic_version: String,
-    certificate_schema: u32,
-    types: Vec<FlatTypeNode>,
-    result: FlatTypeId,
-    effects: FlatTypeId,
-    parameter: Option<FlatTypeId>,
+pub(crate) struct SealedModuleBoundary {
+    pub(crate) schema: u32,
+    pub(crate) compiler_semantic_version: String,
+    pub(crate) certificate_schema: u32,
+    pub(crate) types: Vec<FlatTypeNode>,
+    pub(crate) result: FlatTypeId,
+    pub(crate) effects: FlatTypeId,
+    pub(crate) parameter: Option<FlatTypeId>,
 }
 
 impl SealedModuleBoundary {
     const SCHEMA: u32 = 1;
 
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.schema != Self::SCHEMA {
             return Err(format!(
                 "sealed module boundary schema is {}, expected {}",
@@ -1109,10 +1235,17 @@ impl SealedModuleBoundary {
                 self.certificate_schema, CHECKED_MODULE_CERTIFICATE_SCHEMA,
             ));
         }
-        validate_certificate_type(&self.types, self.result, &mut HashSet::new())?;
-        validate_certificate_type(&self.types, self.effects, &mut HashSet::new())?;
+        validate_flat_type_reference_budget(
+            "sealed module boundary",
+            &self.types,
+            std::iter::once(self.result)
+                .chain(std::iter::once(self.effects))
+                .chain(self.parameter),
+        )?;
+        validate_certificate_type(&self.types, self.result)?;
+        validate_certificate_type(&self.types, self.effects)?;
         if let Some(parameter) = self.parameter {
-            validate_certificate_type(&self.types, parameter, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, parameter)?;
         }
         Ok(())
     }
@@ -1157,48 +1290,69 @@ impl FlatTypeArena {
 }
 
 impl CachedModuleInterface {
-    fn from_checked(checked: &CheckedModule) -> Option<Self> {
-        let mut types = FlatTypeBuilder::default();
-        let mut bound = HashSet::new();
-        let result = flatten_interface_type(&checked.result, &mut bound, &mut types)?;
-        let effects = flatten_interface_type(&checked.effects, &mut bound, &mut types)?;
-        let parameter = match &checked.parameter {
-            Some(parameter) => Some(flatten_interface_type(parameter, &mut bound, &mut types)?),
-            None => None,
+    fn from_checked(checked: &CheckedModule) -> Result<Option<Self>, String> {
+        let interface = (|| {
+            let mut types = FlatTypeBuilder::default();
+            let mut bound = HashSet::new();
+            let result = flatten_interface_type(&checked.result, &mut bound, &mut types)?;
+            let effects = flatten_interface_type(&checked.effects, &mut bound, &mut types)?;
+            let parameter = match &checked.parameter {
+                Some(parameter) => Some(flatten_interface_type(parameter, &mut bound, &mut types)?),
+                None => None,
+            };
+            let expression_types = checked
+                .expression_types
+                .iter()
+                .map(|(expression, type_)| {
+                    Some((
+                        *expression,
+                        flatten_interface_type(type_, &mut bound, &mut types)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let closure_signatures = checked
+                .closure_signatures
+                .iter()
+                .map(|(body, signature)| {
+                    Some((
+                        *body,
+                        flatten_interface_type(signature, &mut bound, &mut types)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Self {
+                types: Rc::new(FlatTypeArena { nodes: types.nodes }),
+                result,
+                effects,
+                parameter,
+                evaluated: checked.evaluated.clone(),
+                expression_types,
+                closure_signatures,
+                recursive_closures: checked.recursive_closures.clone(),
+                ownership_contracts: checked.ownership_contracts.clone(),
+                simplifications: checked.simplifications.clone(),
+                readability: checked.readability.clone(),
+            })
+        })();
+        let Some(interface) = interface else {
+            return Ok(None);
         };
-        let expression_types = checked
-            .expression_types
-            .iter()
-            .map(|(expression, type_)| {
-                Some((
-                    *expression,
-                    flatten_interface_type(type_, &mut bound, &mut types)?,
-                ))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let closure_signatures = checked
-            .closure_signatures
-            .iter()
-            .map(|(body, signature)| {
-                Some((
-                    *body,
-                    flatten_interface_type(signature, &mut bound, &mut types)?,
-                ))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self {
-            types: Rc::new(FlatTypeArena { nodes: types.nodes }),
-            result,
-            effects,
-            parameter,
-            evaluated: checked.evaluated.clone(),
-            expression_types,
-            closure_signatures,
-            recursive_closures: checked.recursive_closures.clone(),
-            ownership_contracts: checked.ownership_contracts.clone(),
-            simplifications: checked.simplifications.clone(),
-            readability: checked.readability.clone(),
-        })
+        interface.validate_type_budget()?;
+        Ok(Some(interface))
+    }
+
+    fn validate_type_budget(&self) -> Result<(), String> {
+        validate_flat_type_reference_budget(
+            "cached module interface",
+            &self.types.nodes,
+            interface_type_roots(
+                self.result,
+                self.effects,
+                self.parameter,
+                &self.expression_types,
+                &self.closure_signatures,
+            ),
+        )
     }
 
     fn certificate(&self) -> CheckedModuleCertificate {
@@ -1237,6 +1391,7 @@ impl CachedModuleInterface {
     }
 
     fn sealed_boundary_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate_type_budget()?;
         let mut builder = FlatTypeBuilder::default();
         let mut rigids = Vec::new();
         let mut next_rigid = 0;
@@ -1279,6 +1434,186 @@ impl CachedModuleInterface {
     }
 }
 
+fn closed_boundary_type_key(
+    source: &FlatTypeArena,
+    root: FlatTypeId,
+    outer_rigids: &[(VariableId, VariableId)],
+) -> Option<String> {
+    enum Frame {
+        Visit(FlatTypeId),
+        Assemble(FlatTypeNode, usize),
+        AssembleForall {
+            variable_count: usize,
+            previous: Vec<(VariableId, Option<usize>)>,
+        },
+    }
+
+    fn text(value: &str) -> String {
+        format!("{}:{value}", value.len())
+    }
+
+    fn scalar(value: Option<&Scalar>) -> String {
+        match value {
+            None => "*".to_owned(),
+            Some(Scalar::Int(value)) => format!("i{value}"),
+            Some(Scalar::Text(value)) => format!("s{}", text(value)),
+        }
+    }
+
+    fn fields(
+        names: impl IntoIterator<Item = String>,
+        keys: impl IntoIterator<Item = String>,
+    ) -> String {
+        let mut fields = names
+            .into_iter()
+            .zip(keys)
+            .map(|(name, key)| format!("{}{key}", text(&name)))
+            .collect::<Vec<_>>();
+        fields.sort();
+        format!("{{{}}}", fields.join(","))
+    }
+
+    let mut binders = outer_rigids
+        .iter()
+        .enumerate()
+        .map(|(index, (source, _))| (*source, index))
+        .collect::<HashMap<_, _>>();
+    let mut stack = vec![Frame::Visit(root)];
+    let mut keys = Vec::new();
+    let mut children = Vec::new();
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Visit(type_) => {
+                let node = source.nodes.get(type_.0 as usize)?.clone();
+                match &node {
+                    FlatTypeNode::Rigid(variable) => {
+                        keys.push(format!("^{}", binders.get(variable)?));
+                    }
+                    FlatTypeNode::Forall { variables, body } => {
+                        let depth = binders.len();
+                        let mut previous = Vec::with_capacity(variables.len());
+                        for (index, variable) in variables.iter().enumerate() {
+                            previous.push((*variable, binders.insert(*variable, depth + index)));
+                        }
+                        stack.push(Frame::AssembleForall {
+                            variable_count: variables.len(),
+                            previous,
+                        });
+                        stack.push(Frame::Visit(*body));
+                    }
+                    FlatTypeNode::Range { domain, low, high } => {
+                        let domain = match domain {
+                            Domain::Int => "int",
+                            Domain::Text => "text",
+                            Domain::Float => "float64",
+                            Domain::Float32 => "float32",
+                        };
+                        keys.push(format!(
+                            "range({domain},{},{})",
+                            scalar(low.as_ref()),
+                            scalar(high.as_ref())
+                        ));
+                    }
+                    FlatTypeNode::Unit => keys.push("unit".to_owned()),
+                    FlatTypeNode::Effects(labels) => keys.push(format!(
+                        "effects{{{}}}",
+                        labels
+                            .iter()
+                            .map(|label| text(label))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )),
+                    FlatTypeNode::Opaque(name) => {
+                        keys.push(format!("opaque({})", text(name)));
+                    }
+                    FlatTypeNode::Top => keys.push("top".to_owned()),
+                    FlatTypeNode::Bottom => keys.push("bottom".to_owned()),
+                    _ => {
+                        children.clear();
+                        append_flat_type_children(&node, &mut children);
+                        stack.push(Frame::Assemble(node, children.len()));
+                        for child in children.iter().rev() {
+                            stack.push(Frame::Visit(*child));
+                        }
+                    }
+                }
+            }
+            Frame::Assemble(node, child_count) => {
+                let first_child = keys.len().checked_sub(child_count)?;
+                let mut children = keys.split_off(first_child).into_iter();
+                let key = match node {
+                    FlatTypeNode::Function { deferred, .. } => format!(
+                        "fun({deferred},{},{},{})",
+                        children.next()?,
+                        children.next()?,
+                        children.next()?
+                    ),
+                    FlatTypeNode::Record(values) => format!(
+                        "record{}",
+                        fields(values.into_iter().map(|(name, _)| name), children)
+                    ),
+                    FlatTypeNode::RecordUpdate { fields: values, .. } => {
+                        let base = children.next()?;
+                        format!(
+                            "record-update({base},{})",
+                            fields(values.into_iter().map(|(name, _)| name), children)
+                        )
+                    }
+                    FlatTypeNode::Array(_) => format!("array({})", children.next()?),
+                    FlatTypeNode::Region(_) => format!("region({})", children.next()?),
+                    FlatTypeNode::Scratch(_) => format!("scratch({})", children.next()?),
+                    FlatTypeNode::Variant { cases, open } => format!(
+                        "variant({open}){}",
+                        fields(cases.into_iter().map(|(name, _)| name), children)
+                    ),
+                    FlatTypeNode::OpenEffects { labels, .. } => format!(
+                        "open-effects{{{};{}}}",
+                        labels
+                            .iter()
+                            .map(|label| text(label))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        children.next()?
+                    ),
+                    FlatTypeNode::Union(_) => {
+                        let mut members = children.collect::<Vec<_>>();
+                        members.sort();
+                        format!("union{{{}}}", members.join(","))
+                    }
+                    FlatTypeNode::Rigid(_)
+                    | FlatTypeNode::Forall { .. }
+                    | FlatTypeNode::Range { .. }
+                    | FlatTypeNode::Unit
+                    | FlatTypeNode::Effects(_)
+                    | FlatTypeNode::Opaque(_)
+                    | FlatTypeNode::Top
+                    | FlatTypeNode::Bottom => return None,
+                };
+                keys.push(key);
+            }
+            Frame::AssembleForall {
+                variable_count,
+                previous,
+            } => {
+                let body = keys.pop()?;
+                for (variable, prior) in previous {
+                    match prior {
+                        Some(prior) => {
+                            binders.insert(variable, prior);
+                        }
+                        None => {
+                            binders.remove(&variable);
+                        }
+                    }
+                }
+                keys.push(format!("all{variable_count}({body})"));
+            }
+        }
+    }
+    let body = keys.pop()?;
+    Some(format!("all{}({body})", outer_rigids.len()))
+}
+
 fn copy_boundary_type(
     source: &FlatTypeArena,
     type_: FlatTypeId,
@@ -1286,122 +1621,180 @@ fn copy_boundary_type(
     next_rigid: &mut VariableId,
     target: &mut FlatTypeBuilder,
 ) -> Result<FlatTypeId, String> {
-    let node = source
-        .nodes
-        .get(type_.0 as usize)
-        .ok_or_else(|| format!("sealed boundary references missing type {}", type_.0))?;
-    let copied = match node {
-        FlatTypeNode::Rigid(variable) => {
-            let canonical = rigids
-                .iter()
-                .rev()
-                .find_map(|(source, target)| (source == variable).then_some(*target))
-                .ok_or_else(|| {
-                    format!("sealed boundary contains free rigid variable {variable}")
-                })?;
-            FlatTypeNode::Rigid(canonical)
-        }
-        FlatTypeNode::Forall { variables, body } => {
-            let checkpoint = rigids.len();
-            let mut canonical_variables = Vec::with_capacity(variables.len());
-            for variable in variables {
-                let canonical = *next_rigid;
-                *next_rigid = next_rigid
-                    .checked_add(1)
-                    .ok_or_else(|| "sealed boundary rigid identity overflow".to_owned())?;
-                rigids.push((*variable, canonical));
-                canonical_variables.push(canonical);
-            }
-            let body = copy_boundary_type(source, *body, rigids, next_rigid, target)?;
-            rigids.truncate(checkpoint);
-            FlatTypeNode::Forall {
-                variables: canonical_variables,
-                body,
-            }
-        }
-        FlatTypeNode::Range { domain, low, high } => FlatTypeNode::Range {
-            domain: *domain,
-            low: low.clone(),
-            high: high.clone(),
+    enum Frame {
+        Copy(FlatTypeId),
+        Assemble(FlatTypeNode, usize),
+        AssembleForall {
+            checkpoint: usize,
+            variables: Vec<VariableId>,
         },
-        FlatTypeNode::Unit => FlatTypeNode::Unit,
-        FlatTypeNode::Function {
-            deferred,
-            parameter,
-            effects,
-            result,
-        } => FlatTypeNode::Function {
-            deferred: *deferred,
-            parameter: copy_boundary_type(source, *parameter, rigids, next_rigid, target)?,
-            effects: copy_boundary_type(source, *effects, rigids, next_rigid, target)?,
-            result: copy_boundary_type(source, *result, rigids, next_rigid, target)?,
-        },
-        FlatTypeNode::Record(fields) => {
-            let mut fields = fields.clone();
-            fields.sort_by(|left, right| left.0.cmp(&right.0));
-            FlatTypeNode::Record(
-                fields
-                    .into_iter()
-                    .map(|(name, type_)| {
-                        copy_boundary_type(source, type_, rigids, next_rigid, target)
-                            .map(|type_| (name, type_))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-        }
-        FlatTypeNode::RecordUpdate { base, fields } => {
-            let mut fields = fields.clone();
-            fields.sort_by(|left, right| left.0.cmp(&right.0));
-            FlatTypeNode::RecordUpdate {
-                base: copy_boundary_type(source, *base, rigids, next_rigid, target)?,
-                fields: fields
-                    .into_iter()
-                    .map(|(name, type_)| {
-                        copy_boundary_type(source, type_, rigids, next_rigid, target)
-                            .map(|type_| (name, type_))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
+    }
+
+    let mut stack = vec![Frame::Copy(type_)];
+    let mut copied = Vec::new();
+    let mut children = Vec::new();
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Copy(type_) => {
+                let mut node = source
+                    .nodes
+                    .get(type_.0 as usize)
+                    .ok_or_else(|| format!("sealed boundary references missing type {}", type_.0))?
+                    .clone();
+                match &mut node {
+                    FlatTypeNode::Rigid(variable) => {
+                        let canonical = rigids
+                            .iter()
+                            .rev()
+                            .find_map(|(source, target)| (source == variable).then_some(*target))
+                            .ok_or_else(|| {
+                                format!("sealed boundary contains free rigid variable {variable}")
+                            })?;
+                        copied.push(target.intern(FlatTypeNode::Rigid(canonical)));
+                        continue;
+                    }
+                    FlatTypeNode::Forall { variables, body } => {
+                        let checkpoint = rigids.len();
+                        let mut canonical_variables = Vec::with_capacity(variables.len());
+                        for variable in variables.iter() {
+                            let canonical = *next_rigid;
+                            *next_rigid = next_rigid.checked_add(1).ok_or_else(|| {
+                                "sealed boundary rigid identity overflow".to_owned()
+                            })?;
+                            rigids.push((*variable, canonical));
+                            canonical_variables.push(canonical);
+                        }
+                        stack.push(Frame::AssembleForall {
+                            checkpoint,
+                            variables: canonical_variables,
+                        });
+                        stack.push(Frame::Copy(*body));
+                        continue;
+                    }
+                    FlatTypeNode::Record(fields) => {
+                        fields.sort_by(|left, right| left.0.cmp(&right.0));
+                    }
+                    FlatTypeNode::RecordUpdate { fields, .. } => {
+                        fields.sort_by(|left, right| left.0.cmp(&right.0));
+                    }
+                    FlatTypeNode::Variant { cases, .. } => {
+                        cases.sort_by(|left, right| left.0.cmp(&right.0));
+                    }
+                    FlatTypeNode::Union(members) => {
+                        let mut keyed = members
+                            .iter()
+                            .map(|member| {
+                                let key = closed_boundary_type_key(source, *member, rigids)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "sealed boundary union member {} is not closed",
+                                            member.0
+                                        )
+                                    })?;
+                                Ok((key, *member))
+                            })
+                            .collect::<Result<Vec<_>, String>>()?;
+                        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+                        *members = keyed.into_iter().map(|(_, member)| member).collect();
+                    }
+                    FlatTypeNode::Range { .. }
+                    | FlatTypeNode::Unit
+                    | FlatTypeNode::Effects(_)
+                    | FlatTypeNode::Opaque(_)
+                    | FlatTypeNode::Top
+                    | FlatTypeNode::Bottom => {
+                        copied.push(target.intern(node));
+                        continue;
+                    }
+                    FlatTypeNode::Function { .. }
+                    | FlatTypeNode::Array(_)
+                    | FlatTypeNode::Region(_)
+                    | FlatTypeNode::Scratch(_)
+                    | FlatTypeNode::OpenEffects { .. } => {}
+                }
+                children.clear();
+                append_flat_type_children(&node, &mut children);
+                stack.push(Frame::Assemble(node, children.len()));
+                for child in children.iter().rev() {
+                    stack.push(Frame::Copy(*child));
+                }
+            }
+            Frame::Assemble(node, child_count) => {
+                let first_child = copied
+                    .len()
+                    .checked_sub(child_count)
+                    .expect("sealed boundary assembly must receive every child");
+                let mut children = copied.split_off(first_child).into_iter();
+                let node = match node {
+                    FlatTypeNode::Function { deferred, .. } => FlatTypeNode::Function {
+                        deferred,
+                        parameter: children.next().expect("function parameter"),
+                        effects: children.next().expect("function effects"),
+                        result: children.next().expect("function result"),
+                    },
+                    FlatTypeNode::Record(fields) => FlatTypeNode::Record(
+                        fields
+                            .into_iter()
+                            .zip(children)
+                            .map(|((name, _), type_)| (name, type_))
+                            .collect(),
+                    ),
+                    FlatTypeNode::RecordUpdate { fields, .. } => FlatTypeNode::RecordUpdate {
+                        base: children.next().expect("record-update base"),
+                        fields: fields
+                            .into_iter()
+                            .zip(children)
+                            .map(|((name, _), type_)| (name, type_))
+                            .collect(),
+                    },
+                    FlatTypeNode::Array(_) => {
+                        FlatTypeNode::Array(children.next().expect("array element"))
+                    }
+                    FlatTypeNode::Region(_) => {
+                        FlatTypeNode::Region(children.next().expect("region element"))
+                    }
+                    FlatTypeNode::Scratch(_) => {
+                        FlatTypeNode::Scratch(children.next().expect("scratch element"))
+                    }
+                    FlatTypeNode::Variant { cases, open } => FlatTypeNode::Variant {
+                        cases: cases
+                            .into_iter()
+                            .zip(children)
+                            .map(|((name, _), type_)| (name, type_))
+                            .collect(),
+                        open,
+                    },
+                    FlatTypeNode::OpenEffects { labels, .. } => FlatTypeNode::OpenEffects {
+                        labels,
+                        tail: children.next().expect("open-effects tail"),
+                    },
+                    FlatTypeNode::Union(_) => FlatTypeNode::Union(children.collect()),
+                    FlatTypeNode::Rigid(_)
+                    | FlatTypeNode::Forall { .. }
+                    | FlatTypeNode::Range { .. }
+                    | FlatTypeNode::Unit
+                    | FlatTypeNode::Effects(_)
+                    | FlatTypeNode::Opaque(_)
+                    | FlatTypeNode::Top
+                    | FlatTypeNode::Bottom => {
+                        unreachable!("leaf and quantified boundary types assemble directly")
+                    }
+                };
+                copied.push(target.intern(node));
+            }
+            Frame::AssembleForall {
+                checkpoint,
+                variables,
+            } => {
+                let body = copied.pop().expect("forall body must be copied");
+                rigids.truncate(checkpoint);
+                copied.push(target.intern(FlatTypeNode::Forall { variables, body }));
             }
         }
-        FlatTypeNode::Array(element) => FlatTypeNode::Array(copy_boundary_type(
-            source, *element, rigids, next_rigid, target,
-        )?),
-        FlatTypeNode::Region(element) => FlatTypeNode::Region(copy_boundary_type(
-            source, *element, rigids, next_rigid, target,
-        )?),
-        FlatTypeNode::Scratch(element) => FlatTypeNode::Scratch(copy_boundary_type(
-            source, *element, rigids, next_rigid, target,
-        )?),
-        FlatTypeNode::Variant { cases, open } => {
-            let mut cases = cases.clone();
-            cases.sort_by(|left, right| left.0.cmp(&right.0));
-            FlatTypeNode::Variant {
-                cases: cases
-                    .into_iter()
-                    .map(|(name, type_)| {
-                        copy_boundary_type(source, type_, rigids, next_rigid, target)
-                            .map(|type_| (name, type_))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-                open: *open,
-            }
-        }
-        FlatTypeNode::Effects(labels) => FlatTypeNode::Effects(labels.clone()),
-        FlatTypeNode::OpenEffects { labels, tail } => FlatTypeNode::OpenEffects {
-            labels: labels.clone(),
-            tail: copy_boundary_type(source, *tail, rigids, next_rigid, target)?,
-        },
-        FlatTypeNode::Union(members) => FlatTypeNode::Union(
-            members
-                .iter()
-                .map(|member| copy_boundary_type(source, *member, rigids, next_rigid, target))
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-        FlatTypeNode::Opaque(name) => FlatTypeNode::Opaque(name.clone()),
-        FlatTypeNode::Top => FlatTypeNode::Top,
-        FlatTypeNode::Bottom => FlatTypeNode::Bottom,
-    };
-    Ok(target.intern(copied))
+    }
+    copied
+        .pop()
+        .ok_or_else(|| "sealed boundary copy produced no type".to_owned())
 }
 
 impl CheckedModuleCertificate {
@@ -1422,14 +1815,25 @@ impl CheckedModuleCertificate {
                 self.schema, CHECKED_MODULE_CERTIFICATE_SCHEMA
             ));
         }
-        validate_certificate_type(&self.types, self.result, &mut HashSet::new())?;
-        validate_certificate_type(&self.types, self.effects, &mut HashSet::new())?;
+        validate_flat_type_reference_budget(
+            "checked-module certificate",
+            &self.types,
+            interface_type_roots(
+                self.result,
+                self.effects,
+                self.parameter,
+                &self.expression_types,
+                &self.closure_signatures,
+            ),
+        )?;
+        validate_certificate_type(&self.types, self.result)?;
+        validate_certificate_type(&self.types, self.effects)?;
         if let Some(parameter) = self.parameter {
-            validate_certificate_type(&self.types, parameter, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, parameter)?;
         }
         let mut expressions = HashSet::new();
         for (expression, type_) in &self.expression_types {
-            validate_certificate_type(&self.types, *type_, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, *type_)?;
             if !expressions.insert(*expression) {
                 return Err(format!(
                     "checked-module certificate repeats expression type {}",
@@ -1439,7 +1843,7 @@ impl CheckedModuleCertificate {
         }
         let mut closure_bodies = HashSet::new();
         for (body, signature) in &self.closure_signatures {
-            validate_certificate_type(&self.types, *signature, &mut HashSet::new())?;
+            validate_certificate_type(&self.types, *signature)?;
             if !closure_bodies.insert(*body) {
                 return Err(format!(
                     "checked-module certificate repeats closure signature expression {}",
@@ -1500,88 +1904,70 @@ impl CheckedModuleCertificate {
     }
 }
 
-fn validate_certificate_type(
-    types: &[FlatTypeNode],
-    type_: FlatTypeId,
-    bound: &mut HashSet<VariableId>,
-) -> Result<(), String> {
-    let index = type_.0 as usize;
-    let node = types
-        .get(index)
-        .ok_or_else(|| format!("checked-module certificate references missing type {index}"))?;
-    let validate_child =
-        |child: FlatTypeId, bound: &mut HashSet<VariableId>| -> Result<(), String> {
-            if child.0 >= type_.0 {
-                return Err(format!(
-                    "checked-module certificate type {} references non-prior type {}",
-                    type_.0, child.0
-                ));
+fn validate_certificate_type(types: &[FlatTypeNode], root: FlatTypeId) -> Result<(), String> {
+    enum Frame {
+        Type(FlatTypeId),
+        LeaveScope(Vec<VariableId>),
+    }
+
+    let mut bound = HashSet::new();
+    let mut stack = vec![Frame::Type(root)];
+    let mut children = Vec::new();
+    while let Some(frame) = stack.pop() {
+        let type_ = match frame {
+            Frame::Type(type_) => type_,
+            Frame::LeaveScope(variables) => {
+                for variable in variables {
+                    bound.remove(&variable);
+                }
+                continue;
             }
-            validate_certificate_type(types, child, bound)
         };
-    match node {
-        FlatTypeNode::Rigid(variable) => {
-            if !bound.contains(variable) {
-                return Err(format!(
-                    "checked-module certificate contains free rigid variable {variable}"
-                ));
-            }
-        }
-        FlatTypeNode::Forall { variables, body } => {
-            let mut inserted = Vec::with_capacity(variables.len());
-            for variable in variables {
-                if !bound.insert(*variable) {
+        let index = type_.0 as usize;
+        let node = types
+            .get(index)
+            .ok_or_else(|| format!("checked-module certificate references missing type {index}"))?;
+        match node {
+            FlatTypeNode::Rigid(variable) => {
+                if !bound.contains(variable) {
                     return Err(format!(
-                        "checked-module certificate rebinds rigid variable {variable}"
+                        "checked-module certificate contains free rigid variable {variable}"
                     ));
                 }
-                inserted.push(*variable);
             }
-            validate_child(*body, bound)?;
-            for variable in inserted {
-                bound.remove(&variable);
+            FlatTypeNode::Forall { variables, body } => {
+                let mut inserted = Vec::with_capacity(variables.len());
+                for variable in variables {
+                    if !bound.insert(*variable) {
+                        return Err(format!(
+                            "checked-module certificate rebinds rigid variable {variable}"
+                        ));
+                    }
+                    inserted.push(*variable);
+                }
+                if body.0 >= type_.0 {
+                    return Err(format!(
+                        "checked-module certificate type {} references non-prior type {}",
+                        type_.0, body.0
+                    ));
+                }
+                stack.push(Frame::LeaveScope(inserted));
+                stack.push(Frame::Type(*body));
             }
-        }
-        FlatTypeNode::Function {
-            parameter,
-            effects,
-            result,
-            ..
-        } => {
-            validate_child(*parameter, bound)?;
-            validate_child(*effects, bound)?;
-            validate_child(*result, bound)?;
-        }
-        FlatTypeNode::Record(fields) | FlatTypeNode::Variant { cases: fields, .. } => {
-            for (_, field) in fields {
-                validate_child(*field, bound)?;
-            }
-        }
-        FlatTypeNode::RecordUpdate { base, fields } => {
-            validate_child(*base, bound)?;
-            for (_, field) in fields {
-                validate_child(*field, bound)?;
-            }
-        }
-        FlatTypeNode::Array(element)
-        | FlatTypeNode::Region(element)
-        | FlatTypeNode::Scratch(element) => {
-            validate_child(*element, bound)?;
-        }
-        FlatTypeNode::OpenEffects { tail, .. } => {
-            validate_child(*tail, bound)?;
-        }
-        FlatTypeNode::Union(members) => {
-            for member in members {
-                validate_child(*member, bound)?;
+            _ => {
+                children.clear();
+                append_flat_type_children(node, &mut children);
+                for child in children.iter().rev() {
+                    if child.0 >= type_.0 {
+                        return Err(format!(
+                            "checked-module certificate type {} references non-prior type {}",
+                            type_.0, child.0
+                        ));
+                    }
+                    stack.push(Frame::Type(*child));
+                }
             }
         }
-        FlatTypeNode::Range { .. }
-        | FlatTypeNode::Unit
-        | FlatTypeNode::Effects(_)
-        | FlatTypeNode::Opaque(_)
-        | FlatTypeNode::Top
-        | FlatTypeNode::Bottom => {}
     }
     Ok(())
 }
@@ -1625,8 +2011,16 @@ struct OpenUsageCandidate {
     shadowed: BTreeSet<String>,
 }
 
+#[derive(Clone)]
+struct ExpressionAnalysis {
+    display: String,
+    analysis_display: String,
+    nullary_unit: bool,
+    reported: bool,
+}
+
 type StructuralReadabilityCandidates =
-    HashMap<(String, ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
+    ModuleFacts<(ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
 
 const SPECIALIZATION_SOFT_LIMIT: usize = 2;
 const SPECIALIZATION_HARD_LIMIT: usize = 256;
@@ -1656,21 +2050,22 @@ pub struct Checker {
     deferred_predicate_closures: RefCell<HashSet<(String, ExpressionId)>>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
-    closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
-    signed_closure_types: RefCell<HashMap<(String, ExpressionId), Type>>,
-    expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
-    analysis_expression_types: RefCell<HashMap<(String, ExpressionId), Type>>,
-    declaration_tags: RefCell<HashMap<(String, Span), Vec<String>>>,
+    closure_types: RefCell<ModuleFacts<ExpressionId, Type>>,
+    signed_closure_types: RefCell<ModuleFacts<ExpressionId, Type>>,
+    expression_types: RefCell<ModuleFacts<ExpressionId, Type>>,
+    analysis_expression_types: RefCell<ModuleFacts<ExpressionId, Type>>,
+    expression_analyses: RefCell<ModuleFacts<ExpressionId, ExpressionAnalysis>>,
+    declaration_tags: RefCell<ModuleFacts<Span, Vec<String>>>,
     ownership_facts: RefCell<HashMap<String, Vec<crate::ownership::OwnershipFact>>>,
-    specializations: RefCell<HashMap<(String, ExpressionId), SpecializationBinding>>,
-    simplifications: RefCell<HashMap<(String, ExpressionId), SimplificationFact>>,
-    readability: RefCell<HashMap<(String, ExpressionId), Vec<ReadabilityFact>>>,
-    conflicting_readability: RefCell<HashSet<(String, ExpressionId, ReadabilityFactKind)>>,
+    specializations: RefCell<ModuleFacts<ExpressionId, SpecializationBinding>>,
+    simplifications: RefCell<ModuleFacts<ExpressionId, SimplificationFact>>,
+    readability: RefCell<ModuleFacts<ExpressionId, Vec<ReadabilityFact>>>,
+    conflicting_readability: RefCell<ModuleFacts<(ExpressionId, ReadabilityFactKind), ()>>,
     structural_readability_candidates: RefCell<StructuralReadabilityCandidates>,
-    stable_shadow_candidates: RefCell<HashMap<(String, ExpressionId), Vec<StableShadowCandidate>>>,
-    direct_effect_candidates: RefCell<HashMap<(String, ExpressionId), Vec<DirectEffectCandidate>>>,
-    open_usage_candidates: RefCell<HashMap<(String, ExpressionId), Vec<OpenUsageCandidate>>>,
-    recursive_closure_bodies: RefCell<HashSet<(String, ExpressionId)>>,
+    stable_shadow_candidates: RefCell<ModuleFacts<ExpressionId, Vec<StableShadowCandidate>>>,
+    direct_effect_candidates: RefCell<ModuleFacts<ExpressionId, Vec<DirectEffectCandidate>>>,
+    open_usage_candidates: RefCell<ModuleFacts<ExpressionId, Vec<OpenUsageCandidate>>>,
+    recursive_closure_bodies: RefCell<ModuleFacts<ExpressionId, ()>>,
     empty_array_elements: RefCell<HashSet<VariableId>>,
     incomplete_evaluations: RefCell<HashSet<String>>,
     module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
@@ -1678,6 +2073,28 @@ pub struct Checker {
 }
 
 impl Checker {
+    #[cfg(test)]
+    pub(crate) fn solver_cardinality(&self) -> (usize, usize) {
+        (
+            self.variables.borrow().len(),
+            self.constraint_types.borrow().nodes.len(),
+        )
+    }
+
+    #[cfg(feature = "development-profile")]
+    pub(crate) fn development_solver_cardinality(
+        &self,
+    ) -> crate::development::DevelopmentSolverCardinality {
+        let constraint_types = self.constraint_types.borrow();
+        crate::development::DevelopmentSolverCardinality {
+            variables: self.variables.borrow().len(),
+            constraint_type_nodes: constraint_types.nodes.len(),
+            constraint_type_interned: constraint_types.interned.len(),
+            settled_variables: self.settled_variables.borrow().len(),
+            residual_variables: self.residual_variables.borrow().len(),
+        }
+    }
+
     #[cfg(test)]
     pub fn new(context: Rc<Context>) -> Self {
         Self::with_caches(
@@ -1717,21 +2134,22 @@ impl Checker {
             deferred_predicate_closures: RefCell::new(HashSet::new()),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
-            closure_types: RefCell::new(HashMap::new()),
-            signed_closure_types: RefCell::new(HashMap::new()),
-            expression_types: RefCell::new(HashMap::new()),
-            analysis_expression_types: RefCell::new(HashMap::new()),
-            declaration_tags: RefCell::new(HashMap::new()),
+            closure_types: RefCell::new(ModuleFacts::default()),
+            signed_closure_types: RefCell::new(ModuleFacts::default()),
+            expression_types: RefCell::new(ModuleFacts::default()),
+            analysis_expression_types: RefCell::new(ModuleFacts::default()),
+            expression_analyses: RefCell::new(ModuleFacts::default()),
+            declaration_tags: RefCell::new(ModuleFacts::default()),
             ownership_facts: RefCell::new(HashMap::new()),
-            specializations: RefCell::new(HashMap::new()),
-            simplifications: RefCell::new(HashMap::new()),
-            readability: RefCell::new(HashMap::new()),
-            conflicting_readability: RefCell::new(HashSet::new()),
-            structural_readability_candidates: RefCell::new(HashMap::new()),
-            stable_shadow_candidates: RefCell::new(HashMap::new()),
-            direct_effect_candidates: RefCell::new(HashMap::new()),
-            open_usage_candidates: RefCell::new(HashMap::new()),
-            recursive_closure_bodies: RefCell::new(HashSet::new()),
+            specializations: RefCell::new(ModuleFacts::default()),
+            simplifications: RefCell::new(ModuleFacts::default()),
+            readability: RefCell::new(ModuleFacts::default()),
+            conflicting_readability: RefCell::new(ModuleFacts::default()),
+            structural_readability_candidates: RefCell::new(ModuleFacts::default()),
+            stable_shadow_candidates: RefCell::new(ModuleFacts::default()),
+            direct_effect_candidates: RefCell::new(ModuleFacts::default()),
+            open_usage_candidates: RefCell::new(ModuleFacts::default()),
+            recursive_closure_bodies: RefCell::new(ModuleFacts::default()),
             empty_array_elements: RefCell::new(HashSet::new()),
             incomplete_evaluations: RefCell::new(HashSet::new()),
             module_interfaces,
@@ -1779,33 +2197,39 @@ impl Checker {
         let analysis_expression_types = staged
             .analysis_expression_types
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((module, expression), type_)| {
-                (
-                    (module.clone(), *expression),
-                    staged.residual_signature(type_.clone()),
-                )
+            .module(path)
+            .map(|facts| {
+                facts
+                    .iter()
+                    .map(|(expression, type_)| {
+                        (*expression, staged.residual_signature(type_.clone()))
+                    })
+                    .collect::<HashMap<_, _>>()
             })
-            .collect::<Vec<_>>();
+            .unwrap_or_default();
         self.analysis_expression_types
             .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.analysis_expression_types
+            .replace_module(path.to_owned(), analysis_expression_types);
+
+        let expression_analyses = staged
+            .expression_analyses
+            .borrow()
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
+        self.expression_analyses
             .borrow_mut()
-            .extend(analysis_expression_types);
+            .replace_module(path.to_owned(), expression_analyses);
 
         let declaration_tags = staged
             .declaration_tags
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|(key, names)| (key.clone(), names.clone()))
-            .collect::<Vec<_>>();
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
         self.declaration_tags
             .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.declaration_tags.borrow_mut().extend(declaration_tags);
+            .replace_module(path.to_owned(), declaration_tags);
 
         let ownership_facts = staged.ownership_facts.borrow().get(path).cloned();
         self.ownership_facts.borrow_mut().remove(path);
@@ -1818,14 +2242,12 @@ impl Checker {
         let specializations = staged
             .specializations
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|(key, binding)| (key.clone(), binding.clone()))
-            .collect::<Vec<_>>();
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
         self.specializations
             .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.specializations.borrow_mut().extend(specializations);
+            .replace_module(path.to_owned(), specializations);
 
         let work = staged.module_work.borrow().get(path).cloned();
         self.module_work.borrow_mut().remove(path);
@@ -1905,7 +2327,7 @@ impl Checker {
             .borrow_mut()
             .insert(path.to_owned(), result.clone());
         if let Ok(checked) = &result
-            && let Some(interface) = CachedModuleInterface::from_checked(checked)
+            && let Ok(Some(interface)) = CachedModuleInterface::from_checked(checked)
         {
             self.module_interfaces
                 .borrow_mut()
@@ -1926,11 +2348,16 @@ impl Checker {
             )
         })?;
         if let Some(interface) = self.module_interfaces.borrow().get(path) {
-            return Ok(interface.certificate());
+            let certificate = interface.certificate();
+            certificate.validate()?;
+            return Ok(certificate);
         }
         let interface = match CachedModuleInterface::from_checked(&checked) {
-            Some(interface) => interface,
-            None => {
+            Ok(Some(interface)) => interface,
+            Err(error) => {
+                return Err(format!("cannot certify module {path}: {error}"));
+            }
+            Ok(None) => {
                 for (body, signature) in &checked.closure_signatures {
                     if !closed_checked_type(signature, &mut HashSet::new()) {
                         return Err(format!(
@@ -1960,7 +2387,9 @@ impl Checker {
                 return Err(format!("module {path} has no closed checked interface"));
             }
         };
-        Ok(interface.certificate())
+        let certificate = interface.certificate();
+        certificate.validate()?;
+        Ok(certificate)
     }
 
     pub(crate) fn install_interface(
@@ -2036,10 +2465,24 @@ impl Checker {
 
     pub fn begin_request(&self) {
         self.module_work.borrow_mut().clear();
-        let interfaces = self.module_interfaces.borrow();
-        self.modules
-            .borrow_mut()
-            .retain(|path, result| result.is_ok() && interfaces.contains_key(path));
+        self.modules.borrow_mut().clear();
+        self.closure_types.borrow_mut().clear();
+        self.signed_closure_types.borrow_mut().clear();
+        self.expression_types.borrow_mut().clear();
+        self.analysis_expression_types.borrow_mut().clear();
+        self.structural_readability_candidates.borrow_mut().clear();
+        self.stable_shadow_candidates.borrow_mut().clear();
+        self.direct_effect_candidates.borrow_mut().clear();
+        self.open_usage_candidates.borrow_mut().clear();
+        self.recursive_closure_bodies.borrow_mut().clear();
+        self.variables.borrow_mut().clear();
+        self.constraint_types.borrow_mut().reset();
+        self.settled_variables.borrow_mut().clear();
+        self.residual_variables.borrow_mut().clear();
+        self.bound_insertions.borrow_mut().clear();
+        self.empty_array_elements.borrow_mut().clear();
+        self.active_closures.borrow_mut().clear();
+        self.deferred_predicate_closures.borrow_mut().clear();
     }
 
     pub fn sealed_boundary_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -2054,68 +2497,62 @@ impl Checker {
         self.modules
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
-        self.closure_types
-            .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
-        self.signed_closure_types
-            .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
-        self.expression_types
-            .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+        self.closure_types.borrow_mut().remove_modules(paths);
+        self.signed_closure_types.borrow_mut().remove_modules(paths);
+        self.expression_types.borrow_mut().remove_modules(paths);
         self.analysis_expression_types
             .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
-        self.declaration_tags
-            .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+            .remove_modules(paths);
+        self.expression_analyses.borrow_mut().remove_modules(paths);
+        self.declaration_tags.borrow_mut().remove_modules(paths);
         self.ownership_facts
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
         self.specializations
             .borrow_mut()
-            .retain(|(path, _), binding| {
+            .retain_modules(|path, bindings| {
                 if paths.contains(path) {
                     return false;
                 }
-                binding.keys.retain(|_, key| {
-                    key.call_sites
-                        .retain(|(call_path, _)| !paths.contains(call_path));
-                    !key.call_sites.is_empty()
+                bindings.retain(|_, binding| {
+                    binding.keys.retain(|_, key| {
+                        key.call_sites
+                            .retain(|(call_path, _)| !paths.contains(call_path));
+                        !key.call_sites.is_empty()
+                    });
+                    !binding.keys.is_empty()
                 });
-                !binding.keys.is_empty()
+                !bindings.is_empty()
             });
-        self.readability
-            .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+        self.readability.borrow_mut().remove_modules(paths);
         self.conflicting_readability
             .borrow_mut()
-            .retain(|(path, _, _)| !paths.contains(path));
+            .remove_modules(paths);
         self.structural_readability_candidates
             .borrow_mut()
-            .retain(|(path, _, _), _| !paths.contains(path));
+            .remove_modules(paths);
         self.stable_shadow_candidates
             .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+            .remove_modules(paths);
         self.direct_effect_candidates
             .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+            .remove_modules(paths);
         self.open_usage_candidates
             .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+            .remove_modules(paths);
         self.module_work
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
         self.recursive_closure_bodies
             .borrow_mut()
-            .retain(|(path, _)| !paths.contains(path));
+            .remove_modules(paths);
         self.incomplete_evaluations
             .borrow_mut()
             .retain(|path| !paths.contains(path));
         self.context
             .ownership_contracts
             .borrow_mut()
-            .retain(|(path, _), _| !paths.contains(path));
+            .remove_modules(paths);
     }
 
     pub fn check_json(&self, path: &str) -> serde_json::Value {
@@ -2146,16 +2583,18 @@ impl Checker {
             .module
             .clone();
         let mut types = self
-            .analysis_expression_types
+            .expression_analyses
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), type_)| {
+            .module(path)
+            .into_iter()
+            .flatten()
+            .filter(|(_, analysis)| analysis.reported)
+            .map(|(expression, analysis)| {
                 (
                     *expression,
                     serde_json::json!({
                         "span": module.arena.expression_span(*expression),
-                        "type": self.show_analysis(type_),
+                        "type": analysis.analysis_display,
                     }),
                 )
             })
@@ -2172,9 +2611,10 @@ impl Checker {
         let mut tags = self
             .declaration_tags
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, span), names)| {
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(span, names)| {
                 (
                     *span,
                     names.clone(),
@@ -2214,9 +2654,10 @@ impl Checker {
         let mut specializations = self
             .specializations
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((module_path, body), binding)| {
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(body, binding)| {
                 let (span, name) = specialization_binding(&module, *body);
                 let keys = binding
                     .keys
@@ -2247,7 +2688,7 @@ impl Checker {
                     *body,
                     serde_json::json!({
                         "binding": {
-                            "path": module_path,
+                            "path": path,
                             "name": name,
                             "span": span,
                         },
@@ -2364,14 +2805,16 @@ impl Checker {
     fn record_readability(&self, path: &str, fact: ReadabilityFact) {
         let expression = fact.expression();
         let kind = fact.kind();
-        let key = (path.to_owned(), expression, kind);
-        if self.conflicting_readability.borrow().contains(&key) {
+        let key = (expression, kind);
+        if self
+            .conflicting_readability
+            .borrow()
+            .contains_key(path, &key)
+        {
             return;
         }
         let mut readability = self.readability.borrow_mut();
-        let facts = readability
-            .entry((path.to_owned(), expression))
-            .or_default();
+        let facts = readability.entry(path.to_owned(), expression).or_default();
         let existing = facts.iter().position(|candidate| candidate.kind() == kind);
         let Some(existing) = existing else {
             facts.push(fact);
@@ -2379,7 +2822,9 @@ impl Checker {
         };
         if facts[existing] != fact {
             facts.remove(existing);
-            self.conflicting_readability.borrow_mut().insert(key);
+            self.conflicting_readability
+                .borrow_mut()
+                .insert(path.to_owned(), key, ());
         }
     }
 
@@ -2396,7 +2841,7 @@ impl Checker {
         }
         self.structural_readability_candidates
             .borrow_mut()
-            .entry((path.to_owned(), expression, kind))
+            .entry(path.to_owned(), (expression, kind))
             .or_default()
             .push(candidate);
     }
@@ -2405,8 +2850,9 @@ impl Checker {
         let structural_candidates = self
             .structural_readability_candidates
             .borrow()
-            .iter()
-            .filter(|((module, _, _), _)| module == path)
+            .module(path)
+            .into_iter()
+            .flatten()
             .map(|(_, candidates)| candidates.clone())
             .collect::<Vec<_>>();
         for candidates in structural_candidates {
@@ -2424,9 +2870,10 @@ impl Checker {
         let direct_candidates = self
             .direct_effect_candidates
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(expression, candidates)| (*expression, candidates.clone()))
             .collect::<Vec<_>>();
         for (expression, candidates) in direct_candidates {
             let proved = !candidates.is_empty()
@@ -2447,9 +2894,10 @@ impl Checker {
         let stable_candidates = self
             .stable_shadow_candidates
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(expression, candidates)| (*expression, candidates.clone()))
             .collect::<Vec<_>>();
         for (expression, candidates) in stable_candidates {
             let Some(first) = candidates.first() else {
@@ -2483,9 +2931,10 @@ impl Checker {
         let open_candidates = self
             .open_usage_candidates
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), candidates)| (*expression, candidates.clone()))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(expression, candidates)| (*expression, candidates.clone()))
             .collect::<Vec<_>>();
         for (expression, candidates) in open_candidates {
             if candidates.is_empty()
@@ -2537,33 +2986,33 @@ impl Checker {
         path: &str,
         expression: ExpressionId,
     ) -> Option<String> {
+        if let Some(analysis) = self
+            .expression_analyses
+            .borrow()
+            .get(path, &expression)
+            .cloned()
+        {
+            return Some(analysis.display);
+        }
         self.expression_type(path, expression)
             .map(|type_| self.show(&type_))
     }
 
     pub(crate) fn expression_is_nullary_unit(&self, path: &str, expression: ExpressionId) -> bool {
+        if let Some(analysis) = self.expression_analyses.borrow().get(path, &expression) {
+            return analysis.nullary_unit;
+        }
         let Some(type_) = self.expression_type(path, expression) else {
             return false;
         };
-        let Type::Function {
-            parameter,
-            effects,
-            result,
-            ..
-        } = type_
-        else {
-            return false;
-        };
-        matches!(*parameter, Type::Unit)
-            && empty_effects(&effects)
-            && matches!(*result, Type::Unit | Type::Bottom)
+        nullary_unit_type(&type_)
     }
 
     fn expression_type(&self, path: &str, expression: ExpressionId) -> Option<Type> {
         let direct = self
             .analysis_expression_types
             .borrow()
-            .get(&(path.to_owned(), expression))
+            .get(path, &expression)
             .cloned();
         let type_ = if direct.is_some() {
             direct
@@ -2579,10 +3028,7 @@ impl Checker {
                 }
                 _ => None,
             }?;
-            self.closure_types
-                .borrow()
-                .get(&(path.to_owned(), body))
-                .cloned()
+            self.closure_types.borrow().get(path, &body).cloned()
         }?;
         Some(self.settle(type_, true))
     }
@@ -2590,33 +3036,27 @@ impl Checker {
     pub(crate) fn declaration_tag_names(&self, path: &str, span: Span) -> Vec<String> {
         self.declaration_tags
             .borrow()
-            .get(&(path.to_owned(), span))
+            .get(path, &span)
             .cloned()
             .unwrap_or_default()
     }
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
-        self.simplifications
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.readability
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+        self.simplifications.borrow_mut().remove_module(path);
+        self.readability.borrow_mut().remove_module(path);
         self.conflicting_readability
             .borrow_mut()
-            .retain(|(module, _, _)| module != path);
+            .remove_module(path);
         self.structural_readability_candidates
             .borrow_mut()
-            .retain(|(module, _, _), _| module != path);
+            .remove_module(path);
         self.stable_shadow_candidates
             .borrow_mut()
-            .retain(|(module, _), _| module != path);
+            .remove_module(path);
         self.direct_effect_candidates
             .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.open_usage_candidates
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
+            .remove_module(path);
+        self.open_usage_candidates.borrow_mut().remove_module(path);
         let loaded = self
             .context
             .modules
@@ -2645,7 +3085,7 @@ impl Checker {
             );
         }
         let mut types = TypeEnvironment::default();
-        let values = child_env(None);
+        let mut values = child_env(None);
         let parameter = loaded.module.parameter.map(|pattern| {
             let parameter = self.fresh();
             // The entry authority survives hoisting: projections from it
@@ -2660,6 +3100,7 @@ impl Checker {
             parameter
         });
         let mut signatures = BTreeMap::<String, Type>::new();
+        let mut recursive_bindings = None;
         let mut effects = Type::Effects(BTreeSet::new());
         types.forward = Rc::new(future_binding_names(
             &loaded.module,
@@ -2686,7 +3127,8 @@ impl Checker {
                 *declaration_id,
                 declaration,
                 &mut types,
-                &values,
+                &mut values,
+                &mut recursive_bindings,
                 &dependency_types,
                 &mut signatures,
             )?;
@@ -2764,7 +3206,7 @@ impl Checker {
                     || self
                         .recursive_closure_bodies
                         .borrow()
-                        .contains(&(path.to_owned(), body));
+                        .contains_key(path, &body);
                 if synthetic_recursive_bodies.contains(&body) {
                     signature = stable_loop_signature(signature);
                 }
@@ -2783,33 +3225,34 @@ impl Checker {
         let mut expression_types = self
             .expression_types
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), type_)| (*expression, self.residual_signature(type_.clone())))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(expression, type_)| (*expression, self.residual_signature(type_.clone())))
             .collect::<Vec<_>>();
         expression_types.sort_by_key(|(expression, _)| expression.0);
         let reified_expression_types = expression_types
             .iter()
             .filter_map(|(expression, type_)| {
                 self.reify_runtime_type(type_)
-                    .map(|type_| ((path.to_owned(), *expression), type_))
+                    .map(|type_| (*expression, type_))
             })
-            .collect::<Vec<_>>();
+            .collect::<HashMap<_, _>>();
         let reified_closure_signatures = closure_signatures
             .iter()
             .filter_map(|(body, type_)| {
                 self.reify_runtime_type(type_)
-                    .map(|signature| ((path.to_owned(), *body), signature))
+                    .map(|signature| (*body, signature))
             })
-            .collect::<Vec<_>>();
+            .collect::<HashMap<_, _>>();
         self.context
             .expression_types
             .borrow_mut()
-            .extend(reified_expression_types);
+            .replace_module(path.to_owned(), reified_expression_types);
         self.context
             .closure_signatures
             .borrow_mut()
-            .extend(reified_closure_signatures);
+            .replace_module(path.to_owned(), reified_closure_signatures);
         let signature_types = Rc::new(
             closure_signatures
                 .iter()
@@ -2830,32 +3273,86 @@ impl Checker {
             .closure_signature_resolvers
             .borrow_mut()
             .insert(path.to_owned(), resolver);
-        self.context.recursive_closures.borrow_mut().extend(
-            recursive_closures
-                .iter()
-                .map(|body| (path.to_owned(), *body)),
+        self.context.recursive_closures.borrow_mut().replace_module(
+            path.to_owned(),
+            recursive_closures.iter().map(|body| (*body, ())).collect(),
         );
-        self.context.ownership_contracts.borrow_mut().extend(
-            analyses
-                .ownership_contracts
-                .iter()
-                .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
-        );
+        self.context
+            .ownership_contracts
+            .borrow_mut()
+            .replace_module(
+                path.to_owned(),
+                analyses
+                    .ownership_contracts
+                    .iter()
+                    .map(|(body, contract)| (*body, contract.clone()))
+                    .collect(),
+            );
         self.finalize_readability(path);
+        let analysis_expression_types = self
+            .analysis_expression_types
+            .borrow()
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
+        let mut expression_analyses = analysis_expression_types
+            .iter()
+            .map(|(expression, type_)| {
+                let settled = self.settle(type_.clone(), true);
+                (
+                    *expression,
+                    ExpressionAnalysis {
+                        display: self.show(&settled),
+                        analysis_display: self.show_analysis(type_),
+                        nullary_unit: nullary_unit_type(&settled),
+                        reported: true,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for (index, expression) in loaded.module.arena.expressions.iter().enumerate() {
+            if !matches!(
+                expression,
+                Expression::Lambda { .. } | Expression::Rec { .. }
+            ) {
+                continue;
+            }
+            let expression = ExpressionId(index as u32);
+            if expression_analyses.contains_key(&expression) {
+                continue;
+            }
+            let Some(type_) = self.expression_type(path, expression) else {
+                continue;
+            };
+            expression_analyses.insert(
+                expression,
+                ExpressionAnalysis {
+                    display: self.show(&type_),
+                    analysis_display: self.show_analysis(&type_),
+                    nullary_unit: nullary_unit_type(&type_),
+                    reported: false,
+                },
+            );
+        }
+        self.expression_analyses
+            .borrow_mut()
+            .replace_module(path.to_owned(), expression_analyses);
         let mut simplifications = self
             .simplifications
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, expression), fact)| (*expression, fact.clone()))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(expression, fact)| (*expression, fact.clone()))
             .collect::<Vec<_>>();
         simplifications.sort_by_key(|(expression, _)| expression.0);
         let mut readability = self
             .readability
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .flat_map(|((_, expression), facts)| {
+            .module(path)
+            .into_iter()
+            .flatten()
+            .flat_map(|(expression, facts)| {
                 facts
                     .iter()
                     .cloned()
@@ -2893,14 +3390,11 @@ impl Checker {
         let mut types = self
             .closure_types
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, body), type_)| (*body, type_.clone()))
-            .collect::<HashMap<_, _>>();
-        for ((module, body), type_) in self.signed_closure_types.borrow().iter() {
-            if module == path {
-                types.insert(*body, type_.clone());
-            }
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(signed) = self.signed_closure_types.borrow().module(path) {
+            types.extend(signed.iter().map(|(body, type_)| (*body, type_.clone())));
         }
         types
     }
@@ -2917,24 +3411,27 @@ impl Checker {
         let mut closure_types = self
             .closure_types
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
-            .map(|((_, body), type_)| (*body, self.settle(type_.clone(), true)))
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(body, type_)| (*body, self.settle(type_.clone(), true)))
             .collect::<HashMap<_, _>>();
         closure_types.extend(
             self.signed_closure_types
                 .borrow()
-                .iter()
-                .filter(|((module, _), _)| module == path)
-                .map(|((_, body), type_)| (*body, type_.clone())),
+                .module(path)
+                .into_iter()
+                .flatten()
+                .map(|(body, type_)| (*body, type_.clone())),
         );
         let expression_types = self
             .analysis_expression_types
             .borrow()
-            .iter()
-            .filter(|((module, _), _)| module == path)
+            .module(path)
+            .into_iter()
+            .flatten()
             .filter(|(_, type_)| ownership_uses_expression_type(type_))
-            .map(|((_, expression), type_)| (*expression, self.settle(type_.clone(), true)))
+            .map(|(expression, type_)| (*expression, self.settle(type_.clone(), true)))
             .collect::<HashMap<_, _>>();
         let ownership = crate::ownership::check(
             path,
@@ -2992,7 +3489,37 @@ impl Checker {
     }
 
     fn inflate_interface(&self, path: &str, cached: CachedModuleInterface) -> CheckedModule {
+        cached
+            .validate_type_budget()
+            .expect("cached module interface must pass artifact admission before inflation");
         let mut rigids = HashMap::new();
+        if self.expression_analyses.borrow().module(path).is_none() {
+            let expression_analyses = cached
+                .expression_types
+                .iter()
+                .map(|(expression, type_)| {
+                    let mut expression_rigids = HashMap::new();
+                    let type_ = Self::inflate_cached_type(
+                        &cached.types,
+                        *type_,
+                        &mut expression_rigids,
+                        &self.next_skolem,
+                    );
+                    (
+                        *expression,
+                        ExpressionAnalysis {
+                            display: self.show(&type_),
+                            analysis_display: self.show_analysis(&type_),
+                            nullary_unit: nullary_unit_type(&type_),
+                            reported: true,
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+            self.expression_analyses
+                .borrow_mut()
+                .replace_module(path.to_owned(), expression_analyses);
+        }
         let expression_type_ids = cached
             .expression_types
             .iter()
@@ -3014,10 +3541,6 @@ impl Checker {
             next_representation_hole.set(next_hole);
             value
         });
-        self.context
-            .expression_types
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
         self.context
             .expression_type_resolvers
             .borrow_mut()
@@ -3048,25 +3571,28 @@ impl Checker {
             value
         });
         self.context
-            .closure_signatures
-            .borrow_mut()
-            .retain(|(module, _), _| module != path);
-        self.context
             .closure_signature_resolvers
             .borrow_mut()
             .insert(path.to_owned(), resolver);
-        self.context.recursive_closures.borrow_mut().extend(
+        self.context.recursive_closures.borrow_mut().replace_module(
+            path.to_owned(),
             cached
                 .recursive_closures
                 .iter()
-                .map(|body| (path.to_owned(), *body)),
+                .map(|body| (*body, ()))
+                .collect(),
         );
-        self.context.ownership_contracts.borrow_mut().extend(
-            cached
-                .ownership_contracts
-                .iter()
-                .map(|(body, contract)| ((path.to_owned(), *body), contract.clone())),
-        );
+        self.context
+            .ownership_contracts
+            .borrow_mut()
+            .replace_module(
+                path.to_owned(),
+                cached
+                    .ownership_contracts
+                    .iter()
+                    .map(|(body, contract)| (*body, contract.clone()))
+                    .collect(),
+            );
         CheckedModule {
             result: self.inflate_interface_type(&cached.types, cached.result, &mut rigids),
             effects: self.inflate_interface_type(&cached.types, cached.effects, &mut rigids),
@@ -3098,133 +3624,150 @@ impl Checker {
         rigids: &mut HashMap<VariableId, VariableId>,
         next_skolem: &Cell<VariableId>,
     ) -> Type {
-        match arena.node(type_) {
-            FlatTypeNode::Rigid(id) => Type::Rigid(*rigids.get(id).unwrap_or(id)),
-            FlatTypeNode::Forall { variables, body } => {
-                let mut fresh_variables = Vec::with_capacity(variables.len());
-                let mut previous = Vec::with_capacity(variables.len());
-                for variable in variables {
-                    let fresh = next_skolem.get();
-                    next_skolem.set(fresh + 1);
-                    previous.push((*variable, rigids.insert(*variable, fresh)));
-                    fresh_variables.push(fresh);
-                }
-                let body = Self::inflate_cached_type(arena, *body, rigids, next_skolem);
-                for (variable, prior) in previous {
-                    match prior {
-                        Some(prior) => {
-                            rigids.insert(variable, prior);
+        enum Frame {
+            Inflate(FlatTypeId),
+            Assemble(FlatTypeId, usize),
+            AssembleForall {
+                variables: Vec<VariableId>,
+                previous: Vec<(VariableId, Option<VariableId>)>,
+            },
+        }
+
+        let mut stack = vec![Frame::Inflate(type_)];
+        let mut inflated = Vec::new();
+        let mut children = Vec::new();
+        while let Some(frame) = stack.pop() {
+            match frame {
+                Frame::Inflate(type_) => match arena.node(type_) {
+                    FlatTypeNode::Rigid(id) => {
+                        inflated.push(Type::Rigid(*rigids.get(id).unwrap_or(id)));
+                    }
+                    FlatTypeNode::Forall { variables, body } => {
+                        let mut fresh_variables = Vec::with_capacity(variables.len());
+                        let mut previous = Vec::with_capacity(variables.len());
+                        for variable in variables {
+                            let fresh = next_skolem.get();
+                            next_skolem.set(fresh + 1);
+                            previous.push((*variable, rigids.insert(*variable, fresh)));
+                            fresh_variables.push(fresh);
                         }
-                        None => {
-                            rigids.remove(&variable);
+                        stack.push(Frame::AssembleForall {
+                            variables: fresh_variables,
+                            previous,
+                        });
+                        stack.push(Frame::Inflate(*body));
+                    }
+                    FlatTypeNode::Range { domain, low, high } => {
+                        inflated.push(Type::Range {
+                            domain: *domain,
+                            low: low.clone(),
+                            high: high.clone(),
+                        });
+                    }
+                    FlatTypeNode::Unit => inflated.push(Type::Unit),
+                    FlatTypeNode::Effects(labels) => {
+                        inflated.push(Type::Effects(labels.clone()));
+                    }
+                    FlatTypeNode::Opaque(name) => inflated.push(Type::Opaque(name.clone())),
+                    FlatTypeNode::Top => inflated.push(Type::Top),
+                    FlatTypeNode::Bottom => inflated.push(Type::Bottom),
+                    node => {
+                        children.clear();
+                        append_flat_type_children(node, &mut children);
+                        stack.push(Frame::Assemble(type_, children.len()));
+                        for child in children.iter().rev() {
+                            stack.push(Frame::Inflate(*child));
                         }
                     }
+                },
+                Frame::Assemble(type_, child_count) => {
+                    let first_child = inflated
+                        .len()
+                        .checked_sub(child_count)
+                        .expect("flat type assembly must receive every child");
+                    let mut children = inflated.split_off(first_child).into_iter();
+                    let type_ = match arena.node(type_) {
+                        FlatTypeNode::Function { deferred, .. } => Type::Function {
+                            deferred: *deferred,
+                            parameter: Rc::new(children.next().expect("function parameter")),
+                            effects: Rc::new(children.next().expect("function effects")),
+                            result: Rc::new(children.next().expect("function result")),
+                        },
+                        FlatTypeNode::Record(fields) => Type::Record(
+                            fields
+                                .iter()
+                                .zip(children)
+                                .map(|((name, _), type_)| (name.clone(), type_))
+                                .collect(),
+                        ),
+                        FlatTypeNode::RecordUpdate { fields, .. } => Type::RecordUpdate {
+                            base: Rc::new(children.next().expect("record-update base")),
+                            fields: fields
+                                .iter()
+                                .zip(children)
+                                .map(|((name, _), type_)| (name.clone(), type_))
+                                .collect(),
+                        },
+                        FlatTypeNode::Array(_) => {
+                            Type::Array(Rc::new(children.next().expect("array element")))
+                        }
+                        FlatTypeNode::Region(_) => {
+                            Type::Region(Rc::new(children.next().expect("region element")))
+                        }
+                        FlatTypeNode::Scratch(_) => {
+                            Type::Scratch(Rc::new(children.next().expect("scratch element")))
+                        }
+                        FlatTypeNode::Variant { cases, open } => Type::Variant {
+                            cases: cases
+                                .iter()
+                                .zip(children)
+                                .map(|((name, _), type_)| (name.clone(), type_))
+                                .collect(),
+                            open: *open,
+                        },
+                        FlatTypeNode::OpenEffects { labels, .. } => Type::OpenEffects {
+                            labels: labels.clone(),
+                            tail: Rc::new(children.next().expect("open-effects tail")),
+                        },
+                        FlatTypeNode::Union(_) => Type::Union(children.collect()),
+                        FlatTypeNode::Rigid(_)
+                        | FlatTypeNode::Forall { .. }
+                        | FlatTypeNode::Range { .. }
+                        | FlatTypeNode::Unit
+                        | FlatTypeNode::Effects(_)
+                        | FlatTypeNode::Opaque(_)
+                        | FlatTypeNode::Top
+                        | FlatTypeNode::Bottom => {
+                            unreachable!("leaf and quantified types assemble directly")
+                        }
+                    };
+                    inflated.push(type_);
                 }
-                Type::Forall {
-                    variables: fresh_variables,
-                    body: Rc::new(body),
+                Frame::AssembleForall {
+                    variables,
+                    previous,
+                } => {
+                    let body = inflated.pop().expect("forall body must be inflated");
+                    for (variable, prior) in previous {
+                        match prior {
+                            Some(prior) => {
+                                rigids.insert(variable, prior);
+                            }
+                            None => {
+                                rigids.remove(&variable);
+                            }
+                        }
+                    }
+                    inflated.push(Type::Forall {
+                        variables,
+                        body: Rc::new(body),
+                    });
                 }
             }
-            FlatTypeNode::Function {
-                deferred,
-                parameter,
-                effects,
-                result,
-            } => Type::Function {
-                deferred: *deferred,
-                parameter: Rc::new(Self::inflate_cached_type(
-                    arena,
-                    *parameter,
-                    rigids,
-                    next_skolem,
-                )),
-                effects: Rc::new(Self::inflate_cached_type(
-                    arena,
-                    *effects,
-                    rigids,
-                    next_skolem,
-                )),
-                result: Rc::new(Self::inflate_cached_type(
-                    arena,
-                    *result,
-                    rigids,
-                    next_skolem,
-                )),
-            },
-            FlatTypeNode::Record(fields) => Type::Record(
-                fields
-                    .iter()
-                    .map(|(name, type_)| {
-                        (
-                            name.clone(),
-                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
-                        )
-                    })
-                    .collect(),
-            ),
-            FlatTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
-                base: Rc::new(Self::inflate_cached_type(arena, *base, rigids, next_skolem)),
-                fields: fields
-                    .iter()
-                    .map(|(name, type_)| {
-                        (
-                            name.clone(),
-                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
-                        )
-                    })
-                    .collect(),
-            },
-            FlatTypeNode::Array(element) => Type::Array(Rc::new(Self::inflate_cached_type(
-                arena,
-                *element,
-                rigids,
-                next_skolem,
-            ))),
-            FlatTypeNode::Region(element) => Type::Region(Rc::new(Self::inflate_cached_type(
-                arena,
-                *element,
-                rigids,
-                next_skolem,
-            ))),
-            FlatTypeNode::Scratch(element) => Type::Scratch(Rc::new(Self::inflate_cached_type(
-                arena,
-                *element,
-                rigids,
-                next_skolem,
-            ))),
-            FlatTypeNode::Variant { cases, open } => Type::Variant {
-                cases: cases
-                    .iter()
-                    .map(|(name, type_)| {
-                        (
-                            name.clone(),
-                            Self::inflate_cached_type(arena, *type_, rigids, next_skolem),
-                        )
-                    })
-                    .collect(),
-                open: *open,
-            },
-            FlatTypeNode::Union(members) => Type::Union(
-                members
-                    .iter()
-                    .map(|member| Self::inflate_cached_type(arena, *member, rigids, next_skolem))
-                    .collect(),
-            ),
-            FlatTypeNode::Range { domain, low, high } => Type::Range {
-                domain: *domain,
-                low: low.clone(),
-                high: high.clone(),
-            },
-            FlatTypeNode::Unit => Type::Unit,
-            FlatTypeNode::Effects(labels) => Type::Effects(labels.clone()),
-            FlatTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
-                labels: labels.clone(),
-                tail: Rc::new(Self::inflate_cached_type(arena, *tail, rigids, next_skolem)),
-            },
-            FlatTypeNode::Opaque(name) => Type::Opaque(name.clone()),
-            FlatTypeNode::Top => Type::Top,
-            FlatTypeNode::Bottom => Type::Bottom,
         }
+        inflated
+            .pop()
+            .expect("flat type inflation must produce one type")
     }
 
     fn refuse_runtime_const_captures(
@@ -3467,7 +4010,8 @@ impl Checker {
         declaration_id: DeclarationId,
         declaration: Declaration,
         types: &mut TypeEnvironment,
-        values: &ValueEnvironment,
+        values: &mut ValueEnvironment,
+        recursive_bindings: &mut Option<(DeclarationKind, Rc<RecursiveBindings>)>,
         dependencies: &BTreeMap<String, Type>,
         signatures: &mut BTreeMap<String, Type>,
     ) -> Result<Type, Diagnostic> {
@@ -3511,9 +4055,11 @@ impl Checker {
                     let hole = replacements
                         .get(variable)
                         .expect("every signature hole must have an inference variable");
-                    self.analysis_expression_types
-                        .borrow_mut()
-                        .insert((path.to_owned(), expression), hole.clone());
+                    self.analysis_expression_types.borrow_mut().insert(
+                        path.to_owned(),
+                        expression,
+                        hole.clone(),
+                    );
                 }
                 if let Some(unrepresentable) = unrepresentable_integer(&signature) {
                     return Err(Diagnostic::new(
@@ -3526,9 +4072,11 @@ impl Checker {
                     ));
                 }
                 if let Some(body) = declaration_closure_body(module, &name) {
-                    self.signed_closure_types
-                        .borrow_mut()
-                        .insert((path.to_owned(), body), signature.clone());
+                    self.signed_closure_types.borrow_mut().insert(
+                        path.to_owned(),
+                        body,
+                        signature.clone(),
+                    );
                 }
                 signatures.insert(name, signature);
                 Ok(Type::Effects(BTreeSet::new()))
@@ -3557,12 +4105,29 @@ impl Checker {
                 if !tag_names.is_empty() {
                     self.declaration_tags
                         .borrow_mut()
-                        .insert((path.to_owned(), span), tag_names);
+                        .insert(path.to_owned(), span, tag_names);
                 }
                 let recursive = matches!(
                     module.arena.expressions[value.0 as usize],
                     Expression::Rec { .. }
                 );
+                let binding_recursive_bindings = if recursive {
+                    let bindings = match recursive_bindings {
+                        Some((group_kind, bindings)) if *group_kind == kind && !tagged => {
+                            bindings.clone()
+                        }
+                        _ => {
+                            let (recursive_values, bindings) = recursive_env(Some(values.clone()));
+                            *values = recursive_values;
+                            bindings
+                        }
+                    };
+                    *recursive_bindings = (!tagged).then(|| (kind, bindings.clone()));
+                    Some(bindings)
+                } else {
+                    *recursive_bindings = None;
+                    None
+                };
                 let stable_shadow = if kind == DeclarationKind::Let && !tagged && !recursive {
                     match &module.arena.patterns[pattern.0 as usize] {
                         Pattern::Name {
@@ -3609,6 +4174,12 @@ impl Checker {
                     }
                 }
                 let names = pattern_names(module, pattern);
+                let recursive_name = recursive.then(|| {
+                    names
+                        .first()
+                        .expect("a checked recursive pattern binds one name")
+                        .clone()
+                });
                 let signature = if names.len() == 1 {
                     signatures.remove(&names[0])
                 } else {
@@ -3670,7 +4241,7 @@ impl Checker {
                 if let Some((name, previous)) = stable_shadow {
                     self.stable_shadow_candidates
                         .borrow_mut()
-                        .entry((path.to_owned(), value))
+                        .entry(path.to_owned(), value)
                         .or_default()
                         .push(StableShadowCandidate {
                             name,
@@ -3686,7 +4257,7 @@ impl Checker {
                 if kind == DeclarationKind::Effect {
                     self.direct_effect_candidates
                         .borrow_mut()
-                        .entry((path.to_owned(), value))
+                        .entry(path.to_owned(), value)
                         .or_default()
                         .push(DirectEffectCandidate {
                             forced: suspended.is_some(),
@@ -3854,13 +4425,17 @@ impl Checker {
                     _ => None,
                 };
                 if let Some(body) = closure_body {
-                    self.closure_types
-                        .borrow_mut()
-                        .insert((path.to_owned(), body), inferred.type_.clone());
+                    self.closure_types.borrow_mut().insert(
+                        path.to_owned(),
+                        body,
+                        inferred.type_.clone(),
+                    );
                     if signed {
-                        self.signed_closure_types
-                            .borrow_mut()
-                            .insert((path.to_owned(), body), inferred.type_.clone());
+                        self.signed_closure_types.borrow_mut().insert(
+                            path.to_owned(),
+                            body,
+                            inferred.type_.clone(),
+                        );
                     }
                 }
                 for bound in recursive_bounds {
@@ -3899,6 +4474,11 @@ impl Checker {
                     self.settle(inferred.type_.clone(), true)
                 };
                 let inferred_signature = self.reify_runtime_type(&settled_signature);
+                let bound_values = if recursive {
+                    values.clone()
+                } else {
+                    declaration_env(values)
+                };
                 for name in names {
                     let body = match types.lookup(&name, self) {
                         Some(Typing::Mono(type_)) => type_,
@@ -3921,14 +4501,31 @@ impl Checker {
                     };
                     Rc::make_mut(&mut types.names).insert(name.clone(), typing);
                     if let Some(signature) = inferred_signature.clone() {
-                        values.signatures.borrow_mut().insert(name, signature);
+                        bound_values.signatures.borrow_mut().insert(name, signature);
                     }
                 }
                 if let Some(mut value_) = evaluated {
                     if let Some(signature) = &inferred_signature {
                         attach_signature(&mut value_, signature);
                     }
-                    if !match_pattern(module, pattern, &value_, values) {
+                    if recursive {
+                        if let Err(error) = binding_recursive_bindings
+                            .as_ref()
+                            .expect("a recursive declaration has a recursive group")
+                            .insert(
+                                recursive_name.expect("a recursive declaration binds one name"),
+                                value_,
+                            )
+                        {
+                            return Err(Diagnostic::new(
+                                "BLOT_RUST_INVARIANT",
+                                format!(
+                                    "A checked recursive binding could not join its group: {error:?}."
+                                ),
+                                span,
+                            ));
+                        }
+                    } else if !match_pattern(module, pattern, &value_, &bound_values) {
                         return Err(Diagnostic::new(
                             "BLOT_BINDING_MISMATCH",
                             "The declaration value does not match its pattern.",
@@ -3936,9 +4533,11 @@ impl Checker {
                         ));
                     }
                 }
+                *values = bound_values;
                 Ok(inferred.effects)
             }
             Declaration::Shadow { name, value, span } => {
+                *recursive_bindings = None;
                 let previous = types.lookup_stable(&name, self).ok_or_else(|| {
                     Diagnostic::new(
                         "BLOT_UNBOUND",
@@ -3968,7 +4567,9 @@ impl Checker {
                 }
                 match self.evaluate(path, value, values, Phase::Runtime) {
                     Ok(value_) => {
-                        values.names.borrow_mut().insert(name, value_);
+                        let shadow_values = declaration_env(values);
+                        shadow_values.names.borrow_mut().insert(name, value_);
+                        *values = shadow_values;
                     }
                     Err(_) => {
                         self.incomplete_evaluations
@@ -3979,6 +4580,7 @@ impl Checker {
                 Ok(inferred.effects)
             }
             Declaration::Open { value, span } => {
+                *recursive_bindings = None;
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Some(fields) = opened_members(&opened) else {
@@ -4032,7 +4634,7 @@ impl Checker {
                 let used = Rc::new(RefCell::new(BTreeSet::new()));
                 self.open_usage_candidates
                     .borrow_mut()
-                    .entry((path.to_owned(), value))
+                    .entry(path.to_owned(), value)
                     .or_default()
                     .push(OpenUsageCandidate {
                         effects: inferred.effects.clone(),
@@ -4045,10 +4647,12 @@ impl Checker {
                     resolved: Rc::new(RefCell::new(HashMap::new())),
                     used: used.clone(),
                 });
-                values
+                let open_values = declaration_env(values);
+                open_values
                     .opens
                     .borrow_mut()
                     .push(OpenedValues::tracked(fields, used));
+                *values = open_values;
                 Ok(inferred.effects)
             }
         }
@@ -4072,13 +4676,15 @@ impl Checker {
             dependencies,
         );
         if let Ok(inferred) = &inferred {
-            self.analysis_expression_types
-                .borrow_mut()
-                .insert((path.to_owned(), expression_id), inferred.type_.clone());
+            self.analysis_expression_types.borrow_mut().insert(
+                path.to_owned(),
+                expression_id,
+                inferred.type_.clone(),
+            );
             if let Some(fact) = simplification_fact(module, expression_id, values, &self.context) {
                 self.simplifications
                     .borrow_mut()
-                    .insert((path.to_owned(), expression_id), fact);
+                    .insert(path.to_owned(), expression_id, fact);
             }
             if matches!(
                 &module.arena.expressions[expression_id.0 as usize],
@@ -4122,9 +4728,11 @@ impl Checker {
             )
             && intrinsic_head(module, expression_id) != Some("@import")
         {
-            self.expression_types
-                .borrow_mut()
-                .insert((path.to_owned(), expression_id), inferred.type_.clone());
+            self.expression_types.borrow_mut().insert(
+                path.to_owned(),
+                expression_id,
+                inferred.type_.clone(),
+            );
         }
         inferred
     }
@@ -4566,9 +5174,11 @@ impl Checker {
                         span,
                     )?;
                     if let Some(signature) = evaluated_signature.clone() {
-                        self.analysis_expression_types
-                            .borrow_mut()
-                            .insert((path.to_owned(), function_expression), signature);
+                        self.analysis_expression_types.borrow_mut().insert(
+                            path.to_owned(),
+                            function_expression,
+                            signature,
+                        );
                     }
                     return Ok(Inferred {
                         type_: result,
@@ -4680,9 +5290,11 @@ impl Checker {
                     effects = self.join_effects(effects, selected_effects)?;
                 }
                 if let Some(signature) = evaluated_signature {
-                    self.analysis_expression_types
-                        .borrow_mut()
-                        .insert((path.to_owned(), function_expression), signature);
+                    self.analysis_expression_types.borrow_mut().insert(
+                        path.to_owned(),
+                        function_expression,
+                        signature,
+                    );
                 }
                 Ok(Inferred {
                     type_: selected_result,
@@ -4773,7 +5385,7 @@ impl Checker {
                 };
                 self.closure_types
                     .borrow_mut()
-                    .entry((path.to_owned(), body_id))
+                    .entry(path.to_owned(), body_id)
                     .or_insert_with(|| type_.clone());
                 Ok(Inferred::pure(type_))
             }
@@ -5100,8 +5712,9 @@ impl Checker {
                 ..
             } => {
                 let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-                let value_scope = child_env(Some(values.clone()));
+                let mut value_scope = child_env(Some(values.clone()));
                 let mut signatures = BTreeMap::new();
+                let mut recursive_bindings = None;
                 let mut effects = pure();
                 scope.forward = Rc::new(future_binding_names(module, &declarations));
                 for (index, declaration) in declarations.iter().enumerate() {
@@ -5119,7 +5732,8 @@ impl Checker {
                         declaration_id,
                         declaration,
                         &mut scope,
-                        &value_scope,
+                        &mut value_scope,
+                        &mut recursive_bindings,
                         dependencies,
                         &mut signatures,
                     )?;
@@ -5142,7 +5756,7 @@ impl Checker {
                 };
                 self.closure_types
                     .borrow_mut()
-                    .entry((path.to_owned(), body))
+                    .entry(path.to_owned(), body)
                     .or_insert_with(|| inferred.type_.clone());
                 Ok(inferred)
             }
@@ -5336,7 +5950,7 @@ impl Checker {
             };
             self.closure_types
                 .borrow_mut()
-                .insert((path.to_owned(), body), inferred.type_.clone());
+                .insert(path.to_owned(), body, inferred.type_.clone());
             return Ok(inferred);
         }
         if let Expression::Lambda {
@@ -5366,7 +5980,7 @@ impl Checker {
             }
             self.closure_types
                 .borrow_mut()
-                .insert((path.to_owned(), body), expected.clone());
+                .insert(path.to_owned(), body, expected.clone());
             let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
             let parameter_phase = Phase::Runtime;
             self.bind_pattern_at_phase(
@@ -5412,16 +6026,23 @@ impl Checker {
         if let Some(body) = signed_closure_body {
             self.closure_types
                 .borrow_mut()
-                .insert((path.to_owned(), body), expected.clone());
+                .insert(path.to_owned(), body, expected.clone());
         }
-        self.analysis_expression_types
-            .borrow_mut()
-            .insert((path.to_owned(), expression), expected.clone());
-        let key = (path.to_owned(), expression);
-        if self.expression_types.borrow().contains_key(&key) {
-            self.expression_types
-                .borrow_mut()
-                .insert(key, expected.clone());
+        self.analysis_expression_types.borrow_mut().insert(
+            path.to_owned(),
+            expression,
+            expected.clone(),
+        );
+        if self
+            .expression_types
+            .borrow()
+            .contains_key(path, &expression)
+        {
+            self.expression_types.borrow_mut().insert(
+                path.to_owned(),
+                expression,
+                expected.clone(),
+            );
         }
         Ok(Inferred {
             type_: expected,
@@ -5441,7 +6062,7 @@ impl Checker {
         let representation = self.show_analysis(&self.settle(parameter_type.clone(), true));
         let mut specializations = self.specializations.borrow_mut();
         let binding = specializations
-            .entry((closure_module.to_owned(), body))
+            .entry(closure_module.to_owned(), body)
             .or_default();
         if !binding.keys.contains_key(&representation)
             && binding.keys.len() >= SPECIALIZATION_HARD_LIMIT
@@ -5578,7 +6199,7 @@ impl Checker {
         }
         self.closure_types
             .borrow_mut()
-            .entry((closure_module.to_owned(), body))
+            .entry(closure_module.to_owned(), body)
             .or_insert_with(|| function.clone());
         Ok(function)
     }
@@ -7737,15 +8358,25 @@ impl Checker {
         environment: &ValueEnvironment,
         phase: Phase,
     ) -> Result<Value, Diagnostic> {
-        let key = (pattern, expression, phase);
-        if let Some(value) = self
-            .context
-            .evaluated_bindings
-            .borrow()
-            .get(path)
-            .and_then(|bindings| bindings.get(&key))
-        {
-            return Ok(value.clone());
+        let environment_identity = Rc::as_ptr(environment) as usize;
+        let key = (pattern, expression, phase, environment_identity);
+        let cached = {
+            let evaluated_bindings = self.context.evaluated_bindings.borrow();
+            evaluated_bindings.get(path).and_then(|bindings| {
+                bindings
+                    .get(&key)
+                    .filter(|cached| {
+                        cached
+                            .environment
+                            .upgrade()
+                            .is_some_and(|cached| Rc::ptr_eq(&cached, environment))
+                    })
+                    .or_else(|| bindings.get(&(pattern, expression, phase, 0)))
+                    .map(|cached| cached.value.clone())
+            })
+        };
+        if let Some(value) = cached {
+            return Ok(value);
         }
         let evaluated = run(evaluate_binding(
             self.context.clone(),
@@ -7756,12 +8387,23 @@ impl Checker {
             Runtime::new(phase, path.to_owned()),
         ));
         if let Ok(value) = &evaluated {
+            let key = if reusable_across_module_instances(value) {
+                (pattern, expression, phase, 0)
+            } else {
+                key
+            };
             self.context
                 .evaluated_bindings
                 .borrow_mut()
                 .entry(path.to_owned())
                 .or_default()
-                .insert(key, value.clone());
+                .insert(
+                    key,
+                    crate::eval::CachedEvaluatedBinding {
+                        environment: Rc::downgrade(environment),
+                        value: value.clone(),
+                    },
+                );
         }
         evaluated
     }
@@ -8178,11 +8820,15 @@ pub(crate) fn sealed_type_name(identity: &str) -> Option<&str> {
 }
 
 fn closed_type_key(type_: &Type) -> Option<String> {
+    fn text(value: &str) -> String {
+        format!("{}:{value}", value.len())
+    }
+
     fn scalar(value: Option<&Scalar>) -> String {
         match value {
             None => "*".to_owned(),
             Some(Scalar::Int(value)) => format!("i{value}"),
-            Some(Scalar::Text(value)) => format!("s{value:?}"),
+            Some(Scalar::Text(value)) => format!("s{}", text(value)),
         }
     }
 
@@ -8193,7 +8839,7 @@ fn closed_type_key(type_: &Type) -> Option<String> {
     ) -> Option<String> {
         let mut keyed = values
             .iter()
-            .map(|(field, type_)| Some(format!("{field:?}:{}", visit(type_, binders)?)))
+            .map(|(field, type_)| Some(format!("{}{}", text(field), visit(type_, binders)?)))
             .collect::<Option<Vec<_>>>()?;
         keyed.sort();
         Some(format!("{name}{{{}}}", keyed.join(",")))
@@ -8213,11 +8859,19 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 *binders = previous;
                 Some(format!("all{}({})", variables.len(), body?))
             }
-            Type::Range { domain, low, high } => Some(format!(
-                "range({domain:?},{},{})",
-                scalar(low.as_ref()),
-                scalar(high.as_ref())
-            )),
+            Type::Range { domain, low, high } => {
+                let domain = match domain {
+                    Domain::Int => "int",
+                    Domain::Text => "text",
+                    Domain::Float => "float64",
+                    Domain::Float32 => "float32",
+                };
+                Some(format!(
+                    "range({domain},{},{})",
+                    scalar(low.as_ref()),
+                    scalar(high.as_ref())
+                ))
+            }
             Type::Unit => Some("unit".to_owned()),
             Type::Function {
                 deferred,
@@ -8249,7 +8903,7 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 "effects{{{}}}",
                 labels
                     .iter()
-                    .map(|label| format!("{label:?}"))
+                    .map(|label| text(label))
                     .collect::<Vec<_>>()
                     .join(",")
             )),
@@ -8257,7 +8911,7 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 "open-effects{{{};{}}}",
                 labels
                     .iter()
-                    .map(|label| format!("{label:?}"))
+                    .map(|label| text(label))
                     .collect::<Vec<_>>()
                     .join(","),
                 visit(tail, binders)?
@@ -8270,7 +8924,7 @@ fn closed_type_key(type_: &Type) -> Option<String> {
                 keys.sort();
                 Some(format!("union{{{}}}", keys.join(",")))
             }
-            Type::Opaque(name) => Some(format!("opaque({name:?})")),
+            Type::Opaque(name) => Some(format!("opaque({})", text(name))),
             Type::Top => Some("top".to_owned()),
             Type::Bottom => Some("bottom".to_owned()),
         }
@@ -10062,11 +10716,27 @@ fn prebind_recursive_group(
     if !recursive_declaration(module, *declaration_id) {
         return Ok(());
     }
-    if declarations[..index]
-        .iter()
-        .rev()
-        .find(|declaration| !signature_declaration(module, **declaration))
-        .is_some_and(|declaration| recursive_declaration(module, *declaration))
+    let Declaration::Binding {
+        kind: group_kind,
+        tags: group_tags,
+        ..
+    } = &module.arena.declarations[declaration_id.0 as usize]
+    else {
+        unreachable!("a recursive declaration is a binding")
+    };
+    if group_tags.is_empty()
+        && declarations[..index]
+            .iter()
+            .rev()
+            .find(|declaration| !signature_declaration(module, **declaration))
+            .is_some_and(|declaration| {
+                let Declaration::Binding { kind, tags, .. } =
+                    &module.arena.declarations[declaration.0 as usize]
+                else {
+                    return false;
+                };
+                recursive_declaration(module, *declaration) && kind == group_kind && tags.is_empty()
+            })
     {
         return Ok(());
     }
@@ -10081,6 +10751,7 @@ fn prebind_recursive_group(
         }
         let Declaration::Binding {
             kind,
+            tags,
             pattern,
             value,
             span,
@@ -10089,6 +10760,9 @@ fn prebind_recursive_group(
         else {
             break;
         };
+        if kind != group_kind || (!tags.is_empty() && !closures.is_empty()) {
+            break;
+        }
         let bound_names = pattern_names(module, *pattern);
         for name in &bound_names {
             if !names.insert(name.clone()) {
@@ -10120,6 +10794,9 @@ fn prebind_recursive_group(
         };
         for name in bound_names {
             closures.push((name, parameter, body));
+        }
+        if !tags.is_empty() {
+            break;
         }
     }
     certify_recursive_components(path, checker, closures)?;
@@ -10166,13 +10843,11 @@ fn certify_recursive_components(
         if !recursive {
             continue;
         }
-        checker
-            .recursive_closure_bodies
-            .borrow_mut()
-            .extend(component.into_iter().map(|member| {
-                let (_, _, body) = closures[member];
-                (path.to_owned(), body)
-            }));
+        let mut recursive_closure_bodies = checker.recursive_closure_bodies.borrow_mut();
+        for member in component {
+            let (_, _, body) = closures[member];
+            recursive_closure_bodies.insert(path.to_owned(), body, ());
+        }
     }
     Ok(())
 }
@@ -10187,10 +10862,19 @@ fn finish_component(
         return;
     }
     visited[node] = true;
-    for target in &graph[node] {
-        finish_component(*target, graph, visited, order);
+    let mut pending = vec![(node, 0)];
+    while let Some((node, next_target)) = pending.last_mut() {
+        if let Some(target) = graph[*node].get(*next_target).copied() {
+            *next_target += 1;
+            if !visited[target] {
+                visited[target] = true;
+                pending.push((target, 0));
+            }
+            continue;
+        }
+        order.push(*node);
+        pending.pop();
     }
-    order.push(node);
 }
 
 fn collect_component(
@@ -10203,9 +10887,15 @@ fn collect_component(
         return;
     }
     visited[node] = true;
-    component.push(node);
-    for source in &reverse[node] {
-        collect_component(*source, reverse, visited, component);
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        component.push(node);
+        for source in &reverse[node] {
+            if !visited[*source] {
+                visited[*source] = true;
+                pending.push(*source);
+            }
+        }
     }
 }
 
@@ -11557,6 +12247,21 @@ pub(crate) fn empty_effects(type_: &Type) -> bool {
     matches!(type_, Type::Bottom) || matches!(type_, Type::Effects(labels) if labels.is_empty())
 }
 
+fn nullary_unit_type(type_: &Type) -> bool {
+    let Type::Function {
+        parameter,
+        effects,
+        result,
+        ..
+    } = type_
+    else {
+        return false;
+    };
+    matches!(parameter.as_ref(), Type::Unit)
+        && empty_effects(effects)
+        && matches!(result.as_ref(), Type::Unit | Type::Bottom)
+}
+
 pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
     match type_ {
         Type::Forall { body, .. }
@@ -11748,6 +12453,65 @@ fn flatten_interface_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn certificate_with_result(
+        mut types: Vec<FlatTypeNode>,
+        result: FlatTypeId,
+    ) -> CheckedModuleCertificate {
+        let effects = FlatTypeId(types.len() as u32);
+        types.push(FlatTypeNode::Effects(BTreeSet::new()));
+        CheckedModuleCertificate {
+            schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
+            types,
+            result,
+            effects,
+            parameter: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
+            readability: Vec::new(),
+        }
+    }
+
+    fn nested_array_certificate(depth: usize) -> CheckedModuleCertificate {
+        let mut types = vec![FlatTypeNode::Unit];
+        let mut result = FlatTypeId(0);
+        for _ in 0..depth {
+            result = FlatTypeId(types.len() as u32);
+            types.push(FlatTypeNode::Array(FlatTypeId(result.0 - 1)));
+        }
+        certificate_with_result(types, result)
+    }
+
+    fn duplicating_union_certificate(depth: usize) -> CheckedModuleCertificate {
+        let mut types = vec![FlatTypeNode::Unit];
+        let mut result = FlatTypeId(0);
+        for _ in 0..depth {
+            let previous = result;
+            result = FlatTypeId(types.len() as u32);
+            types.push(FlatTypeNode::Union(vec![previous, previous]));
+        }
+        certificate_with_result(types, result)
+    }
+
+    fn nested_union_certificate(depth: usize) -> CheckedModuleCertificate {
+        let mut types = vec![FlatTypeNode::Unit];
+        let mut result = FlatTypeId(0);
+        for _ in 0..depth {
+            let previous = result;
+            result = FlatTypeId(types.len() as u32);
+            types.push(FlatTypeNode::Union(vec![previous]));
+        }
+        certificate_with_result(types, result)
+    }
+
+    fn cache_checked(checked: &CheckedModule) -> CachedModuleInterface {
+        CachedModuleInterface::from_checked(checked)
+            .expect("closed test interface must pass artifact admission")
+            .expect("test interface must be closed")
+    }
 
     #[test]
     fn exposed_effect_identity_prevents_module_result_reuse() {
@@ -12036,8 +12800,7 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let cached = CachedModuleInterface::from_checked(&checked)
-            .expect("a quantified closed interface is cacheable");
+        let cached = cache_checked(&checked);
         let checker = Checker::new(Rc::new(Context::default()));
 
         let first = checker.inflate_interface("first", cached.clone()).result;
@@ -12063,6 +12826,83 @@ mod tests {
     }
 
     #[test]
+    fn checked_certificate_at_the_reference_path_limit_is_safe_to_seal_and_inflate() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let cached = CachedModuleInterface::from_certificate(nested_array_certificate(
+                    ARTIFACT_REFERENCE_PATH_LIMIT,
+                ))
+                .expect("a certificate at the reference-path limit must be admitted");
+                cached
+                    .sealed_boundary_bytes()
+                    .expect("an admitted interface must be safe to seal");
+                let checker = Checker::new(Rc::new(Context::default()));
+                let inflated = checker.inflate_interface("depth-limit", cached);
+                assert!(matches!(&inflated.result, Type::Array(_)));
+            })
+            .expect("small-stack certificate thread must start")
+            .join()
+            .expect("at-limit certificate consumers must not overflow");
+    }
+
+    #[test]
+    fn checked_certificate_seals_nested_unions_at_the_reference_path_limit() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let cached = CachedModuleInterface::from_certificate(nested_union_certificate(
+                    ARTIFACT_REFERENCE_PATH_LIMIT,
+                ))
+                .expect("a union certificate at the reference-path limit must be admitted");
+                cached
+                    .sealed_boundary_bytes()
+                    .expect("an admitted union interface must be safe to seal");
+            })
+            .expect("small-stack union certificate thread must start")
+            .join()
+            .expect("at-limit union sealing must not overflow");
+    }
+
+    #[test]
+    fn checked_certificate_rejects_a_reference_path_over_the_limit() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let error = match CachedModuleInterface::from_certificate(nested_array_certificate(
+                    ARTIFACT_REFERENCE_PATH_LIMIT + 1,
+                )) {
+                    Ok(_) => panic!("an over-limit certificate must be refused"),
+                    Err(error) => error,
+                };
+                assert!(error.contains("reference-path depth 129, maximum is 128"));
+            })
+            .expect("small-stack certificate thread must start")
+            .join()
+            .expect("over-limit certificate validation must not overflow");
+    }
+
+    #[test]
+    fn checked_certificate_rejects_a_shallow_expansion_bomb() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let error = match CachedModuleInterface::from_certificate(
+                    duplicating_union_certificate(20),
+                ) {
+                    Ok(_) => panic!("an over-budget expanded DAG must be refused"),
+                    Err(error) => error,
+                };
+                assert!(
+                    error.contains("expand to at least 1048577 references, maximum is 1048576")
+                );
+            })
+            .expect("small-stack certificate thread must start")
+            .join()
+            .expect("expanded-reference certificate validation must not overflow");
+    }
+
+    #[test]
     fn cached_private_type_facts_are_reified_on_demand() {
         let checked = CheckedModule {
             result: Type::Unit,
@@ -12076,8 +12916,7 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let cached = CachedModuleInterface::from_checked(&checked)
-            .expect("a closed interface should be cacheable");
+        let cached = cache_checked(&checked);
         let context = Rc::new(Context::default());
         let checker = Checker::new(context.clone());
 
@@ -12112,6 +12951,63 @@ mod tests {
     }
 
     #[test]
+    fn invalidation_removes_only_changed_module_facts_and_call_sites() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        checker.analysis_expression_types.borrow_mut().insert(
+            "changed.blot".to_owned(),
+            ExpressionId(1),
+            Type::Unit,
+        );
+        checker.analysis_expression_types.borrow_mut().insert(
+            "unchanged.blot".to_owned(),
+            ExpressionId(2),
+            Type::Unit,
+        );
+        let retained_span = Span { start: 3, end: 4 };
+        let mut specialization = SpecializationBinding::default();
+        specialization.keys.insert(
+            "Int".to_owned(),
+            SpecializationKey {
+                reason: "test representation",
+                call_sites: vec![
+                    ("changed.blot".to_owned(), Span { start: 1, end: 2 }),
+                    ("unchanged.blot".to_owned(), retained_span),
+                ],
+            },
+        );
+        checker.specializations.borrow_mut().insert(
+            "unchanged.blot".to_owned(),
+            ExpressionId(3),
+            specialization,
+        );
+
+        checker.invalidate(&HashSet::from(["changed.blot".to_owned()]));
+
+        assert!(
+            checker
+                .analysis_expression_types
+                .borrow()
+                .module("changed.blot")
+                .is_none()
+        );
+        assert!(
+            checker
+                .analysis_expression_types
+                .borrow()
+                .get("unchanged.blot", &ExpressionId(2))
+                .is_some()
+        );
+        let specializations = checker.specializations.borrow();
+        let retained = specializations
+            .get("unchanged.blot", &ExpressionId(3))
+            .expect("unchanged specialization should remain");
+        assert_eq!(
+            retained.keys["Int"].call_sites,
+            vec![("unchanged.blot".to_owned(), retained_span)]
+        );
+    }
+
+    #[test]
     fn sealed_boundaries_are_alpha_canonical_and_ignore_private_facts() {
         let interface = |variable, private_type| CheckedModule {
             result: Type::Forall {
@@ -12130,12 +13026,10 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let first = CachedModuleInterface::from_checked(&interface(7, Type::Unit))
-            .expect("first interface should close")
+        let first = cache_checked(&interface(7, Type::Unit))
             .sealed_boundary_bytes()
             .expect("first boundary should serialize");
-        let second = CachedModuleInterface::from_checked(&interface(42, int_type()))
-            .expect("second interface should close")
+        let second = cache_checked(&interface(42, int_type()))
             .sealed_boundary_bytes()
             .expect("second boundary should serialize");
 
@@ -12144,6 +13038,70 @@ mod tests {
             SealedModuleBoundary::from_bytes(&first).expect("canonical boundary should round-trip");
         assert_eq!(decoded.schema, SealedModuleBoundary::SCHEMA);
         assert_eq!(decoded.compiler_semantic_version, env!("CARGO_PKG_VERSION"),);
+    }
+
+    #[test]
+    fn sealed_boundaries_canonicalize_union_member_order() {
+        let integer = Type::Range {
+            domain: Domain::Int,
+            low: None,
+            high: None,
+        };
+        let text = Type::Range {
+            domain: Domain::Text,
+            low: None,
+            high: None,
+        };
+        let boundary = |members| CheckedModule {
+            result: Type::Union(members),
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
+            readability: Vec::new(),
+        };
+        let first = cache_checked(&boundary(vec![integer.clone(), text.clone()].into()))
+            .sealed_boundary_bytes()
+            .expect("first union boundary should serialize");
+        let second = cache_checked(&boundary(vec![text, integer].into()))
+            .sealed_boundary_bytes()
+            .expect("second union boundary should serialize");
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn sealed_boundary_flat_keys_match_closed_type_keys() {
+        let type_ = Type::Forall {
+            variables: vec![7],
+            body: Rc::new(Type::Record(
+                vec![
+                    ("zeta".to_owned(), Type::Array(Rc::new(Type::Rigid(7)))),
+                    (
+                        "alpha".to_owned(),
+                        Type::Union(vec![Type::Unit, int_type()].into()),
+                    ),
+                ]
+                .into(),
+            )),
+        };
+        let mut builder = FlatTypeBuilder::default();
+        let root = flatten_interface_type(&type_, &mut HashSet::new(), &mut builder)
+            .expect("representative closed type must flatten");
+        let arena = FlatTypeArena {
+            nodes: builder.nodes,
+        };
+        let expected = closed_type_key(&Type::Forall {
+            variables: Vec::new(),
+            body: Rc::new(type_),
+        })
+        .expect("representative type must have a closed key");
+
+        assert_eq!(closed_boundary_type_key(&arena, root, &[]), Some(expected));
     }
 
     #[test]
@@ -12160,12 +13118,10 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let first = CachedModuleInterface::from_checked(&interface(Type::Unit))
-            .expect("first interface should close")
+        let first = cache_checked(&interface(Type::Unit))
             .sealed_boundary_bytes()
             .expect("first boundary should serialize");
-        let second = CachedModuleInterface::from_checked(&interface(int_type()))
-            .expect("second interface should close")
+        let second = cache_checked(&interface(int_type()))
             .sealed_boundary_bytes()
             .expect("second boundary should serialize");
 
@@ -12187,7 +13143,47 @@ mod tests {
             readability: Vec::new(),
         };
 
-        assert!(CachedModuleInterface::from_checked(&checked).is_none());
+        assert!(matches!(
+            CachedModuleInterface::from_checked(&checked),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn cached_interfaces_reject_types_over_the_artifact_reference_path_limit() {
+        let mut result = Type::Unit;
+        for _ in 0..=ARTIFACT_REFERENCE_PATH_LIMIT {
+            result = Type::Array(Rc::new(result));
+        }
+        let checked = CheckedModule {
+            result,
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
+            readability: Vec::new(),
+        };
+
+        let error = match CachedModuleInterface::from_checked(&checked) {
+            Ok(_) => panic!("an over-limit checked interface must be refused"),
+            Err(error) => error,
+        };
+        assert!(error.contains("reference-path depth 129, maximum is 128"));
+
+        let checker = Checker::new(Rc::new(Context::default()));
+        checker
+            .modules
+            .borrow_mut()
+            .insert("over-limit".to_owned(), Ok(checked));
+        let error = match checker.certificate("over-limit") {
+            Ok(_) => panic!("certificate export must refuse an over-limit checked interface"),
+            Err(error) => error,
+        };
+        assert!(error.contains("reference-path depth 129, maximum is 128"));
     }
 
     #[test]
@@ -12204,8 +13200,7 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let cached =
-            CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
+        let cached = cache_checked(&checked);
 
         assert!(
             cached
@@ -12237,8 +13232,7 @@ mod tests {
             simplifications: Vec::new(),
             readability: Vec::new(),
         };
-        let cached =
-            CachedModuleInterface::from_checked(&checked).expect("a closed interface is cacheable");
+        let cached = cache_checked(&checked);
 
         assert!(cached.certificate().validate().is_err_and(|error| {
             error.contains("ownership contract for unknown closure expression 8")

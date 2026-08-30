@@ -258,6 +258,16 @@ disagree, violates `closedRep` and is an invariant failure. A decoded immutable
 aggregate may reuse a structural memo only when every recorded checked view has
 the same closed representation.
 
+The checked-aggregate memo is queried online while Runtime HIR is constructed.
+Equality of its structural keys must therefore imply equality of the complete
+runtime representation at the moment of lookup: runtime leaves retain their
+trace-local type identity, known static leaves retain their scalar or SIMD
+class, and a value with an unknown leaf or an untyped empty-array element has no
+structural key. Discovering a conflicting checked view later cannot repair HIR
+already emitted with the wrong layout. This online concrete-value memo is
+distinct from call-specialization representation facts, whose observations are
+collected before their coarser structural keys are read.
+
 A validation failure caused only by unresolved representation for a closed
 accepted internal program is an `InvariantFailure`. An explicitly unsupported
 public ABI type or experimental target feature may return `TargetRefusal` at its

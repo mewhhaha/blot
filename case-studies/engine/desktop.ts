@@ -1,4 +1,4 @@
-import { Compiler, type CompilerArtifact } from "../../src/compiler/session.ts";
+import { Compiler } from "../../src/compiler/session.ts";
 
 const TICK = 0;
 const RUNNING = 1;
@@ -70,7 +70,202 @@ interface Voxel {
   readonly color: Color;
 }
 
-type Renderable = Triangle | Sprite | Voxel;
+type ProjectedRenderable = Triangle | Sprite;
+
+type GameLoopMessage =
+  | { readonly kind: "option"; readonly key: number; readonly name: string }
+  | { readonly kind: "selected"; readonly key: number; readonly name: string }
+  | { readonly kind: "settled" }
+  | { readonly kind: "redraw" }
+  | {
+    readonly kind: "frame";
+    readonly draws: readonly ProjectedRenderable[];
+    readonly distance: number;
+    readonly lens: number;
+  }
+  | {
+    readonly kind: "voxel-frame";
+    readonly voxels: readonly Voxel[];
+    readonly reset: boolean;
+  }
+  | { readonly kind: "done"; readonly frames: number };
+
+const readMessageProperty = (
+  value: object,
+  name: string,
+  context: string,
+): unknown => {
+  if (!Reflect.has(value, name)) {
+    throw new Error(`${context} omitted ${name}`);
+  }
+  const property: unknown = Reflect.get(value, name);
+  return property;
+};
+
+const readMessageObject = (value: unknown, context: string): object => {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${context} must be an object, received ${typeof value}`);
+  }
+  return value;
+};
+
+const readMessageNumber = (
+  value: object,
+  name: string,
+  context: string,
+): number => {
+  const number = readMessageProperty(value, name, context);
+  if (typeof number !== "number" || !Number.isFinite(number)) {
+    throw new Error(
+      `${context}.${name} must be a finite number, received ${String(number)}`,
+    );
+  }
+  return number;
+};
+
+const readMessageString = (
+  value: object,
+  name: string,
+  context: string,
+): string => {
+  const text = readMessageProperty(value, name, context);
+  if (typeof text !== "string") {
+    throw new Error(`${context}.${name} must be text, received ${typeof text}`);
+  }
+  return text;
+};
+
+const readMessageBoolean = (
+  value: object,
+  name: string,
+  context: string,
+): boolean => {
+  const boolean = readMessageProperty(value, name, context);
+  if (typeof boolean !== "boolean") {
+    throw new Error(
+      `${context}.${name} must be Boolean, received ${typeof boolean}`,
+    );
+  }
+  return boolean;
+};
+
+const readColor = (value: unknown, context: string): Color => {
+  const color = readMessageObject(value, context);
+  return {
+    red: readMessageNumber(color, "red", context),
+    green: readMessageNumber(color, "green", context),
+    blue: readMessageNumber(color, "blue", context),
+  };
+};
+
+const readProjectedRenderable = (
+  value: unknown,
+  context: string,
+): ProjectedRenderable => {
+  const renderable = readMessageObject(value, context);
+  const kind = readMessageString(renderable, "kind", context);
+  if (kind === "sprite") {
+    return {
+      kind,
+      depth: readMessageNumber(renderable, "depth", context),
+      size: readMessageNumber(renderable, "size", context),
+      texture: readMessageString(renderable, "texture", context),
+      x: readMessageNumber(renderable, "x", context),
+      y: readMessageNumber(renderable, "y", context),
+    };
+  }
+  if (kind !== "tri") {
+    throw new Error(`${context}.kind must be tri or sprite, received ${kind}`);
+  }
+  return {
+    kind,
+    ax: readMessageNumber(renderable, "ax", context),
+    ay: readMessageNumber(renderable, "ay", context),
+    az: readMessageNumber(renderable, "az", context),
+    bx: readMessageNumber(renderable, "bx", context),
+    by: readMessageNumber(renderable, "by", context),
+    bz: readMessageNumber(renderable, "bz", context),
+    cx: readMessageNumber(renderable, "cx", context),
+    cy: readMessageNumber(renderable, "cy", context),
+    cz: readMessageNumber(renderable, "cz", context),
+    depth: readMessageNumber(renderable, "depth", context),
+    shade: readMessageNumber(renderable, "shade", context),
+    color: readColor(
+      readMessageProperty(renderable, "color", context),
+      `${context}.color`,
+    ),
+  };
+};
+
+const readVoxel = (value: unknown, context: string): Voxel => {
+  const voxel = readMessageObject(value, context);
+  const kind = readMessageString(voxel, "kind", context);
+  if (kind !== "voxel") {
+    throw new Error(`${context}.kind must be voxel, received ${kind}`);
+  }
+  return {
+    kind,
+    x: readMessageNumber(voxel, "x", context),
+    y: readMessageNumber(voxel, "y", context),
+    z: readMessageNumber(voxel, "z", context),
+    scale: readMessageNumber(voxel, "scale", context),
+    color: readColor(
+      readMessageProperty(voxel, "color", context),
+      `${context}.color`,
+    ),
+  };
+};
+
+const readMessageArray = <T>(
+  value: object,
+  name: string,
+  parseElement: (value: unknown, context: string) => T,
+): readonly T[] => {
+  const array = readMessageProperty(value, name, "game-loop message");
+  if (!Array.isArray(array)) {
+    throw new Error(`game-loop message.${name} must be an array`);
+  }
+  return Array.from(
+    array,
+    (element, index) =>
+      parseElement(element, `game-loop message.${name}[${index}]`),
+  );
+};
+
+const readGameLoopMessage = (value: unknown): GameLoopMessage => {
+  const message = readMessageObject(value, "game-loop message");
+  const kind = readMessageString(message, "kind", "game-loop message");
+  if (kind === "option" || kind === "selected") {
+    return {
+      kind,
+      key: readMessageNumber(message, "key", "game-loop message"),
+      name: readMessageString(message, "name", "game-loop message"),
+    };
+  }
+  if (kind === "settled" || kind === "redraw") return { kind };
+  if (kind === "frame") {
+    return {
+      kind,
+      draws: readMessageArray(message, "draws", readProjectedRenderable),
+      distance: readMessageNumber(message, "distance", "game-loop message"),
+      lens: readMessageNumber(message, "lens", "game-loop message"),
+    };
+  }
+  if (kind === "voxel-frame") {
+    return {
+      kind,
+      voxels: readMessageArray(message, "voxels", readVoxel),
+      reset: readMessageBoolean(message, "reset", "game-loop message"),
+    };
+  }
+  if (kind === "done") {
+    return {
+      kind,
+      frames: readMessageNumber(message, "frames", "game-loop message"),
+    };
+  }
+  throw new Error(`game-loop message has unknown kind ${kind}`);
+};
 
 const cubeVertices = new Float32Array([
   0.5,
@@ -298,7 +493,7 @@ const cubeVertices = new Float32Array([
 
 const compiler = await Compiler.create();
 const compileGameLoop = async (): Promise<{
-  readonly artifact: CompilerArtifact;
+  readonly module: WebAssembly.Module;
   readonly exportName: string;
 }> => {
   const artifact = await compiler.compile(GAME_LOOP_SOURCE);
@@ -316,7 +511,9 @@ const compileGameLoop = async (): Promise<{
   if (defaultExport === undefined || defaultExport.name === null) {
     throw new Error("game_loop.blot did not publish a runtime default export");
   }
-  return { artifact, exportName: defaultExport.name };
+  const bytes = Uint8Array.from(artifact.wasm);
+  const module = await WebAssembly.compile(bytes.buffer);
+  return { module, exportName: defaultExport.name };
 };
 
 const initialProgram = await compileGameLoop();
@@ -651,6 +848,7 @@ const cubeVertexBuffer = device.createBuffer({
 });
 device.queue.writeBuffer(cubeVertexBuffer, 0, cubeVertices);
 let instanceCapacity = INITIAL_INSTANCE_CAPACITY;
+let instanceValues = new Float32Array(instanceCapacity * INSTANCE_WIDTH);
 let instanceBuffer = device.createBuffer({
   size: instanceCapacity * INSTANCE_WIDTH * Float32Array.BYTES_PER_ELEMENT,
   usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
@@ -689,69 +887,78 @@ let uploadedInstanceCount = 0;
 let renderedCameraDistance = 18000;
 let renderedLens = 0;
 let renderMode: "projected" | "voxels" = "projected";
-const uploadFrame = (
-  renderables: readonly Renderable[],
+const uploadVoxelBatch = (
+  voxels: readonly Voxel[],
+  reset: boolean,
+): void => {
+  renderMode = "voxels";
+  let firstInstance = uploadedInstanceCount;
+  if (reset) firstInstance = 0;
+  const nextInstanceCount = firstInstance + voxels.length;
+  let grew = false;
+  if (nextInstanceCount > instanceCapacity) {
+    let nextCapacity = instanceCapacity;
+    while (nextCapacity < nextInstanceCount) nextCapacity *= 2;
+    const nextSize = nextCapacity * INSTANCE_WIDTH *
+      Float32Array.BYTES_PER_ELEMENT;
+    if (nextSize > device.limits.maxBufferSize) {
+      throw new Error(
+        `game loop produced ${nextInstanceCount} voxel instances (${nextSize} bytes), beyond this adapter's ${device.limits.maxBufferSize}-byte buffer limit`,
+      );
+    }
+    const nextValues = new Float32Array(nextCapacity * INSTANCE_WIDTH);
+    if (!reset) nextValues.set(instanceValues);
+    instanceValues = nextValues;
+    const previousBuffer = instanceBuffer;
+    instanceBuffer = device.createBuffer({
+      size: nextSize,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    instanceCapacity = nextCapacity;
+    previousBuffer.destroy();
+    grew = true;
+    console.log(`grew the instance buffer to ${instanceCapacity} voxels`);
+  }
+
+  let offset = firstInstance * INSTANCE_WIDTH;
+  for (const voxel of voxels) {
+    instanceValues[offset] = voxel.x;
+    instanceValues[offset + 1] = voxel.y;
+    instanceValues[offset + 2] = voxel.z;
+    instanceValues[offset + 3] = voxel.scale;
+    instanceValues[offset + 4] = clamp(voxel.color.red, 0, 255) / 255;
+    instanceValues[offset + 5] = clamp(voxel.color.green, 0, 255) / 255;
+    instanceValues[offset + 6] = clamp(voxel.color.blue, 0, 255) / 255;
+    offset += INSTANCE_WIDTH;
+  }
+  uploadedInstanceCount = nextInstanceCount;
+  if (grew) {
+    device.queue.writeBuffer(
+      instanceBuffer,
+      0,
+      instanceValues.subarray(0, uploadedInstanceCount * INSTANCE_WIDTH),
+    );
+  } else if (voxels.length > 0) {
+    device.queue.writeBuffer(
+      instanceBuffer,
+      firstInstance * INSTANCE_WIDTH * Float32Array.BYTES_PER_ELEMENT,
+      instanceValues.subarray(
+        firstInstance * INSTANCE_WIDTH,
+        uploadedInstanceCount * INSTANCE_WIDTH,
+      ),
+    );
+  }
+  requestGpuFrame();
+};
+
+const uploadProjectedFrame = (
+  renderables: readonly ProjectedRenderable[],
   distance: number,
   lens: number,
 ): void => {
-  const hasVoxels = renderables.some((renderable) =>
-    renderable.kind === "voxel"
-  );
-  if (hasVoxels) {
-    if (!renderables.every((renderable) => renderable.kind === "voxel")) {
-      const kinds = [
-        ...new Set(renderables.map((renderable) => renderable.kind)),
-      ];
-      throw new Error(
-        `game loop mixed incompatible render batches: ${kinds.join(", ")}`,
-      );
-    }
-    renderMode = "voxels";
-    uploadedInstanceCount = renderables.length;
-    if (uploadedInstanceCount > instanceCapacity) {
-      let nextCapacity = instanceCapacity;
-      while (nextCapacity < uploadedInstanceCount) nextCapacity *= 2;
-      const nextSize = nextCapacity * INSTANCE_WIDTH *
-        Float32Array.BYTES_PER_ELEMENT;
-      if (nextSize > device.limits.maxBufferSize) {
-        throw new Error(
-          `game loop produced ${uploadedInstanceCount} voxel instances (${nextSize} bytes), beyond this adapter's ${device.limits.maxBufferSize}-byte buffer limit`,
-        );
-      }
-      const previousBuffer = instanceBuffer;
-      instanceBuffer = device.createBuffer({
-        size: nextSize,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      });
-      instanceCapacity = nextCapacity;
-      previousBuffer.destroy();
-      console.log(`grew the instance buffer to ${instanceCapacity} voxels`);
-    }
-    const instances = new Float32Array(
-      uploadedInstanceCount * INSTANCE_WIDTH,
-    );
-    let offset = 0;
-    for (const voxel of renderables) {
-      instances[offset] = voxel.x;
-      instances[offset + 1] = voxel.y;
-      instances[offset + 2] = voxel.z;
-      instances[offset + 3] = voxel.scale;
-      instances[offset + 4] = clamp(voxel.color.red, 0, 255) / 255;
-      instances[offset + 5] = clamp(voxel.color.green, 0, 255) / 255;
-      instances[offset + 6] = clamp(voxel.color.blue, 0, 255) / 255;
-      offset += INSTANCE_WIDTH;
-    }
-    device.queue.writeBuffer(instanceBuffer, 0, instances);
-    requestGpuFrame();
-    return;
-  }
-
   renderMode = "projected";
   const vertices: number[] = [];
-  let ordered: readonly (Triangle | Sprite)[] = renderables.filter(
-    (renderable): renderable is Triangle | Sprite =>
-      renderable.kind !== "voxel",
-  );
+  let ordered: readonly ProjectedRenderable[] = renderables;
   if (renderables.some((renderable) => renderable.kind === "sprite")) {
     const triangles = renderables.filter((renderable) =>
       renderable.kind === "tri"
@@ -1128,20 +1335,37 @@ const startGuest = (
   candidateGuest = guest;
   streamingGuests.add(guest);
 
+  const activateCandidate = (): void => {
+    if (candidateGuest !== guest) return;
+    if (candidateSelection === undefined) {
+      throw new Error("game-loop candidate omitted its selected shrubbery");
+    }
+    const catalogName = candidateOptions.get(candidateSelection.key);
+    if (catalogName !== candidateSelection.name) {
+      throw new Error(
+        `game-loop selected ${candidateSelection.key} as ${candidateSelection.name}, but its catalog names it ${catalogName}`,
+      );
+    }
+    const previousGuest = activeGuest;
+    activeGuest = guest;
+    candidateGuest = undefined;
+    activeProgram = program;
+    activeRevision = revision;
+    shrubberyOptions = new Map(candidateOptions);
+    shrubberySelection = candidateSelection.key;
+    selectedShrubberyName = candidateSelection.name;
+    Atomics.store(shared, SELECTION, shrubberySelection);
+    setWindowTitle();
+    if (previousGuest !== undefined) streamingGuests.delete(previousGuest);
+    previousGuest?.terminate();
+    console.log(`activated game_loop.blot revision ${revision}`);
+  };
+
   guest.onmessage = (event) => {
-    const message = event.data as {
-      readonly kind: string;
-      readonly draws?: readonly Renderable[];
-      readonly distance?: number;
-      readonly lens?: number;
-      readonly frames?: number;
-      readonly key?: number;
-      readonly name?: string;
-    };
+    const message = readGameLoopMessage(event.data);
     if (message.kind === "option") {
       if (
-        message.key === undefined || !Number.isInteger(message.key) ||
-        message.name === undefined || message.name.length === 0
+        !Number.isInteger(message.key) || message.name.length === 0
       ) {
         throw new Error(
           `game-loop option has invalid key or name: ${message.key}, ${message.name}`,
@@ -1155,8 +1379,7 @@ const startGuest = (
     }
     if (message.kind === "selected") {
       if (
-        message.key === undefined || !Number.isInteger(message.key) ||
-        message.name === undefined || message.name.length === 0
+        !Number.isInteger(message.key) || message.name.length === 0
       ) {
         throw new Error(
           `game-loop selection has invalid key or name: ${message.key}, ${message.name}`,
@@ -1173,36 +1396,22 @@ const startGuest = (
       if (activeGuest === guest) requestGpuFrame();
       return;
     }
-    if (message.kind === "frame" && message.draws !== undefined) {
-      if (message.distance === undefined || message.lens === undefined) {
-        throw new Error("game-loop frame omitted its rendered camera state");
-      }
-      if (candidateGuest === guest) {
-        if (candidateSelection === undefined) {
-          throw new Error("game-loop candidate omitted its selected shrubbery");
-        }
-        const catalogName = candidateOptions.get(candidateSelection.key);
-        if (catalogName !== candidateSelection.name) {
-          throw new Error(
-            `game-loop selected ${candidateSelection.key} as ${candidateSelection.name}, but its catalog names it ${catalogName}`,
-          );
-        }
-        const previousGuest = activeGuest;
-        activeGuest = guest;
-        candidateGuest = undefined;
-        activeProgram = program;
-        activeRevision = revision;
-        shrubberyOptions = new Map(candidateOptions);
-        shrubberySelection = candidateSelection.key;
-        selectedShrubberyName = candidateSelection.name;
-        Atomics.store(shared, SELECTION, shrubberySelection);
-        setWindowTitle();
-        if (previousGuest !== undefined) streamingGuests.delete(previousGuest);
-        previousGuest?.terminate();
-        console.log(`activated game_loop.blot revision ${revision}`);
-      }
+    if (message.kind === "frame") {
+      activateCandidate();
       if (activeGuest === guest) {
-        uploadFrame(message.draws, message.distance, message.lens);
+        uploadProjectedFrame(message.draws, message.distance, message.lens);
+      }
+      return;
+    }
+    if (message.kind === "voxel-frame") {
+      if (candidateGuest === guest && !message.reset) {
+        throw new Error(
+          "game-loop candidate's first voxel batch did not reset",
+        );
+      }
+      activateCandidate();
+      if (activeGuest === guest) {
+        uploadVoxelBatch(message.voxels, message.reset);
       }
       return;
     }
@@ -1227,16 +1436,14 @@ const startGuest = (
     if (activeGuest === guest && !closing) desktopWindow.close();
   };
 
-  const wasm = Uint8Array.from(program.artifact.wasm).buffer;
   guest.postMessage(
     {
       kind: "start",
-      wasm,
+      module: program.module,
       shared: shared.buffer,
       export: program.exportName,
       scene: [],
     },
-    [wasm],
   );
 };
 

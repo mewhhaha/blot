@@ -53,7 +53,12 @@ LSP requests run through an explicit host queue. `$/cancelRequest` removes work
 that has not reached the compiler; cancellation or a newer document revision
 marks an in-flight synchronous Wasm result stale and discards it. The compiler
 does not yet run in a terminable worker, so this is not preemptive interruption
-of a Wasm call.
+of a Wasm call. Document close is a queue barrier: prior requests finish or are
+discarded, then the server releases the document root and clears its overlay.
+Shared dependencies remain resident while another open root reaches them, and
+closing a standalone unsaved document does not require a file on disk. A closed
+overlay still reached by another root must rebind that root to disk; the close
+reports any disk-load failure.
 
 Hover is broader than definition lookup. A value hover shows its full inferred
 signature and, for a source-local binding, the declaration that introduced it.
@@ -97,7 +102,14 @@ with:
 ```bash
 just format source.blot
 just format-check source.blot
+just lint-check source.blot
+just lint-fix source.blot
 ```
+
+`lint-check` reports findings without changing the file. `lint-fix` selects
+non-overlapping rewrites, checks each combined revision with the Rust compiler,
+and writes the file once after the complete fix run succeeds. A failed rewrite
+leaves the original file unchanged.
 
 Lints are independent rules over the lowered AST. A rule registers typed module,
 declaration, expression, or pattern visitors and may also inspect the compact

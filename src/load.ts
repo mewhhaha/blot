@@ -205,94 +205,82 @@ function dependencyExpressions(module: Module): DependencySites {
  */
 const modules = new Map<string, Loaded>();
 
-/**
- * Drop cached modules whose files changed, together with every importer that captured them.
- *
- * A resident compiler cannot trust paths alone: inference and comptime facts are keyed by the AST
- * objects in this cache. Reading the known graph before each service build keeps those identities
- * stable for unchanged files and replaces the complete dependent closure after an edit.
- */
+/** Drops cached modules whose own source, capsule, or included input changed. */
 export async function refreshLoadedModules(
   cache: Map<string, Loaded> = modules,
   overlayPaths: ReadonlySet<string> = new Set(),
 ): Promise<void> {
-  const changed = new Set<string>();
-  await Promise.all([...cache].map(async ([path, loaded]) => {
+  const inputs = new Map<
+    string,
+    { readonly source: string; readonly description: string }
+  >();
+  for (const [path, loaded] of cache) {
+    if (loaded.storage.tag === "snapshot") continue;
     if (loaded.storage.tag === "capsule") {
-      try {
-        if (
-          await readFile(loaded.storage.path, "utf8") !== loaded.storage.source
-        ) {
-          changed.add(path);
-        }
-      } catch (error) {
-        if (isNotFound(error)) {
-          changed.add(path);
-          return;
-        }
-        throw new Error(
-          `could not refresh cached Blot module capsule ${
-            JSON.stringify(loaded.storage.path)
-          }`,
-          { cause: error },
-        );
-      }
-      return;
+      inputs.set(loaded.storage.path, {
+        source: loaded.storage.source,
+        description: "cached Blot module capsule",
+      });
+      continue;
     }
     if (!overlayPaths.has(path)) {
-      try {
-        if (await readFile(path, "utf8") !== loaded.source) changed.add(path);
-      } catch (error) {
-        if (isNotFound(error)) {
-          changed.add(path);
-          return;
-        }
-        throw new Error(
-          `could not refresh cached Blot source ${JSON.stringify(path)}`,
-          {
-            cause: error,
-          },
-        );
-      }
+      inputs.set(path, {
+        source: loaded.source,
+        description: "cached Blot source",
+      });
     }
     for (const included of loaded.includedFiles.values()) {
-      try {
-        if (await readFile(included.path, "utf8") !== included.source) {
-          changed.add(path);
-          return;
-        }
-      } catch (error) {
-        if (isNotFound(error)) {
-          changed.add(path);
-          return;
-        }
-        throw new Error(
-          `could not refresh included Blot file ${
-            JSON.stringify(included.path)
-          }`,
-          { cause: error },
-        );
-      }
-    }
-  }));
-  if (changed.size === 0) return;
-
-  let foundDependent = true;
-  while (foundDependent) {
-    foundDependent = false;
-    for (const [path, loaded] of cache) {
-      if (changed.has(path)) continue;
-      if (
-        [...loaded.dependencies.values()].some((dependency) =>
-          changed.has(dependency.path)
-        )
-      ) {
-        changed.add(path);
-        foundDependent = true;
-      }
+      inputs.set(included.path, {
+        source: included.source,
+        description: "included Blot file",
+      });
     }
   }
-  for (const path of changed) cache.delete(path);
+
+  const changedInputs = new Set<string>();
+  await Promise.all([...inputs].map(async ([path, input]) => {
+    try {
+      if (await readFile(path, "utf8") !== input.source) {
+        changedInputs.add(path);
+      }
+    } catch (error) {
+      if (isNotFound(error)) {
+        changedInputs.add(path);
+        return;
+      }
+      throw new Error(
+        `could not refresh ${input.description} ${JSON.stringify(path)}`,
+        { cause: error },
+      );
+    }
+  }));
+  invalidateLoadedInputs(cache, changedInputs);
+}
+
+/**
+ * Removes only modules that directly own a changed filesystem input.
+ * Importers retain their parsed payloads and are rebound to the replacement
+ * dependency revision the next time they are loaded.
+ */
+export function invalidateLoadedInputs(
+  cache: Map<string, Loaded>,
+  changedInputs: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const invalidatedModules = new Set<string>();
+  for (const [cachePath, loaded] of cache) {
+    if (loaded.storage.tag === "snapshot") continue;
+    let sourceChanged = changedInputs.has(loaded.path);
+    if (loaded.storage.tag === "capsule") {
+      sourceChanged = changedInputs.has(loaded.storage.path);
+    }
+    const includeChanged = [...loaded.includedFiles.values()].some(
+      (included) => changedInputs.has(included.path),
+    );
+    if (!sourceChanged && !includeChanged) continue;
+    cache.delete(cachePath);
+    invalidatedModules.add(loaded.path);
+  }
+  return invalidatedModules;
 }
 
 export async function load(
@@ -302,9 +290,6 @@ export async function load(
   inspect?: SourceInspector,
 ): Promise<Loaded> {
   const absolute = resolve(path);
-  const cached = cache.get(absolute);
-  if (cached !== undefined) return cached;
-
   const cycleStart = active.indexOf(absolute);
   if (cycleStart >= 0) {
     const cycle = [...active.slice(cycleStart), absolute];
@@ -315,6 +300,10 @@ export async function load(
     });
   }
   const nextActive = [...active, absolute];
+  const cached = cache.get(absolute);
+  if (cached !== undefined) {
+    return await rebindLoadedDependencies(cached, cache, nextActive, inspect);
+  }
 
   if (absolute.endsWith(".blotc")) {
     return await loadModuleCapsule(absolute, cache, active, inspect);
@@ -329,6 +318,68 @@ export async function load(
     false,
     inspect,
   );
+}
+
+async function rebindLoadedDependencies(
+  loaded: Loaded,
+  cache: Map<string, Loaded>,
+  active: readonly string[],
+  inspect: SourceInspector | undefined,
+): Promise<Loaded> {
+  let changed = false;
+  const dependencies = new Map<string, Loaded>();
+  for (const [specifier, previous] of loaded.dependencies) {
+    let dependency = cache.get(previous.path);
+    if (dependency === undefined) {
+      let importer = loaded.path;
+      if (loaded.storage.tag === "capsule") {
+        importer = loaded.storage.path;
+      }
+      dependency = await loadImport(
+        specifier,
+        importer,
+        cache,
+        active,
+        inspect,
+      );
+    } else {
+      const cycleStart = active.indexOf(dependency.path);
+      if (cycleStart >= 0) {
+        const cycle = [...active.slice(cycleStart), dependency.path];
+        throw new BlotError({
+          code: "BLOT_IMPORT_CYCLE",
+          message: `Import cycle: ${cycle.join(" -> ")}.`,
+          span: { start: 0, end: 0 },
+        });
+      }
+      dependency = await rebindLoadedDependencies(
+        dependency,
+        cache,
+        [...active, dependency.path],
+        inspect,
+      );
+    }
+    dependencies.set(specifier, dependency);
+    if (dependency !== previous) changed = true;
+  }
+  if (!changed) return loaded;
+
+  const rebound: Loaded = {
+    module: loaded.module,
+    dependencies,
+    includedFiles: loaded.includedFiles,
+    source: loaded.source,
+    path: loaded.path,
+    storage: loaded.storage,
+  };
+  cache.set(loaded.path, rebound);
+  if (
+    loaded.storage.tag === "capsule" &&
+    cache.get(loaded.storage.path) === loaded
+  ) {
+    cache.set(loaded.storage.path, rebound);
+  }
+  return rebound;
 }
 
 /** Loads an editor revision without writing it over the source on disk. */

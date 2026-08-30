@@ -89,8 +89,9 @@ the same module owns generator dispatch; the desktop only forwards keys and
 displays the selected source-provided name. The generator assigns stable ids
 while it builds each owned Array. Named color bindings keep each recipe about
 materials such as weathered bark and new growth rather than anonymous RGB
-channels. There is no terrain mesh; every visible voxel belongs to the selected
-shrubbery.
+channels, while `engine/lib/color.blot` owns their shared `Color` shape and
+range-checked `rgb` constructor. There is no terrain mesh; every visible voxel
+belongs to the selected shrubbery.
 
 The selected shrubbery stays immutable and spatially stable while the host
 camera moves around it:
@@ -132,25 +133,27 @@ of the renderer's 256-step turn, so small pointer movements interpolate between
 table entries instead of disappearing at a whole angle step. Projected positions
 retain 1/256-pixel precision across the integer host boundary, and the native
 pipeline resolves four coverage samples per pixel. The native host enables the
-source-defined `VoxelCanvas` effect, so each streaming update transfers one
-compact instance per voxel. WGPU keeps those instances resident and performs
-cube expansion, camera transforms, projection, face lighting, culling, and depth
-on every draw. Each orbit, scroll, or lens input wakes the Blot loop for one
-`VoxelCanvas.redraw` effect that updates a uniform. The application therefore
-owns the render request without rebuilding or retransferring its scene. The
-headless host disables `VoxelCanvas`; the same Blot source then uses its `F32x4`
-SIMD projection and culling renderer as the reference path. Set
-`DENO_WEBGPU_BACKEND=vulkan`, `metal`, or `dx12` to require a particular wgpu
-backend. The host watches every `.blot` file below `engine/`. A successful
-compile starts a candidate worker and promotes it only after its first rendered
-frame; a syntax, type, instantiation, or runtime failure leaves the last working
-revision drawing. The GPU instance buffer grows geometrically with the generated
-scene, up to the adapter's reported buffer limit. Changing shrubbery starts a
-fresh guest from the already compiled artifact. That lets the previous linear
+source-defined `VoxelCanvas` effect, so each streaming update transfers only the
+newly generated suffix. Every compact voxel instance crosses the worker boundary
+once. WGPU keeps those instances resident and performs cube expansion, camera
+transforms, projection, face lighting, culling, and depth on every draw. Each
+orbit, scroll, or lens input wakes the Blot loop for one `VoxelCanvas.redraw`
+effect that updates a uniform. The application therefore owns the render request
+without rebuilding or retransferring its scene. The headless host disables
+`VoxelCanvas`; the same Blot source then uses its `F32x4` SIMD projection and
+culling renderer as the reference path. Set `DENO_WEBGPU_BACKEND=vulkan`,
+`metal`, or `dx12` to require a particular wgpu backend. The host watches every
+`.blot` file below `engine/`. A successful compile starts a candidate worker and
+promotes it only after its first rendered frame; a syntax, type, instantiation,
+or runtime failure leaves the last working revision drawing. The GPU instance
+buffer grows geometrically with the generated scene, up to the adapter's
+reported buffer limit. Changing shrubbery starts a fresh guest from the already
+compiled `WebAssembly.Module`. Hot reload compiles the changed artifact once and
+gives the candidate worker that compiled module. That lets the previous linear
 voxel Store leave with its Wasm instance while the shared camera remains
 untouched. The generator uses half-size voxels and twice the recipe resolution.
-It presents the current immutable Store after the first voxel and every 256
-additions, so the candidate appears immediately and fills in while its final
+It presents the newly appended Store suffix whenever the total crosses another
+256-voxel boundary and at completion, so the candidate fills in while its final
 Store is still being built.
 
 The development compiler has two split-unit examples for this source tree:
@@ -166,12 +169,13 @@ pnpm blot dev case-studies/engine/desktop.blot.json
 These commands compile and report unit changes. The browser and desktop graphics
 hosts retain their existing candidate-worker reload paths.
 
-### Five modules, and what each of them owns
+### Six modules, and what each of them owns
 
 ```text
 main.blot        the game: its components, its systems, its scene, its loop
 lib/ecs.blot     stores and joins over entities, and no authority at all
 lib/frame.blot   the shared frame-completion policy
+lib/color.blot   the shared Color shape and range-checked rgb constructor
 lib/render.blot  the camera, the projection, the cube, and the two draw calls
 lib/math.blot    sine and cosine, indexed by step
 ```
@@ -191,9 +195,10 @@ case-studies/engine/main.blot: (Int | 0) ~ { Assets, Canvas, Host, View }
 ```
 
 The same reason keeps `Canvas` out of the renderer's returned API: an effect has
-no runtime representation to return. The renderer instead returns its `Color`
-type, `rgb` constructor, coordinate conversions, and a `frame` that clears,
-reads the camera, hands the application two brushes, and presents.
+no runtime representation to return. The renderer re-exports the pure color
+module's `Color` type and `rgb` constructor alongside coordinate conversions and
+a `frame` that clears, reads the camera, hands the application two brushes, and
+presents.
 
 A camera is one record inside `lib/render.blot` and a different field subset at
 each of the four places that reads one, and those shapes agree because inference

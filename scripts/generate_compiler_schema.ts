@@ -105,6 +105,8 @@ async function protocolOutputs(): Promise<
     protocol,
     "checkedModuleCertificate",
   );
+  const moduleSnapshot = protocolVersion(protocol, "moduleSnapshotSchema");
+  const valueCapsule = protocolVersion(protocol, "valueCapsuleSchema");
   const runtimeHir = protocolVersion(protocol, "runtimeHir");
   return [
     [
@@ -112,6 +114,8 @@ async function protocolOutputs(): Promise<
       `// Generated from compiler/protocol.json. Do not edit.\n\n` +
       `pub(crate) const COMPILER_HOST_ABI_VERSION: u32 = ${compilerHostAbi};\n` +
       `pub(crate) const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = ${checkedModuleCertificate};\n` +
+      `pub(crate) const MODULE_SNAPSHOT_SCHEMA: u32 = ${moduleSnapshot};\n` +
+      `pub(crate) const VALUE_CAPSULE_SCHEMA: u32 = ${valueCapsule};\n` +
       `pub(crate) const RUNTIME_HIR_SCHEMA: u8 = ${runtimeHir};\n`,
     ],
     [
@@ -119,6 +123,8 @@ async function protocolOutputs(): Promise<
       `// Generated from compiler/protocol.json. Do not edit.\n\n` +
       `export const compilerHostAbiVersion = ${compilerHostAbi} as const;\n` +
       `export const checkedModuleCertificateSchema = ${checkedModuleCertificate} as const;\n` +
+      `export const moduleSnapshotSchema = ${moduleSnapshot} as const;\n` +
+      `export const valueCapsuleSchema = ${valueCapsule} as const;\n` +
       `export const runtimeHirSchema = ${runtimeHir} as const;\n`,
     ],
   ];

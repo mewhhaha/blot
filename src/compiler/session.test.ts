@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runtimeHirSchema } from "./protocol.ts";
 import { CompilerTargetRefusal } from "./policy.ts";
 import { Compiler } from "./session.ts";
+import { CompilerWasm } from "./wasm.ts";
 
 test("Rust compiler host exposes check, prepare, compile", async () => {
   const compiler = await Compiler.create();
@@ -22,6 +23,277 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     assert.equal(artifact.artifactSource, "compiled");
   } finally {
     compiler.destroy();
+  }
+});
+
+test("failed discovery keeps candidates out of semantic and artifact state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-inspection-isolation-"));
+  const path = join(directory, "main.blot");
+  const candidate = join(directory, "candidate.blot");
+  await writeFile(path, "return 1\n");
+  await writeFile(candidate, "return 2\n");
+  const compiler = await Compiler.create();
+  try {
+    await compiler.analyze(path);
+    const stable = await compiler.analyze(path);
+    const compiled = await compiler.compile(path);
+    assert.equal(compiled.artifactSource, "compiled");
+    const developmentRequest = {
+      entryPath: path,
+      entryUnit: "game",
+      units: new Map([["game", path]]),
+    };
+    const development = await compiler.compileDevelopment(developmentRequest);
+    const developmentUnit = development.units[0];
+    if (developmentUnit === undefined) {
+      throw new Error(`development compilation omitted ${path}`);
+    }
+    assert.equal(developmentUnit.artifactSource, "compiled");
+
+    await assert.rejects(
+      compiler.setOverlay(
+        path,
+        'const candidate = import "./candidate.blot"\n' +
+          'const missing = import "./missing.blot"\n' +
+          "return (candidate, missing)\n",
+      ),
+      /missing\.blot/,
+    );
+
+    const afterFailure = await compiler.analyze(path);
+    assert.equal(afterFailure.type, "1");
+    assert.deepEqual(afterFailure.invalidation, stable.invalidation);
+
+    const repeated = await compiler.compile(path);
+    assert.equal(repeated.artifactSource, "revision-cache");
+    assert.deepEqual(repeated.wasm, compiled.wasm);
+    assert.deepEqual(repeated.manifestBytes, compiled.manifestBytes);
+
+    const repeatedDevelopment = await compiler.compileDevelopment(
+      developmentRequest,
+    );
+    const repeatedUnit = repeatedDevelopment.units[0];
+    if (repeatedUnit === undefined) {
+      throw new Error(`repeated development compilation omitted ${path}`);
+    }
+    assert.equal(repeatedUnit.artifactSource, "unit-cache");
+    assert.equal("wasm" in repeatedUnit, false);
+    assert.equal("manifestBytes" in repeatedUnit, false);
+    assert.equal(
+      repeatedUnit.implementationDigest,
+      developmentUnit.implementationDigest,
+    );
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("failed discovery removes candidate inspection modules", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-inspection-rollback-"));
+  const path = join(directory, "main.blot");
+  await writeFile(
+    path,
+    'const missing = import "./missing.blot"\nreturn missing\n',
+  );
+  const added: Array<{ readonly handle: number; readonly path: string }> = [];
+  const removed: Array<{ readonly handle: number; readonly path: string }> = [];
+  const addModule = CompilerWasm.prototype.addCompilerSessionModule;
+  const removeModule = CompilerWasm.prototype.removeCompilerSessionModule;
+  CompilerWasm.prototype.addCompilerSessionModule = function (
+    handle,
+    modulePath,
+    source,
+  ) {
+    added.push({ handle, path: modulePath });
+    return addModule.call(this, handle, modulePath, source);
+  };
+  CompilerWasm.prototype.removeCompilerSessionModule = function (
+    handle,
+    modulePath,
+  ) {
+    removed.push({ handle, path: modulePath });
+    return removeModule.call(this, handle, modulePath);
+  };
+  let compiler: Compiler | undefined;
+  try {
+    compiler = await Compiler.create();
+    await assert.rejects(compiler.check(path), /missing\.blot/);
+
+    const candidate = added.find((entry) => entry.path === path);
+    assert.notEqual(candidate, undefined);
+    assert.deepEqual(
+      removed.filter((entry) => entry.path === path),
+      [candidate],
+    );
+  } finally {
+    compiler?.destroy();
+    CompilerWasm.prototype.addCompilerSessionModule = addModule;
+    CompilerWasm.prototype.removeCompilerSessionModule = removeModule;
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("development cache hits expose identities without sharing caller arrays", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-development-cache-"));
+  const path = join(directory, "main.blot");
+  await writeFile(
+    path,
+    `open import "blot:prelude"
+const Source = @effect.host { .value = Unit -> Int; }
+use value <- Source.value ()
+return value
+`,
+  );
+  const compiler = await Compiler.create();
+  try {
+    const request = {
+      entryPath: path,
+      entryUnit: "game",
+      units: new Map([["game", path]]),
+    };
+    const initial = await compiler.compileDevelopment(request);
+    const initialUnit = initial.units[0];
+    if (initialUnit === undefined) {
+      throw new Error(`development compilation omitted ${path}`);
+    }
+    assert.equal(initialUnit.artifactSource, "compiled");
+    if (initialUnit.artifactSource !== "compiled") {
+      throw new Error("initial development compilation reused an artifact");
+    }
+    const implementationDigest = initialUnit.implementationDigest;
+    const interfaceDigest = initialUnit.interfaceDigest;
+    const wasmDigest = initialUnit.wasmDigest;
+    const capabilities = initialUnit.capabilities.slice();
+    initialUnit.wasm.fill(0);
+    initialUnit.manifestBytes.fill(0);
+    Reflect.set(initialUnit.capabilities, 0, "poisoned");
+
+    const repeated = await compiler.compileDevelopment(request);
+    const repeatedUnit = repeated.units[0];
+    if (repeatedUnit === undefined) {
+      throw new Error(`repeated development compilation omitted ${path}`);
+    }
+    assert.equal(repeatedUnit.artifactSource, "unit-cache");
+    assert.equal("wasm" in repeatedUnit, false);
+    assert.equal("manifestBytes" in repeatedUnit, false);
+    assert.deepEqual(repeatedUnit.capabilities, capabilities);
+    assert.equal(repeatedUnit.interfaceDigest, interfaceDigest);
+    assert.equal(repeatedUnit.implementationDigest, implementationDigest);
+    assert.equal(repeatedUnit.wasmDigest, wasmDigest);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("development artifact caches stay isolated by program root", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-development-roots-"));
+  const firstPath = join(directory, "first.blot");
+  const secondPath = join(directory, "second.blot");
+  await writeFile(firstPath, "return 1\n");
+  await writeFile(secondPath, "return 2\n");
+  const compiler = await Compiler.create();
+  try {
+    const firstRequest = {
+      entryPath: firstPath,
+      entryUnit: "game",
+      units: new Map([["game", firstPath]]),
+    };
+    const first = await compiler.compileDevelopment(firstRequest);
+    await compiler.compileDevelopment({
+      entryPath: secondPath,
+      entryUnit: "game",
+      units: new Map([["game", secondPath]]),
+    });
+    const repeated = await compiler.compileDevelopment(firstRequest);
+    const firstUnit = first.units[0];
+    const repeatedUnit = repeated.units[0];
+    if (firstUnit === undefined || repeatedUnit === undefined) {
+      throw new Error("development compilation omitted the first program");
+    }
+
+    assert.equal(repeatedUnit.artifactSource, "unit-cache");
+    assert.equal("wasm" in repeatedUnit, false);
+    assert.equal("manifestBytes" in repeatedUnit, false);
+    assert.equal(repeatedUnit.wasmDigest, firstUnit.wasmDigest);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("an abandoned low-level preparation recompiles before cache commit", async () => {
+  const rust = await CompilerWasm.load(
+    await readFile("generated/compiler/compiler.wasm"),
+  );
+  const handle = rust.createCompilerSession();
+  const path = "transaction-retry.blot";
+  try {
+    rust.installCompilerSessionTrustedModuleSnapshot(
+      handle,
+      "snapshot:prelude",
+      await readFile("generated/compiler/prelude.snapshot"),
+    );
+    const added = rust.addCompilerSessionModule(handle, path, "return 1\n");
+    assert.equal(added.ok, true);
+    rust.configureCompilerSessionModule(handle, path, {
+      imports: {},
+      includes: {},
+    });
+    const units = new Map([["game", path]]);
+    const abandoned = rust.compileCompilerSessionDevelopmentProgram(
+      handle,
+      path,
+      "game",
+      units,
+    );
+    const retry = rust.compileCompilerSessionDevelopmentProgram(
+      handle,
+      path,
+      "game",
+      units,
+    );
+    if (!abandoned.ok || !retry.ok) {
+      throw new Error("low-level development preparation failed");
+    }
+    assert.deepEqual(
+      abandoned.units.map((unit) => unit.artifactSource),
+      ["compiled"],
+    );
+    assert.deepEqual(
+      retry.units.map((unit) => unit.artifactSource),
+      ["compiled"],
+    );
+    assert.throws(
+      () =>
+        rust.commitCompilerSessionDevelopmentProgram(
+          handle,
+          abandoned.transactionId,
+        ),
+      /rejected development transaction/,
+    );
+    rust.commitCompilerSessionDevelopmentProgram(handle, retry.transactionId);
+
+    const committed = rust.compileCompilerSessionDevelopmentProgram(
+      handle,
+      path,
+      "game",
+      units,
+    );
+    if (!committed.ok) {
+      throw new Error("committed low-level development preparation failed");
+    }
+    assert.deepEqual(
+      committed.units.map((unit) => unit.artifactSource),
+      ["unit-cache"],
+    );
+    rust.commitCompilerSessionDevelopmentProgram(
+      handle,
+      committed.transactionId,
+    );
+  } finally {
+    rust.destroyCompilerSession(handle);
   }
 });
 
@@ -360,6 +632,24 @@ test("canonical syntax snapshots expose parser bypass and node reuse", async () 
     assert.ok(edited.reuse.length > 0);
   } finally {
     compiler.destroy();
+  }
+});
+
+test("releasing a workspace root removes its resident semantic revision", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-release-root-"));
+  const path = join(directory, "root.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(path, "return 1\n");
+    assert.notEqual((await compiler.analyze(path)).work, null);
+    assert.equal((await compiler.analyze(path)).work, null);
+
+    await compiler.releaseRoot(path);
+
+    assert.notEqual((await compiler.analyze(path)).work, null);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

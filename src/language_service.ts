@@ -23,6 +23,7 @@ import { hoverAt } from "./tooling/hover.ts";
 import { lineAtOffset, sourceLineStarts } from "./tooling/formatter.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./tooling/lint.ts";
 import type { LintDiagnostic } from "./tooling/lint.ts";
+import { validateLintDiagnostics } from "./tooling/lint.ts";
 
 export interface Position {
   readonly line: number;
@@ -198,10 +199,14 @@ export class LanguageService {
     this.#syntaxSnapshots.delete(uri);
   }
 
-  close(uri: string): void {
+  async close(uri: string): Promise<void> {
     this.#documents.delete(uri);
     this.#hoverChecks.delete(uri);
     this.#syntaxSnapshots.delete(uri);
+    const compiler = await this.#compiler;
+    const path = editorPath(uri);
+    await compiler.releaseRoot(path);
+    await compiler.clearOverlay(path);
   }
 
   version(uri: string): number | null {
@@ -772,45 +777,11 @@ export class LanguageService {
         diagnostic.fix !== null && diagnostic.fix.validation !== "parse"
       )
     ) return diagnostics;
-    const path = editorPath(uri);
-    const shadow = await Compiler.create();
-    let original;
-    try {
-      original = await shadow.checkSource(path, document.source);
-    } catch (error) {
-      shadow.destroy();
-      if (diagnosticFromError(path, error) === null) throw error;
-      return diagnostics.filter((diagnostic) =>
-        diagnostic.fix === null || diagnostic.fix.validation === "parse"
-      );
-    }
-    const validated: LintDiagnostic[] = [];
-    try {
-      for (const diagnostic of diagnostics) {
-        const fix = diagnostic.fix;
-        if (fix === null || fix.validation === "parse") {
-          validated.push(diagnostic);
-          continue;
-        }
-        const replacement = document.source.slice(0, fix.span.start) +
-          fix.replacement + document.source.slice(fix.span.end);
-        try {
-          const checked = await shadow.checkSource(path, replacement);
-          if (
-            fix.validation === "check" ||
-            (
-              checked.type === original.type &&
-              checked.effects === original.effects
-            )
-          ) validated.push(diagnostic);
-        } catch (error) {
-          if (diagnosticFromError(path, error) === null) throw error;
-        }
-      }
-    } finally {
-      shadow.destroy();
-    }
-    return validated;
+    return await validateLintDiagnostics(
+      editorPath(uri),
+      document.source,
+      diagnostics,
+    );
   }
 
   #syntaxRevision(
@@ -865,6 +836,7 @@ export class LanguageService {
       targetSource = document.source;
       break;
     }
+    const openTarget = targetSource !== undefined;
     if (targetSource === undefined) {
       try {
         targetSource = await readFile(targetPath, "utf8");
@@ -878,10 +850,16 @@ export class LanguageService {
         throw error;
       }
     }
-    const snapshot = await (await this.#compiler).syntaxSnapshot(
-      targetPath,
-      targetSource,
-    );
+    const compiler = await this.#compiler;
+    let snapshot: CompilerSyntaxSnapshot;
+    try {
+      snapshot = await compiler.syntaxSnapshot(targetPath, targetSource);
+    } finally {
+      if (!openTarget) {
+        await compiler.releaseRoot(targetPath);
+        await compiler.clearOverlay(targetPath);
+      }
+    }
     const span = exportedDefinition(snapshot.module, targetSource, name);
     if (span === null) return null;
     return { uri: targetUri, range: rangeOf(targetSource, span) };

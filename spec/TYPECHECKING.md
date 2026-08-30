@@ -299,13 +299,40 @@ contains a name. Replacing a copied aggregate map with an immutable parent and a
 copy-on-write child overlay preserves every lookup provided a write enters only
 the current overlay.
 
+The current tail frame may be extended in place only while no value captures it
+and it is not a recursive-group frame. Creating a closure, deferred argument, or
+other environment-bearing value seals the complete parent chain reachable from
+that value. The next declaration then extends a fresh child. Sealing only the
+leaf would be unsound: a closure created in a nested block could otherwise
+observe a later shadow written into an unsealed parent.
+
 _Sketch._ Induct on the chain. A name in the new overlay shadows the same name a
 copied map would replace. A name absent from the overlay is read from the
 unchanged parent. Both representations retain the same inference-variable
 identities into the one solver graph; structural sharing changes only how the
 name-to-type mapping is stored and introduces no new typing effect.
 
-### Lemma 7: an open frame is equivalent to eager member insertion
+### Lemma 7: a recursive group has one lexical fixed point
+
+One adjacent source recursive group owns one shared lexical frame. Every member
+right-hand side evaluates to an environment-free closure template, and every
+materialized member closes over that frame. A member body therefore observes the
+complete group after declaration evaluation, including forward peers, without
+storing a closure from the frame back into itself.
+
+Signatures between members do not split the group. A different declaration kind,
+a tagged binding, or any non-signature source declaration does. Liveness may
+erase an unused separator's value but must retain its group boundary, so it
+cannot merge two source groups. The in-process frame owns its templates; a weak
+template-to-frame backreference permits reclamation and has no source meaning.
+
+_Sketch._ Materializing a template substitutes the unique group frame for its
+environment. Lookup of every group name therefore reaches the corresponding
+template under the same fixed point. Since templates contain no environment, the
+representation adds no ownership cycle. Source-derived group identity prevents
+erasure from changing which fixed point a member observes.
+
+### Lemma 8: an open frame is equivalent to eager member insertion
 
 Let `open(F, mu)` contain immutable compile-time members `F` and an injective
 target-to-source mapping `mu`. For a record these are its fields. For an effect
@@ -655,6 +682,37 @@ certificate rather than being duplicated on every closure value. Mutable runtime
 Stores, continuations, residual values, and generative effects cannot enter this
 capsule.
 
+Value-capsule schema 4 validates the complete strong environment-reference graph
+before publication and again before reconstruction. The graph contains parent
+edges and closure-environment edges nested anywhere in ordinary names, opened
+values, type substitutions, and aggregate values. Every environment identity
+must exist and the graph must be acyclic. Recursive names are disjoint from
+ordinary names and carry environment-free closure templates instead of ordinary
+closure values. Their ordered names, lambda identities, and source group
+boundaries must match one complete recursive group in the trusted module;
+decoding materializes every template against that group's single environment.
+This structural check prevents serialized ownership cycles and invented or
+rewired recursive peers. Acyclicity alone does not prove the lexical provenance
+of every arbitrary closure capture. That provenance still follows from trusted
+distribution of the source-derived snapshot and validation against the exact
+module revision.
+
+Schema 4 also has a target-independent structural budget enforced before every
+recursive encoder, decoder, and provenance reconstruction: at most 128 logical
+levels, 1,048,576 structural nodes, and 64 MiB of estimated allocation under
+protocol-fixed node, collection, integer, and byte-string weights. Nested
+values, effect-scope creation edges, module-instance sites, and compiler
+applications use the 128-level bound. Environment shells and every parent or
+closure-capture edge are encoded and validated iteratively under a separate
+1,024-edge graph-depth bound. A source-derived environment that exceeds it is
+ineligible for the optional compile-time environment cache. Publication also
+retries without that cache when its serialized wire form exceeds the snapshot
+budget. In either case it retains the AST and checked certificate, so this is
+neither a negative source judgment nor a diagnostic. An installed capsule that
+exceeds the decoded budget is an invalid trusted artifact and is refused before
+graph validation or reconstruction. These checks strengthen the schema-4
+validation contract without changing its serialized representation.
+
 The cache key is the loader's module-revision identity together with every
 generative declaration identity observed in the closed type graph. Today the
 latter are effect labels. A source, include, or transitive dependency edit
@@ -677,7 +735,39 @@ A validated snapshot environment may be instantiated as a revision-keyed
 template for each import. Decoding prefixes every recorded module-instance and
 creation scope with the importing occurrence before evaluating the module's
 result expression. This preserves the no-sharing judgment while avoiding a
-second evaluation of declarations whose values the capsule already records.
+second evaluation of declarations whose values the capsule already records. The
+compiler may retain that decoded environment only after sealing its complete
+lexical ancestor chain, and only under the exact imported-module revision,
+complete module-instance stack, and effect-scope stack. Reusing this environment
+does not reuse the module result: each occurrence still evaluates the result
+expression, and distinct occurrence keys still reconstruct distinct closures and
+generative identities. Replacing any revision named by either provenance stack
+removes the retained environment before another semantic request. Cache
+admission is limited to 32 module-instance, nested effect-scope, or
+compiler-request levels and 256 counted module-instance sites, effect frames,
+and compiler steps. Before reconstruction, the compiler adds the decoded
+capsule's allocation estimate to the caller module-instance prefix copied once
+per stored closure and identity key, plus the caller effect-scope prefix copied
+once per non-empty stored scope. The sum must remain within the capsule's 64 MiB
+allocation bound. Oversized provenance or a cross-product beyond that bound
+replays module declarations instead of decoding the optional template. At most
+64 decoded environments are retained. A miss at that bound clears the generation
+before inserting the new exact key, so recursion and high-cardinality import
+sites cannot grow retained state without bound.
+
+An admitted decoded environment receives an immutable semantic identity keyed by
+the imported-module revision, the exact template provenance, and its encoded
+capsule environment ID. Closure-source equality compares those identities when
+both environments have one. Two ordinary environments retain allocation
+identity, while a token-bearing environment and an ordinary environment are
+always distinct. Thus cache eviction and re-decoding cannot change the number of
+alternatives in a Runtime-HIR function choice, while separate lexical
+environments in one capsule cannot merge. Oversized provenance never reaches
+template decoding, so identity interning cannot bypass the cache's depth, node,
+or reconstruction-allocation budgets. The interner retains weak identities only,
+prunes dead entries at geometric thresholds, and removes revision-dependent keys
+during exact invalidation; an old token remains alive only through an old
+environment that still uses it.
 
 Sharing that resident result does not by itself make its reverse-invalidation
 fingerprint structural. Scalars, closed types, and recursively complete
@@ -907,13 +997,14 @@ eval_module(m, unit) = eval(result(m), rho_c)
 ```
 
 The equality is by induction over the declaration sequence: each successful
-binding extends the same lexical environment with the same value, and `open`
-copies the same ordered fields. A failed speculative runtime evaluation makes
-`complete(rho_c)` false. Parameterised modules also fail the premise because
-their value environment does not contain the caller's argument. In either case
-Runtime-HIR preparation runs the ordinary whole-module evaluator. Thus the
-optimisation cannot discard a trap, divergence, host request, or argument
-dependency that checking did not observe.
+binding extends an observationally equivalent persistent environment with the
+same value, and `open` performs the lookup-equivalent shared-member operation of
+Lemma 8. A failed speculative runtime evaluation makes `complete(rho_c)` false.
+Parameterised modules also fail the premise because their value environment does
+not contain the caller's argument. In either case Runtime-HIR preparation runs
+the ordinary whole-module evaluator. Thus the optimisation cannot discard a
+trap, divergence, host request, or argument dependency that checking did not
+observe.
 
 ### Resident interface cache
 
@@ -922,7 +1013,7 @@ flat arena:
 
 ```txt
 FlatTypeId = u32
-FlatNode   = tag + child FlatTypeId values
+FlatTypeNode = tag + child FlatTypeId values
 Interface = <arena, result, effects, parameter, evaluated-value-certificate,
              expression-types, closure-signatures, ownership-contracts,
              simplifications, readability>
@@ -930,15 +1021,38 @@ Interface = <arena, result, effects, parameter, evaluated-value-certificate,
 
 Encoding rejects every inference variable and every rigid not bound by an
 enclosing `forall`. Decoding allocates a fresh rigid identity for every
-quantifier and reconstructs an ordinary checker type. Consequently no mutable
-bound edge crosses compilations, and two cache hits are alpha-equivalent but
-share no generated rigid identity.
+quantifier and reconstructs an ordinary checker type with an explicit worklist.
+Consequently no mutable bound edge crosses compilations, and two cache hits are
+alpha-equivalent but share no generated rigid identity.
+
+Before rigid-scope validation, inflation, or sealed-boundary copying, the flat
+arena passes a protocol-fixed logical graph admission. Every referenced child
+must be a prior arena node, every root-to-leaf path is limited to 128 edges, and
+the expanded reference count is limited to 1,048,576. A node costs one plus the
+cost of each child occurrence, so duplicate DAG edges count separately; the
+total also sums the result, effects, parameter, expression-type, and
+closure-signature roots, including repeated roots. The iterative preflight
+therefore rejects both deep chains and shallow doubling DAGs before any consumer
+can turn the shared arena into recursive work. A freshly checked interface that
+exceeds either limit is not cacheable or certifiable, and certificate and
+sealed-boundary export revalidate the same admission.
 
 Encoding structurally interns equal flat nodes across module results, runtime
 application types, and closure signatures. Compile-time-only imports retain
 their type for request-local analysis but do not enter the Runtime-HIR
 application certificate. The certificate therefore pays once for repeated type
 structure; interning changes neither identity scope nor the decoded type graph.
+
+QCore schema version 3 has a non-authoritative structural constructor for every
+closed `FlatTypeNode` variant. The shadow projection preserves the shared arena
+and its result, effect, parameter, expression-type, and closure-signature roots;
+canonicalizes labeled fields and cases; attaches those uses to spans from the
+matching installed AST; declares every projected type root at `Type 0`; and runs
+QCore structural validation. These projected structural forms are deliberately
+outside the pure QCore typing fragment. The projection reads the settled
+certificate and never creates constraints, resolves effects, or feeds a fact
+back to checking or lowering. [`QCORE.md`](QCORE.md) owns this representation
+claim.
 
 A resident checker may retain the expanded `CheckedModule` after that encoding
 gate succeeds. Its types contain no mutable inference variables, its quantified
@@ -960,6 +1074,13 @@ different bytes receive a fresh identity and dirty direct importers. Repeating
 this rule is equivalent to the dependency fingerprint required by capsule
 coherence above while allowing propagation to stop at an observationally equal
 boundary.
+
+The binary boundary orders record fields, record-update fields, variant cases,
+and union members by their canonical structural keys. Quantified rigids are
+alpha-renamed. Text inside a structural key is length-prefixed and domains are
+encoded by explicit stable names; semantic identity never depends on map
+iteration or debug formatting. Permuting a union therefore cannot change a
+module boundary fingerprint.
 
 Ownership and safety results are cached at the same revision boundary only for
 nullary modules. Ownership is a function of the AST. Safety additionally reads
@@ -1226,13 +1347,14 @@ candidate that mutates a nested variable before failing.
 
 Lexical environments in the Rust checker use persistent copy-on-write maps, as
 per Lemma 6. Compile-time records and effects opened into scope remain immutable
-open frames under Lemma 7. Record storage and effect-operation aliases retain
-their source values and target indices between the evaluator and checker, so
-opening a large module does not clone every recursive value and type merely to
-establish aliases. Scheme instantiation memoises generalized variable
-replacements within one freshening while allocating distinct replacements for
-separate instantiations. Neither change alters the lattice or lets mutable
-inference state cross a module boundary.
+open frames under Lemma 8. Recursive groups use the acyclic template fixed point
+of Lemma 7. Record storage and effect-operation aliases retain their source
+values and target indices between the evaluator and checker, so opening a large
+module does not clone every recursive value and type merely to establish
+aliases. Scheme instantiation memoises generalized variable replacements within
+one freshening while allocating distinct replacements for separate
+instantiations. Neither change alters the lattice or lets mutable inference
+state cross a module boundary.
 
 The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache

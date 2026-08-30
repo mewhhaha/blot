@@ -5815,21 +5815,22 @@ mod tests {
     #[test]
     fn simd_memory_layout_emits_vector_loads_and_stores() {
         let mut function = Function::new([(1, ValType::I32), (2, ValType::V128)]);
-        let mut instructions = function.instructions();
-        let mut flat_index = 0;
-        emit_store_canonical_result(
-            &mut instructions,
-            &AbiType::Vector128,
-            &[1],
-            &mut flat_index,
-            0,
-            0,
-        )
-        .expect("SIMD Store element should emit");
-        emit_load_canonical_result(&mut instructions, &AbiType::Vector128, &[2], 0, 0)
-            .expect("SIMD Store read should emit");
-        instructions.end();
-        drop(instructions);
+        {
+            let mut instructions = function.instructions();
+            let mut flat_index = 0;
+            emit_store_canonical_result(
+                &mut instructions,
+                &AbiType::Vector128,
+                &[1],
+                &mut flat_index,
+                0,
+                0,
+            )
+            .expect("SIMD Store element should emit");
+            emit_load_canonical_result(&mut instructions, &AbiType::Vector128, &[2], 0, 0)
+                .expect("SIMD Store read should emit");
+            instructions.end();
+        }
 
         let body = function.into_raw_body();
         let operators = FunctionBody::new(BinaryReader::new(&body, 0))

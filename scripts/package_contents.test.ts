@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const exec = promisify(execFile);
+const nodeExecutable = "node";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
 interface PackageReport {
@@ -123,7 +124,7 @@ test("npm package is a runnable distribution", async (context) => {
     async () => {
       const source = [
         'import { Compiler, DevelopmentProject, DevelopmentRuntime, buildPackage, parse } from "@mewhhaha/blot";',
-        'import type { BuiltPackageExport, DevelopmentBuild } from "@mewhhaha/blot";',
+        'import type { BuiltPackageExport, DevelopmentActivation, DevelopmentBuild, DevelopmentEdge, DevelopmentMemoryCheckpoint, DevelopmentMemoryProfile } from "@mewhhaha/blot";',
         'import { Compiler as CompilerEntry } from "@mewhhaha/blot/compiler";',
         'import type { CompilerHost } from "@mewhhaha/blot/compiler";',
         'const parsed: Awaited<ReturnType<typeof parse>> = await parse("return 42\\n");',
@@ -131,6 +132,10 @@ test("npm package is a runnable distribution", async (context) => {
         "const runtime = new DevelopmentRuntime();",
         "const projectClass: typeof DevelopmentProject = DevelopmentProject;",
         "const build: DevelopmentBuild | undefined = undefined;",
+        "const activation: DevelopmentActivation | undefined = undefined;",
+        "const edge: DevelopmentEdge | undefined = undefined;",
+        "const checkpoint: DevelopmentMemoryCheckpoint | undefined = undefined;",
+        "const profile: DevelopmentMemoryProfile | undefined = undefined;",
         "const compilerEntry: typeof Compiler = CompilerEntry;",
         "const built: readonly BuiltPackageExport[] =",
         '  await buildPackage("./blot.json");',
@@ -139,13 +144,17 @@ test("npm package is a runnable distribution", async (context) => {
         "void runtime;",
         "void projectClass;",
         "void build;",
+        "void activation;",
+        "void edge;",
+        "void checkpoint;",
+        "void profile;",
         "void compilerEntry;",
         "void built;",
       ].join("\n");
       const consumerSource = join(consumer, "consumer.mts");
       await writeFile(consumerSource, source);
       await exec(
-        process.execPath,
+        nodeExecutable,
         [
           join(consumer, "node_modules", "typescript", "bin", "tsc"),
           "--noEmit",
@@ -186,7 +195,7 @@ test("npm package is a runnable distribution", async (context) => {
       "}",
     ].join("\n");
     await exec(
-      process.execPath,
+      nodeExecutable,
       ["--input-type=module", "--eval", program],
       { cwd: consumer, env: consumerEnvironment },
     );
@@ -235,7 +244,7 @@ test("npm package is a runnable distribution", async (context) => {
       "}",
     ].join("\n");
     await exec(
-      process.execPath,
+      nodeExecutable,
       ["--input-type=module", "--eval", program],
       { cwd: consumer, env: consumerEnvironment },
     );

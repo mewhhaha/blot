@@ -3,8 +3,8 @@ import { parentPort, workerData as executionInput } from "node:worker_threads";
 if (parentPort === null) {
   throw new Error("game loop test worker requires a parent port");
 }
-if (!(executionInput.wasm instanceof Uint8Array)) {
-  throw new Error("game loop test worker requires Wasm bytes");
+if (!(executionInput.module instanceof WebAssembly.Module)) {
+  throw new Error("game loop test worker requires a compiled Wasm module");
 }
 if (!Number.isInteger(executionInput.selection)) {
   throw new Error(
@@ -16,8 +16,14 @@ let remainingFrames = 1;
 let streamedBatches = 0;
 let uploadedBatches = 0;
 let redraws = 0;
-const module = await WebAssembly.compile(Uint8Array.from(executionInput.wasm));
-const instance = await WebAssembly.instantiate(module, {
+let uploadedVoxels = 0;
+let voxelCalls = 0;
+let geometryHash = 14695981039346656037n;
+const hashVoxelField = (value) => {
+  geometryHash ^= BigInt.asUintN(64, value);
+  geometryHash = BigInt.asUintN(64, geometryHash * 1099511628211n);
+};
+const instance = await WebAssembly.instantiate(executionInput.module, {
   "blot:host/Canvas": {
     clear() {},
     tri() {},
@@ -32,8 +38,20 @@ const instance = await WebAssembly.instantiate(module, {
   },
   "blot:host/VoxelCanvas": {
     enabled: () => 1,
-    clear() {},
-    voxel() {},
+    clear() {
+      uploadedVoxels = 0;
+    },
+    voxel(colorBlue, colorGreen, colorRed, scale, x, y, z) {
+      uploadedVoxels += 1;
+      voxelCalls += 1;
+      hashVoxelField(x);
+      hashVoxelField(y);
+      hashVoxelField(z);
+      hashVoxelField(scale);
+      hashVoxelField(colorRed);
+      hashVoxelField(colorGreen);
+      hashVoxelField(colorBlue);
+    },
     present() {
       uploadedBatches += 1;
     },
@@ -68,5 +86,8 @@ parentPort.postMessage({
   frames: run(),
   streamedBatches,
   uploadedBatches,
+  uploadedVoxels,
+  voxelCalls,
+  geometryHash,
   redraws,
 });

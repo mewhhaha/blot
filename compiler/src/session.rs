@@ -8,9 +8,11 @@ use crate::ast::{
     AstArena, Declaration, DeclarationId, Expression, ExpressionId, Module, Pattern, PatternId,
 };
 use crate::backend::{ClosedProgram, CompiledModule};
+#[cfg(feature = "development-profile")]
+use crate::development::DevelopmentMemoryProfile;
 use crate::development::{
-    CompiledDevelopmentProgram, CompiledDevelopmentUnit, development_module_key,
-    split_runtime_module,
+    CachedDevelopmentArtifact, CompiledDevelopmentProgram, DevelopmentCompilationUnit,
+    DevelopmentUnitArtifact, development_module_identity, split_runtime_module,
 };
 use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
@@ -18,6 +20,7 @@ use crate::eval::{
     evaluate_module, evaluate_module_environment, run,
 };
 use crate::frontend::{FrontendState, SyntaxSnapshot};
+use crate::protocol::MODULE_SNAPSHOT_SCHEMA;
 use crate::typecheck::{
     CachedModuleAnalyses, CachedModuleInterface, CheckedModuleCertificate, Checker, empty_effects,
     type_exposes_generative_effect,
@@ -26,9 +29,7 @@ use crate::value::{
     EffectOperationOwnership, EffectOwnership, OrderedFields, Value,
     reusable_across_module_instances, show,
 };
-use crate::value_capsule::ValueCapsule;
-
-const MODULE_SNAPSHOT_SCHEMA: u32 = 2;
+use crate::value_capsule::{ValueCapsule, validate_snapshot_message_pack};
 
 #[derive(Deserialize, Serialize)]
 struct ModuleSnapshot {
@@ -54,16 +55,24 @@ struct PublishedBoundary {
     fingerprint: BoundaryFingerprint,
 }
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct DevelopmentArtifactCacheKey {
     program_root: String,
     unit_name: String,
     unit_root: String,
 }
 
-struct CachedDevelopmentArtifact {
-    implementation_key: String,
-    compiled: CompiledModule,
+#[derive(Eq, Hash, PartialEq)]
+struct ClosedDevelopmentProgramKey {
+    program_root: String,
+    units: Vec<(String, String)>,
+}
+
+struct PendingDevelopmentCacheUpdate {
+    transaction_id: u32,
+    program_root: String,
+    active_keys: HashSet<DevelopmentArtifactCacheKey>,
+    replacements: HashMap<DevelopmentArtifactCacheKey, CachedDevelopmentArtifact>,
 }
 
 pub struct CompilerSession {
@@ -75,7 +84,10 @@ pub struct CompilerSession {
     module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     checker: Checker,
     closed_programs: RefCell<HashMap<String, Rc<ClosedProgram>>>,
+    closed_development_programs: RefCell<HashMap<ClosedDevelopmentProgramKey, Rc<ClosedProgram>>>,
     development_artifacts: RefCell<HashMap<DevelopmentArtifactCacheKey, CachedDevelopmentArtifact>>,
+    pending_development_artifacts: RefCell<Option<PendingDevelopmentCacheUpdate>>,
+    next_development_transaction_id: Cell<u32>,
     published_boundaries: RefCell<HashMap<String, PublishedBoundary>>,
     next_boundary_id: Cell<u64>,
     dirty_modules: RefCell<HashSet<String>>,
@@ -124,7 +136,10 @@ impl Default for CompilerSession {
             module_analyses,
             checker,
             closed_programs: RefCell::new(HashMap::new()),
+            closed_development_programs: RefCell::new(HashMap::new()),
             development_artifacts: RefCell::new(HashMap::new()),
+            pending_development_artifacts: RefCell::new(None),
+            next_development_transaction_id: Cell::new(1),
             published_boundaries: RefCell::new(HashMap::new()),
             next_boundary_id: Cell::new(0),
             dirty_modules: RefCell::new(HashSet::new()),
@@ -196,6 +211,14 @@ impl CompilerSession {
         self.invalidate_exact(&HashSet::from([path.to_owned()]));
         self.context.remove_module_state(path);
         self.frontends.remove(path);
+        self.closed_development_programs
+            .borrow_mut()
+            .retain(|key, _| {
+                key.program_root != path && key.units.iter().all(|(_, root)| root != path)
+            });
+        self.development_artifacts
+            .borrow_mut()
+            .retain(|key, _| key.program_root != path && key.unit_root != path);
         self.published_boundaries.borrow_mut().remove(path);
         self.dirty_modules.borrow_mut().remove(path);
         self.invalidation
@@ -212,6 +235,8 @@ impl CompilerSession {
         path: &str,
         bytes: &[u8],
     ) -> Result<(), String> {
+        validate_snapshot_message_pack(bytes)
+            .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
         let snapshot: ModuleSnapshot = rmp_serde::from_slice(bytes)
             .map_err(|error| format!("module snapshot for {path} is invalid: {error}"))?;
         if snapshot.schema != MODULE_SNAPSHOT_SCHEMA {
@@ -491,9 +516,9 @@ impl CompilerSession {
                 .map(|bindings| {
                     bindings
                         .iter()
-                        .filter(|((pattern, expression, _), value)| {
+                        .filter(|((pattern, expression, _, _), value)| {
                             unchanged_bindings.contains(&(*pattern, *expression))
-                                && reusable_across_module_instances(value)
+                                && reusable_across_module_instances(&value.value)
                         })
                         .map(|(key, value)| (*key, value.clone()))
                         .collect::<HashMap<_, _>>()
@@ -840,6 +865,8 @@ impl CompilerSession {
             .get(path)
             .map(|loaded| (loaded.module.as_ref().clone(), loaded.revision()))
             .ok_or_else(|| format!("cannot snapshot unknown module {path}"))?;
+        ast.validate()
+            .map_err(|error| format!("cannot snapshot module {path}: {error}"))?;
         let certificate = self.checker.certificate(path)?;
         let checked = self.checker.check(path).map_err(|diagnostic| {
             format!(
@@ -869,17 +896,33 @@ impl CompilerSession {
                     .1
                 }
             };
-            ValueCapsule::encode(&environment, path, &module_revision)?
+            ValueCapsule::encode(&environment, path, &ast, &module_revision)?
         } else {
             None
         };
-        rmp_serde::to_vec(&ModuleSnapshot {
+        let mut snapshot = ModuleSnapshot {
             schema: MODULE_SNAPSHOT_SCHEMA,
             ast,
             certificate,
             comptime_environment,
-        })
-        .map_err(|error| format!("could not encode module snapshot: {error}"))
+        };
+        let encoded = rmp_serde::to_vec(&snapshot)
+            .map_err(|error| format!("could not encode module snapshot: {error}"))?;
+        match validate_snapshot_message_pack(&encoded) {
+            Ok(()) => return Ok(encoded),
+            Err(error) if snapshot.comptime_environment.is_none() => {
+                return Err(format!(
+                    "could not encode module snapshot for {path}: {error}"
+                ));
+            }
+            Err(_) => {}
+        }
+        snapshot.comptime_environment = None;
+        let encoded = rmp_serde::to_vec(&snapshot)
+            .map_err(|error| format!("could not encode module snapshot: {error}"))?;
+        validate_snapshot_message_pack(&encoded)
+            .map_err(|error| format!("could not encode module snapshot for {path}: {error}"))?;
+        Ok(encoded)
     }
 
     pub fn module_ast(&self, path: &str) -> Result<String, String> {
@@ -890,6 +933,9 @@ impl CompilerSession {
             .get(path)
             .map(|loaded| loaded.module.clone())
             .ok_or_else(|| format!("cannot export unknown module {path}"))?;
+        module
+            .validate()
+            .map_err(|error| format!("cannot export module {path}: {error}"))?;
         serde_json::to_string(module.as_ref())
             .map_err(|error| format!("could not encode portable module AST: {error}"))
     }
@@ -919,7 +965,22 @@ impl CompilerSession {
         entry_unit: &str,
         units: &BTreeMap<String, String>,
     ) -> Result<CompiledDevelopmentProgram, Diagnostic> {
-        let program = self.close_development_program(path, units)?;
+        self.pending_development_artifacts.borrow_mut().take();
+        #[cfg(feature = "development-profile")]
+        let mut memory_profile = DevelopmentMemoryProfile::start();
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint_solver(
+            "solver-start",
+            self.checker.development_solver_cardinality(),
+        );
+        let program = self.close_development_program(
+            path,
+            units,
+            #[cfg(feature = "development-profile")]
+            &mut memory_profile,
+        )?;
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint("closed-program");
         let split =
             split_runtime_module(program.runtime(), entry_unit, units).map_err(|message| {
                 Diagnostic::new(
@@ -929,9 +990,13 @@ impl CompilerSession {
                 )
                 .at(path)
             })?;
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint("split-program");
         let mut compiled_units = Vec::with_capacity(split.units.len());
+        let mut active_keys = HashSet::with_capacity(split.units.len());
+        let mut replacements = HashMap::with_capacity(split.units.len());
         for unit in split.units {
-            let implementation_key = development_module_key(&unit.module).map_err(|message| {
+            let identity = development_module_identity(&unit.module).map_err(|message| {
                 Diagnostic::new(
                     "BLOT_BACKEND_ERROR",
                     message,
@@ -939,60 +1004,104 @@ impl CompilerSession {
                 )
                 .at(path)
             })?;
+            #[cfg(feature = "development-profile")]
+            memory_profile.checkpoint(format!("unit:{}:identity", unit.name));
+            let implementation_key = identity.implementation_key().to_owned();
             let cache_key = DevelopmentArtifactCacheKey {
                 program_root: path.to_owned(),
                 unit_name: unit.name.clone(),
                 unit_root: unit.root.clone(),
             };
-            let cached = self
+            active_keys.insert(cache_key.clone());
+            let reused = self
                 .development_artifacts
                 .borrow()
                 .get(&cache_key)
-                .filter(|cached| cached.implementation_key == implementation_key)
-                .map(|cached| cached.compiled.clone());
-            let reused = cached.is_some();
-            let compiled = if let Some(compiled) = cached {
-                compiled
+                .and_then(|cached| cached.reuse(&identity));
+            let artifact = if let Some(reused) = reused {
+                reused
             } else {
-                let compiled = crate::backend::close(unit.module)
-                    .and_then(|program| program.compile())
-                    .map_err(|message| {
-                        let code = if message.contains("development link")
-                            && message.contains("unsupported")
-                        {
-                            "BLOT_TARGET_REFUSAL"
-                        } else {
-                            "BLOT_BACKEND_ERROR"
-                        };
-                        Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 })
-                            .at(path)
-                    })?;
-                self.development_artifacts.borrow_mut().insert(
-                    cache_key,
-                    CachedDevelopmentArtifact {
-                        implementation_key: implementation_key.clone(),
-                        compiled: compiled.clone(),
-                    },
+                let compiled = Rc::new(
+                    crate::backend::close(unit.module)
+                        .and_then(|program| program.compile())
+                        .map_err(|message| {
+                            let code = if message.contains("development link")
+                                && message.contains("unsupported")
+                            {
+                                "BLOT_TARGET_REFUSAL"
+                            } else {
+                                "BLOT_BACKEND_ERROR"
+                            };
+                            Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 })
+                                .at(path)
+                        })?,
                 );
-                compiled
+                replacements.insert(
+                    cache_key.clone(),
+                    CachedDevelopmentArtifact::new(identity, compiled.clone()),
+                );
+                DevelopmentUnitArtifact::Compiled(compiled)
             };
-            compiled_units.push(CompiledDevelopmentUnit {
+            #[cfg(feature = "development-profile")]
+            memory_profile.checkpoint(format!("unit:{}:artifact", unit.name));
+            compiled_units.push(DevelopmentCompilationUnit {
                 name: unit.name,
                 root: unit.root,
-                compiled,
+                artifact,
                 implementation_key,
-                reused,
             });
         }
-        let active_units = units.keys().collect::<HashSet<_>>();
-        self.development_artifacts
-            .borrow_mut()
-            .retain(|key, _| key.program_root != path || active_units.contains(&key.unit_name));
+        let transaction_id = self.next_development_transaction_id.get();
+        let Some(next_transaction_id) = transaction_id.checked_add(1) else {
+            return Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                "development artifact transaction identities exhausted u32",
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .at(path));
+        };
+        self.next_development_transaction_id
+            .set(next_transaction_id);
+        *self.pending_development_artifacts.borrow_mut() = Some(PendingDevelopmentCacheUpdate {
+            transaction_id,
+            program_root: path.to_owned(),
+            active_keys,
+            replacements,
+        });
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint("complete");
         Ok(CompiledDevelopmentProgram {
+            transaction_id,
             entry_unit: split.entry_unit,
             units: compiled_units,
             edges: split.edges,
+            #[cfg(feature = "development-profile")]
+            memory_profile,
         })
+    }
+
+    pub fn commit_development_program(&self, transaction_id: u32) -> Result<(), String> {
+        let mut pending = self.pending_development_artifacts.borrow_mut();
+        let Some(candidate) = pending.as_ref() else {
+            return Err(format!(
+                "development artifact transaction {transaction_id} is not pending"
+            ));
+        };
+        if candidate.transaction_id != transaction_id {
+            return Err(format!(
+                "development artifact transaction {transaction_id} is stale; pending transaction is {}",
+                candidate.transaction_id
+            ));
+        }
+        let candidate = pending
+            .take()
+            .expect("validated development artifact transaction disappeared");
+        let mut committed = self.development_artifacts.borrow_mut();
+        committed.retain(|key, _| {
+            key.program_root != candidate.program_root || candidate.active_keys.contains(key)
+        });
+        committed.extend(candidate.replacements);
+        Ok(())
     }
 
     fn close_program(&self, path: &str) -> Result<Rc<ClosedProgram>, Diagnostic> {
@@ -1024,12 +1133,35 @@ impl CompilerSession {
         &self,
         path: &str,
         units: &BTreeMap<String, String>,
-    ) -> Result<ClosedProgram, Diagnostic> {
+        #[cfg(feature = "development-profile")] memory_profile: &mut DevelopmentMemoryProfile,
+    ) -> Result<Rc<ClosedProgram>, Diagnostic> {
         self.begin_semantic_request(path)?;
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint_solver(
+            "semantic-request",
+            self.checker.development_solver_cardinality(),
+        );
+        let cache_key = ClosedDevelopmentProgramKey {
+            program_root: path.to_owned(),
+            units: units
+                .iter()
+                .map(|(name, root)| (name.clone(), root.clone()))
+                .collect(),
+        };
+        if let Some(program) = self.closed_development_programs.borrow().get(&cache_key) {
+            #[cfg(feature = "development-profile")]
+            memory_profile.checkpoint("closed-program-cache");
+            return Ok(program.clone());
+        }
         let checked = self
             .checker
             .check(path)
             .map_err(|diagnostic| diagnostic.at(path))?;
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint_solver(
+            "checked-entry",
+            self.checker.development_solver_cardinality(),
+        );
         let runtime = crate::hir::elaborate_development(
             self.context.clone(),
             path,
@@ -1041,14 +1173,22 @@ impl CompilerSession {
                 .collect(),
         )
         .map_err(|diagnostic| diagnostic.at(path))?;
-        crate::backend::close(runtime).map_err(|message| {
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint("runtime-hir");
+        let closed = Rc::new(crate::backend::close(runtime).map_err(|message| {
             Diagnostic::new(
                 "BLOT_BACKEND_ERROR",
                 message,
                 crate::ast::Span { start: 0, end: 0 },
             )
             .at(path)
-        })
+        })?);
+        #[cfg(feature = "development-profile")]
+        memory_profile.checkpoint("backend-closed");
+        self.closed_development_programs
+            .borrow_mut()
+            .insert(cache_key, closed.clone());
+        Ok(closed)
     }
 
     fn begin_semantic_request(&self, path: &str) -> Result<(), Diagnostic> {
@@ -1226,8 +1366,11 @@ impl CompilerSession {
     }
 
     fn invalidate_exact(&self, invalidated: &HashSet<String>) {
+        self.pending_development_artifacts.borrow_mut().take();
         self.context.module_cache.borrow_mut().take();
         self.context.remove_effect_state(invalidated);
+        self.context
+            .remove_module_result_template_state(invalidated);
         let mut modules = self.context.modules.borrow_mut();
         for path in invalidated {
             if let Some(module) = modules.get_mut(path) {
@@ -1237,7 +1380,7 @@ impl CompilerSession {
         self.context
             .live_declarations
             .borrow_mut()
-            .retain(|(path, _), _| !invalidated.contains(path));
+            .remove_modules(invalidated);
         self.context
             .evaluated_bindings
             .borrow_mut()
@@ -1245,7 +1388,7 @@ impl CompilerSession {
         self.context
             .expression_types
             .borrow_mut()
-            .retain(|(path, _), _| !invalidated.contains(path));
+            .remove_modules(invalidated);
         self.context
             .expression_type_resolvers
             .borrow_mut()
@@ -1253,7 +1396,7 @@ impl CompilerSession {
         self.context
             .closure_signatures
             .borrow_mut()
-            .retain(|(path, _), _| !invalidated.contains(path));
+            .remove_modules(invalidated);
         self.context
             .closure_signature_resolvers
             .borrow_mut()
@@ -1261,7 +1404,7 @@ impl CompilerSession {
         self.context
             .recursive_closures
             .borrow_mut()
-            .retain(|(path, _)| !invalidated.contains(path));
+            .remove_modules(invalidated);
         self.module_interfaces
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
@@ -1284,6 +1427,9 @@ impl CompilerSession {
         self.closed_programs
             .borrow_mut()
             .retain(|path, _| !invalidated.contains(path));
+        self.closed_development_programs
+            .borrow_mut()
+            .retain(|key, _| !invalidated.contains(&key.program_root));
     }
 }
 
@@ -2211,6 +2357,7 @@ mod tests {
     use super::*;
     use crate::ast::{AstArena, Expression, ResultEffects, Span};
     use crate::eval::{ApplicationSite, apply};
+    use crate::value::{ChoiceSource, ClosureAlternative};
     use std::collections::BTreeSet;
 
     const TOP_LEVEL_FAULT_SOURCE: &str = "const Fault = @effect { .raise = @type.unit -> @type.unit; }\n\u{e000}const Extended = @type.attach Fault \"origin\" \"snapshot\"\n\u{e000}let action = fn () => do:\n  use result <- Fault.raise ()\n  return result\n\u{e000}return { .action = action; .origin = @shape.get (@type.members Extended) \"origin\"; }\u{e000}\n";
@@ -2228,6 +2375,18 @@ mod tests {
         session
             .module_snapshot(path)
             .expect("module snapshot should encode")
+    }
+
+    #[test]
+    fn generated_prelude_snapshot_contains_a_comptime_environment() {
+        let snapshot: ModuleSnapshot =
+            rmp_serde::from_slice(include_bytes!("../../generated/compiler/prelude.snapshot"))
+                .expect("the generated prelude snapshot should decode");
+
+        assert!(
+            snapshot.comptime_environment.is_some(),
+            "the generated prelude snapshot must retain its comptime environment"
+        );
     }
 
     fn run_with_compiler_test_stack(test: impl FnOnce() + Send + 'static) {
@@ -2264,8 +2423,8 @@ mod tests {
                 .context
                 .closure_signatures
                 .borrow()
-                .keys()
-                .any(|(path, _)| path == MODULE_PATH)
+                .module(MODULE_PATH)
+                .is_some_and(|signatures| !signatures.is_empty())
         );
         consumer
             .add_source(
@@ -2286,6 +2445,491 @@ mod tests {
             consumer.evaluate_module("snapshot:consumer")["display"],
             "(43, 42, \"ok\")"
         );
+    }
+
+    #[test]
+    fn snapshot_omits_a_wire_deep_optional_environment_and_replays_declarations() {
+        run_with_compiler_test_stack(|| {
+            const PATH: &str = "snapshot:wire-deep-value";
+            const VALUE_DEPTH: usize = 70;
+            let mut nested = "()".to_owned();
+            for index in 0..VALUE_DEPTH {
+                nested = format!("#Layer{index} ({nested})");
+            }
+            let text = format!(
+                "let cached = {nested}\nreturn case cached of\n  #Layer{} _ => 42\n  _ => 0\n",
+                VALUE_DEPTH - 1,
+            );
+            let mut producer = CompilerSession::default();
+            producer
+                .add_source(PATH.to_owned(), source(&text))
+                .expect("wire-deep source should load");
+            producer
+                .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+                .expect("wire-deep source should configure");
+            assert_eq!(producer.check_module(PATH)["ok"], true);
+            let loaded = producer.context.modules.borrow()[PATH].clone();
+            let (_, environment) = evaluate_module_environment(
+                producer.context.clone(),
+                PATH.to_owned(),
+                Value::Unit,
+                Runtime::new(Phase::Comptime, PATH.to_owned()),
+            )
+            .expect("wire-deep source should evaluate");
+            let capsule = ValueCapsule::encode(
+                &environment,
+                PATH,
+                loaded.module.as_ref(),
+                &loaded.revision(),
+            )
+            .expect("wire-deep environment should be valid")
+            .expect("logical value depth below 128 should remain capsule-eligible");
+            let with_capsule = rmp_serde::to_vec(&ModuleSnapshot {
+                schema: MODULE_SNAPSHOT_SCHEMA,
+                ast: loaded.module.as_ref().clone(),
+                certificate: producer
+                    .checker
+                    .certificate(PATH)
+                    .expect("wire-deep module should have a certificate"),
+                comptime_environment: Some(capsule),
+            })
+            .expect("wire-deep snapshot should serialize");
+            let error = validate_snapshot_message_pack(&with_capsule)
+                .expect_err("the eligible capsule should exceed raw MessagePack depth");
+            assert!(error.contains("maximum structural depth"), "{error}");
+
+            let bytes = producer
+                .module_snapshot(PATH)
+                .expect("snapshot export should retry without the optional environment");
+            let snapshot: ModuleSnapshot =
+                rmp_serde::from_slice(&bytes).expect("fallback snapshot should decode");
+            assert!(snapshot.comptime_environment.is_none());
+            let mut consumer = CompilerSession::default();
+            consumer
+                .install_trusted_module_snapshot(PATH, &bytes)
+                .expect("fallback snapshot should install");
+
+            assert_eq!(consumer.evaluate_module(PATH)["display"], "42");
+        });
+    }
+
+    #[test]
+    fn declaration_time_closure_capture_agrees_between_checking_and_evaluation() {
+        const PATH: &str = "lexical-shadowing.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(concat!(
+                    "const x = 1\n",
+                    "const read = fn () => x\n",
+                    "const x = 2\n",
+                    "const observed = read ()\n",
+                    "return observed\n",
+                )),
+            )
+            .expect("lexical-shadowing source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("lexical-shadowing source should configure");
+
+        let checked = session.check_module(PATH);
+        let evaluated = session.evaluate_module(PATH);
+
+        assert_eq!(checked["type"], "1", "{checked}");
+        assert_eq!(evaluated["display"], "1", "{evaluated}");
+    }
+
+    #[test]
+    fn nested_closure_capture_freezes_ancestor_declaration_frames() {
+        const PATH: &str = "nested-lexical-shadowing.blot";
+        const SOURCE: &str = concat!(
+            "const x = 1\n",
+            "const read = do:\n",
+            "  return fn () => x\n",
+            "const x = 2\n",
+            "const observed = read ()\n",
+            "return observed\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source(PATH.to_owned(), source(SOURCE))
+            .expect("nested lexical-shadowing source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("nested lexical-shadowing source should configure");
+
+        let checked = session.check_module(PATH);
+        let evaluated = session.evaluate_module(PATH);
+        let prepared = session.prepare_runtime_hir(PATH);
+
+        assert_eq!(checked["type"], "1", "{checked}");
+        assert_eq!(evaluated["display"], "1", "{evaluated}");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+
+        let bytes = session
+            .module_snapshot(PATH)
+            .expect("nested lexical-shadowing snapshot should encode");
+        let mut restored = CompilerSession::default();
+        restored
+            .install_trusted_module_snapshot(PATH, &bytes)
+            .expect("nested lexical-shadowing snapshot should install");
+        assert_eq!(restored.evaluate_module(PATH)["display"], "1");
+    }
+
+    #[test]
+    fn deferred_arguments_capture_their_lexical_declaration_frame() {
+        const PATH: &str = "deferred-lexical-shadowing.blot";
+        const SOURCE: &str = concat!(
+            "let delay = fn ~value => fn () => value\n",
+            "let x = 1\n",
+            "let read = delay x\n",
+            "let x = 2\n",
+            "return (x, read ())\n",
+        );
+        let mut session = CompilerSession::default();
+        session
+            .add_source(PATH.to_owned(), source(SOURCE))
+            .expect("deferred lexical-shadowing source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("deferred lexical-shadowing source should configure");
+
+        let checked = session.check_module(PATH);
+        let evaluated = session.evaluate_module(PATH);
+
+        let mut preparation_session = CompilerSession::default();
+        preparation_session
+            .add_source(PATH.to_owned(), source(SOURCE))
+            .expect("deferred lexical-shadowing source should load for preparation");
+        preparation_session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("deferred lexical-shadowing source should configure for preparation");
+        let prepared = preparation_session.prepare_runtime_hir(PATH);
+
+        assert_eq!(checked["type"], "{ .0 = 2; .1 = 1 }", "{checked}");
+        assert_eq!(evaluated["display"], "(2, 1)", "{evaluated}");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    }
+
+    #[test]
+    fn evaluated_closure_environments_do_not_retain_their_binding_frames() {
+        const PATH: &str = "acyclic-environment.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source("let increment = fn value => @int.add value 1\nreturn increment\n"),
+            )
+            .expect("closure source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("closure source should configure");
+
+        let (value, environment) = crate::eval::evaluate_module_environment(
+            session.context.clone(),
+            PATH.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Comptime, PATH.to_owned()),
+        )
+        .expect("closure source should evaluate");
+        let Value::Closure {
+            environment: captured,
+            ..
+        } = &value
+        else {
+            panic!("module should return its closure")
+        };
+        let captured = Rc::downgrade(captured);
+        let binding_frame = Rc::downgrade(&environment);
+
+        drop(value);
+        drop(environment);
+
+        assert!(captured.upgrade().is_none());
+        assert!(binding_frame.upgrade().is_none());
+    }
+
+    #[test]
+    fn evaluated_recursive_groups_do_not_retain_their_binding_frames() {
+        const PATH: &str = "acyclic-recursive-environment.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source("let rec loop = fn value => loop value\nreturn loop\n"),
+            )
+            .expect("recursive closure source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("recursive closure source should configure");
+
+        let (value, environment) = crate::eval::evaluate_module_environment(
+            session.context.clone(),
+            PATH.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Comptime, PATH.to_owned()),
+        )
+        .expect("recursive closure source should evaluate");
+        let Value::Closure {
+            environment: captured,
+            ..
+        } = &value
+        else {
+            panic!("module should return its recursive closure")
+        };
+        let captured = Rc::downgrade(captured);
+        let binding_frame = Rc::downgrade(&environment);
+
+        drop(value);
+        drop(environment);
+
+        assert!(captured.upgrade().is_none());
+        assert!(binding_frame.upgrade().is_none());
+    }
+
+    #[test]
+    fn dead_declarations_still_separate_recursive_groups() {
+        const PATH: &str = "recursive-liveness-boundary.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(concat!(
+                    "let rec first = fn value => first value\n",
+                    "let separator = ()\n",
+                    "let rec second = fn value => second value\n",
+                    "return first\n",
+                )),
+            )
+            .expect("recursive-liveness-boundary source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("recursive-liveness-boundary source should configure");
+
+        let (value, _) = crate::eval::evaluate_module_environment(
+            session.context.clone(),
+            PATH.to_owned(),
+            Value::Unit,
+            Runtime::new(Phase::Comptime, PATH.to_owned()),
+        )
+        .expect("recursive-liveness-boundary source should evaluate");
+        let Value::Closure { environment, .. } = value else {
+            panic!("module should return its recursive closure")
+        };
+        let bindings = environment
+            .recursive_bindings
+            .as_ref()
+            .expect("returned closure should retain its recursive group");
+
+        assert!(bindings.contains("first"));
+        assert!(!bindings.contains("second"));
+    }
+
+    #[test]
+    fn recursive_group_keeps_interleaved_signatures_and_forward_members() {
+        const PATH: &str = "recursive-group.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(concat!(
+                    "let rec even :: @type.int -> @type.int\n",
+                    "let rec even = fn value => case @int.cmp value 0 of\n",
+                    "  #Equal => 0\n",
+                    "  #Greater => odd (@int.sub value 1)\n",
+                    "  #Less => 0\n",
+                    "let rec odd :: @type.int -> @type.int\n",
+                    "let rec odd = fn value => case @int.cmp value 0 of\n",
+                    "  #Equal => 0\n",
+                    "  #Greater => even (@int.sub value 1)\n",
+                    "  #Less => 0\n",
+                    "return even 4\n",
+                )),
+            )
+            .expect("recursive-group source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("recursive-group source should configure");
+
+        let checked = session.check_module(PATH);
+        let evaluated = session.evaluate_module(PATH);
+        let prepared = session.prepare_runtime_hir(PATH);
+
+        assert_eq!(checked["ok"], true, "{checked}");
+        assert_eq!(evaluated["display"], "0", "{evaluated}");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    }
+
+    #[test]
+    fn a_long_recursive_group_checks_on_a_small_stack() {
+        const PATH: &str = "long-recursive-group.blot";
+        const DECLARATIONS: usize = 4_096;
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut module = String::new();
+                for index in 0..DECLARATIONS {
+                    let successor = (index + 1) % DECLARATIONS;
+                    module.push_str(&format!(
+                        "let rec function_{index} = fn value => do:\n  let successor = function_{successor}\n  return value\n"
+                    ));
+                }
+                module.push_str("return 0\n");
+                let mut session = CompilerSession::default();
+                session
+                    .add_source(PATH.to_owned(), source(&module))
+                    .expect("long recursive-group source should load");
+                session
+                    .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+                    .expect("long recursive-group source should configure");
+
+                let checked = session.check_module(PATH);
+
+                assert_eq!(checked["ok"], true, "{checked}");
+            })
+            .expect("small-stack compiler test thread should start")
+            .join()
+            .expect("small-stack compiler test thread should finish");
+    }
+
+    #[test]
+    fn recursive_group_stops_when_the_declaration_kind_changes() {
+        const PATH: &str = "recursive-kind-boundary.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                PATH.to_owned(),
+                source(concat!(
+                    "let rec first = fn value => second value\n",
+                    "const rec second = fn value => value\n",
+                    "return first 1\n",
+                )),
+            )
+            .expect("recursive-kind-boundary source should load");
+        session
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("recursive-kind-boundary source should configure");
+
+        let checked = session.check_module(PATH);
+
+        assert_eq!(checked["ok"], false, "{checked}");
+        assert_eq!(checked["diagnostic"]["code"], "BLOT_FORWARD_REFERENCE");
+    }
+
+    #[test]
+    fn recursive_group_survives_a_value_capsule_round_trip() {
+        const LIBRARY_PATH: &str = "snapshot:recursive-group";
+        const CONSUMER_PATH: &str = "snapshot:recursive-group-consumer";
+        let bytes = snapshot_from_source(
+            LIBRARY_PATH,
+            concat!(
+                "let rec even = fn value => case @int.cmp value 0 of\n",
+                "  #Equal => 0\n",
+                "  #Greater => odd (@int.sub value 1)\n",
+                "  #Less => 0\n",
+                "let rec odd = fn value => case @int.cmp value 0 of\n",
+                "  #Equal => 0\n",
+                "  #Greater => even (@int.sub value 1)\n",
+                "  #Less => 0\n",
+                "return even\n",
+            ),
+        );
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(LIBRARY_PATH, &bytes)
+            .expect("recursive-group snapshot should install");
+        consumer
+            .add_source(
+                CONSUMER_PATH.to_owned(),
+                source("const even = import \"library\"\nreturn even 4\n"),
+            )
+            .expect("recursive-group consumer should load");
+        consumer
+            .configure_module(
+                CONSUMER_PATH,
+                BTreeMap::from([("library".to_owned(), LIBRARY_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("recursive-group consumer should configure");
+
+        let evaluated = consumer.evaluate_module(CONSUMER_PATH);
+
+        assert_eq!(evaluated["display"], "0", "{evaluated}");
+    }
+
+    #[test]
+    fn deep_import_provenance_replays_snapshot_declarations() {
+        run_with_compiler_test_stack(|| {
+            const LIBRARY_PATH: &str = "snapshot:deep-provenance-library";
+            const SHALLOW_PATH: &str = "snapshot:deep-provenance-shallow";
+            const WRAPPER_COUNT: usize = 34;
+            let bytes = snapshot_from_source(
+                LIBRARY_PATH,
+                "let word = \"source\"\nlet read = fn () => word\nreturn read\n",
+            );
+            let snapshot: ModuleSnapshot =
+                rmp_serde::from_slice(&bytes).expect("module snapshot should decode");
+            let mut encoded = serde_json::to_value(snapshot).expect("snapshot should serialize");
+            let word = encoded["comptime_environment"]["environments"]
+                .as_array_mut()
+                .expect("snapshot should contain environments")
+                .iter_mut()
+                .find_map(|environment| environment["names"].get_mut("word"))
+                .expect("snapshot environment should contain word");
+            word["Text"] = serde_json::json!("capsule");
+            let forged: ModuleSnapshot =
+                serde_json::from_value(encoded).expect("forged snapshot should deserialize");
+            let forged = rmp_serde::to_vec(&forged).expect("forged snapshot should encode");
+            let mut consumer = CompilerSession::default();
+            consumer
+                .install_trusted_module_snapshot(LIBRARY_PATH, &forged)
+                .expect("forged trusted snapshot should install");
+            consumer
+                .add_source(
+                    SHALLOW_PATH.to_owned(),
+                    source("const read = import \"next\"\nreturn read ()\n"),
+                )
+                .expect("shallow consumer should load");
+            consumer
+                .configure_module(
+                    SHALLOW_PATH,
+                    BTreeMap::from([("next".to_owned(), LIBRARY_PATH.to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("shallow consumer should configure");
+            assert_eq!(
+                consumer.evaluate_module(SHALLOW_PATH)["display"],
+                "\"capsule\""
+            );
+
+            for index in 0..WRAPPER_COUNT {
+                let path = format!("snapshot:deep-provenance-{index}");
+                let next = if index + 1 == WRAPPER_COUNT {
+                    LIBRARY_PATH.to_owned()
+                } else {
+                    format!("snapshot:deep-provenance-{}", index + 1)
+                };
+                let text = if index == 0 {
+                    "const read = import \"next\"\nreturn read ()\n"
+                } else {
+                    "return import \"next\"\n"
+                };
+                consumer
+                    .add_source(path.clone(), source(text))
+                    .expect("deep consumer should load");
+                consumer
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("next".to_owned(), next)]),
+                        BTreeMap::new(),
+                    )
+                    .expect("deep consumer should configure");
+            }
+            let evaluated = consumer.evaluate_module("snapshot:deep-provenance-0");
+
+            assert_eq!(evaluated["display"], "\"source\"", "{evaluated}");
+        });
     }
 
     #[test]
@@ -2386,6 +3030,51 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_template_cold_miss_scans_structure_once() {
+        const MODULE_PATH: &str = "snapshot:single-scan-template";
+        const CONSUMER_PATH: &str = "snapshot:single-scan-template-consumer";
+        let bytes = snapshot_from_source(
+            MODULE_PATH,
+            "let word = \"capsule\"\nlet read = fn () => word\nreturn read\n",
+        );
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        consumer
+            .add_source(
+                CONSUMER_PATH.to_owned(),
+                source(
+                    "const read = import \"library\"\nlet wrapped = fn () => read ()\nreturn wrapped\n",
+                ),
+            )
+            .expect("consumer source should load");
+        consumer
+            .configure_module(
+                CONSUMER_PATH,
+                BTreeMap::from([("library".to_owned(), MODULE_PATH.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("consumer should configure");
+        let evaluate = || {
+            run(crate::eval::evaluate_module(
+                consumer.context.clone(),
+                CONSUMER_PATH.to_owned(),
+                Value::Unit,
+                Runtime::new(Phase::Comptime, CONSUMER_PATH.to_owned()),
+            ))
+            .expect("consumer should evaluate")
+        };
+        crate::value_capsule::take_structural_budget_scan_count();
+
+        drop(evaluate());
+
+        assert_eq!(crate::value_capsule::take_structural_budget_scan_count(), 1);
+        drop(evaluate());
+        assert_eq!(crate::value_capsule::take_structural_budget_scan_count(), 0);
+    }
+
+    #[test]
     fn snapshot_template_instantiates_closures_for_each_import_occurrence() {
         const MODULE_PATH: &str = "snapshot:closure-template";
         const CONSUMER_PATH: &str = "snapshot:closure-template-consumer";
@@ -2413,17 +3102,20 @@ mod tests {
             )
             .expect("consumer should configure");
 
-        let result = run(crate::eval::evaluate_module(
-            consumer.context.clone(),
-            CONSUMER_PATH.to_owned(),
-            Value::Unit,
-            Runtime::new(Phase::Comptime, CONSUMER_PATH.to_owned()),
-        ))
-        .expect("consumer should evaluate");
-        let Value::Shape(fields) = result else {
-            panic!("consumer should return a closure shape");
-        };
-        let module_instances = |name| {
+        fn evaluate(session: &CompilerSession, path: &str) -> Value {
+            run(crate::eval::evaluate_module(
+                session.context.clone(),
+                path.to_owned(),
+                Value::Unit,
+                Runtime::new(Phase::Comptime, path.to_owned()),
+            ))
+            .expect("consumer should evaluate")
+        }
+
+        fn module_instances(value: &Value, name: &str) -> Rc<crate::eval::ModuleInstanceScope> {
+            let Value::Shape(fields) = value else {
+                panic!("consumer should return a closure shape");
+            };
             let field = fields
                 .get(name)
                 .unwrap_or_else(|| panic!("consumer should contain field {name}"));
@@ -2434,9 +3126,366 @@ mod tests {
                 panic!("consumer field {name} should be a closure");
             };
             module_instances.clone()
+        }
+
+        let first = evaluate(&consumer, CONSUMER_PATH);
+
+        assert!(module_instances(&first, "left") != module_instances(&first, "right"));
+        assert_eq!(consumer.context.module_result_template_instance_count(), 2);
+        assert!(
+            consumer
+                .context
+                .module_result_template_instances_are_sealed()
+        );
+        let Value::Shape(fields) = &first else {
+            panic!("consumer should return a closure shape");
+        };
+        let application = ApplicationSite::for_expression(
+            &consumer.context,
+            CONSUMER_PATH,
+            consumer.context.modules.borrow()[CONSUMER_PATH]
+                .module
+                .result,
+        )
+        .expect("consumer result should provide application provenance");
+        let runtime = Runtime::new(Phase::Comptime, CONSUMER_PATH.to_owned());
+        let constructor = Value::Primitive {
+            name: "@effect".to_owned(),
+            arity: 1,
+            applied: Vec::new(),
+        };
+        let mint = |name| {
+            let effect = run(apply(
+                consumer.context.clone(),
+                fields
+                    .get(name)
+                    .unwrap_or_else(|| panic!("consumer should contain field {name}"))
+                    .clone(),
+                constructor.clone(),
+                Span { start: 0, end: 0 },
+                runtime.clone(),
+                application.clone(),
+            ))
+            .expect("snapshot wrapper should mint its supplied effect");
+            let Value::Effect { id, .. } = effect else {
+                panic!("snapshot wrapper should return an effect");
+            };
+            id
+        };
+        assert_ne!(mint("left"), mint("right"));
+
+        let second = evaluate(&consumer, CONSUMER_PATH);
+
+        assert!(module_instances(&second, "left") != module_instances(&second, "right"));
+        assert_eq!(consumer.context.module_result_template_instance_count(), 2);
+
+        consumer
+            .add_source(
+                CONSUMER_PATH.to_owned(),
+                source(
+                    "const left = import \"left\"\n\u{e000}const right = import \"right\"\n\u{e000}let marker = 0\n\u{e000}return { .left = left.first; .right = right.first; }\u{e000}\n",
+                ),
+            )
+            .expect("edited consumer source should load");
+        assert_eq!(consumer.context.module_result_template_instance_count(), 0);
+        let edited = evaluate(&consumer, CONSUMER_PATH);
+        assert!(module_instances(&edited, "left") != module_instances(&edited, "right"));
+        assert_eq!(consumer.context.module_result_template_instance_count(), 2);
+
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("replacement snapshot should install");
+        assert_eq!(consumer.context.module_result_template_instance_count(), 0);
+        let replaced = evaluate(&consumer, CONSUMER_PATH);
+
+        assert!(module_instances(&replaced, "left") != module_instances(&replaced, "right"));
+        assert_eq!(consumer.context.module_result_template_instance_count(), 2);
+    }
+
+    #[test]
+    fn snapshot_template_cache_stays_bounded_across_many_import_occurrences() {
+        const MODULE_PATH: &str = "snapshot:bounded-closure-template";
+        const IMPORTS_PER_CONSUMER: usize = 4;
+        let import_count = crate::eval::MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT + 1;
+        let bytes = snapshot_from_source(MODULE_PATH, CLOSURE_PROVENANCE_SOURCE);
+        let mut consumer = CompilerSession::default();
+        consumer
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        let mut paths = Vec::new();
+        let mut next_import = 0;
+        while next_import < import_count {
+            let path = format!("snapshot:bounded-closure-template-consumer-{}", paths.len());
+            let consumer_imports = IMPORTS_PER_CONSUMER.min(import_count - next_import);
+            let first_import = next_import;
+            let mut text = String::new();
+            let mut imports = BTreeMap::new();
+            for _ in 0..consumer_imports {
+                let specifier = format!("library-{next_import}");
+                text.push_str(&format!(
+                    "const library{next_import} = import \"{specifier}\"\n\u{e000}"
+                ));
+                imports.insert(specifier, MODULE_PATH.to_owned());
+                next_import += 1;
+            }
+            text.push_str("return [");
+            for index in first_import..next_import {
+                text.push_str(&format!("library{index}.first,"));
+            }
+            text.pop();
+            text.push_str("]\u{e000}\n");
+            consumer
+                .add_source(path.clone(), source(&text))
+                .expect("consumer source should load");
+            consumer
+                .configure_module(&path, imports, BTreeMap::new())
+                .expect("consumer should configure");
+            paths.push((path, consumer_imports));
+        }
+
+        let evaluate_all = || {
+            let mut module_instances = HashSet::new();
+            for (path, expected_imports) in &paths {
+                let value = run(crate::eval::evaluate_module(
+                    consumer.context.clone(),
+                    path.clone(),
+                    Value::Unit,
+                    Runtime::new(Phase::Comptime, path.clone()),
+                ))
+                .expect("consumer should evaluate");
+                let Value::Array(values) = value else {
+                    panic!("consumer should return its imported closures");
+                };
+                assert_eq!(values.len(), *expected_imports);
+                for (index, value) in values.iter().enumerate() {
+                    let Value::Closure {
+                        module_instances: occurrence,
+                        ..
+                    } = value
+                    else {
+                        panic!("consumer element {index} should be a closure");
+                    };
+                    module_instances.insert(occurrence.clone());
+                }
+            }
+            assert_eq!(module_instances.len(), import_count);
         };
 
-        assert!(module_instances("left") != module_instances("right"));
+        evaluate_all();
+        assert!(
+            consumer.context.module_result_template_instance_count()
+                <= crate::eval::MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT
+        );
+        assert!(
+            consumer
+                .context
+                .module_result_template_instances_are_sealed()
+        );
+        evaluate_all();
+        assert!(
+            consumer.context.module_result_template_instance_count()
+                <= crate::eval::MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT
+        );
+    }
+
+    #[test]
+    fn snapshot_template_eviction_preserves_function_choice_identity() {
+        const MODULE_PATH: &str = "snapshot:evicted-closure-template";
+        const TARGET_PATH: &str = "snapshot:evicted-closure-template-target";
+        const MODULE_SOURCE: &str = "const make = fn captured => fn value => @int.add value captured\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
+        const SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const library = import \"library\"\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => library.first\n    \u{e000}#False => library.first\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .first = library.first; .second = library.second; .run = run; }\u{e000}\n";
+
+        fn add_consumer(session: &mut CompilerSession, path: &str) {
+            session
+                .add_source(path.to_owned(), source(SOURCE))
+                .expect("consumer source should load");
+            session
+                .configure_module(
+                    path,
+                    BTreeMap::from([("library".to_owned(), MODULE_PATH.to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("consumer should configure");
+        }
+
+        fn evaluate(session: &CompilerSession, path: &str) -> Value {
+            run(crate::eval::evaluate_module(
+                session.context.clone(),
+                path.to_owned(),
+                Value::Unit,
+                Runtime::new(Phase::Comptime, path.to_owned()),
+            ))
+            .expect("consumer should evaluate")
+        }
+
+        fn closure_field(result: &Value, field: &str) -> Value {
+            let Value::Shape(fields) = result else {
+                panic!("snapshot consumer should return a shape");
+            };
+            let closure = fields
+                .get(field)
+                .unwrap_or_else(|| panic!("snapshot result should contain field {field}"));
+            assert!(matches!(closure, Value::Closure { .. }));
+            closure.clone()
+        }
+
+        fn alternative(value: &Value, field: &str) -> ClosureAlternative {
+            let Value::Shape(fields) = value else {
+                panic!("snapshot consumer should return a shape");
+            };
+            let Value::Closure {
+                module,
+                module_instances,
+                effect_scope,
+                parameter,
+                body,
+                environment,
+                self_name,
+                signature,
+                reuse_assertion,
+                deferred,
+                ..
+            } = fields
+                .get(field)
+                .unwrap_or_else(|| panic!("snapshot result should contain field {field}"))
+            else {
+                panic!("snapshot result field {field} should be a closure");
+            };
+            ClosureAlternative {
+                source: ChoiceSource::Lambda {
+                    module: module.clone(),
+                    module_instances: module_instances.clone(),
+                    effect_scope: effect_scope.clone(),
+                    parameter: *parameter,
+                    body: *body,
+                    environment: environment.clone(),
+                    self_name: self_name.clone(),
+                    signature: signature.clone(),
+                    reuse_assertion: *reuse_assertion,
+                    deferred: *deferred,
+                },
+                captures: Vec::new(),
+                product_type: 0,
+                payload_type: 0,
+            }
+        }
+
+        fn alternative_count(left: &ClosureAlternative, right: &ClosureAlternative) -> usize {
+            if left.same_source(right) { 1 } else { 2 }
+        }
+
+        fn prepared_choice_cases(
+            session: &mut CompilerSession,
+            suffix: &str,
+            left: Value,
+            right: Value,
+        ) -> Vec<serde_json::Value> {
+            const FUNCTION_SOURCE: &str = "return fn value => @int.add value 1\n";
+            const CHOICE_SOURCE: &str = "const positive = fn value => case @int.cmp value 0 of\n  \u{e000}\u{e001}#Greater => #True\n  \u{e000}#Less => #False\n  \u{e000}#Equal => #False\n\n\u{e000}\u{e002}\u{e000}const left = import \"left\"\n\u{e000}const right = import \"right\"\n\n\u{e000}let run :: @type.int -> @type.int\n\u{e000}let run = fn flag => do:\n  \u{e000}\u{e001}let selected = case positive flag of\n    \u{e000}\u{e001}#True => left\n    \u{e000}#False => right\n  \u{e000}\u{e002}\u{e000}return selected flag\n\n\u{e000}\u{e002}\u{e000}return { .run = run; }\u{e000}\n";
+            let left_path = format!("snapshot:history-choice-left-{suffix}");
+            let right_path = format!("snapshot:history-choice-right-{suffix}");
+            for path in [&left_path, &right_path] {
+                session
+                    .add_source(path.clone(), source(FUNCTION_SOURCE))
+                    .expect("choice provider source should load");
+                session
+                    .configure_module(path, BTreeMap::new(), BTreeMap::new())
+                    .expect("choice provider should configure");
+                assert_eq!(session.check_module(path)["ok"], true);
+            }
+            session
+                .context
+                .module_results
+                .borrow_mut()
+                .insert(left_path.clone(), left);
+            session
+                .context
+                .module_results
+                .borrow_mut()
+                .insert(right_path.clone(), right);
+            session
+                .context
+                .reusable_module_results
+                .borrow_mut()
+                .extend([left_path.clone(), right_path.clone()]);
+
+            let choice_path = format!("snapshot:history-choice-{suffix}");
+            session
+                .add_source(choice_path.clone(), source(CHOICE_SOURCE))
+                .expect("choice source should load");
+            session
+                .configure_module(
+                    &choice_path,
+                    BTreeMap::from([
+                        ("left".to_owned(), left_path),
+                        ("right".to_owned(), right_path),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("choice should configure");
+            let prepared = session.prepare_runtime_hir(&choice_path);
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            choice_cases(&prepared["module"])
+        }
+
+        let bytes = snapshot_from_source(MODULE_PATH, MODULE_SOURCE);
+        let mut session = CompilerSession::default();
+        session
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("module snapshot should install");
+        for index in 0..(crate::eval::MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT - 1) {
+            let path = format!("snapshot:evicted-closure-template-primer-{index}");
+            add_consumer(&mut session, &path);
+            drop(evaluate(&session, &path));
+        }
+        add_consumer(&mut session, TARGET_PATH);
+        let before_eviction = evaluate(&session, TARGET_PATH);
+        assert_eq!(
+            session.context.module_result_template_instance_count(),
+            crate::eval::MODULE_RESULT_TEMPLATE_INSTANCE_LIMIT
+        );
+
+        let overflow_path = "snapshot:evicted-closure-template-overflow";
+        add_consumer(&mut session, overflow_path);
+        drop(evaluate(&session, overflow_path));
+        assert_eq!(session.context.module_result_template_instance_count(), 1);
+        let after_eviction = evaluate(&session, TARGET_PATH);
+
+        let first = alternative(&before_eviction, "first");
+        let repeated = alternative(&after_eviction, "first");
+        let distinct_environment = alternative(&after_eviction, "second");
+        assert!(first.same_source(&repeated));
+        assert!(!repeated.same_source(&distinct_environment));
+        let warm_cases = prepared_choice_cases(
+            &mut session,
+            "warm",
+            closure_field(&before_eviction, "first"),
+            closure_field(&after_eviction, "first"),
+        );
+
+        let mut fresh = CompilerSession::default();
+        fresh
+            .install_trusted_module_snapshot(MODULE_PATH, &bytes)
+            .expect("fresh module snapshot should install");
+        add_consumer(&mut fresh, TARGET_PATH);
+        let fresh_first = evaluate(&fresh, TARGET_PATH);
+        let fresh_repeated = evaluate(&fresh, TARGET_PATH);
+        let fresh_cases = prepared_choice_cases(
+            &mut fresh,
+            "fresh",
+            closure_field(&fresh_first, "first"),
+            closure_field(&fresh_repeated, "first"),
+        );
+        assert_eq!(
+            alternative_count(&first, &repeated),
+            alternative_count(
+                &alternative(&fresh_first, "first"),
+                &alternative(&fresh_repeated, "first")
+            )
+        );
+        assert_eq!(alternative_count(&first, &repeated), 1);
+        assert_eq!(warm_cases.len(), fresh_cases.len());
+        assert_eq!(warm_cases.len(), 1);
     }
 
     #[test]
@@ -2862,6 +3911,31 @@ mod tests {
     }
 
     #[test]
+    fn deeply_nested_snapshot_bytes_are_rejected_before_deserialization_transactionally() {
+        const PATH: &str = "snapshot:transaction-message-pack-depth";
+        let mut consumer = CompilerSession::default();
+        consumer
+            .add_source(PATH.to_owned(), source("return 7\n"))
+            .expect("resident source should load");
+        consumer
+            .configure_module(PATH, BTreeMap::new(), BTreeMap::new())
+            .expect("resident source should configure");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        let boundary = consumer.published_boundaries.borrow()[PATH].id;
+        let mut corrupt = vec![0x91; 20_000];
+        corrupt.push(0xc0);
+
+        let error = consumer
+            .install_trusted_module_snapshot(PATH, &corrupt)
+            .expect_err("deep MessagePack should be rejected by iterative preflight");
+
+        assert!(error.contains("maximum structural depth"), "{error}");
+        assert_eq!(consumer.check_module(PATH)["type"], "7");
+        assert_eq!(consumer.evaluate_module(PATH)["display"], "7");
+        assert_eq!(consumer.published_boundaries.borrow()[PATH].id, boundary);
+    }
+
+    #[test]
     fn invalid_cached_closure_body_leaves_the_resident_module_unchanged() {
         const PATH: &str = "snapshot:transaction-closure";
         let bytes = snapshot_from_source(
@@ -2877,7 +3951,7 @@ mod tests {
             .iter_mut()
             .find_map(|environment| environment["names"].get_mut("identity"))
             .expect("value capsule should contain the identity closure");
-        closure["Closure"]["body"] = serde_json::json!(u32::MAX);
+        closure["Closure"]["closure"]["body"] = serde_json::json!(u32::MAX);
         let corrupt: ModuleSnapshot =
             serde_json::from_value(encoded).expect("corrupt snapshot should deserialize");
         let corrupt = rmp_serde::to_vec(&corrupt).expect("corrupt snapshot should encode");
@@ -3598,12 +4672,23 @@ mod tests {
             .expect("module should configure");
         assert_eq!(session.analyze_module(PATH)["ok"], true);
         assert!(session.module_interfaces.borrow().contains_key(PATH));
+        let units = BTreeMap::from([("game".to_owned(), PATH.to_owned())]);
+        let development = session
+            .compile_development_program(PATH, "game", &units)
+            .expect("development program should compile");
+        session
+            .commit_development_program(development.transaction_id)
+            .expect("development artifacts should commit");
+        assert!(!session.closed_development_programs.borrow().is_empty());
+        assert!(!session.development_artifacts.borrow().is_empty());
 
         assert!(session.remove_module(PATH));
         assert!(!session.context.modules.borrow().contains_key(PATH));
         assert!(!session.module_interfaces.borrow().contains_key(PATH));
         assert!(!session.module_analyses.borrow().contains_key(PATH));
         assert!(!session.published_boundaries.borrow().contains_key(PATH));
+        assert!(session.closed_development_programs.borrow().is_empty());
+        assert!(session.development_artifacts.borrow().is_empty());
         assert!(!session.remove_module(PATH));
 
         session
@@ -4285,6 +5370,289 @@ mod tests {
     }
 
     #[test]
+    fn alternating_leaf_edits_reuse_transient_solver_storage() {
+        const ENTRY: &str = "main.blot";
+        const PROVIDER: &str = "provider.blot";
+        let provider_source = |increment| {
+            source(&format!(
+                "let add = fn value => @int.add value {increment}\n\u{e000}return {{ .add = add; }}\u{e000}\n"
+            ))
+        };
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                ENTRY.to_owned(),
+                source(
+                    "const provider = import \"provider\"\n\u{e000}return fn value => provider.add value\u{e000}\n",
+                ),
+            )
+            .expect("entry source should load");
+        session
+            .configure_module(
+                ENTRY,
+                BTreeMap::from([("provider".to_owned(), PROVIDER.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("entry source should configure");
+        session
+            .add_source(PROVIDER.to_owned(), provider_source(1))
+            .expect("provider source should load");
+        session
+            .configure_module(PROVIDER, BTreeMap::new(), BTreeMap::new())
+            .expect("provider source should configure");
+        let units = BTreeMap::from([
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("provider".to_owned(), PROVIDER.to_owned()),
+        ]);
+        session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("initial program should compile");
+
+        let mut cardinalities = Vec::new();
+        for increment in [2, 1, 2] {
+            session
+                .add_source(PROVIDER.to_owned(), provider_source(increment))
+                .expect("edited provider should load");
+            session
+                .compile_development_program(ENTRY, "game", &units)
+                .expect("edited program should compile");
+            cardinalities.push(session.checker.solver_cardinality());
+        }
+
+        assert_eq!(cardinalities[0], cardinalities[1]);
+        assert_eq!(cardinalities[1], cardinalities[2]);
+    }
+
+    #[test]
+    fn development_artifacts_commit_only_the_current_preparation() {
+        const ENTRY: &str = "transaction.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(ENTRY.to_owned(), source("return 1\u{e000}"))
+            .expect("entry source should load");
+        session
+            .configure_module(ENTRY, BTreeMap::new(), BTreeMap::new())
+            .expect("entry source should configure");
+        let units = BTreeMap::from([("game".to_owned(), ENTRY.to_owned())]);
+
+        let first = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("first preparation should compile");
+        let second = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("second preparation should compile from committed state");
+        assert_ne!(first.transaction_id, second.transaction_id);
+        assert!(
+            first
+                .units
+                .iter()
+                .all(|unit| unit.artifact.artifact_source() == "compiled")
+        );
+        assert!(
+            second
+                .units
+                .iter()
+                .all(|unit| unit.artifact.artifact_source() == "compiled")
+        );
+        assert!(session.development_artifacts.borrow().is_empty());
+
+        let stale = session
+            .commit_development_program(first.transaction_id)
+            .expect_err("an older preparation must not commit");
+        assert!(stale.contains("stale"), "{stale}");
+        assert!(session.development_artifacts.borrow().is_empty());
+        session
+            .commit_development_program(second.transaction_id)
+            .expect("the current preparation should commit");
+        let committed_count = session.development_artifacts.borrow().len();
+        assert_eq!(committed_count, 1);
+        assert!(
+            session
+                .commit_development_program(second.transaction_id)
+                .is_err(),
+            "a committed transaction must not commit twice"
+        );
+        assert_eq!(
+            session.development_artifacts.borrow().len(),
+            committed_count
+        );
+
+        let reused = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("committed artifacts should be reusable");
+        assert!(
+            reused
+                .units
+                .iter()
+                .all(|unit| unit.artifact.artifact_source() == "unit-cache")
+        );
+    }
+
+    #[test]
+    fn failed_preparation_invalidates_the_previous_transaction() {
+        const ENTRY: &str = "failed-transaction.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(ENTRY.to_owned(), source("return 1\u{e000}"))
+            .expect("entry source should load");
+        session
+            .configure_module(ENTRY, BTreeMap::new(), BTreeMap::new())
+            .expect("entry source should configure");
+        let units = BTreeMap::from([("game".to_owned(), ENTRY.to_owned())]);
+        let prepared = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("initial preparation should compile");
+
+        assert!(
+            session
+                .compile_development_program(ENTRY, "missing-entry", &units)
+                .is_err(),
+            "the second preparation should fail"
+        );
+        let error = session
+            .commit_development_program(prepared.transaction_id)
+            .expect_err("a failed later preparation must abandon the older token");
+        assert!(error.contains("not pending"), "{error}");
+        assert!(session.development_artifacts.borrow().is_empty());
+    }
+
+    #[test]
+    fn abandoned_reduced_program_does_not_prune_committed_units() {
+        const ENTRY: &str = "abandoned-main.blot";
+        const PROVIDER: &str = "abandoned-provider.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                ENTRY.to_owned(),
+                source(
+                    "const provider = import \"provider\"\n\u{e000}return fn value => provider.add value\u{e000}\n",
+                ),
+            )
+            .expect("entry source should load");
+        session
+            .configure_module(
+                ENTRY,
+                BTreeMap::from([("provider".to_owned(), PROVIDER.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("entry source should configure");
+        session
+            .add_source(
+                PROVIDER.to_owned(),
+                source(
+                    "let add = fn value => @int.add value 1\n\u{e000}return { .add = add; }\u{e000}\n",
+                ),
+            )
+            .expect("provider source should load");
+        session
+            .configure_module(PROVIDER, BTreeMap::new(), BTreeMap::new())
+            .expect("provider source should configure");
+        let full_units = BTreeMap::from([
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("provider".to_owned(), PROVIDER.to_owned()),
+        ]);
+        let initial = session
+            .compile_development_program(ENTRY, "game", &full_units)
+            .expect("initial program should compile");
+        session
+            .commit_development_program(initial.transaction_id)
+            .expect("initial artifacts should commit");
+        assert_eq!(session.development_artifacts.borrow().len(), 2);
+
+        let reduced_units = BTreeMap::from([("game".to_owned(), ENTRY.to_owned())]);
+        session
+            .compile_development_program(ENTRY, "game", &reduced_units)
+            .expect("reduced program should prepare");
+        assert_eq!(session.development_artifacts.borrow().len(), 2);
+
+        let restored = session
+            .compile_development_program(ENTRY, "game", &full_units)
+            .expect("restored program should use committed artifacts");
+        assert!(
+            restored
+                .units
+                .iter()
+                .all(|unit| unit.artifact.artifact_source() == "unit-cache")
+        );
+        session
+            .commit_development_program(restored.transaction_id)
+            .expect("restored program should commit");
+        assert_eq!(session.development_artifacts.borrow().len(), 2);
+    }
+
+    #[test]
+    fn committed_root_replacement_prunes_the_exact_previous_cache_keys() {
+        const ENTRY: &str = "replacement-main.blot";
+        const FIRST: &str = "replacement-first.blot";
+        const SECOND: &str = "replacement-second.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                ENTRY.to_owned(),
+                source(
+                    "const first = import \"first\"\n\u{e000}const second = import \"second\"\n\u{e000}return fn value => @int.add (first.add value) (second.add value)\u{e000}\n",
+                ),
+            )
+            .expect("entry source should load");
+        session
+            .configure_module(
+                ENTRY,
+                BTreeMap::from([
+                    ("first".to_owned(), FIRST.to_owned()),
+                    ("second".to_owned(), SECOND.to_owned()),
+                ]),
+                BTreeMap::new(),
+            )
+            .expect("entry source should configure");
+        for (path, increment) in [(FIRST, 1), (SECOND, 2)] {
+            session
+                .add_source(
+                    path.to_owned(),
+                    source(&format!(
+                        "let add = fn value => @int.add value {increment}\n\u{e000}return {{ .add = add; }}\u{e000}\n"
+                    )),
+                )
+                .expect("provider source should load");
+            session
+                .configure_module(path, BTreeMap::new(), BTreeMap::new())
+                .expect("provider source should configure");
+        }
+        let initial_units = BTreeMap::from([
+            ("first-unit".to_owned(), FIRST.to_owned()),
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("second-unit".to_owned(), SECOND.to_owned()),
+        ]);
+        let initial = session
+            .compile_development_program(ENTRY, "game", &initial_units)
+            .expect("initial program should compile");
+        session
+            .commit_development_program(initial.transaction_id)
+            .expect("initial artifacts should commit");
+
+        let replaced_units = BTreeMap::from([
+            ("first-unit".to_owned(), SECOND.to_owned()),
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("second-unit".to_owned(), FIRST.to_owned()),
+        ]);
+        let replacement = session
+            .compile_development_program(ENTRY, "game", &replaced_units)
+            .expect("root replacement should compile");
+        session
+            .commit_development_program(replacement.transaction_id)
+            .expect("root replacement should commit");
+
+        let committed = session.development_artifacts.borrow();
+        assert_eq!(committed.len(), replaced_units.len());
+        for (name, root) in replaced_units {
+            assert!(committed.contains_key(&DevelopmentArtifactCacheKey {
+                program_root: ENTRY.to_owned(),
+                unit_name: name,
+                unit_root: root,
+            }));
+        }
+    }
+
+    #[test]
     fn effectful_top_level_is_not_replayed_for_multiple_runtime_fields() {
         let mut session = CompilerSession::default();
         session
@@ -4414,7 +5782,7 @@ mod tests {
         let retained = session.context.evaluated_bindings.borrow();
         assert_eq!(retained[PATH].len(), 1);
         assert!(matches!(
-            retained[PATH].values().next(),
+            retained[PATH].values().next().map(|cached| &cached.value),
             Some(Value::Int(_))
         ));
     }
@@ -5235,6 +6603,293 @@ mod tests {
     }
 
     #[test]
+    fn arena_list_prepares_with_one_recursive_arena_representation() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../experiments/generated-code/programs/arena_list.blot"
+                    )),
+                )
+                .expect("arena-list source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([(
+                        "../../../src/prelude/prelude.blot".to_owned(),
+                        "prelude.blot".to_owned(),
+                    )]),
+                    BTreeMap::new(),
+                )
+                .expect("arena-list source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn recursive_list_prepares_with_a_runtime_recursive_variant_argument() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../experiments/generated-code/programs/recursive_list.blot"
+                    )),
+                )
+                .expect("recursive-list source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([(
+                        "../../../src/prelude/prelude.blot".to_owned(),
+                        "prelude.blot".to_owned(),
+                    )]),
+                    BTreeMap::new(),
+                )
+                .expect("recursive-list source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn owned_radix_sorts_prepare_with_recursive_store_results() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/owned_radix_sorts.blot")),
+                )
+                .expect("owned-radix-sort source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("owned-radix-sort source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn owned_merge_sort_prepares_with_recursive_store_results() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/owned_merge_sort.blot")),
+                )
+                .expect("owned-merge-sort source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("owned-merge-sort source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn runtime_function_export_preserves_certified_store_reuse() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/reuse_clear_first.blot")),
+                )
+                .expect("reuse source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("reuse source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let functions = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions");
+            let writing_functions = functions
+                .iter()
+                .filter(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                        .flat_map(|block| {
+                            block["operations"].as_array().expect("runtime operations")
+                        })
+                        .any(|operation| operation["kind"] == "store.write")
+                })
+                .collect::<Vec<_>>();
+            assert!(!writing_functions.is_empty(), "{prepared}");
+            for function in writing_functions {
+                assert_eq!(function["reuse"], "checked", "{prepared}");
+                for operation in function["blocks"]
+                    .as_array()
+                    .expect("runtime blocks")
+                    .iter()
+                    .flat_map(|block| block["operations"].as_array().expect("runtime operations"))
+                    .filter(|operation| operation["kind"] == "store.write")
+                {
+                    assert_eq!(operation["update"], "owned-reuse", "{prepared}");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn residual_function_specializes_shared_and_reusable_store_arguments_separately() {
+        run_with_compiler_test_stack(|| {
+            const ENTRY: &str = "main.blot";
+            const LIBRARY: &str = "library.blot";
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    LIBRARY.to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let acquire :: [Int] -> @region.type Int\n",
+                        "let acquire = fn !values => @region.copy (!values)\n",
+                        "return { .acquire = acquire; }\n",
+                    )),
+                )
+                .expect("library source should load");
+            session
+                .configure_module(
+                    LIBRARY,
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("library source should configure");
+            session
+                .add_source(
+                    ENTRY.to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const library = import \"library\"\n",
+                        "const Source = @effect.host { .value = Int -> Int; }\n",
+                        "use value <- Source.value 0\n",
+                        "let !owned = @array.set [value, 2, 3] 1 2\n",
+                        "let owned_region = library.acquire (!owned)\n",
+                        "let owned_result = @region.freeze (!owned_region)\n",
+                        "let shared = freeze (@array.set [value, 2, 3] 1 2)\n",
+                        "let shared_region = library.acquire shared\n",
+                        "let shared_result = @region.freeze (!shared_region)\n",
+                        "return Array.length owned_result + Array.length shared_result\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    ENTRY,
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        ("library".to_owned(), LIBRARY.to_owned()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+            let units = BTreeMap::from([
+                ("game".to_owned(), ENTRY.to_owned()),
+                ("library".to_owned(), LIBRARY.to_owned()),
+            ]);
+            #[cfg(feature = "development-profile")]
+            let mut memory_profile = DevelopmentMemoryProfile::start();
+
+            let program = session
+                .close_development_program(
+                    ENTRY,
+                    &units,
+                    #[cfg(feature = "development-profile")]
+                    &mut memory_profile,
+                )
+                .expect("development program should close");
+
+            let persistent_writes = program
+                .runtime()
+                .functions
+                .iter()
+                .flat_map(|function| {
+                    function
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.operations.iter())
+                })
+                .filter(|operation| {
+                    operation.kind == "store.write" && operation.update == Some("persistent")
+                })
+                .count();
+            assert_eq!(persistent_writes, 3);
+        });
+    }
+
+    #[test]
     fn dynamic_integer_case_lowers_every_literal_before_the_wildcard() {
         let mut session = CompilerSession::default();
         session
@@ -5637,6 +7292,10 @@ mod tests {
                     include_str!("../../case-studies/engine/lib/frame.blot"),
                 ),
                 (
+                    "case-studies/engine/lib/color.blot",
+                    include_str!("../../case-studies/engine/lib/color.blot"),
+                ),
+                (
                     "case-studies/engine/lib/render.blot",
                     include_str!("../../case-studies/engine/lib/render.blot"),
                 ),
@@ -5685,12 +7344,23 @@ mod tests {
                 .expect("frame should configure");
             session
                 .configure_module(
+                    "case-studies/engine/lib/color.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("color should configure");
+            session
+                .configure_module(
                     "case-studies/engine/lib/render.blot",
                     BTreeMap::from([
                         ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
                         (
                             "./math.blot".to_owned(),
                             "case-studies/engine/lib/math.blot".to_owned(),
+                        ),
+                        (
+                            "./color.blot".to_owned(),
+                            "case-studies/engine/lib/color.blot".to_owned(),
                         ),
                     ]),
                     BTreeMap::new(),
@@ -5705,7 +7375,13 @@ mod tests {
                 session
                     .configure_module(
                         path,
-                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::from([
+                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                            (
+                                "../lib/color.blot".to_owned(),
+                                "case-studies/engine/lib/color.blot".to_owned(),
+                            ),
+                        ]),
                         BTreeMap::new(),
                     )
                     .expect("shrubbery recipe should configure");
@@ -5718,6 +7394,10 @@ mod tests {
                         (
                             "./render.blot".to_owned(),
                             "case-studies/engine/lib/render.blot".to_owned(),
+                        ),
+                        (
+                            "./color.blot".to_owned(),
+                            "case-studies/engine/lib/color.blot".to_owned(),
                         ),
                         (
                             "../shrubberies/oak.blot".to_owned(),

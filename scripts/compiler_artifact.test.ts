@@ -21,13 +21,34 @@ Deno.test("compiler artifact manifest authenticates bytes and source tree", asyn
     rustc,
     prelude,
     inputs,
+    "production",
   );
   const manifest = decodeCompilerArtifactManifest(JSON.stringify(described));
   await validateCompilerArtifact(emptyWasm, manifest, {
     hostAbi: COMPILER_HOST_ABI_VERSION,
     preludeSha256: prelude,
     compilerInputsSha256: inputs,
+    profile: "production",
   });
+
+  await assertRejects(
+    () =>
+      validateCompilerArtifact(
+        emptyWasm,
+        { ...manifest, profile: "development-profile" },
+        { profile: "production" },
+      ),
+    Error,
+    "profile is development-profile, expected production",
+  );
+  await assertRejects(
+    () =>
+      validateCompilerArtifact(emptyWasm, manifest, {
+        profile: "development-profile",
+      }),
+    Error,
+    "profile is production, expected development-profile",
+  );
 
   await assertRejects(
     () =>

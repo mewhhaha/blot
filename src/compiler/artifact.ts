@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 
 export const compilerArtifactSchema = "blot-rust-compiler-artifact";
-export const compilerArtifactVersion = 2;
+export const compilerArtifactVersion = 3;
+
+export type CompilerArtifactProfile = "production" | "development-profile";
 
 export interface CompilerArtifactManifest {
   readonly schema: typeof compilerArtifactSchema;
@@ -13,6 +15,7 @@ export interface CompilerArtifactManifest {
   readonly hostAbi: number;
   readonly preludeSha256: string;
   readonly compilerInputsSha256: string;
+  readonly profile: CompilerArtifactProfile;
   readonly sourceCommit: string;
   readonly sourceTree: string;
   readonly rustc: string;
@@ -22,6 +25,7 @@ export interface ExpectedCompilerArtifact {
   readonly hostAbi?: number;
   readonly preludeSha256?: string;
   readonly compilerInputsSha256?: string;
+  readonly profile?: CompilerArtifactProfile;
 }
 
 export async function describeCompilerArtifact(
@@ -31,6 +35,7 @@ export async function describeCompilerArtifact(
   rustc: string,
   preludeSha256: string,
   compilerInputsSha256: string,
+  profile: CompilerArtifactProfile,
 ): Promise<CompilerArtifactManifest> {
   requireWasm(bytes);
   requireGitIdentity(sourceCommit, "source commit");
@@ -47,6 +52,7 @@ export async function describeCompilerArtifact(
     hostAbi: COMPILER_HOST_ABI_VERSION,
     preludeSha256,
     compilerInputsSha256,
+    profile,
     sourceCommit,
     sourceTree,
     rustc,
@@ -78,6 +84,11 @@ export function decodeCompilerArtifactManifest(
   requireHash(value.sha256, "artifact SHA-256");
   requireHash(value.preludeSha256, "prelude SHA-256");
   requireHash(value.compilerInputsSha256, "compiler-input SHA-256");
+  if (
+    value.profile !== "production" && value.profile !== "development-profile"
+  ) {
+    throw new Error("compiler artifact manifest has an invalid build profile");
+  }
   requireGitIdentity(value.sourceCommit, "source commit");
   requireGitIdentity(value.sourceTree, "source tree");
   requireToolchain(value.rustc);
@@ -115,6 +126,11 @@ export async function verifyCompilerArtifactIntegrity(
     manifest.compilerInputsSha256 !== expected.compilerInputsSha256
   ) {
     throw new Error("compiler artifact inputs do not match this checkout");
+  }
+  if (expected.profile !== undefined && manifest.profile !== expected.profile) {
+    throw new Error(
+      `compiler artifact profile is ${manifest.profile}, expected ${expected.profile}`,
+    );
   }
   if (manifest.bytes !== bytes.byteLength) {
     throw new Error(

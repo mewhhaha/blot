@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use serde::Serialize;
 
+use crate::backend::CompiledModule;
 use crate::hir::{RuntimeExport, RuntimeFunction, RuntimeLink, RuntimeModule, RuntimeOperation};
 
 #[derive(Clone)]
@@ -25,33 +27,172 @@ pub(crate) struct DevelopmentProgram {
     pub(crate) edges: Vec<DevelopmentUnitEdge>,
 }
 
-pub(crate) struct CompiledDevelopmentUnit {
+pub(crate) struct DevelopmentCompilationUnit {
     pub(crate) name: String,
     pub(crate) root: String,
-    pub(crate) compiled: crate::backend::CompiledModule,
+    pub(crate) artifact: DevelopmentUnitArtifact,
     pub(crate) implementation_key: String,
-    pub(crate) reused: bool,
 }
 
 pub(crate) struct CompiledDevelopmentProgram {
+    pub(crate) transaction_id: u32,
     pub(crate) entry_unit: String,
-    pub(crate) units: Vec<CompiledDevelopmentUnit>,
+    pub(crate) units: Vec<DevelopmentCompilationUnit>,
     pub(crate) edges: Vec<DevelopmentUnitEdge>,
+    #[cfg(feature = "development-profile")]
+    pub(crate) memory_profile: DevelopmentMemoryProfile,
 }
 
-pub(crate) fn development_module_key(module: &RuntimeModule) -> Result<String, String> {
-    let encoded = serde_json::to_vec(module).map_err(|error| {
+#[cfg(feature = "development-profile")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DevelopmentMemoryCheckpoint {
+    stage: String,
+    pages: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    solver: Option<DevelopmentSolverCardinality>,
+}
+
+#[cfg(feature = "development-profile")]
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DevelopmentSolverCardinality {
+    pub(crate) variables: usize,
+    pub(crate) constraint_type_nodes: usize,
+    pub(crate) constraint_type_interned: usize,
+    pub(crate) settled_variables: usize,
+    pub(crate) residual_variables: usize,
+}
+
+#[cfg(feature = "development-profile")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DevelopmentMemoryProfile {
+    checkpoints: Vec<DevelopmentMemoryCheckpoint>,
+}
+
+#[cfg(feature = "development-profile")]
+impl DevelopmentMemoryProfile {
+    pub(crate) fn start() -> Self {
+        let mut profile = Self {
+            checkpoints: Vec::new(),
+        };
+        profile.checkpoint("start");
+        profile
+    }
+
+    pub(crate) fn checkpoint(&mut self, stage: impl Into<String>) {
+        self.checkpoints.push(DevelopmentMemoryCheckpoint {
+            stage: stage.into(),
+            pages: compiler_memory_pages(),
+            solver: None,
+        });
+    }
+
+    pub(crate) fn checkpoint_solver(
+        &mut self,
+        stage: impl Into<String>,
+        solver: DevelopmentSolverCardinality,
+    ) {
+        self.checkpoints.push(DevelopmentMemoryCheckpoint {
+            stage: stage.into(),
+            pages: compiler_memory_pages(),
+            solver: Some(solver),
+        });
+    }
+}
+
+#[cfg(all(feature = "development-profile", target_arch = "wasm32"))]
+fn compiler_memory_pages() -> usize {
+    core::arch::wasm32::memory_size(0)
+}
+
+#[cfg(all(feature = "development-profile", not(target_arch = "wasm32")))]
+fn compiler_memory_pages() -> usize {
+    0
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DevelopmentModuleIdentity {
+    implementation_key: String,
+    canonical_runtime_module: Vec<u8>,
+}
+
+impl DevelopmentModuleIdentity {
+    pub(crate) fn implementation_key(&self) -> &str {
+        &self.implementation_key
+    }
+}
+
+pub(crate) enum DevelopmentUnitArtifact {
+    Compiled(Rc<CompiledModule>),
+    Reused { capabilities: Vec<String> },
+}
+
+impl DevelopmentUnitArtifact {
+    pub(crate) fn artifact_source(&self) -> &'static str {
+        match self {
+            Self::Compiled(_) => "compiled",
+            Self::Reused { .. } => "unit-cache",
+        }
+    }
+
+    pub(crate) fn capabilities(&self) -> &[String] {
+        match self {
+            Self::Compiled(compiled) => &compiled.capabilities,
+            Self::Reused { capabilities } => capabilities,
+        }
+    }
+
+    pub(crate) fn compiled(&self) -> Option<&CompiledModule> {
+        match self {
+            Self::Compiled(compiled) => Some(compiled),
+            Self::Reused { .. } => None,
+        }
+    }
+}
+
+pub(crate) struct CachedDevelopmentArtifact {
+    identity: DevelopmentModuleIdentity,
+    compiled: Rc<CompiledModule>,
+}
+
+impl CachedDevelopmentArtifact {
+    pub(crate) fn new(identity: DevelopmentModuleIdentity, compiled: Rc<CompiledModule>) -> Self {
+        Self { identity, compiled }
+    }
+
+    pub(crate) fn reuse(
+        &self,
+        identity: &DevelopmentModuleIdentity,
+    ) -> Option<DevelopmentUnitArtifact> {
+        if self.identity != *identity {
+            return None;
+        }
+        Some(DevelopmentUnitArtifact::Reused {
+            capabilities: self.compiled.capabilities.clone(),
+        })
+    }
+}
+
+pub(crate) fn development_module_identity(
+    module: &RuntimeModule,
+) -> Result<DevelopmentModuleIdentity, String> {
+    let canonical_runtime_module = serde_json::to_vec(module).map_err(|error| {
         format!(
             "{}: could not encode development implementation identity: {error}",
             module.source
         )
     })?;
     let mut hash = 0xcbf29ce484222325_u64;
-    for byte in encoded {
-        hash ^= u64::from(byte);
+    for byte in &canonical_runtime_module {
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    Ok(format!("{hash:016x}"))
+    Ok(DevelopmentModuleIdentity {
+        implementation_key: format!("{hash:016x}"),
+        canonical_runtime_module,
+    })
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -736,6 +877,54 @@ mod tests {
         RuntimeBlock, RuntimeBlockParameter, RuntimeOperation, RuntimeSignature, RuntimeSpan,
         RuntimeTerminator, RuntimeType,
     };
+
+    #[test]
+    fn cached_unit_reuse_returns_metadata_without_retaining_compiled_bytes() {
+        let cached_identity = development_module_identity(&scalar_program(41))
+            .expect("cached development identity should encode");
+        let requested_identity = development_module_identity(&scalar_program(41))
+            .expect("requested development identity should encode");
+        let compiled = Rc::new(CompiledModule {
+            wasm: vec![0, 97, 115, 109],
+            manifest: br#"{"format":"blot-core-wasm"}"#.to_vec(),
+            capabilities: vec!["blot:host/Test".to_owned()],
+        });
+        let compiled_ownership = Rc::downgrade(&compiled);
+        let cached = CachedDevelopmentArtifact::new(cached_identity, compiled);
+
+        let reused = cached
+            .reuse(&requested_identity)
+            .expect("equal Runtime HIR should reuse its unit");
+
+        assert_eq!(reused.artifact_source(), "unit-cache");
+        assert_eq!(reused.capabilities(), ["blot:host/Test"]);
+        assert!(reused.compiled().is_none());
+        assert_eq!(compiled_ownership.strong_count(), 1);
+    }
+
+    #[test]
+    fn equal_implementation_keys_do_not_reuse_different_runtime_modules() {
+        let first = development_module_identity(&scalar_program(41))
+            .expect("first development identity should encode");
+        let mut different = development_module_identity(&scalar_program(42))
+            .expect("different development identity should encode");
+        different.implementation_key = first.implementation_key.clone();
+        assert_eq!(first.implementation_key, different.implementation_key);
+        assert_ne!(
+            first.canonical_runtime_module,
+            different.canonical_runtime_module
+        );
+        let cached = CachedDevelopmentArtifact::new(
+            first,
+            Rc::new(CompiledModule {
+                wasm: vec![0, 97, 115, 109],
+                manifest: br#"{"format":"blot-core-wasm"}"#.to_vec(),
+                capabilities: Vec::new(),
+            }),
+        );
+
+        assert!(cached.reuse(&different).is_none());
+    }
 
     #[test]
     fn direct_calls_at_configured_roots_become_stable_external_links() {

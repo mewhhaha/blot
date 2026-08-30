@@ -1,6 +1,7 @@
 import { resolve } from "@std/path";
 import {
   type IncludedFile,
+  invalidateLoadedInputs,
   load,
   type Loaded,
   type LoadedStorage,
@@ -31,20 +32,31 @@ interface OverlayRevision {
   readonly version: number;
 }
 
+interface WorkspaceState {
+  loaded: Map<string, Loaded>;
+  overlays: Map<string, OverlayRevision>;
+  dirty: Set<string>;
+  roots: Set<string>;
+  overlaySequence: number;
+}
+
 /**
  * Persistent source/package/include graph shared by compiler and editor hosts.
  *
- * Parsed `Loaded` nodes remain stable until their own payload, direct edges, or
- * an overlay changes. Overlay text always wins over the disk revision.
+ * Parsed module payloads remain stable until their own source, includes, or an
+ * overlay changes. Graph wrappers may change when they are rebound to a new
+ * dependency revision. Overlay text always wins over the disk revision.
  */
 export class WorkspaceGraph {
-  readonly #loaded = new Map<string, Loaded>();
-  readonly #overlays = new Map<string, OverlayRevision>();
-  readonly #dirty = new Set<string>();
-  readonly #roots = new Set<string>();
+  #state: WorkspaceState = {
+    loaded: new Map(),
+    overlays: new Map(),
+    dirty: new Set(),
+    roots: new Set(),
+    overlaySequence: 0,
+  };
   readonly #pinnedPaths = new Set<string>();
   readonly #inspect: SourceInspector | undefined;
-  #overlaySequence = 0;
 
   constructor(
     inspect?: SourceInspector,
@@ -52,25 +64,35 @@ export class WorkspaceGraph {
   ) {
     this.#inspect = inspect;
     for (const loaded of pinnedModules) {
-      this.#loaded.set(loaded.path, loaded);
+      this.#state.loaded.set(loaded.path, loaded);
       this.#pinnedPaths.add(loaded.path);
     }
   }
 
   async refresh(path: string): Promise<Loaded> {
     const absolute = resolve(path);
-    this.#roots.add(absolute);
+    const staged = this.#stage();
+    staged.roots.add(absolute);
     await refreshLoadedModules(
-      this.#loaded,
-      new Set([...this.#overlays.keys(), ...this.#pinnedPaths]),
+      staged.loaded,
+      new Set([...staged.overlays.keys(), ...this.#pinnedPaths]),
     );
-    return await this.#loadCurrent(absolute);
+    const loaded = await this.#loadCurrent(absolute, staged);
+    this.#state = staged;
+    return loaded;
   }
 
   async refreshAfterKnownChanges(path: string): Promise<Loaded> {
     const absolute = resolve(path);
-    this.#roots.add(absolute);
-    return await this.#loadCurrent(absolute);
+    const staged = this.#stage();
+    staged.roots.add(absolute);
+    const loaded = await this.#refreshKnownChanges(
+      absolute,
+      new Set(staged.dirty),
+      staged,
+    );
+    this.#state = staged;
+    return loaded;
   }
 
   async updateOverlay(
@@ -79,64 +101,103 @@ export class WorkspaceGraph {
     version?: number,
   ): Promise<Loaded> {
     const absolute = resolve(path);
-    this.#roots.add(absolute);
-    const previous = this.#overlays.get(absolute);
+    const staged = this.#stage();
+    staged.roots.add(absolute);
+    const previous = staged.overlays.get(absolute);
     let nextVersion = version;
     if (nextVersion === undefined) {
-      this.#overlaySequence += 1;
-      nextVersion = this.#overlaySequence;
+      let previousVersion = 0;
+      if (previous !== undefined) previousVersion = previous.version;
+      nextVersion = Math.max(staged.overlaySequence, previousVersion) + 1;
+      staged.overlaySequence = nextVersion;
     }
     if (
       previous !== undefined && previous.source === source &&
       previous.version === nextVersion
     ) {
-      return await this.#loadCurrent(absolute);
+      const loaded = await this.#loadCurrent(absolute, staged);
+      this.#state = staged;
+      return loaded;
     }
     if (previous !== undefined && nextVersion <= previous.version) {
       throw new Error(
         `overlay ${absolute} version ${nextVersion} does not follow ${previous.version}`,
       );
     }
-    this.#overlays.set(absolute, { source, version: nextVersion });
-    this.#invalidate(absolute);
-    return await this.#loadCurrent(absolute);
+    staged.overlays.set(absolute, { source, version: nextVersion });
+    staged.dirty.add(absolute);
+    const loaded = await this.#refreshKnownChanges(
+      absolute,
+      new Set([absolute]),
+      staged,
+    );
+    this.#state = staged;
+    return loaded;
   }
 
-  async closeOverlay(path: string): Promise<Loaded> {
+  async closeOverlay(path: string): Promise<readonly Loaded[]> {
     const absolute = resolve(path);
-    this.#overlays.delete(absolute);
-    this.#invalidate(absolute);
-    return await this.#loadCurrent(absolute);
+    const staged = this.#stage();
+    if (!staged.overlays.has(absolute)) return [];
+    const affectedRoots = [...staged.roots].filter((root) =>
+      workspacePathReaches(staged, root, absolute)
+    );
+    staged.overlays.delete(absolute);
+    staged.dirty.add(absolute);
+    await this.#invalidateKnownChanges(new Set([absolute]), staged);
+    const loaded: Loaded[] = [];
+    for (const root of affectedRoots) {
+      loaded.push(await this.#loadCurrent(root, staged));
+    }
+    staged.dirty.delete(absolute);
+    this.#state = staged;
+    return loaded;
+  }
+
+  releaseRoot(path: string): void {
+    const absolute = resolve(path);
+    if (!this.#state.roots.delete(absolute)) return;
+    const activePaths = workspaceActivePaths(this.#state);
+    for (const [cachedPath, loaded] of this.#state.loaded) {
+      if (this.#pinnedPaths.has(cachedPath)) continue;
+      if (activePaths.has(cachedPath) || activePaths.has(loaded.path)) continue;
+      this.#state.loaded.delete(cachedPath);
+    }
+    const activeInputs = new Set(activePaths);
+    for (const loaded of this.#state.loaded.values()) {
+      if (!activePaths.has(loaded.path)) continue;
+      if (loaded.storage.tag === "capsule") {
+        activeInputs.add(loaded.storage.path);
+      }
+      for (const included of loaded.includedFiles.values()) {
+        activeInputs.add(included.path);
+      }
+    }
+    this.#state.dirty = new Set(
+      [...this.#state.dirty].filter((dirtyPath) => activeInputs.has(dirtyPath)),
+    );
   }
 
   markDirty(path: string): void {
     const absolute = resolve(path);
-    this.#dirty.add(absolute);
-    this.#invalidate(absolute);
+    if (this.#pinnedPaths.has(absolute)) return;
+    this.#state.dirty.add(absolute);
+  }
+
+  committedRevision(path: string): Loaded | undefined {
+    return this.#state.loaded.get(resolve(path));
   }
 
   activePaths(): ReadonlySet<string> {
-    const active = new Set<string>();
-    const pending = [...this.#roots];
-    while (pending.length > 0) {
-      const path = pending.pop();
-      if (path === undefined || active.has(path)) continue;
-      const loaded = this.#loaded.get(path);
-      if (loaded === undefined) continue;
-      active.add(path);
-      for (const dependency of loaded.dependencies.values()) {
-        pending.push(dependency.path);
-      }
-    }
-    return active;
+    return workspaceActivePaths(this.#state);
   }
 
   node(path: string): WorkspaceNode | undefined {
     const absolute = resolve(path);
-    const loaded = this.#loaded.get(absolute);
+    const loaded = this.#state.loaded.get(absolute);
     if (loaded === undefined) return undefined;
     const reverseImports = new Set<string>();
-    for (const [importerPath, importer] of this.#loaded) {
+    for (const [importerPath, importer] of this.#state.loaded) {
       if (
         [...importer.dependencies.values()].some((dependency) =>
           dependency.path === absolute
@@ -151,7 +212,7 @@ export class WorkspaceGraph {
         dependency.path,
       ]),
     );
-    const overlaySource = this.#overlays.get(absolute);
+    const overlaySource = this.#state.overlays.get(absolute);
     const common = {
       path: absolute,
       storage: loaded.storage,
@@ -161,54 +222,117 @@ export class WorkspaceGraph {
       reverseImports,
       payloadDigest: loadedPayloadDigest(loaded),
       configurationDigest: loadedConfigurationDigest(loaded),
-      dirty: this.#dirty.has(absolute),
+      dirty: this.#state.dirty.has(absolute),
     };
     if (overlaySource === undefined) return common;
     return { ...common, overlaySource };
   }
 
-  async #loadCurrent(path: string): Promise<Loaded> {
-    const cached = this.#loaded.get(path);
+  async #loadCurrent(
+    path: string,
+    state: WorkspaceState,
+  ): Promise<Loaded> {
+    const cached = state.loaded.get(path);
     if (cached !== undefined) {
-      this.#dirty.delete(path);
-      return cached;
+      return await load(path, state.loaded, [], this.#inspect);
     }
-    const overlay = this.#overlays.get(path);
-    let loaded: Loaded;
+    const overlay = state.overlays.get(path);
     if (overlay !== undefined) {
-      loaded = await loadSource(
+      return await loadSource(
         path,
         overlay.source,
-        this.#loaded,
+        state.loaded,
         this.#inspect,
       );
-    } else {
-      loaded = await load(path, this.#loaded, [], this.#inspect);
     }
-    this.#dirty.delete(path);
+    return await load(path, state.loaded, [], this.#inspect);
+  }
+
+  async #refreshKnownChanges(
+    path: string,
+    changedInputs: ReadonlySet<string>,
+    state: WorkspaceState,
+  ): Promise<Loaded> {
+    if (changedInputs.size === 0) {
+      return await this.#loadCurrent(path, state);
+    }
+
+    await this.#invalidateKnownChanges(changedInputs, state);
+    const loaded = await this.#loadCurrent(path, state);
+    for (const changed of changedInputs) {
+      state.dirty.delete(changed);
+    }
     return loaded;
   }
 
-  #invalidate(changed: string): void {
-    const invalidated = new Set([changed]);
-    let found = true;
-    while (found) {
-      found = false;
-      for (const [path, loaded] of this.#loaded) {
-        if (invalidated.has(path)) continue;
-        if (
-          [...loaded.dependencies.values()].some((dependency) =>
-            invalidated.has(dependency.path)
-          )
-        ) {
-          invalidated.add(path);
-          found = true;
-        }
-      }
-    }
-    for (const path of invalidated) {
-      this.#dirty.add(path);
-      this.#loaded.delete(path);
+  async #invalidateKnownChanges(
+    changedInputs: ReadonlySet<string>,
+    state: WorkspaceState,
+  ): Promise<void> {
+    const invalidatedModules = invalidateLoadedInputs(
+      state.loaded,
+      changedInputs,
+    );
+    for (const modulePath of invalidatedModules) {
+      const overlay = state.overlays.get(modulePath);
+      if (overlay === undefined) continue;
+      await loadSource(
+        modulePath,
+        overlay.source,
+        state.loaded,
+        this.#inspect,
+      );
     }
   }
+
+  #stage(): WorkspaceState {
+    return {
+      loaded: new Map(this.#state.loaded),
+      overlays: new Map(this.#state.overlays),
+      dirty: new Set(this.#state.dirty),
+      roots: new Set(this.#state.roots),
+      overlaySequence: this.#state.overlaySequence,
+    };
+  }
+}
+
+function workspaceActivePaths(state: WorkspaceState): Set<string> {
+  const active = new Set<string>();
+  const visited = new Set<string>();
+  const pending = [...state.roots];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (path === undefined || visited.has(path)) continue;
+    visited.add(path);
+    const loaded = state.loaded.get(path);
+    if (loaded === undefined) continue;
+    active.add(path);
+    active.add(loaded.path);
+    for (const dependency of loaded.dependencies.values()) {
+      pending.push(dependency.path);
+    }
+  }
+  return active;
+}
+
+function workspacePathReaches(
+  state: WorkspaceState,
+  root: string,
+  target: string,
+): boolean {
+  const visited = new Set<string>();
+  const pending = [root];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (path === undefined || visited.has(path)) continue;
+    visited.add(path);
+    if (path === target) return true;
+    const loaded = state.loaded.get(path);
+    if (loaded === undefined) continue;
+    if (loaded.path === target) return true;
+    for (const dependency of loaded.dependencies.values()) {
+      pending.push(dependency.path);
+    }
+  }
+  return false;
 }

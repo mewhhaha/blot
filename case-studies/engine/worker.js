@@ -31,7 +31,9 @@ let lastTick = 0;
 
 /** The scene, sent by the page and replaced whenever it changes on disk. */
 let scene = [];
-let batch = [];
+let projectedBatch = [];
+let voxelBatch = [];
+let voxelResetPending = false;
 let instance = null;
 let settled = false;
 let renderedDistance = 0;
@@ -67,7 +69,7 @@ function waitForFrame() {
 const imports = {
   "blot:host/Canvas": {
     clear() {
-      batch = [];
+      projectedBatch = [];
     },
     // A record parameter arrives flattened in *canonical* field order, which is
     // alphabetical and not the order the program wrote them. `docs/abi.md` is
@@ -87,7 +89,7 @@ const imports = {
       cz,
       shade,
     ) {
-      batch.push({
+      projectedBatch.push({
         kind: "tri",
         ax: Number(ax) / SCREEN_SCALE,
         ay: Number(ay) / SCREEN_SCALE,
@@ -108,7 +110,7 @@ const imports = {
       });
     },
     sprite(depth, size, texturePointer, textureLength, x, y) {
-      batch.push({
+      projectedBatch.push({
         kind: "sprite",
         depth: Number(depth),
         size: Number(size) / SCREEN_SCALE,
@@ -120,7 +122,7 @@ const imports = {
     present() {
       self.postMessage({
         kind: "frame",
-        draws: batch,
+        draws: projectedBatch,
         distance: renderedDistance,
         lens: renderedLens,
       });
@@ -143,12 +145,13 @@ const imports = {
   "blot:host/VoxelCanvas": {
     enabled: () => 1,
     clear() {
-      batch = [];
+      voxelBatch = [];
+      voxelResetPending = true;
     },
     // Canonical record order: color.blue, color.green, color.red, scale,
     // x, y, z.
     voxel(colorBlue, colorGreen, colorRed, scale, x, y, z) {
-      batch.push({
+      voxelBatch.push({
         kind: "voxel",
         x: Number(x) / 1000,
         y: Number(y) / 1000,
@@ -163,11 +166,14 @@ const imports = {
     },
     present() {
       self.postMessage({
-        kind: "frame",
-        draws: batch,
+        kind: "voxel-frame",
+        voxels: voxelBatch,
+        reset: voxelResetPending,
         distance: Atomics.load(shared, DISTANCE),
         lens: Atomics.load(shared, LENS),
       });
+      voxelBatch = [];
+      voxelResetPending = false;
     },
     redraw() {
       self.postMessage({ kind: "redraw" });
@@ -247,14 +253,10 @@ self.onmessage = async (event) => {
   lastTick = Atomics.load(shared, TICK);
   scene = message.scene;
 
-  let module = message.module;
-  if (!(module instanceof WebAssembly.Module)) {
-    if (!(message.wasm instanceof ArrayBuffer)) {
-      throw new Error("engine worker requires a compiled module or Wasm bytes");
-    }
-    module = await WebAssembly.compile(message.wasm);
+  if (!(message.module instanceof WebAssembly.Module)) {
+    throw new Error("engine worker requires a compiled Wasm module");
   }
-  instance = await WebAssembly.instantiate(module, imports);
+  instance = await WebAssembly.instantiate(message.module, imports);
 
   const frames = instance.exports[message.export]();
   self.postMessage({ kind: "done", frames: Number(frames) });

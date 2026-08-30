@@ -70,6 +70,13 @@ the access requirement to `Unique`, including through nested and imported calls.
 Control-flow joins retain `Unique` when any alternative requires it while
 keeping the common Store lineage.
 
+Residual function specialization identity includes a structural Store-reuse
+witness derived from the caller's value and intersected with the callee's
+certified input contract. Only a reusable witness permits destructive reuse in
+the specialized body. A shared witness is non-promotable by ownership markers
+and remains shared through control-flow joins, so shared and reusable calls with
+the same runtime type cannot select the same residual function body.
+
 A caller may hand a fresh or otherwise owned Store directly to a consuming
 parameter:
 
@@ -249,10 +256,12 @@ The implementation must preserve these facts:
 9. residual aggregate specialization preserves the concrete Store element
    representation observed at the call site; and
 10. a residual direct call restores Store authority only from its certified
-    produced-result tree.
-11. an opaque higher-order callback never receives owned state without a
+    produced-result tree;
+11. residual function specialization keys caller-derived Store reuse provenance
+    after intersecting it with the certified input contract;
+12. an opaque higher-order callback never receives owned state without a
     certified consuming parameter contract; and
-12. each inferred callback requirement is discharged by substituting the actual
+13. each inferred callback requirement is discharged by substituting the actual
     callback's checked result contract, never by type equality or callee name.
 
 The useful asymptotic boundary is explicit:

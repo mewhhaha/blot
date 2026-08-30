@@ -67,6 +67,35 @@ Deno.test("language diagnostics check the open editor revision", async () => {
   }
 });
 
+Deno.test("closing a document stops its overlay from shadowing disk", async () => {
+  const directory = await Deno.makeTempDir();
+  const dependencyPath = join(directory, "dependency.blot");
+  const dependencyUri = toFileUrl(dependencyPath).href;
+  const consumerPath = join(directory, "consumer.blot");
+  const consumerUri = toFileUrl(consumerPath).href;
+  const consumerSource = `const dependency = import "./dependency.blot"
+return dependency
+`;
+  await Deno.writeTextFile(dependencyPath, "return 1\n");
+  await Deno.writeTextFile(consumerPath, consumerSource);
+  const service = new LanguageService();
+  try {
+    service.open(dependencyUri, "return missing\n", 1);
+    const overlayDiagnostics = await service.diagnostics(dependencyUri);
+    assert(
+      overlayDiagnostics.some((diagnostic) =>
+        diagnostic.code === "BLOT_UNBOUND"
+      ),
+    );
+
+    await service.close(dependencyUri);
+    service.open(consumerUri, consumerSource, 1);
+    assertEquals(await service.diagnostics(consumerUri), []);
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("language diagnostics report compiler target preflight refusals", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "target-refusal.blot");

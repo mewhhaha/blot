@@ -74,6 +74,32 @@ models/count, and the Node invocation flags. A comparison requires the same
 execution environment. A startup report is invalid when its phase matrix is
 incomplete or a distribution cannot be recomputed exactly from its raw samples.
 
+The development edit-through-activation report applies the same stable-capture
+rule outside its warm samples. Schema 3 identifies the repository commit and the
+bytes or deletion state of every tracked and relevant untracked worktree input,
+plus the complete measured Deno host harness, including every local file in the
+resolved module graph and the installed dependency bytes it executes. It
+separately identifies the compiler artifact, manifest, compiler inputs, prelude,
+compiler source commit/tree, and Rust toolchain. Its environment records
+Deno/V8, platform, architecture, CPU models/count, and hashes of the Deno
+executable and exact invocation. A changed capture rejects the run. Compiler
+profiling measurements and feature status remain explicit report facts. The
+selected production or development-profile distribution supplies one adjacent
+manifest, Wasm artifact, and prelude snapshot; those exact validated bytes feed
+the measured project and both provenance captures. An absent optional profile on
+every build identifies a production compiler; a present profile identifies a
+development-profile compiler and contributes every initial and sample memory
+checkpoint, including solver cardinalities. Mixed observations or disagreement
+with the manifest profile reject the report rather than infer feature status
+from binary contents.
+
+The development committed boundary begins before the provider write and ends
+when transactional project activation resolves. The activation-only boundary
+subtracts the build's nested duration from that same outer activation interval.
+RSS is captured at resolution. Changed-unit classification is part of the build
+and committed boundaries. The assertion over that classification and the runtime
+observation remain mandatory parity checks after both clocks and the RSS sample.
+
 Generated-code execution is a separate boundary from every compiler class above.
 A warm generated-execution measurement starts with validated and compiled
 WebAssembly modules; compilation, module instantiation, warmup, and observation

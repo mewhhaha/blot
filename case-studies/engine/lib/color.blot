@@ -1,0 +1,14 @@
+open import "blot:prelude"
+
+// Residual host signatures carry integer channels, while construction keeps
+// source colors inside the byte range.
+const Color = { .red = Int; .green = Int; .blue = Int; }
+
+const rgb :: (U8, U8, U8) -> Color
+const rgb = fn (red, green, blue) => {
+  .red = red;
+  .green = green;
+  .blue = blue;
+}
+
+return { .Color = Color; .rgb = rgb; }

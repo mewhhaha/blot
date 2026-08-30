@@ -64,7 +64,7 @@ try {
   const hir = await compiler.prepare("examples/minimal.blot");
   const artifact = await compiler.compile("examples/minimal.blot");
   console.log(checked.type, analysis.ownership.length, hir.schemaVersion);
-  console.log(WebAssembly.validate(artifact.wasm));
+  console.log(WebAssembly.validate(Uint8Array.from(artifact.wasm)));
 } finally {
   compiler.destroy();
 }
@@ -78,19 +78,20 @@ post-check invariant failures remain `CompilerInvariantFailure`.
 ## Compiler distribution
 
 `generated/compiler/compiler.wasm` is derived and ignored by Git. Its adjacent
-manifest is schema version 2 and binds the bytes to:
+manifest is schema version 3 and binds the bytes to:
 
 - the compiler host ABI version;
 - the generated prelude snapshot digest;
 - a deterministic digest of every Rust compiler input;
+- the production or `development-profile` build feature set;
 - the pinned Rust toolchain and Git provenance.
 
-`Compiler.create()` requires the Wasm, manifest, and prelude snapshot. It may
-authenticate the byte digest, host ABI, and prelude digest concurrently with
-structural Wasm compilation, but both must succeed before instantiation. It
-never invokes Cargo and never falls back to TypeScript. A custom Wasm passed to
-`Compiler.create` must include its matching prelude snapshot; that explicit pair
-is a caller-owned trusted distribution.
+The bundled/default `Compiler.create()` path requires the Wasm, manifest, and
+prelude snapshot. It may authenticate the byte digest, host ABI, and prelude
+digest concurrently with structural Wasm compilation, but both must succeed
+before instantiation. It never invokes Cargo and never falls back to TypeScript.
+A custom Wasm passed to `Compiler.create` must include its matching prelude
+snapshot; that explicit pair is a caller-owned trusted distribution.
 
 Build the bundle locally with:
 
@@ -110,7 +111,7 @@ installing anything.
 
 ## Host ABI
 
-Compiler-host ABI 4 registers UTF-8 paths once and refers to them through stable
+Compiler-host ABI 5 registers UTF-8 paths once and refers to them through stable
 session-local `ModuleId` values. Changed UTF-8 source or compact AST bytes,
 resolved import edges, included bytes, and removals travel in validated batched
 binary delta frames. Trusted compiler-distributed snapshots use a separate
@@ -123,12 +124,15 @@ envelope.
 
 The compiler also exports session operations for evaluation, tagged test
 execution, canonical AST export, Runtime-HIR preparation, whole-program
-compilation, and development-unit compilation. ABI 4 adds the development
-compile operation and indexed access to its unit Wasm and manifest bytes. It
-does not change the binary graph-delta frame schema. Transport failures preserve
-the compiler's three public classes:
+compilation, and development-unit compilation. ABI 5 prepares development units
+under a transaction identity and exposes indexed access to compiled Wasm and
+manifest bytes. The host commits that identity only after copying and hashing
+the full result; stale or duplicate commits fail without changing the resident
+artifact cache. It does not change the binary graph-delta frame schema.
+Transport failures preserve the compiler's four public classes:
 
 - located source diagnostics;
+- explicit resource-limit diagnostics;
 - explicit target refusals;
 - compiler invariant failures.
 
@@ -146,15 +150,38 @@ and specialize that graph normally.
 ## Caching
 
 The Node host keys a resident source graph by portable syntax, dependencies, and
-included bytes. The Rust session owns semantic caches and invalidates a changed
-module together with its importers. Runtime HIR and artifacts are copied at the
-public boundary so caller mutation cannot poison the cache.
+included bytes. A separate Rust inspection session reports import and include
+sites and retains incremental parser state. It has no checked boundaries or
+artifact authority. Once discovery succeeds, Node installs the accepted source
+or portable AST in the semantic session under a separate session-local module
+identity.
+
+A discovery failure leaves the committed workspace graph and semantic session
+unchanged. Existing checked boundaries, invalidation state, Runtime HIR, and
+compiler artifacts remain reusable. This guarantee covers inspection, dependency
+resolution, include loading, and syntax parity. It does not cover a failure
+after semantic graph synchronization has begun.
+
+The semantic Rust session owns its caches and invalidates a changed module
+together with its importers. Runtime HIR and artifacts are copied at the public
+boundary so caller mutation cannot poison the cache.
+
+Resident roots are explicit. Releasing one root preserves modules still
+reachable from another root and removes every other module from both the source
+graph and the Rust inspection and semantic sessions. Overlays have a separate
+lifetime: root release retains them, while overlay close transactionally rebinds
+the remaining roots to disk without changing root ownership.
 
 A [`blot-project`](development.md) manifest may keep that session resident while
 the compiler emits independently reloadable units. An implementation-only edit
 behind an unchanged link interface reuses its consumers. A changed interface
 rebuilds direct consumers. The host reports complete changed, retained, and
-removed sets only after the whole development build succeeds.
+removed sets only after the whole development build succeeds. Rust stages its
+artifact-cache replacements until the host has copied every byte range, checked
+the cache-hit identities, computed the artifact hashes, and derived the
+canonical development revision. A host failure publishes neither the Rust
+candidate nor the host identity map, so retry starts from the previous committed
+pair.
 
 ## Conformance and benchmark
 
@@ -169,7 +196,8 @@ Runtime HIR and ABI artifacts are identical.
 
 `pnpm benchmark:development` measures 20 warm edits in a generated 5 MiB,
 20-unit project. It requires the known-change path to rebuild only the edited
-unit and keeps p95 below 100 ms on the reference machine.
+unit, keeps p95 below 100 ms, and bounds resident-memory growth after activation
+to less than 128 MiB on the reference machine.
 
 `pnpm benchmark:compiler-profiles` compares release profiles `s`, `2`, and `3`
 under identical LTO, codegen-unit, panic, strip, and stack controls. It records

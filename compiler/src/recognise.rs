@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, FailureClass};
 use crate::eval::{
     ApplicationSite, CompilerApplication, Context, Phase, RecognitionProbe, Runtime, apply, run,
 };
-use crate::value::Value;
+use crate::value::{DeferredDemands, Value, capture_env};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Ordering {
@@ -422,7 +422,8 @@ fn probe_deferred_bool(
         left,
         right: right_value,
     };
-    let demands = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let demands = Rc::new(std::cell::RefCell::new(DeferredDemands::default()));
+    capture_env(environment);
     let argument = Value::Deferred {
         module: module.clone(),
         expression: right_expression,
@@ -431,6 +432,7 @@ fn probe_deferred_bool(
     };
     let application = probe_application(context, &partial)?
         .compiler(CompilerApplication::RecognitionArgument { probe, position: 1 });
+    let execution = runtime.execution.clone();
     let answer = recognition_result(run(apply(
         context.clone(),
         partial,
@@ -439,7 +441,7 @@ fn probe_deferred_bool(
         runtime,
         application,
     )))?;
-    let demand_count = demands.borrow().len();
+    let demand_count = demands.borrow_mut().blocks_for(&execution).len();
     Some((boolean(answer)?, right_value, demand_count))
 }
 

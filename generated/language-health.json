@@ -1,7 +1,9 @@
 {
   "protocol": {
-    "compilerHostAbi": 4,
+    "compilerHostAbi": 5,
     "checkedModuleCertificate": 16,
+    "moduleSnapshotSchema": 2,
+    "valueCapsuleSchema": 4,
     "runtimeHir": 7
   },
   "operators": [
@@ -720,27 +722,27 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 12657
+      "lines": 13651
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 10497
-    },
-    {
-      "path": "compiler/src/ownership.rs",
-      "lines": 6502
-    },
-    {
-      "path": "compiler/src/backend.rs",
-      "lines": 6000
+      "lines": 10955
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 5949
+      "lines": 7629
+    },
+    {
+      "path": "compiler/src/ownership.rs",
+      "lines": 6516
+    },
+    {
+      "path": "compiler/src/backend.rs",
+      "lines": 6001
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 5089
+      "lines": 5735
     },
     {
       "path": "compiler/src/lower.rs",
@@ -751,6 +753,10 @@
       "lines": 3600
     },
     {
+      "path": "compiler/src/value_capsule.rs",
+      "lines": 3373
+    },
+    {
       "path": "src/prelude/prelude.blot",
       "lines": 3210
     },
@@ -759,24 +765,20 @@
       "lines": 3150
     },
     {
+      "path": "compiler/src/qcore.rs",
+      "lines": 2238
+    },
+    {
       "path": "compiler/src/primitives.rs",
       "lines": 2117
     },
     {
-      "path": "src/tooling/lint.test.ts",
-      "lines": 1967
-    },
-    {
-      "path": "src/runtime/hir.ts",
-      "lines": 1713
+      "path": "compiler/src/qcore_typing.rs",
+      "lines": 2115
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 1633
-    },
-    {
-      "path": "src/language_service.ts",
-      "lines": 1414
+      "lines": 2057
     }
   ]
 }

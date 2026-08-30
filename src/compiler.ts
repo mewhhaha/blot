@@ -9,7 +9,12 @@ export {
   type CompilerSyntaxSnapshot,
   type DevelopmentCompilation,
   type DevelopmentCompilationRequest,
+  type DevelopmentCompilationUnit,
+  type DevelopmentEdge,
+  type DevelopmentMemoryCheckpoint,
+  type DevelopmentMemoryProfile,
   type DevelopmentUnitArtifact,
+  type DevelopmentUnitIdentity,
   type EvaluatedModule,
   explanationAt,
 } from "./compiler/session.ts";
@@ -19,6 +24,7 @@ export {
   type RetainedDevelopmentUnit,
 } from "./development.ts";
 export {
+  type DevelopmentActivation,
   DevelopmentRuntime,
   type DevelopmentRuntimeContext,
   type DevelopmentRuntimeImports,

@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 interface ProtocolVersions {
   readonly compilerHostAbi: number;
   readonly checkedModuleCertificate: number;
+  readonly moduleSnapshotSchema: number;
+  readonly valueCapsuleSchema: number;
   readonly runtimeHir: number;
 }
 
@@ -49,6 +51,8 @@ function markdown(current: CurrentImplementation): string {
 | Emitter | \`${current.emitter}\` |
 | Compiler-host ABI | ${current.compilerHostAbi} |
 | Checked-module certificate | ${current.checkedModuleCertificate} |
+| Module snapshot | ${current.moduleSnapshotSchema} |
+| Value capsule | ${current.valueCapsuleSchema} |
 | Runtime HIR | ${current.runtimeHir} |
 | Public ABI | ${current.publicAbi.major}.${current.publicAbi.minor} |
 

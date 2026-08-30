@@ -8,6 +8,7 @@ import type {
   RetainedDevelopmentUnit,
 } from "./development.ts";
 import type { DevelopmentUnitArtifact } from "./compiler/session.ts";
+import { developmentRevision } from "./development_identity.ts";
 
 type WasmValue = number | bigint;
 type Reallocate = (
@@ -42,6 +43,46 @@ interface UnitActivation {
   readonly instance: WebAssembly.Instance;
 }
 
+interface PreparedDevelopmentUnit {
+  readonly artifact: DevelopmentUnitArtifact;
+  readonly manifest: DevelopmentManifest;
+  readonly module: WebAssembly.Module;
+}
+
+const developmentActivationBrand: unique symbol = Symbol(
+  "DevelopmentActivation",
+);
+
+export interface DevelopmentActivation {
+  readonly [developmentActivationBrand]: true;
+  readonly revision: string;
+}
+
+interface PendingDevelopmentActivation {
+  readonly activation: DevelopmentActivation;
+  readonly units: Map<string, UnitActivation>;
+  readonly build: ValidatedDevelopmentBuild;
+}
+
+interface ValidatedDevelopmentBuild {
+  readonly baseRevision: string | undefined;
+  readonly revision: string;
+  readonly entryUnit: string;
+  readonly changedUnits: readonly DevelopmentUnitArtifact[];
+  readonly retainedUnits: readonly RetainedDevelopmentUnit[];
+  readonly removedUnits: readonly string[];
+  readonly edges: DevelopmentBuild["edges"];
+  readonly durationMilliseconds: number;
+}
+
+type DevelopmentRuntimeState =
+  | { readonly tag: "ready" }
+  | { readonly tag: "preparing" }
+  | {
+    readonly tag: "pending";
+    readonly candidate: PendingDevelopmentActivation;
+  };
+
 interface Allocation {
   readonly pointer: number;
   readonly size: number;
@@ -59,9 +100,10 @@ export type DevelopmentRuntimeImports = (
 
 export class DevelopmentRuntime {
   readonly #imports: DevelopmentRuntimeImports;
-  readonly #units = new Map<string, UnitActivation>();
+  #units = new Map<string, UnitActivation>();
   #entryUnit: string | undefined;
   #revision: string | undefined;
+  #state: DevelopmentRuntimeState = { tag: "ready" };
 
   constructor(imports: DevelopmentRuntimeImports = () => ({})) {
     this.#imports = imports;
@@ -88,86 +130,323 @@ export class DevelopmentRuntime {
     return active.instance;
   }
 
-  async activate(build: DevelopmentBuild): Promise<void> {
-    validateBuildTransition(build, this.#units);
-    this.#requireRetainedUnits(build.retainedUnits);
-    const compiled = await Promise.all(
-      build.changedUnits.map(async (artifact) => {
-        const manifest = decodeManifest(artifact);
-        const interfaceDigest = await sha256(artifact.manifestBytes);
-        if (interfaceDigest !== artifact.interfaceDigest) {
+  async prepareActivation(
+    build: DevelopmentBuild,
+  ): Promise<DevelopmentActivation> {
+    this.#requireReady("prepare an activation");
+    this.#state = { tag: "preparing" };
+    try {
+      const validated = validateBuildTransition(
+        build,
+        this.#units,
+        this.#revision,
+      );
+      this.#requireRetainedUnits(validated.retainedUnits);
+      const compiled = await Promise.all(
+        validated.changedUnits.map(async (artifact) => {
+          const manifest = decodeManifest(artifact);
+          const interfaceDigest = await sha256(artifact.manifestBytes);
+          if (interfaceDigest !== artifact.interfaceDigest) {
+            throw new Error(
+              `development unit ${
+                JSON.stringify(artifact.name)
+              } manifest digest ${interfaceDigest} differs from declared digest ${
+                JSON.stringify(artifact.interfaceDigest)
+              }`,
+            );
+          }
+          const wasmDigest = await sha256(artifact.wasm);
+          if (wasmDigest !== artifact.wasmDigest) {
+            throw new Error(
+              `development unit ${
+                JSON.stringify(artifact.name)
+              } Wasm digest ${wasmDigest} differs from declared digest ${
+                JSON.stringify(artifact.wasmDigest)
+              }`,
+            );
+          }
+          const module = await WebAssembly.compile(
+            Uint8Array.from(artifact.wasm),
+          );
+          requireEmbeddedManifest(module, artifact);
+          return { artifact, manifest, module };
+        }),
+      );
+      const finalUnits = new Map<string, PreparedDevelopmentUnit>(
+        [...this.#units].map(([name, active]) =>
+          [name, {
+            artifact: active.artifact,
+            manifest: active.manifest,
+            module: active.module,
+          }] as const
+        ),
+      );
+      for (const removed of validated.removedUnits) finalUnits.delete(removed);
+      for (const prepared of compiled) {
+        finalUnits.set(prepared.artifact.name, prepared);
+      }
+      const resolvedLinks = new Map<
+        string,
+        readonly DevelopmentManifest["links"][number][]
+      >();
+      const moduleExports = new Map<
+        string,
+        readonly WebAssembly.ModuleExportDescriptor[]
+      >();
+      const derivedEdges: Array<DevelopmentBuild["edges"][number]> = [];
+      for (const [consumer, unit] of finalUnits) {
+        const consumerLinks: Array<DevelopmentManifest["links"][number]> = [];
+        for (const link of unit.manifest.links) {
+          const provider = finalUnits.get(link.unit);
+          if (provider === undefined) {
+            throw new Error(
+              `development unit ${JSON.stringify(consumer)} links ${
+                JSON.stringify(link.name)
+              } to inactive provider ${JSON.stringify(link.unit)} in build ${
+                JSON.stringify(validated.revision)
+              }`,
+            );
+          }
+          const exportName = `blot:dev:${link.name}`;
+          const manifestExports = provider.manifest.exports.filter((
+            candidate,
+          ) => candidate.name === exportName);
+          const exported = manifestExports[0];
+          if (
+            manifestExports.length !== 1 || exported === undefined ||
+            exported.function === null || exported.name === null
+          ) {
+            throw new Error(
+              `development provider ${
+                JSON.stringify(link.unit)
+              } has ${manifestExports.length} runtime exports ${
+                JSON.stringify(exportName)
+              } for consumer ${JSON.stringify(consumer)}, expected one`,
+            );
+          }
+          if (
+            JSON.stringify(exported.function) !== JSON.stringify(link.function)
+          ) {
+            throw new Error(
+              `development link ${JSON.stringify(link.name)} from ${
+                JSON.stringify(consumer)
+              } disagrees with provider ${JSON.stringify(link.unit)}`,
+            );
+          }
+          let wasmExports = moduleExports.get(link.unit);
+          if (wasmExports === undefined) {
+            wasmExports = WebAssembly.Module.exports(provider.module);
+            moduleExports.set(link.unit, wasmExports);
+          }
+          const wasmEntries = wasmExports.filter((candidate) =>
+            candidate.name === exportName
+          );
+          const wasmEntry = wasmEntries[0];
+          if (
+            wasmEntries.length !== 1 || wasmEntry === undefined ||
+            wasmEntry.kind !== "function"
+          ) {
+            throw new Error(
+              `development provider ${
+                JSON.stringify(link.unit)
+              } has Wasm export kinds ${
+                JSON.stringify(wasmEntries.map((candidate) => candidate.kind))
+              } under ${JSON.stringify(exportName)}, expected ["function"]`,
+            );
+          }
+          if (exported.postReturn !== null) {
+            const postReturns = wasmExports.filter((candidate) =>
+              candidate.name === exported.postReturn
+            );
+            const postReturn = postReturns[0];
+            if (
+              postReturns.length !== 1 || postReturn === undefined ||
+              postReturn.kind !== "function"
+            ) {
+              throw new Error(
+                `development provider ${
+                  JSON.stringify(link.unit)
+                } has post-return Wasm export kinds ${
+                  JSON.stringify(
+                    postReturns.map((candidate) => candidate.kind),
+                  )
+                } under ${
+                  JSON.stringify(exported.postReturn)
+                }, expected ["function"]`,
+              );
+            }
+          }
+          consumerLinks.push(link);
+          derivedEdges.push({
+            consumer,
+            provider: link.unit,
+            name: link.name,
+          });
+        }
+        resolvedLinks.set(consumer, consumerLinks);
+      }
+      derivedEdges.sort(compareDevelopmentEdges);
+      const expectedEdgeIdentities = validated.edges.map(
+        developmentEdgeIdentity,
+      );
+      const derivedEdgeIdentities = derivedEdges.map(developmentEdgeIdentity);
+      if (
+        JSON.stringify(expectedEdgeIdentities) !==
+          JSON.stringify(derivedEdgeIdentities)
+      ) {
+        throw new Error(
+          `development build ${
+            JSON.stringify(validated.revision)
+          } declares edges [${
+            expectedEdgeIdentities.join(", ")
+          }], but its final manifests derive [${
+            derivedEdgeIdentities.join(", ")
+          }]`,
+        );
+      }
+      const revision = await developmentRevision(
+        validated.entryUnit,
+        [...finalUnits.values()].map((unit) => unit.artifact),
+      );
+      if (revision !== validated.revision) {
+        throw new Error(
+          `development build ${
+            JSON.stringify(validated.revision)
+          } has canonical revision ${JSON.stringify(revision)}`,
+        );
+      }
+      const candidates = new Map<string, UnitActivation>();
+      for (const prepared of compiled) {
+        const links = resolvedLinks.get(prepared.artifact.name);
+        if (links === undefined) {
           throw new Error(
-            `development unit ${
-              JSON.stringify(artifact.name)
-            } manifest digest ${interfaceDigest} differs from declared digest ${
-              JSON.stringify(artifact.interfaceDigest)
+            `development build ${
+              JSON.stringify(validated.revision)
+            } lost validated links for ${
+              JSON.stringify(prepared.artifact.name)
             }`,
           );
         }
-        const module = await WebAssembly.compile(
-          Uint8Array.from(artifact.wasm),
-        );
-        requireEmbeddedManifest(module, artifact);
-        return { artifact, manifest, module };
-      }),
-    );
-    const candidates = new Map<string, UnitActivation>();
-    for (const prepared of compiled) {
-      const activation: { instance?: WebAssembly.Instance } = {};
-      const context: DevelopmentRuntimeContext = {
-        unit: prepared.artifact.name,
-        memory: () => {
-          if (activation.instance === undefined) {
-            throw new Error(
-              `unit ${
-                JSON.stringify(prepared.artifact.name)
-              } used host memory during instantiation`,
+        const activation: { instance?: WebAssembly.Instance } = {};
+        const context: DevelopmentRuntimeContext = {
+          unit: prepared.artifact.name,
+          memory: () => {
+            if (activation.instance === undefined) {
+              throw new Error(
+                `unit ${
+                  JSON.stringify(prepared.artifact.name)
+                } used host memory during instantiation`,
+              );
+            }
+            return requiredMemory(
+              activation.instance,
+              prepared.manifest,
+              prepared.artifact.name,
             );
-          }
-          return requiredMemory(
-            activation.instance,
-            prepared.manifest,
-            prepared.artifact.name,
-          );
+          },
+        };
+        const imports = await this.#imports(context);
+        const linkedImports = this.#linkImports(
+          prepared.artifact.name,
+          prepared.manifest,
+          links,
+          imports,
+          () => {
+            if (activation.instance === undefined) {
+              throw new Error(
+                `unit ${
+                  JSON.stringify(prepared.artifact.name)
+                } called a development link during instantiation`,
+              );
+            }
+            return activation.instance;
+          },
+        );
+        activation.instance = await WebAssembly.instantiate(
+          prepared.module,
+          linkedImports,
+        );
+        candidates.set(prepared.artifact.name, {
+          ...prepared,
+          instance: activation.instance,
+        });
+      }
+
+      if (candidates.size !== validated.changedUnits.length) {
+        throw new Error(
+          `development build ${
+            JSON.stringify(validated.revision)
+          } prepared ${candidates.size} changed units, expected ${validated.changedUnits.length}`,
+        );
+      }
+      const nextUnits = new Map(this.#units);
+      for (const removed of validated.removedUnits) nextUnits.delete(removed);
+      for (const [name, active] of candidates) nextUnits.set(name, active);
+      const activation: DevelopmentActivation = Object.freeze({
+        [developmentActivationBrand]: true as const,
+        revision: validated.revision,
+      });
+      this.#state = {
+        tag: "pending",
+        candidate: {
+          activation,
+          units: nextUnits,
+          build: validated,
         },
       };
-      const imports = await this.#imports(context);
-      const linkedImports = this.#linkImports(
-        prepared.artifact.name,
-        prepared.manifest,
-        imports,
-        () => {
-          if (activation.instance === undefined) {
-            throw new Error(
-              `unit ${
-                JSON.stringify(prepared.artifact.name)
-              } called a development link during instantiation`,
-            );
-          }
-          return activation.instance;
-        },
-      );
-      activation.instance = await WebAssembly.instantiate(
-        prepared.module,
-        linkedImports,
-      );
-      candidates.set(prepared.artifact.name, {
-        ...prepared,
-        instance: activation.instance,
-      });
+      return activation;
+    } catch (error) {
+      if (this.#state.tag === "preparing") this.#state = { tag: "ready" };
+      throw error;
     }
+  }
 
-    if (candidates.size !== build.changedUnits.length) {
+  commitActivation(activation: DevelopmentActivation): void {
+    const pending = this.#pendingActivation(activation, "commit");
+    this.#units = pending.units;
+    this.#entryUnit = pending.build.entryUnit;
+    this.#revision = pending.build.revision;
+    this.#state = { tag: "ready" };
+  }
+
+  abortActivation(activation: DevelopmentActivation): void {
+    this.#pendingActivation(activation, "abort");
+    this.#state = { tag: "ready" };
+  }
+
+  #pendingActivation(
+    activation: DevelopmentActivation,
+    operation: "commit" | "abort",
+  ): PendingDevelopmentActivation {
+    if (
+      this.#state.tag === "pending" &&
+      this.#state.candidate.activation === activation
+    ) {
+      return this.#state.candidate;
+    }
+    let pendingRevision = "none";
+    if (this.#state.tag === "pending") {
+      pendingRevision = JSON.stringify(this.#state.candidate.build.revision);
+    }
+    throw new Error(
+      `development runtime cannot ${operation} activation ${
+        JSON.stringify(activation.revision)
+      }; pending revision is ${pendingRevision}`,
+    );
+  }
+
+  #requireReady(operation: string): void {
+    if (this.#state.tag === "ready") return;
+    if (this.#state.tag === "preparing") {
       throw new Error(
-        `development build ${
-          JSON.stringify(build.revision)
-        } prepared ${candidates.size} changed units, expected ${build.changedUnits.length}`,
+        `development runtime cannot ${operation} while preparing an activation`,
       );
     }
-    for (const removed of build.removedUnits) this.#units.delete(removed);
-    for (const [name, active] of candidates) this.#units.set(name, active);
-    this.#entryUnit = build.entryUnit;
-    this.#revision = build.revision;
+    throw new Error(
+      `development runtime cannot ${operation} while activation ${
+        JSON.stringify(this.#state.candidate.build.revision)
+      } is pending`,
+    );
   }
 
   #requireRetainedUnits(retained: readonly RetainedDevelopmentUnit[]): void {
@@ -182,7 +461,9 @@ export class DevelopmentRuntime {
       }
       if (
         active.artifact.interfaceDigest !== expected.interfaceDigest ||
-        active.artifact.implementationDigest !== expected.implementationDigest
+        active.artifact.implementationDigest !==
+          expected.implementationDigest ||
+        active.artifact.wasmDigest !== expected.wasmDigest
       ) {
         throw new Error(
           `development build retained stale unit ${
@@ -195,41 +476,59 @@ export class DevelopmentRuntime {
 
   #linkImports(
     consumerName: string,
-    manifest: DevelopmentManifest,
+    consumerManifest: DevelopmentManifest,
+    links: DevelopmentManifest["links"],
     hostImports: WebAssembly.Imports,
     consumerInstance: () => WebAssembly.Instance,
   ): WebAssembly.Imports {
     const imports: Record<string, WebAssembly.ModuleImports> = {
       ...hostImports,
     };
-    for (const link of manifest.links) {
-      if (Object.hasOwn(imports, link.module)) {
+    const developmentModules = new Map<
+      string,
+      WebAssembly.ModuleImports
+    >();
+    for (const link of links) {
+      const exportName = `blot:dev:${link.name}`;
+      let moduleImports = developmentModules.get(link.module);
+      if (moduleImports === undefined) {
+        if (Object.hasOwn(hostImports, link.module)) {
+          throw new Error(
+            `host imports for unit ${
+              JSON.stringify(consumerName)
+            } collide with development module ${JSON.stringify(link.module)}`,
+          );
+        }
+        moduleImports = {};
+        developmentModules.set(link.module, moduleImports);
+        imports[link.module] = moduleImports;
+      }
+      if (Object.hasOwn(moduleImports, exportName)) {
         throw new Error(
-          `host imports for unit ${
-            JSON.stringify(consumerName)
-          } collide with development module ${JSON.stringify(link.module)}`,
+          `development unit ${JSON.stringify(consumerName)} repeats import ${
+            JSON.stringify(exportName)
+          } from ${JSON.stringify(link.module)}`,
         );
       }
-      imports[link.module] = {
-        [`blot:dev:${link.name}`]: (...arguments_: WasmValue[]) => {
-          const consumer = consumerInstance();
-          const provider = this.#units.get(link.unit);
-          if (provider === undefined) {
-            throw new Error(
-              `unit ${JSON.stringify(consumerName)} called inactive provider ${
-                JSON.stringify(link.unit)
-              }`,
-            );
-          }
-          return invokeLink(
-            consumerName,
-            consumer,
-            link.function,
-            provider,
-            link.name,
-            arguments_,
+      moduleImports[exportName] = (...arguments_: WasmValue[]) => {
+        const consumer = consumerInstance();
+        const provider = this.#units.get(link.unit);
+        if (provider === undefined) {
+          throw new Error(
+            `unit ${JSON.stringify(consumerName)} called inactive provider ${
+              JSON.stringify(link.unit)
+            }`,
           );
-        },
+        }
+        return invokeLink(
+          consumerName,
+          consumer,
+          consumerManifest,
+          link.function,
+          provider,
+          link.name,
+          arguments_,
+        );
       };
     }
     return imports;
@@ -295,32 +594,55 @@ function decodeManifest(
 function validateBuildTransition(
   build: DevelopmentBuild,
   activeUnits: ReadonlyMap<string, UnitActivation>,
-): void {
+  activeRevision: string | undefined,
+): ValidatedDevelopmentBuild {
   if (!isRecord(build)) {
     throw new TypeError("development build must be an object");
   }
   const revision = requireString(build.revision, "development build revision");
+  let baseRevision: string | undefined;
+  if (build.baseRevision !== undefined) {
+    baseRevision = requireString(
+      build.baseRevision,
+      `development build ${JSON.stringify(revision)} base revision`,
+    );
+  }
+  if (baseRevision !== activeRevision) {
+    throw new Error(
+      `development build ${JSON.stringify(revision)} starts from revision ${
+        JSON.stringify(baseRevision)
+      }, but the runtime has revision ${JSON.stringify(activeRevision)}`,
+    );
+  }
   const entryUnit = requireString(
     build.entryUnit,
     `development build ${JSON.stringify(revision)} entry unit`,
   );
+  const changedValues = requireArray(
+    build.changedUnits,
+    `development build ${JSON.stringify(revision)} changed units`,
+  );
+  const retainedValues = requireArray(
+    build.retainedUnits,
+    `development build ${JSON.stringify(revision)} retained units`,
+  );
+  const removedValues = requireArray(
+    build.removedUnits,
+    `development build ${JSON.stringify(revision)} removed units`,
+  );
+  const edgeValues = requireArray(
+    build.edges,
+    `development build ${JSON.stringify(revision)} edges`,
+  );
+  const durationMilliseconds = build.durationMilliseconds;
   if (
-    !Array.isArray(build.changedUnits) ||
-    !Array.isArray(build.retainedUnits) ||
-    !Array.isArray(build.removedUnits) || !Array.isArray(build.edges)
-  ) {
-    throw new TypeError(
-      `development build ${JSON.stringify(revision)} has invalid unit sets`,
-    );
-  }
-  if (
-    typeof build.durationMilliseconds !== "number" ||
-    !Number.isFinite(build.durationMilliseconds) ||
-    build.durationMilliseconds < 0
+    typeof durationMilliseconds !== "number" ||
+    !Number.isFinite(durationMilliseconds) ||
+    durationMilliseconds < 0
   ) {
     throw new TypeError(
       `development build ${JSON.stringify(revision)} has invalid duration ${
-        String(build.durationMilliseconds)
+        String(durationMilliseconds)
       }`,
     );
   }
@@ -349,45 +671,79 @@ function validateBuildTransition(
     return unitName;
   };
 
-  for (const artifact of build.changedUnits) {
-    if (!isRecord(artifact)) {
+  const changedUnits: DevelopmentUnitArtifact[] = [];
+  for (const value of changedValues) {
+    if (!isRecord(value)) {
       throw new TypeError(
         `changed unit in development build ${
           JSON.stringify(revision)
         } must be an object`,
       );
     }
-    const name = classify(artifact.name, "changed");
-    requireString(
-      artifact.root,
+    const name = classify(value.name, "changed");
+    const root = requireString(
+      value.root,
       `root for changed unit ${JSON.stringify(name)}`,
     );
-    requireString(
-      artifact.interfaceDigest,
+    const interfaceDigest = requireString(
+      value.interfaceDigest,
       `interface digest for changed unit ${JSON.stringify(name)}`,
     );
-    requireString(
-      artifact.implementationDigest,
+    const implementationDigest = requireString(
+      value.implementationDigest,
       `implementation digest for changed unit ${JSON.stringify(name)}`,
     );
+    const wasmDigest = requireString(
+      value.wasmDigest,
+      `Wasm digest for changed unit ${JSON.stringify(name)}`,
+    );
     if (
-      !(artifact.wasm instanceof Uint8Array) ||
-      !(artifact.manifestBytes instanceof Uint8Array)
+      !(value.wasm instanceof Uint8Array) ||
+      !(value.manifestBytes instanceof Uint8Array)
     ) {
       throw new TypeError(
         `changed unit ${JSON.stringify(name)} has non-binary artifacts`,
       );
     }
+    const capabilities = requireArray(
+      value.capabilities,
+      `capabilities for changed unit ${JSON.stringify(name)}`,
+    ).map((capability, index) =>
+      requireString(
+        capability,
+        `capability ${index} for changed unit ${JSON.stringify(name)}`,
+      )
+    );
+    const artifactSource = value.artifactSource;
+    if (artifactSource !== "compiled" && artifactSource !== "unit-cache") {
+      throw new TypeError(
+        `artifact source for changed unit ${JSON.stringify(name)} is ${
+          JSON.stringify(artifactSource)
+        }`,
+      );
+    }
+    changedUnits.push({
+      name,
+      root,
+      wasm: value.wasm.slice(),
+      manifestBytes: value.manifestBytes.slice(),
+      capabilities,
+      interfaceDigest,
+      implementationDigest,
+      wasmDigest,
+      artifactSource,
+    });
   }
-  for (const retained of build.retainedUnits) {
-    if (!isRecord(retained)) {
+  const retainedUnits: RetainedDevelopmentUnit[] = [];
+  for (const value of retainedValues) {
+    if (!isRecord(value)) {
       throw new TypeError(
         `retained unit in development build ${
           JSON.stringify(revision)
         } must be an object`,
       );
     }
-    const name = classify(retained.name, "retained");
+    const name = classify(value.name, "retained");
     if (!activeUnits.has(name)) {
       throw new Error(
         `development build ${JSON.stringify(revision)} retains inactive unit ${
@@ -395,17 +751,28 @@ function validateBuildTransition(
         }`,
       );
     }
-    requireString(
-      retained.interfaceDigest,
+    const interfaceDigest = requireString(
+      value.interfaceDigest,
       `interface digest for retained unit ${JSON.stringify(name)}`,
     );
-    requireString(
-      retained.implementationDigest,
+    const implementationDigest = requireString(
+      value.implementationDigest,
       `implementation digest for retained unit ${JSON.stringify(name)}`,
     );
+    const wasmDigest = requireString(
+      value.wasmDigest,
+      `Wasm digest for retained unit ${JSON.stringify(name)}`,
+    );
+    retainedUnits.push({
+      name,
+      interfaceDigest,
+      implementationDigest,
+      wasmDigest,
+    });
   }
-  for (const removed of build.removedUnits) {
-    const name = classify(removed, "removed");
+  const removedUnits: string[] = [];
+  for (const value of removedValues) {
+    const name = classify(value, "removed");
     if (!activeUnits.has(name)) {
       throw new Error(
         `development build ${JSON.stringify(revision)} removes inactive unit ${
@@ -413,6 +780,7 @@ function validateBuildTransition(
         }`,
       );
     }
+    removedUnits.push(name);
   }
   for (const active of activeUnits.keys()) {
     if (classifications.has(active)) continue;
@@ -424,8 +792,8 @@ function validateBuildTransition(
   }
 
   const finalUnits = new Set(activeUnits.keys());
-  for (const removed of build.removedUnits) finalUnits.delete(removed);
-  for (const changed of build.changedUnits) finalUnits.add(changed.name);
+  for (const removed of removedUnits) finalUnits.delete(removed);
+  for (const changed of changedUnits) finalUnits.add(changed.name);
   if (!finalUnits.has(entryUnit)) {
     throw new Error(
       `development build ${JSON.stringify(revision)} omitted entry unit ${
@@ -433,9 +801,10 @@ function validateBuildTransition(
       }`,
     );
   }
-  const edges = new Set<string>();
-  for (const edge of build.edges) {
-    if (!isRecord(edge)) {
+  const edgeIdentities = new Set<string>();
+  const edges: Array<DevelopmentBuild["edges"][number]> = [];
+  for (const value of edgeValues) {
+    if (!isRecord(value)) {
       throw new TypeError(
         `development edge in build ${
           JSON.stringify(revision)
@@ -443,15 +812,15 @@ function validateBuildTransition(
       );
     }
     const consumer = requireString(
-      edge.consumer,
+      value.consumer,
       `development edge consumer in build ${JSON.stringify(revision)}`,
     );
     const provider = requireString(
-      edge.provider,
+      value.provider,
       `development edge provider in build ${JSON.stringify(revision)}`,
     );
     const name = requireString(
-      edge.name,
+      value.name,
       `development edge name in build ${JSON.stringify(revision)}`,
     );
     if (!finalUnits.has(consumer) || !finalUnits.has(provider)) {
@@ -463,16 +832,46 @@ function validateBuildTransition(
         }, but the final units are [${[...finalUnits].sort().join(", ")}]`,
       );
     }
-    const identity = JSON.stringify([consumer, provider, name]);
-    if (edges.has(identity)) {
+    const edge = { consumer, provider, name };
+    const identity = developmentEdgeIdentity(edge);
+    if (edgeIdentities.has(identity)) {
       throw new Error(
         `development build ${JSON.stringify(revision)} repeats edge ${
           JSON.stringify(name)
         } from ${JSON.stringify(consumer)} to ${JSON.stringify(provider)}`,
       );
     }
-    edges.add(identity);
+    edgeIdentities.add(identity);
+    edges.push(edge);
   }
+  edges.sort(compareDevelopmentEdges);
+  return {
+    baseRevision,
+    revision,
+    entryUnit,
+    changedUnits,
+    retainedUnits,
+    removedUnits,
+    edges,
+    durationMilliseconds,
+  };
+}
+
+function developmentEdgeIdentity(
+  edge: DevelopmentBuild["edges"][number],
+): string {
+  return JSON.stringify([edge.consumer, edge.provider, edge.name]);
+}
+
+function compareDevelopmentEdges(
+  left: DevelopmentBuild["edges"][number],
+  right: DevelopmentBuild["edges"][number],
+): number {
+  const leftIdentity = developmentEdgeIdentity(left);
+  const rightIdentity = developmentEdgeIdentity(right);
+  if (leftIdentity < rightIdentity) return -1;
+  if (leftIdentity > rightIdentity) return 1;
+  return 0;
 }
 
 function parseExport(
@@ -694,35 +1093,30 @@ function requireString(value: unknown, position: string): string {
 function invokeLink(
   consumerName: string,
   consumer: WebAssembly.Instance,
+  consumerManifest: DevelopmentManifest,
   function_: BlotAbiFunction,
   provider: UnitActivation,
   linkName: string,
   arguments_: readonly WasmValue[],
 ): WasmValue | undefined {
-  const exported = provider.manifest.exports.find((candidate) =>
-    candidate.name === `blot:dev:${linkName}`
+  const exportName = `blot:dev:${linkName}`;
+  const exports = provider.manifest.exports.filter((candidate) =>
+    candidate.name === exportName
   );
+  const exported = exports[0];
   if (
-    exported === undefined || exported.function === null ||
-    exported.name === null
+    exports.length !== 1 || exported === undefined ||
+    exported.function === null || exported.name === null
   ) {
     throw new Error(
-      `provider ${
+      `active development provider ${
         JSON.stringify(provider.artifact.name)
-      } omitted development export ${JSON.stringify(linkName)}`,
+      } lost validated export ${JSON.stringify(exportName)}`,
     );
   }
-  if (JSON.stringify(exported.function) !== JSON.stringify(function_)) {
-    throw new Error(
-      `development link ${JSON.stringify(linkName)} from ${
-        JSON.stringify(consumerName)
-      } disagrees with provider ${JSON.stringify(provider.artifact.name)}`,
-    );
-  }
-
   const consumerMemory = requiredMemory(
     consumer,
-    provider.manifest,
+    consumerManifest,
     consumerName,
   );
   const providerMemory = requiredMemory(
@@ -739,7 +1133,7 @@ function invokeLink(
   if (arguments_.length !== expectedArguments) {
     throw new Error(
       `development link ${
-        JSON.stringify(linkName)
+        JSON.stringify(exportName)
       } received ${arguments_.length} Wasm values, expected ${expectedArguments}`,
     );
   }
@@ -759,7 +1153,7 @@ function invokeLink(
     offset += width;
   }
 
-  const callable = requiredExportedFunction(provider.instance, exported.name);
+  const callable = requiredExportedFunction(provider.instance, exportName);
   let providerResultPointer: number | undefined;
   try {
     const raw = callable(...providerArguments);
@@ -768,7 +1162,7 @@ function invokeLink(
       if (!isWasmValue(raw)) {
         throw new Error(
           `development export ${
-            JSON.stringify(exported.name)
+            JSON.stringify(exportName)
           } returned an invalid direct value`,
         );
       }
@@ -784,7 +1178,7 @@ function invokeLink(
     if (typeof raw !== "number") {
       throw new Error(
         `development export ${
-          JSON.stringify(exported.name)
+          JSON.stringify(exportName)
         } omitted its result pointer`,
       );
     }
@@ -793,7 +1187,7 @@ function invokeLink(
     if (typeof resultPointer !== "number") {
       throw new Error(
         `development link ${
-          JSON.stringify(linkName)
+          JSON.stringify(exportName)
         } received an invalid caller result pointer`,
       );
     }

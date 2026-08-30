@@ -7,12 +7,12 @@ export interface CompilerTargetPolicy {
 }
 
 export interface ResolvedCompilerTargetPolicy {
-  readonly abiMajor: 1;
+  readonly abiMajor: 2;
   readonly wasmTarget: "wasm-simd128";
 }
 
 export const defaultCompilerTargetPolicy: CompilerTargetPolicy = Object.freeze({
-  abiMajor: 1,
+  abiMajor: 2,
   wasmTarget: "wasm-simd128",
 });
 
@@ -55,11 +55,11 @@ export function resolveTargetPolicy(
 ): ResolvedCompilerTargetPolicy {
   let requested = policy;
   if (requested === undefined) requested = defaultCompilerTargetPolicy;
-  if (requested.abiMajor !== 1) {
+  if (requested.abiMajor !== 2) {
     throw new CompilerTargetRefusal(
       `Blot ABI major ${
         String(requested.abiMajor)
-      } is not supported; expected 1`,
+      } is not supported; expected 2`,
     );
   }
   if (requested.wasmTarget !== "wasm-simd128") {
@@ -67,5 +67,5 @@ export function resolveTargetPolicy(
       `WebAssembly target ${requested.wasmTarget} is not supported; expected wasm-simd128`,
     );
   }
-  return Object.freeze({ abiMajor: 1, wasmTarget: "wasm-simd128" });
+  return Object.freeze({ abiMajor: 2, wasmTarget: "wasm-simd128" });
 }

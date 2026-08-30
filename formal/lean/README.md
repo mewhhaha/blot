@@ -1,9 +1,9 @@
 # Blot Core model
 
 This Lake package pins the Lean version in `lean-toolchain` and models the
-smallest trusted value/computation boundary. It deliberately omits modules,
-reflection, storage layouts, the ABI, and the production compiler's arena
-representation.
+smallest trusted value/computation boundary. It also contains non-authoritative
+QCore shadow artifacts. The package deliberately omits reflection, storage
+layouts, the ABI, and a proved translation from the production compiler.
 
 ## Checked scope
 
@@ -37,6 +37,15 @@ contains:
   at-most-once use, and linear exact use on terminating exits;
 - a bounds-safety theorem for the only array-read constructor; and
 - a small Runtime-HIR-to-target evaluator simulation.
+
+`Blot/QCoreGenerated.lean` mirrors the generated version-3 arena schema, and
+`Blot/QCore.lean` mirrors its structural scopes and grade algebra.
+`Blot/QCoreTyping.lean` defines a separate declarative calculus for the strict
+pure subset accepted by the executable Rust shadow kernel. It includes de Bruijn
+weakening and substitution functions, syntactic occurrence grades, dependent
+`Pi` and `Sigma` typing, and beta/projection conversion. It does not prove that
+the Rust checker implements those judgments; the missing correspondence and
+metatheorems are listed in `spec/QCORE_TYPING.md`.
 
 The package contains no `sorry` or admitted axioms. CI builds it, asks Lean's
 standalone `leanchecker` to check the generated declarations independently, and

@@ -8,3 +8,8 @@ export type {
   LintVisitors,
 } from "./lint/types.ts";
 export { DEFAULT_LINT_RULES } from "./lint/rules.ts";
+export {
+  applyLintFix,
+  validateLintDiagnostics,
+  validateLintDiagnosticsWithCompiler,
+} from "./lint/validation.ts";

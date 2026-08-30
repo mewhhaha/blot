@@ -77,19 +77,40 @@ another Store are not interchangeable.
 
 ### 2.1 Compiler-owned source inspection
 
-Installing a changed source revision in the resident Rust session is also its
-semantic dependency-discovery pass. The successful installation returns the
-resident module handle, literal import and include specifiers with source spans,
-and a deterministic portable-AST digest. Node resolves those reported sites and
-then configures that already-installed module; it does not ask the compiler to
-parse the same revision a second time.
+Source inspection runs in a dedicated Rust session that has no semantic module
+configuration, checked boundary, or artifact authority. It returns literal
+import and include specifiers with source spans, a deterministic portable-AST
+digest, and the compact syntax snapshot used by formatting and editor tooling.
+Its module handles and revision identities remain private to that inspection
+session.
 
-The compiler-owned inspection result also carries the canonical compact syntax
-snapshot used by formatting and editor tooling. The TypeScript parser remains a
-fresh-equivalence oracle and may validate a proposed replacement revision, but
-it is not run again for the accepted editor revision and is not a second source
-of semantic graph edges. Nonliteral include paths and syntax failures are
-diagnostics from the Rust inspection before graph configuration.
+Node resolves the reported sites and checks them against its Baba-backed syntax
+view. The Rust result remains the source of semantic graph edges; parity failure
+rejects the candidate. After the complete source graph succeeds, the host
+installs the accepted source or portable AST independently in the resident
+semantic session and verifies the same dependency sets before configuration. A
+source revision may therefore be parsed once for inspection and again for
+semantic installation. No inspection-session identity authorizes semantic cache
+reuse.
+
+If source inspection, dependency resolution, include loading, or syntax parity
+fails, the workspace retains its prior loaded graph, roots, overlays, dirty set,
+and implicit overlay sequence. The host removes candidate-only inspection
+modules and every touched inspection module whose source differs from the
+committed revision; an already-identical committed module may remain. No
+candidate module or module-owned inspection fact remains resident. Lower parser
+memoization may retain source-derived work, but it has no module identity or
+semantic authority. The semantic session has not received the candidate, so its
+module revisions, checked boundaries, facts, Runtime HIR, and artifacts remain
+unchanged.
+
+This isolation ends when semantic synchronization begins. This section does not
+claim that a failure partway through semantic payload installation or graph
+configuration rolls back the whole semantic delta.
+
+Rust inspection and the Baba-backed host syntax view must agree on source
+acceptance. Either may reject a candidate with a located syntax diagnostic.
+Nonliteral include paths are rejected before semantic graph configuration.
 
 ## 3. Dependency invalidation
 
@@ -129,6 +150,13 @@ This is the transitive reverse-dependency invalidation required for every phase
 that can observe a changed edge: an unchanged sealed boundary proves that the
 phase cannot observe the private change and stops its closure. Unrelated modules
 retain their revisions and closed artifacts.
+
+Resident node-indexed facts are partitioned by their owning module revision.
+Invalidating a module removes that module's fact buckets directly; it does not
+filter a session-wide table by re-reading every unrelated node key. Facts that
+explicitly record cross-module use sites, such as specialization demand, remove
+the invalidated use sites from the remaining owner bucket. This representation
+changes invalidation work, not the invalidation set or fresh-equivalence rule.
 
 An ordinary effect reachable from a published interface adds the complete owning
 module-instance occurrence to the key. Reuse is sound only when that identity is
@@ -279,6 +307,48 @@ decodes that template over its own module-instance and effect-scope prefix, then
 evaluates only the module result expression. This skips declaration replay
 without merging written occurrences.
 
+An instantiated template environment is reusable only after it is fully sealed
+and only for the exact imported-module revision, complete module-instance stack,
+and complete effect-scope stack. This is an environment cache, not a
+module-result cache: a hit still evaluates the result expression for that
+occurrence. Distinct occurrence provenance cannot share an entry, and
+invalidating any referenced module revision removes the entry. These conditions
+preserve per-occurrence closure and generative identity while avoiding repeated
+structural decoding of an unchanged trusted capsule. This opportunistic cache
+admits only provenance with at most 32 module-instance, nested effect-scope, or
+compiler-request levels and 256 counted module-instance sites, effect frames,
+and compiler steps. Admitted provenance must also keep the decoded capsule's
+base allocation plus caller-prefix copies within the 64 MiB capsule allocation
+bound: the module-instance prefix is copied once per stored closure and identity
+key, and the effect-scope prefix once per non-empty stored scope. Deeper
+provenance or an excessive prefix/capsule cross-product skips template decoding
+and replays declarations. The cache retains at most 64 environments; a miss at
+that bound starts a fresh cache generation before inserting the new exact key.
+Its retained memory is therefore independent of dynamic recursion depth and the
+number of import occurrences.
+
+On a template-instance miss, one structural fold both revalidates the capsule's
+logical budget and prices those caller-prefix copies. Success creates an
+ephemeral admission fact borrowing the exact capsule; consuming that fact enters
+the remaining graph and provenance validation without repeating the structural
+fold. The fact is neither serializable nor cacheable, cannot be transferred to a
+different capsule, and does not alter the instance key or decoded-environment
+identity. A structurally invalid installed capsule therefore remains an
+invariant failure, while only excessive caller provenance or allocation selects
+declaration replay.
+
+Every environment decoded under an admitted key carries an immutable semantic
+identity interned by the imported-module revision, the complete template
+provenance, and the capsule's encoded environment ID. Evicting and later
+decoding the same exact key therefore preserves closure-source equality and
+cannot change Runtime-HIR function-choice cardinality. Different encoded
+environments remain different even when they contain the same lambda. Oversized
+provenance does not produce a decoded environment; ordinary declaration replay
+retains the conservative allocation-identity rule. The interner holds only weak
+references, sweeps dead entries at geometric thresholds, and removes every
+affected key on revision invalidation. A removed token survives only while a
+decoded environment still owns it.
+
 Ordinary effects retain complete generative occurrence identity. Seals retain
 canonical applicative inputs. A staged result containing process-local mutable
 state, unresolved polymorphism, live proof values, or unvalidated private
@@ -288,6 +358,32 @@ Runtime HIR and emitted artifacts use the strongest revision of any source,
 certificate, target, ABI, or language-plan input they observe. Revalidation is
 required after decoding; a content hash establishes transport integrity, not the
 semantic truth of a producer-controlled interface claim.
+
+An unchanged development request may reuse a closed development program only
+after the semantic request has processed every pending invalidation. Its key is
+the program root and exact ordered unit-name-to-root mapping. A source or
+dependency-boundary invalidation removes the entry before another request. This
+cache skips checking and Runtime-HIR reconstruction for a no-op request; it does
+not change staging, specialization, or source meaning.
+
+The resident development-artifact cache has one committed map and at most one
+pending update. Preparing a program abandons the previous pending update before
+any fallible work, reads only the committed map, and stages replacements plus
+the exact active cache-key set under a fresh transaction identity. Preparation
+does not insert or prune committed entries. A failed preparation therefore
+publishes nothing. Commit accepts only the current identity, applies all staged
+replacements and exact-key pruning in one mutation, then consumes the identity.
+A stale, duplicate, or missing identity changes nothing. An abandoned reduced
+unit set cannot prune committed units, and replacing a configured root prunes
+the exact former key only when its replacement commits.
+
+The host copies and hashes every compiled unit, resolves identity-only cache
+hits against private retained artifacts, and computes the canonical development
+revision before committing the Rust transaction. Caller-visible compiled bytes
+and capabilities never alias the host's retained identities or artifact
+reservoir. Failure in this host work leaves both committed caches unchanged, so
+the next preparation recompiles the uncommitted Rust units and can retry against
+the same host baseline.
 
 ## 9. Prelude and package snapshots
 
@@ -308,19 +404,47 @@ may fall back to ordinary compilation after validation failure. A compiler-
 distributed snapshot instead reports corrupt distribution when its authority is
 the distribution itself.
 
-Compiler-host ABI 4 exposes trusted-snapshot installation separately from graph
-deltas. The bundled host invokes it only after the artifact manifest
-authenticates the prelude digest. A caller supplying a custom compiler and
-snapshot explicitly owns that trust decision. Source, portable-AST,
-configuration, and removal deltas cannot carry snapshot bytes, and registry
-packages cannot reach this authority. Development-program compilation is a
-separate ABI 4 session operation and does not widen the graph-delta or snapshot
-decoders.
+Compiler-host ABI 4 introduced trusted-snapshot installation separately from
+graph deltas, and ABI 5 preserves that boundary. The bundled host invokes it
+only after the artifact manifest authenticates the prelude digest. A caller
+supplying a custom compiler and snapshot explicitly owns that trust decision.
+Source, portable-AST, configuration, and removal deltas cannot carry snapshot
+bytes, and registry packages cannot reach this authority. Development-program
+preparation and commit are separate ABI 5 session operations and do not widen
+the graph-delta or snapshot decoders.
 
 Snapshot preparation is transactional. The AST, interface, compile-time capsule,
 and result evaluation are completed in path-scoped staging state before the
 resident module, invalidation graph, or identity counters change. A failed
 installation leaves any prior resident module and its published boundary intact.
+Before recursive MessagePack deserialization, installation scans the complete
+byte slice iteratively and requires exactly one well-formed root with no
+trailing bytes or reserved marker. Snapshot bytes are limited to 32 MiB,
+MessagePack nesting to 128 levels, structural nodes to 1,048,576, and estimated
+allocation to 64 MiB under protocol-fixed weights. Export applies the same
+preflight after serialization, so the compiler cannot publish a snapshot that
+its trusted installer refuses. After deserialization, portable AST and checked-
+certificate flat graphs are admitted iteratively before semantic traversal.
+Every AST arena node and flat-type root has a maximum reference-path depth of
+128 edges and an expanded-reference budget of 1,048,576 nodes, counting repeated
+DAG edges separately. The AST additionally aggregates its parameter,
+declaration, and result roots; the certificate aggregates its result, effects,
+parameter, expression-type, and closure-signature roots. Export validates the
+same logical budgets before serializing either portable artifact. The value
+capsule limits nested values, applications, effect-scope creation, and module-
+instance sites to 128 logical levels. It encodes lexical environment shells
+iteratively and limits every path through the complete
+parent-and-closure-capture graph to 1,024 edges. The same node and allocation
+budgets apply before reference validation and reconstruction. An over-budget
+installed snapshot is a corrupt or unacceptable trusted distribution, not a
+source diagnostic; refusal publishes no staged state. If the optional
+source-side capsule exceeds either its logical budget or the serialized
+snapshot's wire budget, publication retries without that environment cache. The
+capsule-less AST and certificate are preflighted again, and declaration replay
+remains authoritative. The generated prelude snapshot must retain its admitted
+environment capsule; its artifact regression rejects a capsule-less prelude
+because every import would otherwise replay all prelude declarations.
+
 Effect declarations and extensions created by `@type.attach` are exact-identity,
 module-owned resident-context facts. The declaration retains the effect's
 operation metadata; later module-owned attachments form overlays, so removing an
@@ -365,16 +489,32 @@ unchanged transport. It does not prove that a claimed interface follows from its
 AST unless a separately checked certificate establishes that judgment more
 cheaply than ordinary checking.
 
+Workspace roots and editor overlays have independent ownership. A successful
+root load or overlay update claims that path as a root. Releasing the root does
+not clear its overlay, and clearing the overlay does not release the root. A
+released node remains resident when another root still reaches it; otherwise the
+host removes its loaded revision and dirty inputs, then removes the
+corresponding inspection and semantic modules. Pinned compiler-distribution
+modules are not owned by workspace roots.
+
+Closing an overlay invalidates its source input once, then transactionally
+rebinds every remaining root whose committed graph reaches that input. All of
+those roots observe the disk replacement, or none of them commit. With no
+remaining affected root, close clears the overlay without reading or installing
+the path. This permits an editor to close an unsaved, diskless document by
+releasing its root before closing its overlay.
+
 An active workspace graph owns the resident module set. Removing a node from
 that set removes its frontend snapshot, mutable inference generation,
 compile-time evaluation caches, effect-identity entries, closed programs, and
-request-local analyses. Every direct importer is invalidated before that
-dependency disappears, so no importer can reuse an environment, boundary, or
-closed program containing the removed value. A later module with the same path
-is a new revision and must install and validate its payload again. Stable sealed
-boundaries and checked snapshots are self-contained; none retains a live
-variable or another private generation merely because a removed module once
-published it.
+request-local analyses. It also removes closed development programs and
+committed development artifacts whose program or unit root names that node.
+Every direct importer is invalidated before that dependency disappears, so no
+importer can reuse an environment, boundary, or closed program containing the
+removed value. A later module with the same path is a new revision and must
+install and validate its payload again. Stable sealed boundaries and checked
+snapshots are self-contained; none retains a live variable or another private
+generation merely because a removed module once published it.
 
 ## 10. Diagnostic and limit reuse
 

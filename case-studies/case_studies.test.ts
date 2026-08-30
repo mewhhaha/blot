@@ -24,7 +24,7 @@ for (
   });
 }
 
-Deno.test("game_loop.blot streams every shrubbery off the main thread", async () => {
+Deno.test("game_loop.blot streams exact shrubbery geometry once", async () => {
   const compiler = await Compiler.create();
   let artifact;
   try {
@@ -32,10 +32,11 @@ Deno.test("game_loop.blot streams every shrubbery off the main thread", async ()
   } finally {
     compiler.destroy();
   }
+  const module = await WebAssembly.compile(Uint8Array.from(artifact.wasm));
   const observe = async (selection: number) => {
     const worker = new Worker(
       new URL("./engine/game_loop_test_worker.mjs", import.meta.url),
-      { workerData: { wasm: artifact.wasm, selection } },
+      { workerData: { module, selection } },
     );
     let observation;
     try {
@@ -43,6 +44,9 @@ Deno.test("game_loop.blot streams every shrubbery off the main thread", async ()
         readonly frames: bigint;
         readonly streamedBatches: number;
         readonly uploadedBatches: number;
+        readonly uploadedVoxels: number;
+        readonly voxelCalls: number;
+        readonly geometryHash: bigint;
         readonly redraws: number;
       }>((resolve, reject) => {
         worker.once("message", resolve);
@@ -53,11 +57,18 @@ Deno.test("game_loop.blot streams every shrubbery off the main thread", async ()
     }
     return { selection, observation };
   };
+  const expectedShrubberies = [
+    { selection: 1, voxels: 8_581, hash: 8_352_871_537_366_778_277n },
+    { selection: 2, voxels: 5_402, hash: 581_267_836_942_678_797n },
+    { selection: 3, voxels: 1_865, hash: 891_817_835_035_434_143n },
+    { selection: 4, voxels: 160, hash: 5_278_148_221_706_545_873n },
+    { selection: 5, voxels: 1_154, hash: 11_831_599_231_652_038_555n },
+  ];
   const observations = [];
-  for (const selection of [1, 2, 3, 4, 5]) {
-    observations.push(await observe(selection));
+  for (const expected of expectedShrubberies) {
+    observations.push({ expected, ...await observe(expected.selection) });
   }
-  for (const { selection, observation } of observations) {
+  for (const { expected, selection, observation } of observations) {
     assertEquals(observation.frames, 1n, `selection ${selection} frame count`);
     assertEquals(
       observation.streamedBatches > 0,
@@ -69,8 +80,111 @@ Deno.test("game_loop.blot streams every shrubbery off the main thread", async ()
       true,
       `selection ${selection} upload`,
     );
+    assertEquals(
+      observation.voxelCalls,
+      expected.voxels,
+      `selection ${selection} transfers each voxel once`,
+    );
+    assertEquals(
+      observation.uploadedVoxels,
+      expected.voxels,
+      `selection ${selection} final voxel count`,
+    );
+    assertEquals(
+      observation.geometryHash,
+      expected.hash,
+      `selection ${selection} geometry`,
+    );
     assertEquals(observation.redraws, 1, `selection ${selection} redraw`);
   }
+
+  const mixed = observations.find(({ expected }) => expected.selection === 1);
+  if (mixed === undefined) {
+    throw new Error("game-loop observations omitted mixed shrubbery");
+  }
+  const shared = new Int32Array(
+    new SharedArrayBuffer(7 * Int32Array.BYTES_PER_ELEMENT),
+  );
+  Atomics.store(shared, 1, 1);
+  Atomics.store(shared, 6, mixed.selection);
+  const guest = new Worker(
+    new URL("./engine/browser_worker_test_adapter.mjs", import.meta.url),
+  );
+  let receivedVoxels = 0;
+  let receivedBatches = 0;
+  let firstBatchReset: boolean | undefined;
+  let laterBatchReset = false;
+  const settled = new Promise<void>((resolve, reject) => {
+    guest.once("error", reject);
+    guest.on("message", (message) => {
+      if (
+        typeof message !== "object" || message === null ||
+        !("kind" in message)
+      ) {
+        reject(new Error("game-loop worker emitted a malformed message"));
+        return;
+      }
+      if (message.kind === "voxel-frame") {
+        if (
+          !("voxels" in message) || !Array.isArray(message.voxels) ||
+          !("reset" in message) || typeof message.reset !== "boolean"
+        ) {
+          reject(new Error("game-loop worker emitted a malformed voxel frame"));
+          return;
+        }
+        receivedVoxels += message.voxels.length;
+        receivedBatches += 1;
+        if (firstBatchReset === undefined) firstBatchReset = message.reset;
+        else if (message.reset) laterBatchReset = true;
+      }
+      if (message.kind === "settled") resolve();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    guest.once("error", reject);
+    guest.once("message", (message) => {
+      if (
+        typeof message !== "object" || message === null ||
+        !("kind" in message) || message.kind !== "ready"
+      ) {
+        reject(new Error("game-loop worker test adapter did not become ready"));
+        return;
+      }
+      resolve();
+    });
+  });
+  const tick = setInterval(() => {
+    Atomics.add(shared, 0, 1);
+    Atomics.notify(shared, 0);
+  }, 1);
+  try {
+    guest.postMessage({
+      kind: "start",
+      module,
+      shared: shared.buffer,
+      export: "blot:default",
+      scene: [],
+    });
+    await settled;
+  } finally {
+    clearInterval(tick);
+    Atomics.store(shared, 1, 0);
+    Atomics.add(shared, 0, 1);
+    Atomics.notify(shared, 0);
+    await guest.terminate();
+  }
+  assertEquals(firstBatchReset, true, "first streamed batch resets the scene");
+  assertEquals(laterBatchReset, false, "later batches append to the scene");
+  assertEquals(
+    receivedBatches,
+    mixed.observation.uploadedBatches,
+    "worker preserves the source batch count",
+  );
+  assertEquals(
+    receivedVoxels,
+    mixed.observation.uploadedVoxels,
+    "worker sends each generated voxel once",
+  );
 });
 
 Deno.test("Text.contains searches Unicode text", async () => {

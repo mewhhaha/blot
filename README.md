@@ -158,6 +158,23 @@ Node resolves the graph; Rust owns Baba-backed parsing, checking, staging,
 ownership, Runtime HIR, ABI closure, and Wasm emission. The operational boundary
 is documented in [docs/compiler.md](docs/compiler.md).
 
+Development projects keep that compiler session resident. The compiler closes
+and specializes the whole reachable program before splitting it into reloadable
+Wasm units, so development mode does not weaken inference or create another
+module system. A build is prepared, checked against exact source and artifact
+identities, and committed together with its runtime activation. Failed or stale
+candidates leave the previous project revision and running instances intact. The
+generated 5 MiB development benchmark requires a one-unit implementation edit to
+stay below 100 ms at p95 while resident-memory growth stays below 128 MiB. See
+[docs/development.md](docs/development.md) and
+[spec/INCREMENTAL.md](spec/INCREMENTAL.md).
+
+The production checker remains the semantic authority. QCore is a generated
+structural and typing shadow for a smaller pure fragment, shared by Rust,
+TypeScript, and Lean so their boundary representations cannot drift silently. It
+is not a second checker or a proof of the full compiler. See
+[spec/QCORE.md](spec/QCORE.md) and [spec/QCORE_TYPING.md](spec/QCORE_TYPING.md).
+
 The production compiler binary is not committed to Git. CI publishes a 90-day
 `blot-rust-compiler` artifact and a runnable workspace containing the same
 bytes. From a checkout at the corresponding commit, `pnpm compiler:download`
@@ -184,6 +201,7 @@ try {
 corepack enable
 pnpm install
 pnpm blot check examples/tour.blot
+pnpm blot lint --check examples/arithmetic.blot
 pnpm blot build examples/compiled.blot
 pnpm blot ast examples/minimal.blot
 pnpm blot dev case-studies/engine/browser.blot.json

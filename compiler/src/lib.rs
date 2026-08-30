@@ -1,3 +1,4 @@
+mod artifact_limits;
 mod ast;
 mod backend;
 mod cst;
@@ -15,6 +16,9 @@ mod partition;
 mod predicate_refinement;
 mod primitives;
 mod protocol;
+pub mod qcore;
+pub mod qcore_generated;
+pub mod qcore_typing;
 mod rebinding;
 mod recognise;
 mod relational;
@@ -725,6 +729,7 @@ pub unsafe extern "C" fn compile_compiler_session_development_program(
     configuration_pointer: *const i32,
     configuration_unit_count: u32,
 ) -> u32 {
+    DEVELOPMENT_PROGRAM.with(|slot| slot.borrow_mut().take());
     let path_words = unsafe { std::slice::from_raw_parts(path_pointer, path_unit_count as usize) };
     let configuration_words = unsafe {
         std::slice::from_raw_parts(configuration_pointer, configuration_unit_count as usize)
@@ -779,18 +784,26 @@ pub unsafe extern "C" fn compile_compiler_session_development_program(
                     serde_json::json!({
                         "name": unit.name,
                         "root": unit.root,
-                        "capabilities": unit.compiled.capabilities,
+                        "capabilities": unit.artifact.capabilities(),
                         "implementationKey": unit.implementation_key,
-                        "artifactSource": if unit.reused { "unit-cache" } else { "compiled" },
+                        "artifactSource": unit.artifact.artifact_source(),
                     })
                 })
                 .collect::<Vec<_>>();
             let result = serde_json::json!({
                 "ok": true,
+                "transactionId": program.transaction_id,
                 "entryUnit": program.entry_unit,
                 "units": units,
                 "edges": program.edges,
             });
+            #[cfg(feature = "development-profile")]
+            let result = {
+                let mut result = result;
+                result["developmentProfile"] = serde_json::to_value(&program.memory_profile)
+                    .expect("development memory profile serialization failed");
+                result
+            };
             DEVELOPMENT_PROGRAM.with(|slot| *slot.borrow_mut() = Some(program));
             result
         }
@@ -809,12 +822,35 @@ pub unsafe extern "C" fn compile_compiler_session_development_program(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn commit_compiler_session_development_program(
+    handle: u32,
+    transaction_id: u32,
+) -> i32 {
+    let Ok(index) = session_index(handle) else {
+        return 1;
+    };
+    let committed = SESSIONS.with(|sessions| {
+        let sessions = sessions.borrow();
+        let Some(session) = sessions.get(index).and_then(Option::as_ref) else {
+            return false;
+        };
+        session.commit_development_program(transaction_id).is_ok()
+    });
+    if !committed {
+        return 1;
+    }
+    DEVELOPMENT_PROGRAM.with(|slot| slot.borrow_mut().take());
+    0
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn development_unit_wasm_pointer(index: u32) -> *const u8 {
     DEVELOPMENT_PROGRAM.with(|slot| {
         slot.borrow()
             .as_ref()
             .and_then(|program| program.units.get(index as usize))
-            .map_or(std::ptr::null(), |unit| unit.compiled.wasm.as_ptr())
+            .and_then(|unit| unit.artifact.compiled())
+            .map_or(std::ptr::null(), |compiled| compiled.wasm.as_ptr())
     })
 }
 
@@ -824,7 +860,8 @@ pub extern "C" fn development_unit_wasm_length(index: u32) -> u32 {
         slot.borrow()
             .as_ref()
             .and_then(|program| program.units.get(index as usize))
-            .map_or(0, |unit| unit.compiled.wasm.len() as u32)
+            .and_then(|unit| unit.artifact.compiled())
+            .map_or(0, |compiled| compiled.wasm.len() as u32)
     })
 }
 
@@ -834,7 +871,8 @@ pub extern "C" fn development_unit_manifest_pointer(index: u32) -> *const u8 {
         slot.borrow()
             .as_ref()
             .and_then(|program| program.units.get(index as usize))
-            .map_or(std::ptr::null(), |unit| unit.compiled.manifest.as_ptr())
+            .and_then(|unit| unit.artifact.compiled())
+            .map_or(std::ptr::null(), |compiled| compiled.manifest.as_ptr())
     })
 }
 
@@ -844,7 +882,8 @@ pub extern "C" fn development_unit_manifest_length(index: u32) -> u32 {
         slot.borrow()
             .as_ref()
             .and_then(|program| program.units.get(index as usize))
-            .map_or(0, |unit| unit.compiled.manifest.len() as u32)
+            .and_then(|unit| unit.artifact.compiled())
+            .map_or(0, |compiled| compiled.manifest.len() as u32)
     })
 }
 
@@ -971,4 +1010,35 @@ fn write_result(result: Vec<u8>) -> u32 {
         .expect("lower result mutex was poisoned");
     *bytes = result;
     bytes.len() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reused_development_units_expose_no_artifact_byte_ranges() {
+        DEVELOPMENT_PROGRAM.with(|slot| {
+            *slot.borrow_mut() = Some(development::CompiledDevelopmentProgram {
+                transaction_id: 1,
+                entry_unit: "game".to_owned(),
+                units: vec![development::DevelopmentCompilationUnit {
+                    name: "game".to_owned(),
+                    root: "game.blot".to_owned(),
+                    artifact: development::DevelopmentUnitArtifact::Reused {
+                        capabilities: Vec::new(),
+                    },
+                    implementation_key: "test-identity".to_owned(),
+                }],
+                edges: Vec::new(),
+                #[cfg(feature = "development-profile")]
+                memory_profile: development::DevelopmentMemoryProfile::start(),
+            });
+        });
+
+        assert!(development_unit_wasm_pointer(0).is_null());
+        assert_eq!(development_unit_wasm_length(0), 0);
+        assert!(development_unit_manifest_pointer(0).is_null());
+        assert_eq!(development_unit_manifest_length(0), 0);
+    }
 }

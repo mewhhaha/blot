@@ -206,7 +206,8 @@ export async function runLanguageServer(
             cancelled,
             params.textDocument.uri,
           );
-          service.close(params.textDocument.uri);
+          await workTail;
+          await service.close(params.textDocument.uri);
           await notify(writer, "textDocument/publishDiagnostics", {
             uri: params.textDocument.uri,
             diagnostics: [],

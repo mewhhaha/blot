@@ -92,7 +92,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 4. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 5. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -101,9 +101,17 @@ generic graph-delta payload. The decoder validates the complete frame before
 mutation, rejects unknown identities and trailing bytes, and reconstructs UTF-16
 source offsets during decoding. Compact success summaries avoid JSON on the
 check hot path; diagnostic and requested analysis payloads retain their
-classified content. ABI 4 adds development-program compilation and indexed
-transport of its unit Wasm and manifest bytes. The graph-delta frame remains
-schema 3.
+classified content. ABI 5 prepares development-program artifacts under a
+transaction identity, exposes indexed Wasm and manifest bytes until the next
+transport call, and commits the resident artifact cache only through the
+matching commit operation. The graph-delta frame remains schema 3.
+
+[`compiler/protocol.json`](../compiler/protocol.json) is the version authority
+for the compiler-host ABI, checked-module certificate, module snapshot, value
+capsule, and Runtime HIR. The module-snapshot and value-capsule versions
+describe nested compiler artifacts. They change independently from the public
+ABI, compiler-host ABI, certificate, and Runtime-HIR versions unless a
+representation change crosses one of those separate boundaries.
 
 ## 3. Pass graph
 
@@ -124,6 +132,24 @@ source bytes
   -> public-layout construction
   -> WebAssembly and manifest
 ```
+
+QCore is a non-authoritative shadow artifact beside this graph:
+
+```text
+checked-module certificate + matching AST, or sealed boundary + source origin
+  -> QCore v3 shadow projection
+  -> shadow-only structural validation
+  -> ValidatedQModule
+```
+
+No production pass invokes or consumes that projection. Focused tests use it to
+show that the existing closed structural type/effect certificate has a lossless
+QCore representation with real source origins. Its kernel checks the schema,
+arena references, scopes, canonical labels and effect rows, structural ranges,
+and interval grades specified in [`QCORE.md`](QCORE.md). The separate pure
+typing shadow admits none of the projected structural forms. Validation proves
+no typing fact and cannot replace, weaken, or authorize any arrow in the
+production graph.
 
 Every pass has:
 
@@ -547,11 +573,52 @@ metadata are reconstructed in the receiving session. Nullary modules are then
 evaluated in staging; parameterized modules remain unevaluated until an import
 supplies their argument.
 
+The snapshot boundary scans raw MessagePack iteratively before recursive serde
+deserialization. It admits at most 32 MiB of bytes, 128 nested levels, 1,048,576
+structural nodes, and 64 MiB of estimated allocation using protocol-fixed
+weights that agree on native and Wasm hosts. It accepts exactly one complete
+root, checks all marker and collection lengths with overflow-safe arithmetic,
+and refuses trailing values and the reserved marker. After decoding, the
+portable AST and checked type certificate receive a separate protocol-fixed
+logical graph preflight. Every AST arena node and flat-type root-to-leaf path is
+limited to 128 reference edges, and expanding duplicate references may visit at
+most 1,048,576 nodes. The AST also sums that expansion across its parameter,
+declaration, and result roots; the certificate sums its result, effects,
+parameter, expression-type, and closure-signature roots. Snapshot and portable-
+AST export run the same admission, so the compiler cannot publish an artifact
+its installer refuses. The decoded schema-4 value capsule reapplies the logical
+depth, node, and allocation budget before recursive value, environment,
+effect-scope, or application work; its flat identity graphs are then checked
+iteratively for missing edges, cycles, and their separate bounds: a 1,024-edge
+environment-reference path or a 128-edge effect-scope path. Export runs the same
+raw MessagePack preflight after serialization. If only the optional environment
+fails, export serializes and preflights the capsule-less AST and certificate
+once more. A trusted input that fails any of these checks is a corrupt or
+unacceptable distribution and snapshot installation remains transactional. A
+source-derived environment that exceeds the capsule budget merely makes the
+optional compile-time environment cache ineligible: the AST and certificate
+remain complete and replay supplies the environment without a source diagnostic.
+
 The validated environment may also serve as a revision-keyed module-result
 template. A nullary import decodes it over that written occurrence's complete
 module-instance and effect-scope prefixes and evaluates only the result
-expression. The resulting closures are occurrence-local; the template is never a
-directly shared closure-bearing module result.
+expression. Reconstruction requires the existing provenance depth/node admission
+and a deterministic allocation estimate no greater than 64 MiB. That estimate
+includes the capsule's base allocation, the caller module-instance prefix copied
+per stored closure and identity key, and the caller effect-scope prefix copied
+per non-empty stored scope. On a cache miss, the structural fold produces a
+short-lived reconstruction-admission fact that borrows that exact capsule and
+records that its caller-prefix allocation fits. Only that fact may enter the
+decoder after structural validation without repeating the fold; it cannot be
+stored, paired with another capsule, or outlive the borrowed capsule. The decode
+continuation still validates environment and effect-scope graphs, closure and
+recursive-group provenance, and every referenced source identity before
+reconstruction. Excessive provenance or caller-prefix allocation replays
+declarations without decoding the optional template. Failure to validate the
+installed capsule itself remains an invariant failure rather than replay. The
+fact does not participate in cache identity. The resulting closures are
+occurrence-local; the template is never a directly shared closure-bearing module
+result.
 
 A cache hit and fresh compilation produce equivalent results; only work changes.
 
@@ -572,28 +639,68 @@ the boundary. Each link carries one closed first-order signature derived from
 the checker facts. The splitter does not infer a replacement signature from
 backend layout.
 
-For development unit `U`, the implementation key contains the complete
+For development unit `U`, the compiler deterministically serializes the complete
 normalized Runtime-HIR module for `U`, including link signatures, link targets,
 capabilities, and exports within one resident compiler and target-policy
-session. The interface key is the canonical ABI manifest bytes. Reuse requires
-both the configured root identity and an equal implementation key. Consequently,
-an implementation-only provider edit can reuse its consumers, while a changed
-link signature changes and rebuilds every direct consumer. Reverse invalidation
-continues only after publication of a changed checked-module boundary.
+session. The implementation key reported to the host is a fixed-size digest of
+that serialization, but the resident artifact cache retains the serialization
+and requires byte-for-byte equality in addition to an equal digest and
+configured root identity. A digest collision therefore cannot authorize resident
+artifact-cache reuse. The interface key is the canonical ABI manifest bytes.
+Consequently, an implementation-only provider edit can reuse its consumers,
+while a changed link signature changes and rebuilds every direct consumer.
+Reverse invalidation continues only after publication of a changed
+checked-module boundary.
 
 The development compiler returns every current unit identity plus whether its
-emitted artifact was reused. The host compares interface and implementation keys
-with the previous successful build to publish changed, retained, and removed
-sets. It must not publish a partial build after any checking, splitting,
-validation, or emission failure. Release compilation does not consume these unit
-artifacts and retains the whole-program cache and artifact contract.
+emitted artifact was reused. A reused-unit response contains its capabilities
+and identities but no duplicate Wasm or manifest bytes; the corresponding ABI
+byte accessors return null pointers and zero lengths. The unchanged
+`artifactSource` discriminator tells the host to retain its previous artifact.
+Only a `unit-cache` response proves equality with the resident artifact's full
+Runtime-HIR serialization. A `compiled` response is changed even if its reported
+fixed-size key collides with the prior key. The host also retains a SHA-256 of
+the emitted Wasm, checks that digest before activation, and includes it in the
+development revision. The interface identity commits the canonical ABI manifest
+and therefore every development link. Activation rederives the canonical edge
+set from the final unit manifests, requires every provider to be present, and
+requires exact agreement with the reported edges. Each link must resolve to
+exactly one provider runtime export with the same closed ABI signature before a
+host import callback or instantiation runs. The provider's compiled Wasm module
+must contain function exports under that runtime export name and any post-return
+name declared by the manifest. Wasm reflection establishes only the export name
+and kind; the canonical manifest remains authoritative for the closed logical
+signature. The revision does not hash a second edge encoding. It parses every
+changed and retained unit identity before activation. Host artifacts are staged
+separately and replace the resident artifact set only after every unit has been
+validated and the development revision digest has been computed, so a failure
+leaves the prior set intact. It must not publish a partial build after any
+checking, splitting, validation, or emission failure. Release compilation does
+not consume these unit artifacts and retains the whole-program cache and
+artifact contract.
 
-The reference development benchmark is a 5 MiB, 20-unit reachable project with
-one currently demanded gameplay unit. It edits that unit without changing its
-interface, notifies the resident graph of the known path change, performs 20
-warm rebuilds, requires exactly that unit to change, and requires wall-clock p95
-below 100 ms on the project reference machine. This benchmark is a named
-development-mode boundary; it does not claim the same latency when an edit
+Rust artifact reuse follows a two-phase protocol. Preparation reads only the
+committed artifact map and stages compiled replacements with the exact active
+cache keys under a fresh transaction identity. Starting another preparation
+abandons that candidate, including when the later preparation fails. The host
+copies and validates every returned byte range, hashes the manifest and Wasm,
+and computes the canonical revision before synchronously committing the current
+identity. Commit atomically applies replacements and exact-key pruning. A stale,
+duplicate, or absent identity is an invariant failure and cannot mutate the
+committed map. The host replaces its private identity map only after Rust
+accepts the commit. Public compiled arrays and capabilities do not alias either
+private map; cache-hit responses remain byte-free.
+
+The reference development benchmark is a 5 MiB, 20-unit project whose entry
+calls every unit. Catalog source is distributed across 18 unchanged content
+units, while the edited gameplay provider stays small. The edit preserves its
+interface, notifies the resident graph of the known path change, and performs 20
+warm rebuilds. Exactly that provider must change. On the project reference
+machine, wall-clock p95 from file edit through committed runtime activation must
+remain below 100 ms. Maximum resident-memory growth after initial activation
+must remain below 128 MiB across the 20 edits, so the benchmark rejects a reload
+path that retains one compiler working set per revision. This benchmark is a
+named development-mode boundary; it does not claim the same latency when an edit
 changes the demanded graph or a public unit interface.
 
 ## 16. Artifact production
@@ -615,7 +722,9 @@ contract. It does not silently become source authority.
 
 The packaged compiler's stack, memory, and evaluator limits are implementation
 budgets. They do not alter emitted-program memory or prove negative source
-judgments when exhausted.
+judgments when exhausted. In particular, exhausting the optional value-capsule
+publication budget omits that cache rather than producing a limit diagnostic;
+exceeding the trusted snapshot boundary is an artifact/distribution refusal.
 
 ## 17. Pass correctness
 

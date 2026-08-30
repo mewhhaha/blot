@@ -13,6 +13,13 @@ import { buildPackage } from "./package.ts";
 import { Compiler } from "./compiler.ts";
 import { DevelopmentProject } from "./development.ts";
 import { formatSource } from "./tooling/formatter.ts";
+import {
+  fixLintSource,
+  type LintedSource,
+  type LintMode,
+  lintSource,
+  parseLintArguments,
+} from "./tooling/lint_command.ts";
 import { runLanguageServer } from "./lsp.ts";
 
 const [command, ...rest] = Deno.args;
@@ -56,6 +63,13 @@ if (command === "build") {
   failures += await buildPackages(rest);
 } else if (command === "fmt") {
   failures += await formatFiles(rest);
+} else if (command === "lint") {
+  const invocation = parseLintArguments(rest);
+  if (!invocation.ok) {
+    console.error(invocation.message);
+    Deno.exit(2);
+  }
+  failures += await lintFiles(invocation.mode, invocation.paths);
 } else {
   for (const path of rest) {
     try {
@@ -98,7 +112,7 @@ type BuiltFileArtifact = {
 
 function printUsage(): void {
   console.error(
-    "usage: blot <check|test|eval|ast|ownership|fmt> <path>...",
+    "usage: blot <check|test|eval|ast|ownership|fmt|lint|build> <path>...",
   );
   console.error(
     "       check, test, eval, ownership, build, and package use Rust/Wasm;",
@@ -107,10 +121,72 @@ function printUsage(): void {
     "       ast and fmt use Baba syntax only.",
   );
   console.error("       blot fmt [--check] <file.blot>...");
+  console.error("       blot lint [--check|--fix] <file.blot>...");
   console.error("       blot build <file.blot>...");
   console.error("       blot package <blot.json>...");
   console.error("       blot dev <blot.json>");
   console.error("       blot lsp");
+}
+
+async function lintFiles(
+  mode: LintMode,
+  paths: readonly string[],
+): Promise<number> {
+  const analysisCompiler = await Compiler.create();
+  let failures = 0;
+  try {
+    const validationCompiler = await Compiler.create();
+    try {
+      const lintCompilers = {
+        analysis: analysisCompiler,
+        validation: validationCompiler,
+      };
+      for (const path of paths) {
+        try {
+          const source = await Deno.readTextFile(path);
+          let linted: LintedSource;
+          if (mode === "fix") {
+            linted = await fixLintSource(
+              lintCompilers,
+              path,
+              source,
+            );
+            if (linted.source !== source) {
+              await Deno.writeTextFile(path, linted.source);
+            }
+            if (linted.appliedFixes > 0) {
+              let noun = "fixes";
+              if (linted.appliedFixes === 1) noun = "fix";
+              console.log(`${path}: applied ${linted.appliedFixes} ${noun}`);
+            }
+          } else {
+            linted = await lintSource(
+              lintCompilers,
+              path,
+              source,
+            );
+          }
+          for (const diagnostic of linted.diagnostics) {
+            console.error(render(path, linted.source, diagnostic));
+          }
+          if (
+            linted.diagnostics.length > 0 &&
+            (mode === "check" || mode === "fix")
+          ) {
+            failures += 1;
+          }
+        } catch (error) {
+          failures += 1;
+          report(path, error);
+        }
+      }
+    } finally {
+      validationCompiler.destroy();
+    }
+  } finally {
+    analysisCompiler.destroy();
+  }
+  return failures;
 }
 
 async function watchDevelopmentProject(manifestPath: string): Promise<void> {
@@ -153,17 +229,23 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
 async function reportDevelopmentBuild(
   project: DevelopmentProject,
 ): Promise<void> {
-  const build = await project.build();
-  const changed = build.changedUnits.map((unit) => unit.name).join(", ");
-  const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
-  const removed = build.removedUnits.join(", ");
-  console.log(
-    `${
-      build.revision.slice(0, 12)
-    }: changed [${changed}], retained [${retained}], removed [${removed}], ${
-      build.durationMilliseconds.toFixed(1)
-    } ms`,
-  );
+  const build = await project.prepareBuild();
+  try {
+    const changed = build.changedUnits.map((unit) => unit.name).join(", ");
+    const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
+    const removed = build.removedUnits.join(", ");
+    console.log(
+      `${
+        build.revision.slice(0, 12)
+      }: changed [${changed}], retained [${retained}], removed [${removed}], ${
+        build.durationMilliseconds.toFixed(1)
+      } ms`,
+    );
+  } catch (error) {
+    project.abortBuild(build);
+    throw error;
+  }
+  project.commitBuild(build);
 }
 
 async function formatFiles(arguments_: readonly string[]): Promise<number> {

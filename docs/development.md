@@ -62,9 +62,18 @@ the watcher alive. Changing the manifest creates a fresh project session only
 after the replacement project builds successfully.
 
 Known filesystem changes take the incremental path. An embedding host should
-call `markChanged(path)` before `build()` when it already knows which files a
-watch event touched. Editor integrations may use `setOverlay` and `clearOverlay`
-instead.
+call `markChanged(path)` before `prepareBuild()` or `activate(runtime)` when it
+already knows which files a watch event touched. Editor integrations may use
+`setOverlay` instead. Roots and overlays have separate lifetimes, so closing an
+editor document releases both in that order:
+
+```ts
+await project.releaseRoot(path);
+await project.clearOverlay(path);
+```
+
+Releasing first also permits a diskless, unsaved document to close without a
+filesystem read.
 
 ## Activating builds
 
@@ -78,8 +87,7 @@ const project = await DevelopmentProject.create("./blot.json");
 const runtime = new DevelopmentRuntime();
 
 try {
-  const build = await project.build();
-  await runtime.activate(build);
+  const build = await project.activate(runtime);
 
   const run = runtime.entryInstance.exports["blot:default"];
   if (typeof run !== "function") {
@@ -109,12 +117,73 @@ const runtime = new DevelopmentRuntime(({ unit, memory }) => ({
 Do not call `memory()` while the unit is being instantiated. The instance does
 not exist until instantiation finishes.
 
-Activation validates the full build delta, manifest digest, embedded ABI
-manifest, link signatures, and unit classifications before replacing live
-instances. It instantiates every changed unit first and commits the replacement
-only when every candidate succeeds. Changed units receive fresh memory and
-module state. Retained units keep their existing instances. Removed units leave
-the runtime at the same commit point.
+`project.activate(runtime)` is the publication boundary. It prepares a project
+build, validates the full delta, checks the manifest and Wasm digests, compiles
+and instantiates every changed unit, and only then publishes the project and
+runtime candidates synchronously. The project's committed unit baseline and the
+runtime's revision and instances remain unchanged during preparation. A failed
+validation, host import callback, compilation, or instantiation aborts both
+candidates, so the same edit can be retried against the previous committed
+state.
+
+The project keeps newly compiled bytes in a private artifact reservoir when a
+candidate aborts. A retry may therefore resolve an identity-only compiler cache
+hit without treating that artifact as committed. Changed and retained
+classification always compares against the last committed project baseline. The
+lower compiler-host call has its own narrower transaction: Rust stages unit
+artifact-cache replacements while Node copies and hashes the result, then Node
+commits that cache before returning the prepared project build. If copying,
+identity validation, or hashing fails, Rust retains its former committed map and
+the next call recompiles the abandoned replacements. Caller-visible buffers and
+capability arrays do not alias either private cache.
+
+The runtime copies the complete external build transition before its first
+asynchronous step. It hashes and compiles those private bytes, then recomputes
+the canonical revision from the entry unit and the final units' interface,
+implementation, and Wasm identities. Mutating a caller-owned artifact while a
+candidate is preparing cannot change what eventually commits.
+
+Development edges are derivable from the final units' ABI manifests. The runtime
+derives them again, requires every linked provider to be present, and requires
+exact agreement with the reported edge set. The revision does not hash the edge
+list separately because each interface digest already commits to its unit's
+manifest and links. Before requesting host imports, the runtime also requires
+the compiled provider module to export a function under each linked manifest
+name and each declared post-return name. The manifest remains the authority for
+the logical function signature because JavaScript's Wasm reflection exposes
+export names and kinds, not function types.
+
+Changed units receive fresh memory and module state. Retained units keep their
+existing instances. Removed units leave the runtime at the same commit point.
+The host import callback runs during preparation and may run again after an
+aborted candidate, so external work performed by that callback must tolerate a
+retry.
+
+A project and runtime each permit one candidate at a time. Source mutations,
+another preparation, and project destruction are rejected while a build is
+preparing or pending. `commitBuild`, `abortBuild`, `commitActivation`, and
+`abortActivation` accept only the exact pending candidate from their owner and
+reject stale, copied, or already consumed candidates.
+
+A build-only host prepares its report before publishing the compiler baseline:
+
+```ts
+const build = await project.prepareBuild();
+try {
+  await publishBuildReport(build);
+} catch (error) {
+  project.abortBuild(build);
+  throw error;
+}
+project.commitBuild(build);
+```
+
+A host that needs to coordinate another reversible resource can use
+`runtime.prepareActivation(build)` directly. It must abort both candidates if
+any later preparation fails, then call `project.commitBuild(build)` and
+`runtime.commitActivation(activation)` without an `await` or other fallible host
+work between them. The runtime does not expose candidate instances before
+commit.
 
 Values crossing a development link are copied between unit memories. The
 supported boundary is the closed first-order ABI subset: unit, integers, floats,
@@ -141,8 +210,14 @@ warm rebuilds:
 pnpm benchmark:development
 ```
 
-The benchmark requires exactly one changed unit and a p95 below 100 ms on the
-reference machine. It does not claim the same latency for interface changes or
-newly demanded subsystems. See
+The benchmark requires exactly one changed unit, a p95 below 100 ms, and less
+than 128 MiB of resident-memory growth after initial activation on the reference
+machine. It does not claim the same latency for interface changes or newly
+demanded subsystems. See
 [`experiments/development-bench/README.md`](../experiments/development-bench/README.md)
 for the exact workload.
+
+A compiler built with the `development-profile` feature also returns
+`DevelopmentBuild.developmentProfile`. Its checkpoints report compiler Wasm
+pages and solver arena counts for benchmark diagnosis. Production compiler
+artifacts leave this field `undefined`.

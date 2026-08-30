@@ -1,6 +1,8 @@
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 
+use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Span {
     pub start: u32,
@@ -328,6 +330,8 @@ impl Module {
         let pattern_offset = expression_count;
         let declaration_offset = expression_count + pattern_count;
         let mut edges = vec![Vec::new(); declaration_offset + declaration_count];
+        let mut roots =
+            Vec::with_capacity(usize::from(self.parameter.is_some()) + self.declarations.len() + 1);
 
         let expression_index = |id: ExpressionId, location: &str| {
             let index = id.0 as usize;
@@ -361,12 +365,15 @@ impl Module {
         };
 
         if let Some(parameter) = self.parameter {
-            pattern_index(parameter, "module parameter")?;
+            roots.push(pattern_index(parameter, "module parameter")?);
         }
         for (ordinal, declaration) in self.declarations.iter().enumerate() {
-            declaration_index(*declaration, &format!("module declaration {ordinal}"))?;
+            roots.push(declaration_index(
+                *declaration,
+                &format!("module declaration {ordinal}"),
+            )?);
         }
-        expression_index(self.result, "module result")?;
+        roots.push(expression_index(self.result, "module result")?);
         for (index, expression) in self.arena.expressions.iter().enumerate() {
             let location = format!("expression {index}");
             validate_span(
@@ -522,6 +529,9 @@ impl Module {
         }
 
         let mut states = vec![0_u8; edges.len()];
+        let mut reference_depths = vec![0_usize; edges.len()];
+        let mut expanded_references = vec![0_u64; edges.len()];
+        let expanded_overflow = ARTIFACT_EXPANDED_REFERENCE_LIMIT + 1;
         for root in 0..edges.len() {
             if states[root] != 0 {
                 continue;
@@ -529,6 +539,26 @@ impl Module {
             let mut stack = vec![(root, false)];
             while let Some((node, exiting)) = stack.pop() {
                 if exiting {
+                    let mut depth = 0_usize;
+                    let mut expanded = 1_u64;
+                    for target in &edges[node] {
+                        depth = depth.max(reference_depths[*target].saturating_add(1));
+                        expanded = expanded
+                            .saturating_add(expanded_references[*target])
+                            .min(expanded_overflow);
+                    }
+                    if depth > ARTIFACT_REFERENCE_PATH_LIMIT {
+                        return Err(format!(
+                            "portable AST arena node {node} has reference-path depth {depth}, maximum is {ARTIFACT_REFERENCE_PATH_LIMIT}"
+                        ));
+                    }
+                    if expanded > ARTIFACT_EXPANDED_REFERENCE_LIMIT {
+                        return Err(format!(
+                            "portable AST arena node {node} expands to at least {expanded} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
+                        ));
+                    }
+                    reference_depths[node] = depth;
+                    expanded_references[node] = expanded;
                     states[node] = 2;
                     continue;
                 }
@@ -552,6 +582,17 @@ impl Module {
                         stack.push((*target, false));
                     }
                 }
+            }
+        }
+        let mut expanded_roots = 0_u64;
+        for root in roots {
+            expanded_roots = expanded_roots
+                .saturating_add(expanded_references[root])
+                .min(expanded_overflow);
+            if expanded_roots > ARTIFACT_EXPANDED_REFERENCE_LIMIT {
+                return Err(format!(
+                    "portable AST roots expand to at least {expanded_roots} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
+                ));
             }
         }
         Ok(())
@@ -582,7 +623,51 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::Module;
+    use super::{ArrayElement, AstArena, Expression, Module, ResultEffects, Span};
+    use crate::artifact_limits::ARTIFACT_REFERENCE_PATH_LIMIT;
+
+    fn nested_array_module(depth: usize) -> Module {
+        let span = Span { start: 0, end: 0 };
+        let mut arena = AstArena::default();
+        let mut result = arena.expression(Expression::Unit { span });
+        for _ in 0..depth {
+            result = arena.expression(Expression::Array {
+                elements: vec![ArrayElement {
+                    spread: false,
+                    value: result,
+                }],
+                span,
+            });
+        }
+        Module {
+            parameter: None,
+            declarations: Vec::new(),
+            result,
+            result_effects: ResultEffects::Pure,
+            span,
+            arena,
+        }
+    }
+
+    fn duplicating_tuple_module(depth: usize) -> Module {
+        let span = Span { start: 0, end: 0 };
+        let mut arena = AstArena::default();
+        let mut result = arena.expression(Expression::Unit { span });
+        for _ in 0..depth {
+            result = arena.expression(Expression::Tuple {
+                elements: vec![result, result],
+                span,
+            });
+        }
+        Module {
+            parameter: None,
+            declarations: Vec::new(),
+            result,
+            result_effects: ResultEffects::Pure,
+            span,
+            arena,
+        }
+    }
 
     #[test]
     fn portable_ast_accepts_a_valid_integer_module() {
@@ -631,5 +716,52 @@ mod tests {
             module.validate(),
             Err("portable AST contains a cycle from arena node 0 to 0".to_owned())
         );
+    }
+
+    #[test]
+    fn portable_ast_accepts_the_reference_path_limit_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                assert_eq!(
+                    nested_array_module(ARTIFACT_REFERENCE_PATH_LIMIT).validate(),
+                    Ok(())
+                );
+            })
+            .expect("small-stack AST validation thread must start")
+            .join()
+            .expect("AST validation at the reference-path limit must not overflow");
+    }
+
+    #[test]
+    fn portable_ast_rejects_a_reference_path_over_the_limit_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let error = nested_array_module(ARTIFACT_REFERENCE_PATH_LIMIT + 1)
+                    .validate()
+                    .expect_err("an over-limit reference path must be refused");
+                assert!(error.contains("reference-path depth 129, maximum is 128"));
+            })
+            .expect("small-stack AST validation thread must start")
+            .join()
+            .expect("over-limit AST validation must not overflow");
+    }
+
+    #[test]
+    fn portable_ast_rejects_a_shallow_expansion_bomb_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let error = duplicating_tuple_module(20)
+                    .validate()
+                    .expect_err("an over-budget expanded DAG must be refused");
+                assert!(
+                    error.contains("expands to at least 1048577 references, maximum is 1048576")
+                );
+            })
+            .expect("small-stack AST validation thread must start")
+            .join()
+            .expect("expanded-reference AST validation must not overflow");
     }
 }
