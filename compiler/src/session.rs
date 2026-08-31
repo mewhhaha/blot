@@ -8088,6 +8088,83 @@ mod tests {
     }
 
     #[test]
+    fn an_unbounded_frame_loop_with_simd_state_emits_a_residual_back_edge() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const Host = @effect.host {\n",
+                        "  .frame = Unit -> Int;\n",
+                        "}\n",
+                        "let position = F32x4.splat (F32.of_int 1)\n",
+                        "for ever:\n",
+                        "  use remaining <- Host.frame ()\n",
+                        "  if remaining <= 0:\n",
+                        "    break\n",
+                        "\n",
+                        "  position := F32x4.add position (F32x4.splat (F32.of_int 1))\n",
+                        "return F32.truncate (F32x4.x position)\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let frame_loop = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .find(|function| {
+                    let entry = function["entryBlock"]
+                        .as_u64()
+                        .expect("runtime function entry block");
+                    let blocks = function["blocks"].as_array().expect("runtime blocks");
+                    let reads_frame = blocks.iter().any(|block| {
+                        block["operations"]
+                            .as_array()
+                            .expect("runtime operations")
+                            .iter()
+                            .any(|operation| {
+                                operation["kind"] == "host.call"
+                                    && operation["capability"] == "Host"
+                                    && operation["operation"] == "frame"
+                            })
+                    });
+                    let returns_to_entry = blocks.iter().any(|block| {
+                        block["terminator"]["kind"] == "branch"
+                            && block["terminator"]["target"] == entry
+                    });
+                    reads_frame && returns_to_entry
+                });
+            assert!(
+                frame_loop.is_some(),
+                "frame loop should compile one residual back edge: {prepared}"
+            );
+            session
+                .compile_module("main.blot")
+                .expect("frame loop should emit Wasm");
+        });
+    }
+
+    #[test]
     fn engine_entry_points_prepare_and_the_game_loop_emits_wasm() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
