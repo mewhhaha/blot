@@ -234,6 +234,17 @@ representations into the closed constructor set already established by surface
 lowering. Dense `integer-32` switches emit `br_table`; other switches emit a
 balanced comparison tree.
 
+A non-reconvergent acyclic function emits as direct structured Wasm without a
+program-counter local or dispatch loop. The same bounded structural expansion
+emits an entry-recursive cycle as one Wasm loop. Switches, non-entry cycles,
+reconvergent control flow, and graphs beyond the fixed expansion budget retain
+the indexed dispatcher; the emitter does not duplicate a shared join to force
+structure.
+
+Every `call.direct` target receives an internal callable Wasm body even when the
+same normalized Runtime-HIR function also backs a public export wrapper. The
+wrapper remains separate because it owns canonical ABI lifting and lowering.
+
 When every predecessor constructs a known member of that closed sum and no other
 reader observes the joined sum, Runtime-HIR simplification may bypass the tag
 switch. Each predecessor branches directly to the matching arm and passes the

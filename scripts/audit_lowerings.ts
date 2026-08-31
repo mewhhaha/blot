@@ -78,6 +78,7 @@ try {
       inspectInterning(runtime, failures);
       inspectStaticStores(runtime, failures);
       inspectDeadOperations(runtime, failures);
+      inspectAdministrativeOperations(runtime, failures);
       inspectLoopGrowth(runtime, failures);
       const report = summarize(source, runtime, artifact.wasm);
       inspectBudget(report, budgets[source], failures);
@@ -165,6 +166,29 @@ function inspectInterning(
       );
     });
   }
+  const firstFunctions = new Map<string, number>();
+  runtime.functions.forEach((runtimeFunction) => {
+    const key = JSON.stringify(
+      {
+        ...runtimeFunction,
+        id: 0,
+        name: "",
+      },
+      (name, value) => {
+        if (name === "span") return undefined;
+        if (typeof value === "bigint") return `\u0000bigint:${value}`;
+        return value;
+      },
+    );
+    const firstId = firstFunctions.get(key);
+    if (firstId === undefined) {
+      firstFunctions.set(key, runtimeFunction.id);
+      return;
+    }
+    failures.push(
+      `${runtime.source}: runtime functions ${firstId} and ${runtimeFunction.id} have identical normalized bodies`,
+    );
+  });
 }
 
 function inspectBudget(
@@ -256,6 +280,7 @@ function isDiscardableOperation(operation: BlotRuntimeOperation): boolean {
     "sum.make",
     "sum.tag",
     "sum.payload",
+    "indirect.load",
     "store.length",
     "seal.wrap",
     "seal.unwrap",
@@ -263,6 +288,105 @@ function isDiscardableOperation(operation: BlotRuntimeOperation): boolean {
     "resource.borrow",
     "resource.freeze",
   ].includes(operation.kind);
+}
+
+function inspectAdministrativeOperations(
+  runtime: BlotRuntimeModule,
+  failures: string[],
+): void {
+  for (const runtimeFunction of runtime.functions) {
+    const blocks = new Map(
+      runtimeFunction.blocks.map((block) => [block.id, block] as const),
+    );
+    const liveValues = new Set<number>();
+    const edges: Array<{
+      readonly target: number;
+      readonly arguments: readonly number[];
+    }> = [];
+    const definitions = new Map<number, BlotRuntimeOperation>();
+    for (const block of runtimeFunction.blocks) {
+      for (const operation of block.operations) {
+        definitions.set(operation.result, operation);
+        operation.operands.forEach((operand) => liveValues.add(operand));
+      }
+      const terminator = block.terminator;
+      if (terminator.kind === "branch") {
+        edges.push({
+          target: terminator.target,
+          arguments: terminator.arguments,
+        });
+      }
+      if (terminator.kind === "conditional") {
+        liveValues.add(terminator.condition);
+        edges.push({
+          target: terminator.consequent,
+          arguments: terminator.consequentArguments,
+        });
+        edges.push({
+          target: terminator.alternate,
+          arguments: terminator.alternateArguments,
+        });
+      }
+      if (terminator.kind === "switch") liveValues.add(terminator.selector);
+      if (terminator.kind === "return") liveValues.add(terminator.value);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of edges) {
+        const target = blocks.get(edge.target);
+        if (target === undefined) {
+          failures.push(
+            `${runtime.source}: ${runtimeFunction.name} targets absent block ${edge.target}`,
+          );
+          continue;
+        }
+        if (target.parameters.length !== edge.arguments.length) continue;
+        target.parameters.forEach((parameter, index) => {
+          const argument = edge.arguments[index];
+          if (argument === undefined || !liveValues.has(parameter.value)) {
+            return;
+          }
+          if (liveValues.has(argument)) return;
+          liveValues.add(argument);
+          changed = true;
+        });
+      }
+    }
+    for (const block of runtimeFunction.blocks) {
+      if (block.id === runtimeFunction.entryBlock) continue;
+      for (const parameter of block.parameters) {
+        if (liveValues.has(parameter.value)) continue;
+        failures.push(
+          `${parameter.span.file}:${parameter.span.start}: unused block parameter ${parameter.value} remains in ${runtimeFunction.name}`,
+        );
+      }
+    }
+    for (const operation of definitions.values()) {
+      const operand = operation.operands[0];
+      if (operand === undefined) continue;
+      const source = definitions.get(operand);
+      if (
+        source !== undefined &&
+        ((operation.kind === "indirect.load" &&
+          source.kind === "indirect.make") ||
+          (operation.kind === "indirect.make" &&
+            source.kind === "indirect.load"))
+      ) {
+        failures.push(
+          `${operation.span.file}:${operation.span.start}: inverse ${source.kind}/${operation.kind} roundtrip remains in ${runtimeFunction.name}`,
+        );
+      }
+      if (
+        operation.kind === "product.project" &&
+        source?.kind === "product.make"
+      ) {
+        failures.push(
+          `${operation.span.file}:${operation.span.start}: product projection of a fresh product remains in ${runtimeFunction.name}`,
+        );
+      }
+    }
+  }
 }
 
 function inspectLoopGrowth(

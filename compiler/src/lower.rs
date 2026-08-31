@@ -5,8 +5,8 @@ use num_bigint::BigInt;
 
 use crate::ast::{
     Arm, ArrayElement, AstArena, Branch, Declaration, DeclarationId, DeclarationKind,
-    DeclarationTag, Expression, ExpressionId, Module, Pattern, PatternId, Qualifier, ResultEffects,
-    ShapeMember, ShapePatternField, Span,
+    DeclarationTag, Expression, ExpressionId, MULTI_CASE_COVERAGE_TAG, Module, Pattern, PatternId,
+    Qualifier, ResultEffects, ShapeMember, ShapePatternField, Span,
 };
 use crate::cst::{CompactCst, Cursor};
 use crate::fixity::{ChainStep, FixityTable, target_expression};
@@ -3127,32 +3127,7 @@ fn lower_case_targets(
 
     let cached = vec![None; subject_names.len()];
     let mut result = lower_multi_case_rows(arms, &subject_names, &cached, span, 0, arena)?;
-    // The executable probes include fall-through wildcards, so each probe is
-    // locally total and cannot close the whole pattern matrix. Inferring this
-    // unused closure first closes that matrix over the same monomorphic subject
-    // parameters without evaluating any subject at runtime.
-    let coverage = multi_case_coverage_witness(arms, &subject_names, &cached, span, arena);
-    let parameter = arena.pattern(Pattern::Unit { span });
-    let coverage = arena.expression(Expression::Lambda {
-        parameter,
-        body: coverage,
-        deferred: false,
-        span,
-    });
-    let pattern = arena.pattern(Pattern::Wildcard { span });
-    let coverage = arena.declaration(Declaration::Binding {
-        kind: DeclarationKind::Let,
-        tags: Vec::new(),
-        pattern,
-        value: coverage,
-        span,
-    });
-    result = arena.expression(Expression::Block {
-        declarations: vec![coverage],
-        result,
-        result_effects: ResultEffects::Ambient,
-        span,
-    });
+    let coverage_targets = targets.clone();
     for (target, name) in targets.into_iter().zip(subject_names).rev() {
         let parameter = arena.pattern(Pattern::Name {
             name,
@@ -3171,6 +3146,31 @@ fn lower_case_targets(
             span,
         });
     }
+    // The executable probes include fall-through wildcards, so each probe is
+    // locally total and cannot close the whole pattern matrix. The outer
+    // function is inferred first, including every subject application. Its
+    // unused closure argument then checks the original subjects as one tuple
+    // without evaluating them at runtime.
+    let coverage = multi_case_coverage_witness(arms, &coverage_targets, span, arena);
+    let parameter = arena.pattern(Pattern::Unit { span });
+    let coverage = arena.expression(Expression::Lambda {
+        parameter,
+        body: coverage,
+        deferred: false,
+        span,
+    });
+    let parameter = arena.pattern(Pattern::Wildcard { span });
+    let function = arena.expression(Expression::Lambda {
+        parameter,
+        body: result,
+        deferred: false,
+        span,
+    });
+    result = arena.expression(Expression::Apply {
+        function,
+        argument: coverage,
+        span,
+    });
     Ok(result)
 }
 
@@ -3355,119 +3355,39 @@ fn lower_multi_case_body(
 
 fn multi_case_coverage_witness(
     rows: &[MultiCaseArm],
-    subject_names: &[String],
-    cached: &[Option<String>],
+    targets: &[ExpressionId],
     span: Span,
     arena: &mut AstArena,
 ) -> ExpressionId {
-    let rows = rows
-        .iter()
-        .filter(|row| row.guard.is_none())
-        .collect::<Vec<_>>();
-    multi_case_coverage_column(&rows, subject_names, cached, span, 0, arena)
-}
-
-fn multi_case_coverage_column(
-    rows: &[&MultiCaseArm],
-    subject_names: &[String],
-    cached: &[Option<String>],
-    span: Span,
-    column: usize,
-    arena: &mut AstArena,
-) -> ExpressionId {
-    if rows.is_empty() {
-        let target = arena.expression(Expression::Unit { span });
-        return arena.expression(Expression::Case {
-            target,
-            arms: Vec::new(),
+    let marker = arena.expression(Expression::Tag {
+        name: MULTI_CASE_COVERAGE_TAG.to_owned(),
+        span,
+    });
+    let mut elements = Vec::with_capacity(targets.len() + 1);
+    elements.push(marker);
+    elements.extend_from_slice(targets);
+    let target = arena.expression(Expression::Tuple { elements, span });
+    let mut arms = Vec::new();
+    for row in rows.iter().filter(|row| row.guard.is_none()) {
+        // The source cannot spell `$`, so this column records which surface
+        // construct owns an otherwise ordinary tuple-coverage diagnostic.
+        let marker = arena.pattern(Pattern::Constructor {
+            name: MULTI_CASE_COVERAGE_TAG.to_owned(),
+            payload: None,
             span,
         });
-    }
-    if column == subject_names.len() {
-        return arena.expression(Expression::Unit { span });
-    }
-
-    let mut groups: Vec<(String, PatternId)> = Vec::new();
-    for row in rows {
-        let pattern = row.patterns[column];
-        let key = pattern_structure_key(pattern, arena);
-        if groups.iter().all(|group| group.0 != key) {
-            groups.push((key, pattern));
-        }
-    }
-    let arms = groups
-        .into_iter()
-        .map(|(key, pattern)| {
-            let accepted = rows
+        let mut elements = Vec::with_capacity(row.patterns.len() + 1);
+        elements.push(marker);
+        elements.extend(
+            row.patterns
                 .iter()
-                .copied()
-                .filter(|row| {
-                    let candidate = pattern_structure_key(row.patterns[column], arena);
-                    candidate == key || candidate == "*"
-                })
-                .collect::<Vec<_>>();
-            let pattern = erase_binders(pattern, arena);
-            let body = multi_case_coverage_column(
-                &accepted,
-                subject_names,
-                cached,
-                span,
-                column + 1,
-                arena,
-            );
-            Arm { pattern, body }
-        })
-        .collect();
-    let target = match &cached[column] {
-        Some(name) => variable(name, span, arena),
-        None => variable(&subject_names[column], span, arena),
-    };
+                .map(|pattern| erase_binders(*pattern, arena)),
+        );
+        let pattern = arena.pattern(Pattern::Tuple { elements, span });
+        let body = arena.expression(Expression::Unit { span });
+        arms.push(Arm { pattern, body });
+    }
     arena.expression(Expression::Case { target, arms, span })
-}
-
-fn pattern_structure_key(pattern: PatternId, arena: &AstArena) -> String {
-    match &arena.patterns[pattern.0 as usize] {
-        Pattern::Name { .. } | Pattern::Wildcard { .. } => "*".to_owned(),
-        Pattern::Pin { name, .. } => format!("pin:{name}"),
-        Pattern::Int { value, .. } => format!("int:{value}"),
-        Pattern::Float { value, .. } => format!("float:{}", value.to_bits()),
-        Pattern::Text { value, .. } => format!("text:{value:?}"),
-        Pattern::Unit { .. } => "unit".to_owned(),
-        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
-            let kind = if matches!(arena.patterns[pattern.0 as usize], Pattern::Tuple { .. }) {
-                "tuple"
-            } else {
-                "array"
-            };
-            let elements = elements
-                .iter()
-                .map(|element| pattern_structure_key(*element, arena))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{kind}:{elements}")
-        }
-        Pattern::Constructor { name, payload, .. } => match payload {
-            Some(payload) => format!(
-                "constructor:{name}({})",
-                pattern_structure_key(*payload, arena)
-            ),
-            None => format!("constructor:{name}"),
-        },
-        Pattern::Shape { fields, .. } => {
-            let fields = fields
-                .iter()
-                .map(|field| {
-                    format!(
-                        "{}:{}",
-                        field.name,
-                        pattern_structure_key(field.pattern, arena)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("shape:{fields}")
-        }
-    }
 }
 
 fn compiler_panic(message: &str, span: Span, arena: &mut AstArena) -> ExpressionId {

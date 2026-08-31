@@ -11,8 +11,8 @@ thread_local! {
 
 use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
 use crate::ast::{
-    Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
-    PatternId, Qualifier, ShapeMember, Span,
+    Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, MULTI_CASE_COVERAGE_TAG,
+    Module, Pattern, PatternId, Qualifier, ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
@@ -1112,9 +1112,21 @@ fn validate_flat_type_reference_budget(
     types: &[FlatTypeNode],
     roots: impl IntoIterator<Item = FlatTypeId>,
 ) -> Result<(), String> {
+    validate_named_flat_type_reference_budget(
+        artifact,
+        types,
+        roots.into_iter().map(|root| (None, root)),
+    )
+}
+
+fn validate_named_flat_type_reference_budget(
+    artifact: &str,
+    types: &[FlatTypeNode],
+    roots: impl IntoIterator<Item = (Option<String>, FlatTypeId)>,
+) -> Result<(), String> {
     let roots = roots.into_iter().collect::<Vec<_>>();
     let mut reachable = vec![false; types.len()];
-    let mut pending = roots.clone();
+    let mut pending = roots.iter().map(|(_, root)| *root).collect::<Vec<_>>();
     let mut children = Vec::new();
     while let Some(type_) = pending.pop() {
         let index = type_.0 as usize;
@@ -1161,12 +1173,13 @@ fn validate_flat_type_reference_budget(
     }
 
     let mut expanded_roots = 0_u64;
-    for root in roots {
+    for (name, root) in roots {
         let index = root.0 as usize;
         let depth = reference_depths[index];
+        let prefix = name.map(|name| format!("{name}: ")).unwrap_or_default();
         if depth > ARTIFACT_REFERENCE_PATH_LIMIT {
             return Err(format!(
-                "{artifact} root type {index} has reference-path depth {depth}, maximum is {ARTIFACT_REFERENCE_PATH_LIMIT}"
+                "{prefix}{artifact} root type {index} has reference-path depth {depth}, maximum is {ARTIFACT_REFERENCE_PATH_LIMIT}"
             ));
         }
         expanded_roots = expanded_roots
@@ -1174,7 +1187,7 @@ fn validate_flat_type_reference_budget(
             .min(expanded_overflow);
         if expanded_roots > ARTIFACT_EXPANDED_REFERENCE_LIMIT {
             return Err(format!(
-                "{artifact} roots expand to at least {expanded_roots} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
+                "{prefix}{artifact} roots expand to at least {expanded_roots} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
             ));
         }
     }
@@ -1342,16 +1355,29 @@ impl CachedModuleInterface {
     }
 
     fn validate_type_budget(&self) -> Result<(), String> {
-        validate_flat_type_reference_budget(
+        let mut named_roots = vec![
+            ("module result".to_owned(), self.result),
+            ("module effects".to_owned(), self.effects),
+        ];
+        if let Some(parameter) = self.parameter {
+            named_roots.push(("module parameter".to_owned(), parameter));
+        }
+        named_roots.extend(
+            self.expression_types
+                .iter()
+                .map(|(expression, type_)| (format!("expression {} type", expression.0), *type_)),
+        );
+        named_roots.extend(
+            self.closure_signatures
+                .iter()
+                .map(|(body, signature)| (format!("closure {} signature", body.0), *signature)),
+        );
+        validate_named_flat_type_reference_budget(
             "cached module interface",
             &self.types.nodes,
-            interface_type_roots(
-                self.result,
-                self.effects,
-                self.parameter,
-                &self.expression_types,
-                &self.closure_signatures,
-            ),
+            named_roots
+                .into_iter()
+                .map(|(name, root)| (Some(name), root)),
         )
     }
 
@@ -2486,11 +2512,25 @@ impl Checker {
     }
 
     pub fn sealed_boundary_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
-        self.module_interfaces
+        if let Some(interface) = self.module_interfaces.borrow().get(path) {
+            return interface.sealed_boundary_bytes();
+        }
+        let checked = self
+            .modules
             .borrow()
             .get(path)
-            .ok_or_else(|| format!("module {path} has no closed checked interface"))?
-            .sealed_boundary_bytes()
+            .cloned()
+            .ok_or_else(|| format!("module {path} has not been checked"))?
+            .map_err(|diagnostic| {
+                format!(
+                    "module {path} failed checking: {} ({})",
+                    diagnostic.message, diagnostic.code
+                )
+            })?;
+        let interface = CachedModuleInterface::from_checked(&checked)
+            .map_err(|error| format!("module {path} checked interface cannot be sealed: {error}"))?
+            .ok_or_else(|| format!("module {path} has no closed checked interface"))?;
+        interface.sealed_boundary_bytes()
     }
 
     pub fn invalidate(&self, paths: &HashSet<String>) {
@@ -3207,6 +3247,9 @@ impl Checker {
                         .recursive_closure_bodies
                         .borrow()
                         .contains_key(path, &body);
+                if !recursive {
+                    signature = self.settle(signature, true);
+                }
                 if synthetic_recursive_bodies.contains(&body) {
                     signature = stable_loop_signature(signature);
                 }
@@ -3228,7 +3271,10 @@ impl Checker {
             .module(path)
             .into_iter()
             .flatten()
-            .map(|(expression, type_)| (*expression, self.residual_signature(type_.clone())))
+            .map(|(expression, type_)| {
+                let type_ = self.residual_signature(type_.clone());
+                (*expression, self.settle(type_, true))
+            })
             .collect::<Vec<_>>();
         expression_types.sort_by_key(|(expression, _)| expression.0);
         let reified_expression_types = expression_types
@@ -5620,6 +5666,7 @@ impl Checker {
                 let target = self.infer(path, module, target, environment, values, dependencies)?;
                 let target_type = target.type_.clone();
                 let target_before_patterns = self.settle(target_type.clone(), false);
+                let target_evidence_before_patterns = self.settle(target_type.clone(), true);
                 let result = self.fresh();
                 let mut effects = target.effects;
                 let mut covered = Vec::new();
@@ -5679,14 +5726,34 @@ impl Checker {
                         .all(|arm| structural_pattern(module, arm.pattern));
                     let patterns_pin_target = constructor_patterns
                         || structural_patterns
-                        || tuple_columns_are_total(module, &arms);
+                        || tuple_pattern_matrix(module, &arms);
                     let settled_target = if patterns_pin_target {
                         self.settle(target_type, false)
                     } else {
                         target_before_patterns
                     };
-                    if !patterns_cover(module, &arms, &settled_target) {
-                        let code = if matches!(settled_target, Type::Variant { .. }) {
+                    let coverage_target = tuple_coverage_type(
+                        module,
+                        &accepted_patterns,
+                        &target_evidence_before_patterns,
+                    )
+                    .unwrap_or_else(|| settled_target.clone());
+                    if !patterns_cover(module, &arms, &coverage_target) {
+                        let multi_case_coverage_tuple = matches!(
+                            &coverage_target,
+                            Type::Record(fields)
+                                if matches!(
+                                    fields.first(),
+                                    Some((name, Type::Variant { cases, open: false }))
+                                        if name == "0"
+                                            && cases.iter().any(|(case, _)| {
+                                                case == MULTI_CASE_COVERAGE_TAG
+                                            })
+                                )
+                        );
+                        let code = if matches!(settled_target, Type::Variant { .. })
+                            || multi_case_coverage_tuple
+                        {
                             "BLOT_TYPE_ERROR"
                         } else {
                             "BLOT_INCOMPLETE_CASE"
@@ -7880,7 +7947,7 @@ impl Checker {
                     .collect(),
                 open,
             },
-            Type::Union(members) => Type::Union(
+            Type::Union(members) => union_types(
                 members
                     .into_iter()
                     .map(|member| self.settle_seen(member, positive, seen, cacheable))
@@ -10537,7 +10604,74 @@ fn case_constraint(
     None
 }
 
-fn tuple_columns_are_total(module: &Module, arms: &[crate::ast::Arm]) -> bool {
+fn tuple_coverage_type(
+    module: &Module,
+    accepted: &[(PatternId, Type)],
+    target_evidence: &Type,
+) -> Option<Type> {
+    let Pattern::Tuple { elements, .. } = &module.arena.patterns[accepted.first()?.0.0 as usize]
+    else {
+        return None;
+    };
+    let arity = elements.len();
+    if !accepted.iter().all(|(pattern, _)| {
+        matches!(
+            &module.arena.patterns[pattern.0 as usize],
+            Pattern::Tuple { elements, .. } if elements.len() == arity
+        )
+    }) {
+        return None;
+    }
+    let evidence_fields = match target_evidence {
+        Type::Record(fields) => Some(fields),
+        _ => None,
+    };
+    let fields = (0..arity)
+        .map(|index| {
+            let evidence = evidence_fields
+                .and_then(|fields| fields.iter().find(|(name, _)| name == &index.to_string()))
+                .map(|(_, field)| field.clone())
+                .filter(|field| !matches!(field, Type::Bottom | Type::Top));
+            let mut candidates = Vec::new();
+            let mut column_has_irrefutable_pattern = false;
+            for (pattern, type_) in accepted {
+                let Pattern::Tuple { elements, .. } = &module.arena.patterns[pattern.0 as usize]
+                else {
+                    unreachable!();
+                };
+                if matches!(
+                    module.arena.patterns[elements[index].0 as usize],
+                    Pattern::Name { .. } | Pattern::Wildcard { .. }
+                ) {
+                    column_has_irrefutable_pattern = true;
+                    continue;
+                }
+                if let Type::Record(fields) = type_
+                    && let Some((_, field)) =
+                        fields.iter().find(|(name, _)| name == &index.to_string())
+                {
+                    candidates.push(field.clone());
+                }
+            }
+            let explicit_domain = (!candidates.is_empty())
+                .then(|| join_types(candidates))
+                .filter(|candidate| {
+                    !column_has_irrefutable_pattern || same_closed_type(candidate, &bool_type())
+                });
+            let mut domains = evidence.into_iter().collect::<Vec<_>>();
+            domains.extend(explicit_domain);
+            let field = if domains.is_empty() {
+                Type::Top
+            } else {
+                join_types(domains)
+            };
+            (index.to_string(), field)
+        })
+        .collect();
+    Some(Type::Record(fields))
+}
+
+fn tuple_pattern_matrix(module: &Module, arms: &[crate::ast::Arm]) -> bool {
     let Some(Pattern::Tuple { elements, .. }) = arms
         .first()
         .map(|arm| &module.arena.patterns[arm.pattern.0 as usize])
@@ -10550,14 +10684,6 @@ fn tuple_columns_are_total(module: &Module, arms: &[crate::ast::Arm]) -> bool {
             &module.arena.patterns[arm.pattern.0 as usize],
             Pattern::Tuple { elements, .. } if elements.len() == arity
         )
-    }) && (0..arity).all(|index| {
-        arms.iter().any(|arm| {
-            let Pattern::Tuple { elements, .. } = &module.arena.patterns[arm.pattern.0 as usize]
-            else {
-                return false;
-            };
-            total_pattern(module, elements[index])
-        })
     })
 }
 
@@ -13184,6 +13310,13 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("reference-path depth 129, maximum is 128"));
+        let error = checker
+            .sealed_boundary_bytes("over-limit")
+            .expect_err("boundary publication must report the artifact budget failure");
+        assert!(
+            error.contains("reference-path depth 129, maximum is 128"),
+            "{error}"
+        );
     }
 
     #[test]

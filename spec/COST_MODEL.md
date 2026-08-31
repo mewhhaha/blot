@@ -265,24 +265,28 @@ fact count and wall time.
 For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
 the fallback dispatcher emits `O(H)` branch targets and executes one indexed
 `br_table` per transition, for `O(D)` dispatch operations rather than `O(D H)`
-block-identity comparisons. A reducible entry cycle instead executes one
-structured path per iteration and no dispatcher operation. Unfolding shared
-acyclic joins can increase emitted `Q`, so eligibility includes a fixed
-expansion budget and otherwise preserves the dispatcher. HIR removal of known
-boolean and sum round-trips reduces both the expansion and the executed
-administrative steps without changing source work. For closed sums this removal
-applies to the canonical integer switch over the constructor tag, not a
-reconstructed chain of equality conditionals.
+block-identity comparisons. A non-reconvergent acyclic function emits its direct
+structured path with no dispatcher, and a reducible entry cycle executes one
+structured path per iteration. Unfolding shared acyclic joins can increase
+emitted `Q`, so eligibility includes a fixed expansion budget and otherwise
+preserves the dispatcher. HIR removal of known boolean and sum round-trips
+reduces both the expansion and the executed administrative steps without
+changing source work. For closed sums this removal applies to the canonical
+integer switch over the constructor tag, not a reconstructed chain of equality
+conditionals.
 
 Runtime-HIR normalization scans operations and table references to a fixed
-point. Exact type and signature interning adds work proportional to their closed
-structural size and publishes only compacted identifiers. WebAssembly local
-allocation performs block liveness followed by interference coloring within
-equal physical representations; its cost is a compiler cost, while the emitted
-local count is bounded by simultaneously live values rather than total SSA
-definitions. A proved iteration allocation region restores one cursor per
-backedge, so temporary allocation within a loop is bounded by the largest
-iteration instead of the sum across iterations.
+point. Exact type, signature, and function-body interning adds work proportional
+to their closed structural size plus call-graph partition refinement and
+publishes only compacted identifiers. WebAssembly local allocation performs
+block liveness, constructs one conservative interval per SSA definition, and
+linear-scans intervals within equal physical representations. It stores
+`O(V + H)` range and queue state beyond the block-liveness facts rather than an
+explicit pairwise interference graph; the sort and active-interval queue cost
+`O(V log V)`. The emitted local count remains bounded by simultaneously live
+intervals rather than total SSA definitions. A proved iteration allocation
+region restores one cursor per backedge, so temporary allocation within a loop
+is bounded by the largest iteration instead of the sum across iterations.
 
 Cold capsule loading hashes and decompresses `O(C)`, validates the `M` bundled
 flat ASTs, and resolves the `X` external edges through installed manifests. It

@@ -1,6 +1,6 @@
 open import "blot:prelude"
 
-const ProjectProvider = import "./lib/residual_boolean_project.blot"
+const ProjectProvider = import "./residual_boolean_project.blot"
 const Host =
   @effect.host {
     .observe = (Int, Bool) -> Unit;

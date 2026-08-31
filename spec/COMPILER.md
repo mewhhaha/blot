@@ -195,7 +195,12 @@ cases. A subject is demanded only when the selected row first tests its column.
 The first structural probe retains its binders for the rest of that successful
 path; elaboration must not erase those binders and emit a second pattern test to
 recover them. An irrefutable name column binds the cached subject with an
-ordinary local declaration.
+ordinary local declaration. Exhaustiveness is checked through one unused closure
+containing an ordinary tuple case whose row binders are erased. The witness has
+one tuple pattern per guard-free source row and an unspellable leading
+constructor column that preserves multi-subject diagnostic provenance. It must
+not recursively expand the Cartesian prefix matrix because that changes an
+`O(rows * subjects)` surface obligation into exponential AST growth.
 
 An incremental frontend result must equal a fresh result, including diagnostics,
 spans, compact edges, and resolved identities.
@@ -445,12 +450,20 @@ closed operations, values, control flow, Store lineage, host requests with
 normalized input/result ownership, traps, and public metadata.
 
 Before validation, Runtime-HIR normalization pools closed scalar Store literals
-in the module's typed static-Store table, removes unused total operations to a
-fixed point, and interns structurally equal closed types and signatures. It does
-not remove calls, host operations, allocation, mutation, reads, or arithmetic
-whose checked operation may trap. Every rewritten reference is validated against
-the compacted tables; the backend consumes those facts and does not repeat type
-or effect inference.
+in the module's typed static-Store table, cancels inverse indirect
+construction/loading and product construction/projection representations,
+removes unused total operations to a fixed point, and removes non-entry block
+parameters together with the corresponding arguments on every incoming edge.
+Entry parameters stay aligned with the closed function signature. It then
+interns structurally equal closed types, signatures, and alpha-normalized
+function bodies. Function equivalence is refined through direct-call equivalence
+classes; calls and exports are rewritten to the first canonical body. Source
+names and spans select that representative but do not prevent body sharing.
+Outside the proved representation cancellations above, normalization does not
+remove calls, host operations, allocation, mutation, reads, or arithmetic whose
+checked operation may trap. Every rewritten reference is validated against the
+compacted tables; the backend consumes those facts and does not repeat type or
+effect inference.
 
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked

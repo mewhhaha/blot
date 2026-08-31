@@ -113,6 +113,9 @@ Runtime HIR is typed, closed, ownership-annotated, and source-spanned. Recursive
 closures become internal functions with explicit runtime captures and
 `call.direct` edges. Dynamic branches become blocks and joins. Closed function
 choices are defunctionalized inside the program; an open source set is refused.
+Normalization removes dead join slots and inverse private-representation
+round-trips, then shares alpha-equivalent residual bodies after type and
+signature identifiers have settled.
 
 Current scalar lowering covers signed integers, `f32`, `f64`, comparisons,
 conversions, and the supported SIMD families. Text lowering covers append,
@@ -140,7 +143,11 @@ empty join blocks to the return, lowers to `return_call`. The backend verifies
 parameter and result flattening before emission. This removes recursive Wasm
 frames without changing Blot's source observation model. Export wrappers are not
 tail-called because they must restore allocation checkpoints and perform
-canonical result lowering.
+canonical result lowering. Non-reconvergent acyclic functions emit directly as
+structured Wasm, entry-recursive functions use the structured loop path, and
+only the remaining general CFGs pay for the indexed dispatcher. Local reuse is
+selected by linear scan over conservative live intervals, without constructing a
+pairwise interference graph.
 
 CI validates and executes the target without feature flags on the current Node
 24 LTS and Node 26 Current V8 lines. The detailed adoption and deferral

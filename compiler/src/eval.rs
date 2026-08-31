@@ -3829,6 +3829,9 @@ fn apply_with_expected(
                 Err(error) => return Computation::error(error),
             };
             if let Some(trace) = runtime.residual.clone() {
+                let crosses_development_boundary = trace
+                    .borrow()
+                    .crosses_development_boundary(runtime.module.as_str(), closure_module.as_str());
                 let name = self_name.clone().unwrap_or_else(|| {
                     let definition = loaded.arena.expression_span(body);
                     format!("{closure_module}@{}", definition.start)
@@ -3848,6 +3851,7 @@ fn apply_with_expected(
                             application.compiler_steps.last(),
                             Some(CompilerApplication::RuntimeExportParameter(_))
                         ),
+                        crosses_development_boundary,
                     },
                     &argument,
                     expected_argument.as_ref(),

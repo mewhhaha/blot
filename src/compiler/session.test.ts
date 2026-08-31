@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { BlotError } from "../diagnostic.ts";
 import { runtimeHirSchema } from "./protocol.ts";
 import { CompilerTargetRefusal } from "./policy.ts";
 import { Compiler } from "./session.ts";
@@ -21,6 +22,53 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
     const wasm = Uint8Array.from(artifact.wasm).buffer;
     assert.equal(WebAssembly.validate(wasm), true);
     assert.equal(artifact.artifactSource, "compiled");
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("inferred multi-subject Boolean matrix rejects its missing combination", async () => {
+  const compiler = await Compiler.create();
+  try {
+    await assert.rejects(
+      compiler.checkSource(
+        join(tmpdir(), "blot-inferred-incomplete-matrix.blot"),
+        'open import "blot:prelude"\n' +
+          "let choose = fn (first, second) => case first, second of\n" +
+          "  #True, _ => 1\n" +
+          "  _, #True => 2\n" +
+          "return choose\n",
+      ),
+      (error: unknown) => {
+        assert(error instanceof BlotError);
+        assert.match(error.diagnostic.message, /do not cover every value/);
+        return true;
+      },
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("typed multi-subject Boolean matrix rejects its missing combination", async () => {
+  const compiler = await Compiler.create();
+  try {
+    await assert.rejects(
+      compiler.checkSource(
+        join(tmpdir(), "blot-typed-incomplete-matrix.blot"),
+        'open import "blot:prelude"\n' +
+          "let choose :: (Bool, Bool) -> Int\n" +
+          "let choose = fn (first, second) => case first, second of\n" +
+          "  #True, _ => 1\n" +
+          "  _, #True => 2\n" +
+          "return choose (False, False)\n",
+      ),
+      (error: unknown) => {
+        assert(error instanceof BlotError);
+        assert.match(error.diagnostic.message, /do not cover every value/);
+        return true;
+      },
+    );
   } finally {
     compiler.destroy();
   }
@@ -123,7 +171,7 @@ test("static Boolean argument crosses residual iteration", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(
-      "examples/residual_boolean_argument.blot",
+      "examples/lib/residual_boolean_argument.blot",
     );
     const observations: Array<readonly [bigint, number]> = [];
     const instantiated = await WebAssembly.instantiate(

@@ -285,18 +285,24 @@ Deno.test("browser and desktop engine projects prepare reloadable frame units", 
       new URL(`../case-studies/engine/${manifestName}`, import.meta.url),
     );
     const project = await DevelopmentProject.create(manifestPath);
+    let pendingBuild: DevelopmentBuild | undefined;
     try {
       const initial = await project.prepareBuild();
+      pendingBuild = initial;
       assertEquals(initial.changedUnits.length, 2);
       assertEquals(initial.edges.length, 1);
       assertEquals(initial.edges[0].provider, "frame");
       project.commitBuild(initial);
+      pendingBuild = undefined;
 
       const repeated = await project.prepareBuild();
+      pendingBuild = repeated;
       assertEquals(repeated.changedUnits, []);
       assertEquals(repeated.retainedUnits.length, 2);
       project.commitBuild(repeated);
+      pendingBuild = undefined;
     } finally {
+      if (pendingBuild !== undefined) project.abortBuild(pendingBuild);
       project.destroy();
     }
   }

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
 use serde::Serialize;
 use wasm_encoder::{
@@ -479,6 +479,26 @@ fn exported_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
         .collect()
 }
 
+fn internally_emitted_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
+    let exported = exported_runtime_function_ids(module);
+    let directly_called = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.operations)
+        .filter(|operation| operation.kind == "call.direct")
+        .filter_map(|operation| operation.function)
+        .collect::<BTreeSet<_>>();
+    module
+        .functions
+        .iter()
+        .filter(|function| {
+            !exported.contains(&function.id) || directly_called.contains(&function.id)
+        })
+        .map(|function| function.id)
+        .collect()
+}
+
 fn direct_tail_call<'a>(
     function: &'a RuntimeFunction,
     block: &'a RuntimeBlock,
@@ -539,16 +559,12 @@ fn runtime_type_uses_simd(module: &RuntimeModule, type_id: usize) -> Result<bool
 }
 
 fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, String> {
-    let exported_functions = exported_runtime_function_ids(module);
+    let internal_ids = internally_emitted_runtime_function_ids(module);
     let internal_functions = module
         .functions
         .iter()
-        .filter(|function| !exported_functions.contains(&function.id))
+        .filter(|function| internal_ids.contains(&function.id))
         .collect::<Vec<_>>();
-    let internal_ids = internal_functions
-        .iter()
-        .map(|function| function.id)
-        .collect::<BTreeSet<_>>();
     let mut features = BTreeSet::new();
 
     // `cabi_realloc` always contains `memory.copy`, so every emitted artifact
@@ -1225,12 +1241,12 @@ fn emit_dynamic_module(
         i64_to_text: i64_to_text_index,
     };
 
-    let exported_functions = exported_runtime_function_ids(module);
+    let internally_emitted = internally_emitted_runtime_function_ids(module);
     let mut runtime_function_indices = HashMap::new();
     let internal_functions = module
         .functions
         .iter()
-        .filter(|function| !exported_functions.contains(&function.id))
+        .filter(|function| internally_emitted.contains(&function.id))
         .collect::<Vec<_>>();
     for function in &internal_functions {
         let signature = module.signatures.get(function.signature).ok_or_else(|| {
@@ -1495,27 +1511,67 @@ fn allocate_value_locals(
         }
     }
 
-    let mut interference = definitions
-        .keys()
-        .map(|value| (*value, HashSet::new()))
-        .collect::<HashMap<_, _>>();
+    let mut block_positions = HashMap::new();
+    let mut value_ranges = HashMap::new();
+    let mut next_position = 0_usize;
     for block in &function.blocks {
-        let mut live = live_out.get(&block.id).cloned().ok_or_else(|| {
+        let block_start = next_position;
+        for parameter in &block.parameters {
+            if definitions.contains_key(&parameter.value) {
+                value_ranges.insert(parameter.value, (block_start, block_start));
+            }
+        }
+        for operation in &block.operations {
+            next_position += 1;
+            value_ranges.insert(operation.result, (next_position, next_position));
+        }
+        next_position += 1;
+        block_positions.insert(block.id, (block_start, next_position));
+    }
+    for block in &function.blocks {
+        let (block_start, block_end) =
+            block_positions.get(&block.id).copied().ok_or_else(|| {
+                format!(
+                    "{}: function {} omitted positions for block {}",
+                    module.source, function.name, block.id
+                )
+            })?;
+        let block_live_in = live_in.get(&block.id).ok_or_else(|| {
+            format!(
+                "{}: function {} omitted live-in facts for block {}",
+                module.source, function.name, block.id
+            )
+        })?;
+        let block_live_out = live_out.get(&block.id).ok_or_else(|| {
             format!(
                 "{}: function {} omitted live-out facts for block {}",
                 module.source, function.name, block.id
             )
         })?;
-        live.extend(terminator_operands(&block.terminator));
-        for operation in block.operations.iter().rev() {
-            // Emitters may inspect operands after assigning the result.
-            live.extend(&operation.operands);
-            record_interference(&mut interference, operation.result, &live);
-            live.remove(&operation.result);
+        for value in block_live_in {
+            if let Some(range) = value_ranges.get_mut(value) {
+                range.0 = range.0.min(block_start);
+            }
         }
-        for parameter in block.parameters.iter().rev() {
-            record_interference(&mut interference, parameter.value, &live);
-            live.remove(&parameter.value);
+        for value in block_live_out {
+            if let Some(range) = value_ranges.get_mut(value) {
+                range.1 = range.1.max(block_end);
+            }
+        }
+        for (index, operation) in block.operations.iter().enumerate() {
+            let position = block_start + index + 1;
+            for operand in &operation.operands {
+                if let Some(range) = value_ranges.get_mut(operand) {
+                    range.0 = range.0.min(position);
+                    range.1 = range.1.max(position);
+                }
+            }
+        }
+        for operand in terminator_operands(&block.terminator) {
+            if let Some(range) = value_ranges.get_mut(&operand) {
+                range.0 = range.0.min(block_end);
+                range.1 = range.1.max(block_end);
+            }
         }
     }
 
@@ -1535,75 +1591,68 @@ fn allocate_value_locals(
     let mut local_types = Vec::new();
     for (layout, mut values) in layout_groups {
         values.sort_by_key(|value| {
-            (
-                Reverse(interference.get(value).map_or(0, HashSet::len)),
-                *value,
-            )
+            let range = value_ranges
+                .get(value)
+                .expect("every allocated value has a live range");
+            (range.0, *value)
         });
-        let mut colors: Vec<(Vec<u32>, Vec<usize>)> = Vec::new();
+        let mut colors: Vec<Vec<u32>> = Vec::new();
+        let mut active = BinaryHeap::<Reverse<(usize, usize)>>::new();
+        let mut available = BTreeSet::new();
         for value in values {
-            let conflicts = interference.get(&value).ok_or_else(|| {
+            let (start, end) = value_ranges.get(&value).copied().ok_or_else(|| {
                 format!(
-                    "{}: function {} omitted interference facts for value {value}",
+                    "{}: function {} omitted a live range for value {value}",
                     module.source, function.name
                 )
             })?;
-            if let Some((locals, occupants)) = colors
-                .iter_mut()
-                .find(|(_, occupants)| occupants.iter().all(|other| !conflicts.contains(other)))
-            {
-                value_locals.insert(value, locals.clone());
-                occupants.push(value);
-                continue;
+            while let Some(Reverse((active_end, color))) = active.peek().copied() {
+                if active_end >= start {
+                    break;
+                }
+                active.pop();
+                available.insert(color);
             }
-            let local_offset = u32::try_from(local_types.len()).map_err(|_| {
-                format!(
-                    "{}: function {} requires more than memory32 locals",
-                    module.source, function.name
-                )
-            })?;
-            let start = parameter_count.checked_add(local_offset).ok_or_else(|| {
-                format!(
-                    "{}: function {} local index exceeds memory32",
-                    module.source, function.name
-                )
-            })?;
-            let width = u32::try_from(layout.len()).map_err(|_| {
-                format!(
-                    "{}: function {} local layout exceeds memory32",
-                    module.source, function.name
-                )
-            })?;
-            let end = start.checked_add(width).ok_or_else(|| {
-                format!(
-                    "{}: function {} local range exceeds memory32",
-                    module.source, function.name
-                )
-            })?;
-            let locals = (start..end).collect::<Vec<_>>();
-            local_types.extend(&layout);
-            value_locals.insert(value, locals.clone());
-            colors.push((locals, vec![value]));
+            let color = if let Some(color) = available.pop_first() {
+                color
+            } else {
+                let local_offset = u32::try_from(local_types.len()).map_err(|_| {
+                    format!(
+                        "{}: function {} requires more than memory32 locals",
+                        module.source, function.name
+                    )
+                })?;
+                let local_start = parameter_count.checked_add(local_offset).ok_or_else(|| {
+                    format!(
+                        "{}: function {} local index exceeds memory32",
+                        module.source, function.name
+                    )
+                })?;
+                let width = u32::try_from(layout.len()).map_err(|_| {
+                    format!(
+                        "{}: function {} local layout exceeds memory32",
+                        module.source, function.name
+                    )
+                })?;
+                let local_end = local_start.checked_add(width).ok_or_else(|| {
+                    format!(
+                        "{}: function {} local range exceeds memory32",
+                        module.source, function.name
+                    )
+                })?;
+                let color = colors.len();
+                colors.push((local_start..local_end).collect());
+                local_types.extend(&layout);
+                color
+            };
+            value_locals.insert(value, colors[color].clone());
+            active.push(Reverse((end, color)));
         }
     }
     Ok(ValueLocalAllocation {
         value_locals,
         local_types,
     })
-}
-
-fn record_interference(
-    interference: &mut HashMap<usize, HashSet<usize>>,
-    definition: usize,
-    live: &HashSet<usize>,
-) {
-    for other in live {
-        if *other == definition || !interference.contains_key(other) {
-            continue;
-        }
-        interference.entry(definition).or_default().insert(*other);
-        interference.entry(*other).or_default().insert(definition);
-    }
 }
 
 fn terminator_operands(terminator: &RuntimeTerminator) -> Vec<usize> {
@@ -1692,8 +1741,8 @@ fn dynamic_internal_function(
     let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
     let value_locals = allocation.value_locals;
     let mut local_types = allocation.local_types;
-    let structured_loop = structured_loop_eligible(function);
-    let dispatcher = if structured_loop {
+    let control_flow = structured_control_flow(function);
+    let dispatcher = if control_flow.is_some() {
         None
     } else {
         let dispatcher = parameter_count + local_types.len() as u32;
@@ -1706,7 +1755,9 @@ fn dynamic_internal_function(
     local_types.push(ValType::I32);
     let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let iteration_checkpoint = if structured_loop && iteration_region_eligible(function) {
+    let iteration_checkpoint = if control_flow == Some(StructuredControlFlow::EntryLoop)
+        && iteration_region_eligible(function)
+    {
         let checkpoint = parameter_count + local_types.len() as u32;
         local_types.push(ValType::I32);
         Some(checkpoint)
@@ -1716,87 +1767,111 @@ fn dynamic_internal_function(
 
     let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
-    if structured_loop {
-        if let Some(checkpoint) = iteration_checkpoint {
-            instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
-        }
-        instructions.loop_(BlockType::Empty);
-        emit_structured_loop_block(
-            &mut instructions,
-            module,
-            function,
-            function.entry_block,
-            manifest,
-            helpers,
-            static_data,
-            &value_locals,
-            scratch_pointer,
-            scratch_length,
-            scratch_index,
-            runtime_function_indices,
-            iteration_checkpoint,
-            StructuredResult::Internal,
-            0,
-        )?;
-        instructions.unreachable().end().unreachable().end();
-    } else {
-        let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
-        instructions
-            .i32_const(function.entry_block as i32)
-            .local_set(dispatcher)
-            .block(BlockType::Empty)
-            .loop_(BlockType::Empty);
-        for _ in &function.blocks {
-            instructions.block(BlockType::Empty);
-        }
-        instructions.local_get(dispatcher).br_table(
-            (0..function.blocks.len() as u32).rev(),
-            function.blocks.len() as u32 + 1,
-        );
-        for block in function.blocks.iter().rev() {
-            instructions.end();
-            let tail_call = direct_tail_call(function, block);
-            let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
-            for operation in &block.operations[..operation_count] {
-                emit_dynamic_operation(
-                    &mut instructions,
-                    module,
-                    function,
-                    operation,
-                    manifest,
-                    helpers,
-                    static_data,
-                    &value_locals,
-                    scratch_pointer,
-                    scratch_length,
-                    scratch_index,
-                    runtime_function_indices,
-                )?;
+    match control_flow {
+        Some(StructuredControlFlow::EntryLoop) => {
+            if let Some(checkpoint) = iteration_checkpoint {
+                instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
             }
-            if let Some(operation) = tail_call {
-                emit_direct_tail_call(
-                    &mut instructions,
-                    module,
-                    function,
-                    operation,
-                    &value_locals,
-                    runtime_function_indices,
-                )?;
-            } else {
-                emit_internal_terminator(
-                    &mut instructions,
-                    module,
-                    function,
-                    &block.terminator,
-                    &value_locals,
-                    Dispatcher {
-                        local: dispatcher,
-                        depth: block.id as u32,
-                    },
-                )?;
-            }
+            instructions.loop_(BlockType::Empty);
+            emit_structured_block(
+                &mut instructions,
+                module,
+                function,
+                function.entry_block,
+                manifest,
+                helpers,
+                static_data,
+                &value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                iteration_checkpoint,
+                StructuredResult::Internal,
+                0,
+            )?;
+            instructions.unreachable().end().unreachable().end();
         }
-        instructions.end().end().unreachable().end();
+        Some(StructuredControlFlow::Acyclic) => {
+            emit_structured_block(
+                &mut instructions,
+                module,
+                function,
+                function.entry_block,
+                manifest,
+                helpers,
+                static_data,
+                &value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                None,
+                StructuredResult::Internal,
+                0,
+            )?;
+            instructions.unreachable().end();
+        }
+        None => {
+            let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
+            instructions
+                .i32_const(function.entry_block as i32)
+                .local_set(dispatcher)
+                .block(BlockType::Empty)
+                .loop_(BlockType::Empty);
+            for _ in &function.blocks {
+                instructions.block(BlockType::Empty);
+            }
+            instructions.local_get(dispatcher).br_table(
+                (0..function.blocks.len() as u32).rev(),
+                function.blocks.len() as u32 + 1,
+            );
+            for block in function.blocks.iter().rev() {
+                instructions.end();
+                let tail_call = direct_tail_call(function, block);
+                let operation_count =
+                    block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
+                for operation in &block.operations[..operation_count] {
+                    emit_dynamic_operation(
+                        &mut instructions,
+                        module,
+                        function,
+                        operation,
+                        manifest,
+                        helpers,
+                        static_data,
+                        &value_locals,
+                        scratch_pointer,
+                        scratch_length,
+                        scratch_index,
+                        runtime_function_indices,
+                    )?;
+                }
+                if let Some(operation) = tail_call {
+                    emit_direct_tail_call(
+                        &mut instructions,
+                        module,
+                        function,
+                        operation,
+                        &value_locals,
+                        runtime_function_indices,
+                    )?;
+                } else {
+                    emit_internal_terminator(
+                        &mut instructions,
+                        module,
+                        function,
+                        &block.terminator,
+                        &value_locals,
+                        Dispatcher {
+                            local: dispatcher,
+                            depth: block.id as u32,
+                        },
+                    )?;
+                }
+            }
+            instructions.end().end().unreachable().end();
+        }
     }
     Ok(wasm_function)
 }
@@ -1859,8 +1934,8 @@ fn dynamic_export_function(
     let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
     let value_locals = allocation.value_locals;
     let mut local_types = allocation.local_types;
-    let structured_loop = structured_loop_eligible(function);
-    let dispatcher = if structured_loop {
+    let control_flow = structured_control_flow(function);
+    let dispatcher = if control_flow.is_some() {
         None
     } else {
         let dispatcher = parameter_count + local_types.len() as u32;
@@ -1873,7 +1948,9 @@ fn dynamic_export_function(
     local_types.push(ValType::I32);
     let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let iteration_checkpoint = if structured_loop && iteration_region_eligible(function) {
+    let iteration_checkpoint = if control_flow == Some(StructuredControlFlow::EntryLoop)
+        && iteration_region_eligible(function)
+    {
         let checkpoint = parameter_count + local_types.len() as u32;
         local_types.push(ValType::I32);
         Some(checkpoint)
@@ -1883,85 +1960,105 @@ fn dynamic_export_function(
     let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
     begin_call(&mut instructions, public_export.call_id);
-    if structured_loop {
-        if let Some(checkpoint) = iteration_checkpoint {
-            instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
-        }
-        instructions.loop_(BlockType::Empty);
-        emit_structured_loop_block(
-            &mut instructions,
-            module,
-            function,
-            function.entry_block,
-            manifest,
-            helpers,
-            static_data,
-            &value_locals,
-            scratch_pointer,
-            scratch_length,
-            scratch_index,
-            runtime_function_indices,
-            iteration_checkpoint,
-            StructuredResult::Canonical(CanonicalResult {
-                type_: public_export.result_type,
-                runtime_type: public_export.result_runtime_type,
-                pointer: scratch_pointer,
-                realloc: helpers.realloc,
-            }),
-            0,
-        )?;
-        instructions.unreachable().end().unreachable().end();
-    } else {
-        let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
-        instructions
-            .i32_const(function.entry_block as i32)
-            .local_set(dispatcher)
-            .block(BlockType::Empty)
-            .loop_(BlockType::Empty);
-        for _ in &function.blocks {
-            instructions.block(BlockType::Empty);
-        }
-        instructions.local_get(dispatcher).br_table(
-            (0..function.blocks.len() as u32).rev(),
-            function.blocks.len() as u32 + 1,
-        );
-        for block in function.blocks.iter().rev() {
-            instructions.end();
-            for operation in &block.operations {
-                emit_dynamic_operation(
-                    &mut instructions,
-                    module,
-                    function,
-                    operation,
-                    manifest,
-                    helpers,
-                    static_data,
-                    &value_locals,
-                    scratch_pointer,
-                    scratch_length,
-                    scratch_index,
-                    runtime_function_indices,
-                )?;
+    let canonical_result = CanonicalResult {
+        type_: public_export.result_type,
+        runtime_type: public_export.result_runtime_type,
+        pointer: scratch_pointer,
+        realloc: helpers.realloc,
+    };
+    let result = StructuredResult::Canonical(canonical_result);
+    match control_flow {
+        Some(StructuredControlFlow::EntryLoop) => {
+            if let Some(checkpoint) = iteration_checkpoint {
+                instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
             }
-            emit_dynamic_terminator(
+            instructions.loop_(BlockType::Empty);
+            emit_structured_block(
                 &mut instructions,
                 module,
                 function,
-                &block.terminator,
+                function.entry_block,
+                manifest,
+                helpers,
+                static_data,
                 &value_locals,
-                Dispatcher {
-                    local: dispatcher,
-                    depth: block.id as u32,
-                },
-                CanonicalResult {
-                    type_: public_export.result_type,
-                    runtime_type: public_export.result_runtime_type,
-                    pointer: scratch_pointer,
-                    realloc: helpers.realloc,
-                },
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                iteration_checkpoint,
+                result,
+                0,
             )?;
+            instructions.unreachable().end().unreachable().end();
         }
-        instructions.end().end().unreachable().end();
+        Some(StructuredControlFlow::Acyclic) => {
+            emit_structured_block(
+                &mut instructions,
+                module,
+                function,
+                function.entry_block,
+                manifest,
+                helpers,
+                static_data,
+                &value_locals,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                None,
+                result,
+                0,
+            )?;
+            instructions.unreachable().end();
+        }
+        None => {
+            let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
+            instructions
+                .i32_const(function.entry_block as i32)
+                .local_set(dispatcher)
+                .block(BlockType::Empty)
+                .loop_(BlockType::Empty);
+            for _ in &function.blocks {
+                instructions.block(BlockType::Empty);
+            }
+            instructions.local_get(dispatcher).br_table(
+                (0..function.blocks.len() as u32).rev(),
+                function.blocks.len() as u32 + 1,
+            );
+            for block in function.blocks.iter().rev() {
+                instructions.end();
+                for operation in &block.operations {
+                    emit_dynamic_operation(
+                        &mut instructions,
+                        module,
+                        function,
+                        operation,
+                        manifest,
+                        helpers,
+                        static_data,
+                        &value_locals,
+                        scratch_pointer,
+                        scratch_length,
+                        scratch_index,
+                        runtime_function_indices,
+                    )?;
+                }
+                emit_dynamic_terminator(
+                    &mut instructions,
+                    module,
+                    function,
+                    &block.terminator,
+                    &value_locals,
+                    Dispatcher {
+                        local: dispatcher,
+                        depth: block.id as u32,
+                    },
+                    canonical_result,
+                )?;
+            }
+            instructions.end().end().unreachable().end();
+        }
     }
     Ok(wasm_function)
 }
@@ -3045,20 +3142,31 @@ fn emit_dynamic_operation(
     Ok(())
 }
 
-fn structured_loop_eligible(function: &RuntimeFunction) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StructuredControlFlow {
+    Acyclic,
+    EntryLoop,
+}
+
+fn structured_control_flow(function: &RuntimeFunction) -> Option<StructuredControlFlow> {
     let mut active = HashSet::new();
     let mut expanded = HashSet::new();
     let mut has_back_edge = false;
-    let Some(expanded_blocks) = structured_loop_expansion(
+    let expanded_blocks = structured_loop_expansion(
         function,
         function.entry_block,
         &mut active,
         &mut expanded,
         &mut has_back_edge,
-    ) else {
-        return false;
-    };
-    has_back_edge && expanded_blocks <= MAX_STRUCTURED_LOOP_BLOCKS
+    )?;
+    if expanded_blocks > MAX_STRUCTURED_LOOP_BLOCKS {
+        return None;
+    }
+    if has_back_edge {
+        Some(StructuredControlFlow::EntryLoop)
+    } else {
+        Some(StructuredControlFlow::Acyclic)
+    }
 }
 
 fn iteration_region_eligible(function: &RuntimeFunction) -> bool {
@@ -3168,7 +3276,7 @@ fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_structured_loop_block(
+fn emit_structured_block(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
@@ -3187,13 +3295,13 @@ fn emit_structured_loop_block(
 ) -> Result<(), String> {
     let block = function.blocks.get(block_id).ok_or_else(|| {
         format!(
-            "{}: structured loop references unknown block {block_id}",
+            "{}: structured control flow references unknown block {block_id}",
             module.source
         )
     })?;
     if block.id != block_id {
         return Err(format!(
-            "{}: structured loop block index {block_id} contains block {}",
+            "{}: structured block index {block_id} contains block {}",
             module.source, block.id
         ));
     }
@@ -3233,7 +3341,7 @@ fn emit_structured_loop_block(
     match &block.terminator {
         RuntimeTerminator::Branch {
             target, arguments, ..
-        } => emit_structured_loop_target(
+        } => emit_structured_target(
             instructions,
             module,
             function,
@@ -3261,7 +3369,7 @@ fn emit_structured_loop_block(
         } => {
             let condition = locals_for(module, value_locals, *condition)?;
             instructions.local_get(condition[0]).if_(BlockType::Empty);
-            emit_structured_loop_target(
+            emit_structured_target(
                 instructions,
                 module,
                 function,
@@ -3280,7 +3388,7 @@ fn emit_structured_loop_block(
                 loop_depth + 1,
             )?;
             instructions.else_();
-            emit_structured_loop_target(
+            emit_structured_target(
                 instructions,
                 module,
                 function,
@@ -3301,7 +3409,7 @@ fn emit_structured_loop_block(
             instructions.end();
         }
         RuntimeTerminator::Switch { .. } => {
-            return Err("a Runtime HIR switch entered structured loop emission".to_owned());
+            return Err("a Runtime HIR switch entered structured emission".to_owned());
         }
         RuntimeTerminator::Return { value, .. } => {
             emit_structured_return(instructions, module, value_locals, *value, result)?;
@@ -3314,7 +3422,7 @@ fn emit_structured_loop_block(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_structured_loop_target(
+fn emit_structured_target(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
@@ -3347,7 +3455,7 @@ fn emit_structured_loop_target(
         instructions.br(loop_depth);
         return Ok(());
     }
-    emit_structured_loop_block(
+    emit_structured_block(
         instructions,
         module,
         function,
@@ -6360,7 +6468,10 @@ mod tests {
             branch_block(2, 0),
         ]);
 
-        assert!(structured_loop_eligible(&function));
+        assert_eq!(
+            structured_control_flow(&function),
+            Some(StructuredControlFlow::EntryLoop)
+        );
     }
 
     #[test]
@@ -6371,7 +6482,7 @@ mod tests {
             branch_block(2, 1),
         ]);
 
-        assert!(!structured_loop_eligible(&function));
+        assert_eq!(structured_control_flow(&function), None);
     }
 
     #[test]
@@ -6383,7 +6494,7 @@ mod tests {
             branch_block(3, 0),
         ]);
 
-        assert!(!structured_loop_eligible(&function));
+        assert_eq!(structured_control_flow(&function), None);
     }
 
     #[test]
@@ -6477,6 +6588,57 @@ mod tests {
             });
 
         assert!(restores_heap);
+    }
+
+    #[test]
+    fn single_block_function_emits_without_a_dispatcher() {
+        let mut entry = return_block(0);
+        entry.parameters.push(parameter(0));
+        let function = runtime_function(vec![entry]);
+        assert_eq!(
+            structured_control_flow(&function),
+            Some(StructuredControlFlow::Acyclic)
+        );
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "acyclic-structured-test".to_owned(),
+            types: vec![RuntimeType::Unit, RuntimeType::Boolean],
+            signatures: vec![crate::hir::RuntimeSignature {
+                parameters: vec![1],
+                result: 1,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions: vec![function],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+        let manifest = build_manifest(&module).expect("test manifest should close");
+        let wasm = emit_dynamic_module(&module, &manifest, b"{}")
+            .expect("acyclic structured function should emit");
+        let body = wasmparser::Parser::new(0)
+            .parse_all(&wasm)
+            .filter_map(
+                |payload| match payload.expect("emitted Wasm should parse") {
+                    wasmparser::Payload::CodeSectionEntry(body) => Some(body),
+                    _ => None,
+                },
+            )
+            .nth(1)
+            .expect("module should contain realloc and the runtime function");
+        let operators = body
+            .get_operators_reader()
+            .expect("acyclic operators should parse")
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("acyclic operators should decode");
+
+        assert!(!operators.iter().any(|operator| matches!(
+            operator,
+            wasmparser::Operator::BrTable { .. } | wasmparser::Operator::Loop { .. }
+        )));
     }
 
     #[test]
@@ -6711,6 +6873,30 @@ mod tests {
     }
 
     #[test]
+    fn wide_live_product_allocates_without_pairwise_interference_edges() {
+        const WIDTH: usize = 2_048;
+        let mut operations = (1..=WIDTH)
+            .map(|value| plain_operation(value, Vec::new()))
+            .collect::<Vec<_>>();
+        operations.push(plain_operation(WIDTH + 1, (1..=WIDTH).collect()));
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations,
+            terminator: RuntimeTerminator::Return {
+                value: WIDTH + 1,
+                span: span(),
+            },
+        }]);
+        let module = allocation_test_module(function.clone());
+
+        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
+            .expect("wide live product should allocate");
+
+        assert_eq!(allocation.local_types.len(), WIDTH + 1);
+    }
+
+    #[test]
     fn adjacent_wasm_locals_use_counted_declarations() {
         assert_eq!(
             compact_local_declarations(&[
@@ -6787,6 +6973,40 @@ mod tests {
         assert_eq!(
             direct_tail_call(&function, &function.blocks[0]).map(|candidate| candidate.result),
             Some(7)
+        );
+    }
+
+    #[test]
+    fn directly_called_exported_tail_body_requires_tail_call_feature() {
+        let mut call = direct_call_operation(7);
+        call.function = Some(0);
+        let mut function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![parameter(0)],
+            operations: vec![call],
+            terminator: RuntimeTerminator::Return {
+                value: 7,
+                span: span(),
+            },
+        }]);
+        function.name = "exported-tail-body".to_owned();
+        let mut module = allocation_test_module(function);
+        module.signatures[0].parameters = vec![1];
+        module.exports.push(RuntimeExport::Runtime {
+            source_name: "default".to_owned(),
+            phase: "runtime",
+            wasm_name: "blot:default".to_owned(),
+            function: 0,
+            signature: 0,
+            ownership: "plain",
+        });
+
+        let features = required_wasm_features(&module).expect("features should close");
+
+        assert!(features.contains(&"tail-call"));
+        assert_eq!(
+            internally_emitted_runtime_function_ids(&module),
+            BTreeSet::from([0])
         );
     }
 

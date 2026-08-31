@@ -1162,8 +1162,17 @@ impl CompilerSession {
             "checked-entry",
             self.checker.development_solver_cardinality(),
         );
-        let runtime = crate::hir::elaborate_development(self.context.clone(), path, checked)
-            .map_err(|diagnostic| diagnostic.at(path))?;
+        let runtime = crate::hir::elaborate_development(
+            self.context.clone(),
+            path,
+            checked,
+            units
+                .values()
+                .filter(|root| root.as_str() != path)
+                .cloned()
+                .collect(),
+        )
+        .map_err(|diagnostic| diagnostic.at(path))?;
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("runtime-hir");
         let closed = Rc::new(crate::backend::close(runtime).map_err(|message| {
@@ -5502,6 +5511,79 @@ mod tests {
     }
 
     #[test]
+    fn development_provider_boolean_result_remains_a_reload_boundary() {
+        run_with_compiler_test_stack(|| {
+            const ENTRY: &str = "game.blot";
+            const PROVIDER: &str = "frame.blot";
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    ENTRY.to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const frame = import \"frame\"\n",
+                        "const Host = @effect.host { .remaining = Unit -> Int; }\n",
+                        "use remaining <- Host.remaining ()\n",
+                        "let total = 0\n",
+                        "for value in Iter.items [remaining, 2]:\n",
+                        "  total := total + value\n",
+                        "if frame.finished remaining:\n",
+                        "  return total\n",
+                        "return 0\n",
+                    )),
+                )
+                .expect("game source should load");
+            session
+                .configure_module(
+                    ENTRY,
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        ("frame".to_owned(), PROVIDER.to_owned()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("game source should configure");
+            session
+                .add_source(
+                    PROVIDER.to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let finished :: Int -> Bool\n",
+                        "let finished = fn remaining => remaining <= 0\n",
+                        "return { .finished = finished; }\n",
+                    )),
+                )
+                .expect("frame source should load");
+            session
+                .configure_module(
+                    PROVIDER,
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("frame source should configure");
+            let units = BTreeMap::from([
+                ("frame".to_owned(), PROVIDER.to_owned()),
+                ("game".to_owned(), ENTRY.to_owned()),
+            ]);
+
+            let compiled = session
+                .compile_development_program(ENTRY, "game", &units)
+                .expect("Boolean development boundary should compile");
+
+            assert_eq!(compiled.edges.len(), 1);
+            assert_eq!(compiled.edges[0].consumer, "game");
+            assert_eq!(compiled.edges[0].provider, "frame");
+        });
+    }
+
+    #[test]
     fn development_artifacts_commit_only_the_current_preparation() {
         const ENTRY: &str = "transaction.blot";
         let mut session = CompilerSession::default();
@@ -7139,7 +7221,14 @@ mod tests {
             let static_stores = prepared["module"]["staticStores"]
                 .as_array()
                 .expect("static Store pool");
+            let exported_functions = prepared["module"]["exports"]
+                .as_array()
+                .expect("runtime exports")
+                .iter()
+                .filter_map(|exported| exported["function"].as_u64())
+                .collect::<BTreeSet<_>>();
             assert_eq!(static_stores.len(), 1, "{prepared}");
+            assert_eq!(exported_functions.len(), 1, "{prepared}");
             assert_eq!(
                 static_stores[0]["values"],
                 serde_json::json!([
@@ -7153,7 +7242,7 @@ mod tests {
                     .iter()
                     .filter(|operation| operation["kind"] == "store.literal")
                     .count(),
-                2,
+                1,
                 "{prepared}"
             );
             for literal in operations
@@ -7685,7 +7774,7 @@ mod tests {
                 .add_source(
                     "main.blot".to_owned(),
                     source(include_str!(
-                        "../../examples/residual_boolean_argument.blot"
+                        "../../examples/lib/residual_boolean_argument.blot"
                     )),
                 )
                 .expect("residual Boolean source should load");
@@ -7695,7 +7784,7 @@ mod tests {
                     BTreeMap::from([
                         ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
                         (
-                            "./lib/residual_boolean_project.blot".to_owned(),
+                            "./residual_boolean_project.blot".to_owned(),
                             "project.blot".to_owned(),
                         ),
                     ]),
@@ -7955,6 +8044,37 @@ mod tests {
     }
 
     #[test]
+    fn exported_non_tail_recursion_emits_an_internal_call_target() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/pathological_fibonacci.blot")),
+                )
+                .expect("Fibonacci source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("Fibonacci source should configure");
+
+            session
+                .compile_module("main.blot")
+                .expect("exported non-tail recursion should emit Wasm");
+        });
+    }
+
+    #[test]
     fn demand_driven_boolean_case_prepares_and_emits_wasm() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -8001,6 +8121,54 @@ mod tests {
     }
 
     #[test]
+    fn staggered_boolean_case_rejects_a_missing_combination() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const Host = @effect.host {\n",
+                        "  .first = Unit -> Bool;\n",
+                        "  .second = Unit -> Bool;\n",
+                        "  .third = Unit -> Bool;\n",
+                        "}\n",
+                        "use first <- Host.first ()\n",
+                        "use second <- Host.second ()\n",
+                        "use third <- Host.third ()\n",
+                        "return case first, second, third of\n",
+                        "  #True, _, _ => 1\n",
+                        "  #False, #True, _ => 2\n",
+                        "  #False, #False, #True => 3\n",
+                    )),
+                )
+                .expect("staggered Boolean source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("staggered Boolean source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(
+                prepared["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                "{prepared}"
+            );
+        });
+    }
+
+    #[test]
     fn wildcard_row_completes_a_multi_subject_literal_case() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -8042,6 +8210,96 @@ mod tests {
             session
                 .compile_module("main.blot")
                 .expect("literal matrix source should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn multi_subject_case_lowering_grows_polynomially_with_subject_count() {
+        let mut expression_counts = Vec::new();
+        for subject_count in [8, 16] {
+            let names = (0..subject_count)
+                .map(|index| format!("subject{index}"))
+                .collect::<Vec<_>>();
+            let mut text = format!(
+                "let choose = fn ({}) => case {} of\n",
+                names.join(", "),
+                names.join(", ")
+            );
+            for selected in 0..subject_count {
+                let patterns = (0..subject_count)
+                    .map(|index| if index == selected { "#True" } else { "_" })
+                    .collect::<Vec<_>>();
+                text.push_str(&format!("  {} => {selected}\n", patterns.join(", ")));
+            }
+            text.push_str("return choose\n");
+            let path = format!("multi-{subject_count}.blot");
+            let mut session = CompilerSession::default();
+            session
+                .add_source(path.clone(), source(&text))
+                .expect("multi-subject source should lower");
+            let expression_count = session.context.modules.borrow()[&path]
+                .module
+                .arena
+                .expressions
+                .len();
+            expression_counts.push(expression_count);
+        }
+
+        assert!(
+            expression_counts[1] <= expression_counts[0] * 5,
+            "doubling subjects expanded expressions from {} to {}",
+            expression_counts[0],
+            expression_counts[1]
+        );
+    }
+
+    #[test]
+    fn deep_measure_wrapper_publishes_a_closed_interface() {
+        run_with_compiler_test_stack(|| {
+            const WRAPPER_COUNT: usize = 256;
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut text = concat!(
+                "open import \"blot:prelude\"\n",
+                "const count0 = fn values => Array.length values\n",
+            )
+            .to_owned();
+            for index in 1..=WRAPPER_COUNT {
+                text.push_str(&format!(
+                    "const count{index} = fn values => count{} values\n",
+                    index - 1
+                ));
+            }
+            text.push_str(&format!(
+                concat!(
+                    "let at :: [Int] -> Int -> Int\n",
+                    "let at = fn values => fn index => case index >= 0 && index < count{} values of\n",
+                    "  #True => @array.get values index\n",
+                    "  #False => 0\n",
+                    "return at [1, 2, 3, 4] 3\n",
+                ),
+                WRAPPER_COUNT
+            ));
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(&text))
+                .expect("measure-wrapper source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("measure-wrapper source should configure");
+
+            let checked = session.check_module("main.blot");
+
+            assert_eq!(checked["ok"], true, "{checked}");
         });
     }
 

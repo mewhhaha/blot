@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
 
+pub(crate) const MULTI_CASE_COVERAGE_TAG: &str = "case_coverage$";
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Span {
     pub start: u32,

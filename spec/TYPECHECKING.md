@@ -108,9 +108,15 @@ A type is **ground** when it contains no inference variable or `forall`. Source
 union values bridge only to ground unions. At that boundary, nested unions are
 flattened, duplicate members and `bottom` are removed, `top` absorbs, and zero
 members becomes `bottom`. The same normalizer receives exact ground intersection
-and difference results. Inference may compute joins containing variables
-internally; those joins are not admissible as the right-hand disjunction rule
-described below.
+and difference results. Settling a union recursively normalizes the settled
+members before a checked interface is published, so a chain of equivalent
+wrapper results cannot encode a nested duplicate union. Published expression
+types and nonrecursive closure signatures repeat that canonicalization.
+Recursive closure signatures retain their solver structure because it carries
+relationships between quantified inputs and results that residual specialization
+still consumes. Inference may compute joins containing variables internally;
+those joins are not admissible as the right-hand disjunction rule described
+below.
 
 ## 2. Declarative subtyping
 
@@ -1073,7 +1079,11 @@ canonical bytes; equal bytes retain its identity and importer interfaces, while
 different bytes receive a fresh identity and dirty direct importers. Repeating
 this rule is equivalent to the dependency fingerprint required by capsule
 coherence above while allowing propagation to stop at an observationally equal
-boundary.
+boundary. Failure to encode or satisfy a boundary artifact budget remains the
+exact publication invariant failure; it must not be discarded and later reported
+as a generic missing-interface failure. Budget validation traverses the shared
+flat type graph once for all named interface roots; a failing root is reported
+without rescanning the graph per expression or closure.
 
 The binary boundary orders record fields, record-update fields, variant cases,
 and union members by their canonical structural keys. Quantified rigids are

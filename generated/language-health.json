@@ -722,19 +722,19 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 13651
+      "lines": 13784
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 11845
+      "lines": 12692
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 8489
+      "lines": 8824
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 6928
+      "lines": 7148
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -742,11 +742,11 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6060
+      "lines": 6064
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3765
+      "lines": 3685
     },
     {
       "path": "compiler/src/frontend_plan.rs",
