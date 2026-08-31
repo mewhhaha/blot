@@ -1162,17 +1162,8 @@ impl CompilerSession {
             "checked-entry",
             self.checker.development_solver_cardinality(),
         );
-        let runtime = crate::hir::elaborate_development(
-            self.context.clone(),
-            path,
-            checked,
-            units
-                .values()
-                .filter(|root| root.as_str() != path)
-                .cloned()
-                .collect(),
-        )
-        .map_err(|diagnostic| diagnostic.at(path))?;
+        let runtime = crate::hir::elaborate_development(self.context.clone(), path, checked)
+            .map_err(|diagnostic| diagnostic.at(path))?;
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("runtime-hir");
         let closed = Rc::new(crate::backend::close(runtime).map_err(|message| {
@@ -1742,7 +1733,7 @@ fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagno
     loop {
         match computation {
             Computation::Done(result) => return result.map(|value| (value, writes)),
-            Computation::Step(step) => computation = step(),
+            Computation::Step(step) => computation = step.advance(),
             Computation::Perform { request, resume }
                 if request.host
                     && request.effect_name == "Console"
@@ -1753,7 +1744,7 @@ fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagno
                     value => show(&value),
                 };
                 writes.push(line);
-                computation = resume(Value::Unit);
+                computation = resume.advance(Value::Unit);
             }
             Computation::Perform { request, .. } => {
                 return Err(Diagnostic::new(
@@ -5424,6 +5415,93 @@ mod tests {
     }
 
     #[test]
+    fn explicit_development_provider_contract_retains_the_consumer_unit() {
+        const ENTRY: &str = "game.blot";
+        const PROVIDER: &str = "project.blot";
+        let provider_source = |second_enemy_id| {
+            source(&format!(
+                concat!(
+                    "const Project = {{\n",
+                    "  .runtime_token = @type.int;\n",
+                    "  .first_enemy_id = @type.text;\n",
+                    "  .second_enemy_id = @type.text;\n",
+                    "}}\n",
+                    "let project :: @type.int -> Project\n",
+                    "let project = fn runtime_token => {{\n",
+                    "  .runtime_token = runtime_token;\n",
+                    "  .first_enemy_id = \"guard\";\n",
+                    "  .second_enemy_id = \"{}\";\n",
+                    "}}\n",
+                    "return {{ .project = project; }}\n",
+                ),
+                second_enemy_id,
+            ))
+        };
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                ENTRY.to_owned(),
+                source(concat!(
+                    "const ProjectProvider = import \"project\"\n",
+                    "let active_enemy_id = fn runtime_token => do:\n",
+                    "  let Project = ProjectProvider.project runtime_token\n",
+                    "  let use_first_enemy = case @int.cmp runtime_token 0 of\n",
+                    "    #Equal => #True\n",
+                    "    #Greater => #False\n",
+                    "    #Less => #False\n",
+                    "  if use_first_enemy:\n",
+                    "    return Project.first_enemy_id\n",
+                    "  return Project.second_enemy_id\n",
+                    "let enemy_id_length :: @type.int -> @type.int\n",
+                    "let enemy_id_length = fn runtime_token => ",
+                    "@text.len (active_enemy_id runtime_token)\n",
+                    "return { .enemy_id_length = enemy_id_length; }\n",
+                )),
+            )
+            .expect("game source should load");
+        session
+            .configure_module(
+                ENTRY,
+                BTreeMap::from([("project".to_owned(), PROVIDER.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("game source should configure");
+        session
+            .add_source(PROVIDER.to_owned(), provider_source("guard"))
+            .expect("initial project source should load");
+        session
+            .configure_module(PROVIDER, BTreeMap::new(), BTreeMap::new())
+            .expect("project source should configure");
+        let units = BTreeMap::from([
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("project".to_owned(), PROVIDER.to_owned()),
+        ]);
+        let initial = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("initial development program should compile");
+        session
+            .commit_development_program(initial.transaction_id)
+            .expect("initial development program should commit");
+
+        session
+            .add_source(PROVIDER.to_owned(), provider_source("reinforcement"))
+            .expect("edited project source should load");
+        let edited = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("edited development program should compile");
+        let artifact_sources = edited
+            .units
+            .iter()
+            .map(|unit| (unit.name.as_str(), unit.artifact.artifact_source()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            artifact_sources,
+            BTreeMap::from([("game", "unit-cache"), ("project", "compiled")])
+        );
+    }
+
+    #[test]
     fn development_artifacts_commit_only_the_current_preparation() {
         const ENTRY: &str = "transaction.blot";
         let mut session = CompilerSession::default();
@@ -6603,6 +6681,116 @@ mod tests {
     }
 
     #[test]
+    fn surface_iteration_erases_iterator_sum_dispatch() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../experiments/generated-code/programs/surface_iteration.blot"
+                    )),
+                )
+                .expect("surface iteration source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("surface iteration source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let functions = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions");
+            let loop_function = functions
+                .iter()
+                .find(|function| {
+                    let entry = function["entryBlock"]
+                        .as_u64()
+                        .expect("runtime function entry block");
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                        .any(|block| {
+                            block["terminator"]["kind"] == "branch"
+                                && block["terminator"]["target"] == entry
+                        })
+                })
+                .unwrap_or_else(|| {
+                    panic!("surface iteration should contain an entry-cycle loop: {prepared}")
+                });
+            let blocks = loop_function["blocks"]
+                .as_array()
+                .expect("runtime loop blocks");
+            assert!(
+                blocks
+                    .iter()
+                    .all(|block| block["terminator"]["kind"] != "switch"),
+                "iterator sum dispatch remained in {loop_function}"
+            );
+            for operation in blocks
+                .iter()
+                .flat_map(|block| block["operations"].as_array().expect("runtime operations"))
+            {
+                assert!(
+                    operation["kind"] != "sum.make"
+                        && operation["kind"] != "sum.tag"
+                        && operation["kind"] != "sum.payload",
+                    "iterator sum operation remained in {loop_function}"
+                );
+            }
+            let compiled = session
+                .compile_module("main.blot")
+                .expect("surface iteration should emit Wasm");
+            let loop_shape = wasmparser::Parser::new(0)
+                .parse_all(&compiled.wasm)
+                .filter_map(
+                    |payload| match payload.expect("emitted Wasm should parse") {
+                        wasmparser::Payload::CodeSectionEntry(body) => Some(body),
+                        _ => None,
+                    },
+                )
+                .find_map(|body| {
+                    let mut has_counted_comparison = false;
+                    let mut loop_count = 0;
+                    let mut dispatcher_comparisons = 0;
+                    let mut branch_tables = 0;
+                    for operator in body
+                        .get_operators_reader()
+                        .expect("function operators should parse")
+                    {
+                        match operator.expect("operator should parse") {
+                            wasmparser::Operator::I64LtS => has_counted_comparison = true,
+                            wasmparser::Operator::Loop { .. } => loop_count += 1,
+                            wasmparser::Operator::I32Eq => dispatcher_comparisons += 1,
+                            wasmparser::Operator::BrTable { .. } => branch_tables += 1,
+                            _ => {}
+                        }
+                    }
+                    has_counted_comparison.then_some((
+                        loop_count,
+                        dispatcher_comparisons,
+                        branch_tables,
+                    ))
+                })
+                .expect("surface iteration should emit a counted loop");
+            assert_eq!(loop_shape, (1, 0, 0), "surface iteration used a dispatcher");
+        });
+    }
+
+    #[test]
     fn arena_list_prepares_with_one_recursive_arena_representation() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -6675,7 +6863,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_radix_sorts_prepare_with_recursive_store_results() {
+    fn owned_radix_sorts_prepare_and_emit_with_recursive_store_results() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
                 "prelude.blot",
@@ -6702,11 +6890,14 @@ mod tests {
             let prepared = session.prepare_runtime_hir("main.blot");
 
             assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("owned radix sorts should emit Wasm");
         });
     }
 
     #[test]
-    fn owned_merge_sort_prepares_with_recursive_store_results() {
+    fn owned_merge_sort_prepares_and_emits_with_recursive_store_results() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
                 "prelude.blot",
@@ -6733,6 +6924,9 @@ mod tests {
             let prepared = session.prepare_runtime_hir("main.blot");
 
             assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("owned merge sort should emit Wasm");
         });
     }
 
@@ -6890,6 +7084,452 @@ mod tests {
     }
 
     #[test]
+    fn equal_residual_array_literals_share_static_data() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const at :: Int -> Int\n",
+                        "const at = fn index => Array.expect_get ((&[10, 20, 30]), index)\n",
+                        "const at_again :: Int -> Int\n",
+                        "const at_again = fn index => Array.expect_get ((&[10, 20, 30]), index)\n",
+                        "return { .at = at; .at_again = at_again; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let operations = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let static_stores = prepared["module"]["staticStores"]
+                .as_array()
+                .expect("static Store pool");
+            assert_eq!(static_stores.len(), 1, "{prepared}");
+            assert_eq!(
+                static_stores[0]["values"],
+                serde_json::json!([
+                    { "kind": "signed-integer-64", "value": "10" },
+                    { "kind": "signed-integer-64", "value": "20" },
+                    { "kind": "signed-integer-64", "value": "30" },
+                ])
+            );
+            assert_eq!(
+                operations
+                    .iter()
+                    .filter(|operation| operation["kind"] == "store.literal")
+                    .count(),
+                2,
+                "{prepared}"
+            );
+            for literal in operations
+                .iter()
+                .filter(|operation| operation["kind"] == "store.literal")
+            {
+                assert_eq!(literal["staticStore"], 0, "{prepared}");
+                assert_eq!(literal["operands"], serde_json::json!([]), "{prepared}");
+            }
+            assert!(
+                !operations.iter().any(|operation| {
+                    operation["kind"] == "constant"
+                        && matches!(
+                            operation["value"]["value"].as_str(),
+                            Some("10" | "20" | "30")
+                        )
+                }),
+                "static literal producers remained in {prepared}"
+            );
+            assert!(
+                !operations
+                    .iter()
+                    .any(|operation| operation["kind"] == "store.grow"),
+                "{prepared}"
+            );
+            let compiled = session
+                .compile_module("main.blot")
+                .expect("pooled Store literal should emit Wasm");
+            let data_segments = wasmparser::Parser::new(0)
+                .parse_all(&compiled.wasm)
+                .filter_map(
+                    |payload| match payload.expect("emitted Wasm should parse") {
+                        wasmparser::Payload::DataSection(section) => Some(section.count()),
+                        _ => None,
+                    },
+                )
+                .sum::<u32>();
+            assert_eq!(
+                data_segments, 1,
+                "equal literals should share one data segment"
+            );
+        });
+    }
+
+    #[test]
+    fn ordinary_runtime_helpers_are_outlined_once() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const increment :: Int -> Int\n",
+                        "const increment = fn value => @int.add value 1\n",
+                        "const left :: Int -> Int\n",
+                        "const left = fn value => increment value\n",
+                        "const right :: Int -> Int\n",
+                        "const right = fn value => increment value\n",
+                        "return { .left = left; .right = right; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let module = &prepared["module"];
+            let exported_functions = module["exports"]
+                .as_array()
+                .expect("runtime exports")
+                .iter()
+                .filter_map(|exported| exported["function"].as_u64())
+                .collect::<Vec<_>>();
+            assert_eq!(exported_functions.len(), 2, "{prepared}");
+            let calls = module["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                        .flat_map(|block| {
+                            block["operations"].as_array().expect("runtime operations")
+                        })
+                        .filter_map(|operation| {
+                            (operation["kind"] == "call.direct")
+                                .then(|| operation["function"].as_u64())
+                                .flatten()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let reachable = exported_functions
+                .iter()
+                .map(|exported| {
+                    let mut reached = BTreeSet::new();
+                    let mut pending = vec![*exported];
+                    while let Some(function) = pending.pop() {
+                        for target in &calls[function as usize] {
+                            if reached.insert(*target) {
+                                pending.push(*target);
+                            }
+                        }
+                    }
+                    reached
+                })
+                .collect::<Vec<_>>();
+            let shared = reachable[0]
+                .intersection(&reachable[1])
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(shared.len(), 1, "{prepared}");
+            assert!(!exported_functions.contains(&shared[0]), "{prepared}");
+        });
+    }
+
+    #[test]
+    fn an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/owned_radix_sorts.blot")),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn an_empty_scratch_argument_uses_the_contextual_result_representation() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/owned_merge_sort.blot")),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn surface_for_preserves_owned_array_accumulators() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const construct :: Int -> Int\n",
+                        "const construct = fn count => do:\n",
+                        "  let values :: [Int]\n",
+                        "  let values = Array.empty\n",
+                        "  for value in Iter.range (0, count):\n",
+                        "    values := @array.push values value\n",
+                        "  return Array.length values\n",
+                        "return { .construct = construct; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let growth = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .find(|operation| operation["kind"] == "store.grow")
+                .expect("surface loop should append to its Store");
+            assert_eq!(growth["update"], "owned-reuse", "{prepared}");
+        });
+    }
+
+    #[test]
+    fn nested_surface_for_preserves_returned_array_authority() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const append_batch = fn (values, start, count) => do:\n",
+                        "  for offset in Iter.range (0, count):\n",
+                        "    values := @array.push values (start + offset)\n",
+                        "  return values\n",
+                        "const construct :: Int -> Int\n",
+                        "const construct = fn count => do:\n",
+                        "  let values :: [Int]\n",
+                        "  let values = Array.empty\n",
+                        "  for batch in Iter.range (0, count):\n",
+                        "    values := append_batch (values, batch * 4, 4)\n",
+                        "  return Array.length values\n",
+                        "return { .construct = construct; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let growth = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .filter(|operation| operation["kind"] == "store.grow")
+                .collect::<Vec<_>>();
+            assert!(!growth.is_empty(), "nested loops should append to a Store");
+            assert!(
+                growth
+                    .iter()
+                    .all(|operation| operation["update"] == "owned-reuse"),
+                "{prepared}"
+            );
+        });
+    }
+
+    #[test]
+    fn function_exports_share_residual_specializations() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const rec increment_many :: (Int, Int) -> Int\n",
+                        "const rec increment_many = fn (value, remaining) => do:\n",
+                        "  if remaining <= 0:\n",
+                        "    return value\n",
+                        "  return increment_many (value + 1, remaining - 1)\n",
+                        "const first :: Int -> Int\n",
+                        "const first = fn value => increment_many (0, value)\n",
+                        "const second :: Int -> Int\n",
+                        "const second = fn value => increment_many (0, value)\n",
+                        "return { .first = first; .second = second; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let increment_specializations = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .filter(|function| function["name"] == "blot$residual$increment_many")
+                .count();
+            assert_eq!(increment_specializations, 1, "{prepared}");
+        });
+    }
+
+    #[test]
     fn dynamic_integer_case_lowers_every_literal_before_the_wildcard() {
         let mut session = CompilerSession::default();
         session
@@ -6936,6 +7576,140 @@ mod tests {
             4,
             "{prepared}"
         );
+    }
+
+    #[test]
+    fn dynamic_optional_integer_case_binds_the_present_arm() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/dynamic_optional_field.blot")),
+                )
+                .expect("dynamic optional field source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("dynamic optional field source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("dynamic optional field should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn runtime_fold_residualizes_its_recursive_step_with_a_concrete_argument() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../examples/residual_runtime_fold_projection.blot"
+                    )),
+                )
+                .expect("runtime fold source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("runtime fold source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let recursive_steps = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .filter(|function| function["name"] == "blot$residual$go")
+                .count();
+            assert_eq!(recursive_steps, 1, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("runtime fold should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn static_boolean_argument_crosses_residual_iteration() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "project.blot".to_owned(),
+                    source(include_str!(
+                        "../../examples/lib/residual_boolean_project.blot"
+                    )),
+                )
+                .expect("project source should load");
+            session
+                .configure_module(
+                    "project.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("project source should configure");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../examples/residual_boolean_argument.blot"
+                    )),
+                )
+                .expect("residual Boolean source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./lib/residual_boolean_project.blot".to_owned(),
+                            "project.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("residual Boolean source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("residual Boolean argument should emit Wasm");
+        });
     }
 
     #[test]
@@ -7272,7 +8046,49 @@ mod tests {
     }
 
     #[test]
-    fn compositional_game_loop_prepares_and_emits_wasm() {
+    fn a_recursive_effect_continuation_can_return_unit() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const Pulse = @effect.host { .emit = Int -> Unit; }\n",
+                        "const run = fn count => do:\n",
+                        "  for index in Iter.range (0, count):\n",
+                        "    use Pulse.emit index\n",
+                        "  return ()\n",
+                        "return { .run = run; }\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("recursive Unit continuation should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn engine_entry_points_prepare_and_the_game_loop_emits_wasm() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
                 "prelude.blot",
@@ -7283,6 +8099,10 @@ mod tests {
                 .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
                 .expect("prelude snapshot should install");
             for (path, text) in [
+                (
+                    "case-studies/engine/lib/ecs.blot",
+                    include_str!("../../case-studies/engine/lib/ecs.blot"),
+                ),
                 (
                     "case-studies/engine/lib/math.blot",
                     include_str!("../../case-studies/engine/lib/math.blot"),
@@ -7323,11 +8143,22 @@ mod tests {
                     "case-studies/engine/game_loop.blot",
                     include_str!("../../case-studies/engine/game_loop.blot"),
                 ),
+                (
+                    "case-studies/engine/main.blot",
+                    include_str!("../../case-studies/engine/main.blot"),
+                ),
             ] {
                 session
                     .add_source(path.to_owned(), source(text))
                     .expect("engine source should load");
             }
+            session
+                .configure_module(
+                    "case-studies/engine/lib/ecs.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("ECS should configure");
             session
                 .configure_module(
                     "case-studies/engine/lib/math.blot",
@@ -7444,6 +8275,31 @@ mod tests {
                     BTreeMap::new(),
                 )
                 .expect("game loop should configure");
+            session
+                .configure_module(
+                    "case-studies/engine/main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./lib/ecs.blot".to_owned(),
+                            "case-studies/engine/lib/ecs.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/frame.blot".to_owned(),
+                            "case-studies/engine/lib/frame.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/math.blot".to_owned(),
+                            "case-studies/engine/lib/math.blot".to_owned(),
+                        ),
+                        (
+                            "./lib/render.blot".to_owned(),
+                            "case-studies/engine/lib/render.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("engine should configure");
 
             let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
 
@@ -7451,6 +8307,10 @@ mod tests {
             session
                 .compile_module("case-studies/engine/game_loop.blot")
                 .expect("game loop should emit Wasm");
+
+            let prepared = session.prepare_runtime_hir("case-studies/engine/main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
         });
     }
 

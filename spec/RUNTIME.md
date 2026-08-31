@@ -67,8 +67,9 @@ A Runtime-HIR module contains:
 
 - first-order control-flow graphs;
 - closed scalar and aggregate representations;
+- a typed table of immutable static scalar Stores;
 - explicit calls and host requests with normalized input/result ownership;
-- explicit Store allocation, read, write, root, and release operations;
+- explicit Store literal, allocation, read, write, root, and release operations;
 - explicit traps classified by source or boundary contract;
 - closed closure environments where supported;
 - complete public import/export metadata; and
@@ -84,6 +85,14 @@ It contains no:
 - source binding name used as semantic evidence;
 - unchecked proof-required operation; or
 - private capability object crossing ABI 2.
+
+During construction, a recursive result may temporarily have a private indirect
+identity before a finite branch determines its target representation. The
+producer tracks whether that identity is settled independently of the numeric
+target identifier, because identifier zero is the ordinary `Unit`
+representation. Every published module contains only settled indirect types;
+missing or conflicting settlement is a compiler invariant failure rather than a
+Runtime-HIR state accepted by validation.
 
 ### 1.1 Development links
 
@@ -184,6 +193,17 @@ an invariant failure, not a Runtime-HIR feature or backend inference case.
 The target write is related to construction of a fresh source result. It does
 not retroactively make source aliases mutable.
 
+A closed residual array construction is one `store.literal` operation. A dynamic
+literal's operands have the Store's checked element representation and remain in
+source order. Runtime-HIR schema 9 may instead name one entry in the module's
+typed static-Store table and carry no operands. Normalization uses that form for
+scalar constants and interns equal element type and value sequences across
+residual functions and exports. Emission places each table entry in immutable
+static data. Other element representations allocate once and write each operand
+once; the emitter must not reconstruct either form as a chain of persistent
+Store grows. An owned update of a pooled Store first copies it into private heap
+storage, so sharing static bytes cannot make either source array mutable.
+
 A residual array literal remains a static `Array` value until its first runtime
 spread. At that boundary the producer materializes the static prefix as a fresh
 Store, then appends the spread operand with a `store.length` / `store.read` /
@@ -213,6 +233,13 @@ demand. Compiler-local control envelopes may merge disjoint single-constructor
 representations into the closed constructor set already established by surface
 lowering. Dense `integer-32` switches emit `br_table`; other switches emit a
 balanced comparison tree.
+
+When every predecessor constructs a known member of that closed sum and no other
+reader observes the joined sum, Runtime-HIR simplification may bypass the tag
+switch. Each predecessor branches directly to the matching arm and passes the
+constructor payload as an arm parameter. The source case remains a switch when
+an arm is shared, an incoming edge is indirect, or another operation reads the
+sum.
 
 Borrowed reads never grant Store ownership. Splits and joins consume exact
 family, root, footprint, and produced-value lineage. Equal-looking intervals or
@@ -335,6 +362,27 @@ Integer arithmetic, memory operations, and host calls use the source or ABI
 behavior selected by their validated Runtime-HIR operation. A convenient Wasm
 instruction is not permission to change overflow, bounds, NaN, evaluation-order,
 or ownership semantics.
+
+The private allocator stores capacity immediately before each returned heap
+pointer. Fresh nonempty allocations reserve at least 16 bytes, and authorized
+growth doubles capacity until it covers the requested size. Growth at the heap
+cursor extends in place; other growth moves and copies only when capacity is
+exhausted. The capacity word is backend-private and does not change the Store,
+canonical ABI, or `cabi_realloc` pointer contract.
+
+The emitter interns equal physical WebAssembly function signatures. Within one
+function it derives Runtime-HIR block liveness, assigns identical flattened
+representations to the same local tuple only when their live ranges do not
+interfere, and emits adjacent equal local types as counted declarations. These
+are physical layout choices over validated values, not another type judgment.
+
+A structured entry loop may use an iteration allocation region only when each
+owned entry parameter is carried across every entry backedge as the exact same
+Runtime-HIR value. The function saves the private heap cursor before the loop
+and restores it on each such backedge after branch arguments have been assigned.
+Replacing an owned parameter disables the region because the new value may
+retain an iteration allocation. Plain scalar parameters may vary. Returns and
+exits do not restore the cursor, so returned values remain live.
 
 Store and Scratch elements use a private memory layout distinct from public ABI
 layout. Fixed-width SIMD vectors and masks occupy 16-byte-aligned, 16-byte slots

@@ -140,16 +140,15 @@ pub extern "C" fn destroy_compiler_session(handle: u32) -> i32 {
     let Ok(index) = session_index(handle) else {
         return 1;
     };
-    SESSIONS.with(|sessions| {
+    let session = SESSIONS.with(|sessions| {
         let mut sessions = sessions.borrow_mut();
-        let Some(slot) = sessions.get_mut(index) else {
-            return 1;
-        };
-        if slot.take().is_none() {
-            return 1;
-        }
-        0
-    })
+        sessions.get_mut(index).and_then(Option::take)
+    });
+    let Some(session) = session else {
+        return 1;
+    };
+    drop(session);
+    0
 }
 
 #[unsafe(no_mangle)]

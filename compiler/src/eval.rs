@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
 
@@ -1334,11 +1334,39 @@ impl Runtime {
 
 pub enum Computation {
     Done(Result<Value, Diagnostic>),
-    Step(Box<dyn FnOnce() -> Computation>),
+    Step(ComputationStep),
     Perform {
         request: Box<Perform>,
-        resume: Box<dyn FnOnce(Value) -> Computation>,
+        resume: ComputationResume,
     },
+}
+
+pub struct ComputationStep {
+    next: Box<dyn FnOnce() -> Computation>,
+    continuations: VecDeque<ComputationContinuation>,
+}
+
+pub struct ComputationResume {
+    next: Box<dyn FnOnce(Value) -> Computation>,
+    continuations: VecDeque<ComputationContinuation>,
+}
+
+enum ComputationContinuation {
+    Value(Box<dyn FnOnce(Value) -> Computation>),
+    Result(Box<dyn FnOnce(Result<Value, Diagnostic>) -> Computation>),
+    Origin(Rc<String>),
+}
+
+impl ComputationStep {
+    pub(crate) fn advance(self) -> Computation {
+        Computation::attach_continuations((self.next)(), self.continuations)
+    }
+}
+
+impl ComputationResume {
+    pub(crate) fn advance(self, value: Value) -> Computation {
+        Computation::attach_continuations((self.next)(value), self.continuations)
+    }
 }
 
 impl Computation {
@@ -1351,18 +1379,87 @@ impl Computation {
     }
 
     fn step(next: impl FnOnce() -> Computation + 'static) -> Self {
-        Self::Step(Box::new(next))
+        Self::Step(ComputationStep {
+            next: Box::new(next),
+            continuations: VecDeque::new(),
+        })
+    }
+
+    fn perform(request: Box<Perform>, resume: impl FnOnce(Value) -> Computation + 'static) -> Self {
+        Self::Perform {
+            request,
+            resume: ComputationResume {
+                next: Box::new(resume),
+                continuations: VecDeque::new(),
+            },
+        }
+    }
+
+    fn attach_continuations(
+        mut computation: Computation,
+        mut continuations: VecDeque<ComputationContinuation>,
+    ) -> Computation {
+        loop {
+            computation = match computation {
+                Computation::Done(result) => {
+                    let Some(continuation) = continuations.pop_front() else {
+                        return Computation::Done(result);
+                    };
+                    match continuation {
+                        ComputationContinuation::Value(next) => match result {
+                            Ok(value) => Computation::step(move || next(value)),
+                            Err(error) => Computation::Done(Err(error)),
+                        },
+                        ComputationContinuation::Result(next) => {
+                            Computation::step(move || next(result))
+                        }
+                        ComputationContinuation::Origin(origin) => match result {
+                            Ok(value) => Computation::Done(Ok(value)),
+                            Err(error) => Computation::Done(Err(error.at(&origin))),
+                        },
+                    }
+                }
+                Computation::Step(mut step) => {
+                    if step.continuations.is_empty() {
+                        step.continuations = continuations;
+                    } else {
+                        step.continuations.append(&mut continuations);
+                    }
+                    return Computation::Step(step);
+                }
+                Computation::Perform {
+                    request,
+                    mut resume,
+                } => {
+                    if resume.continuations.is_empty() {
+                        resume.continuations = continuations;
+                    } else {
+                        resume.continuations.append(&mut continuations);
+                    }
+                    return Computation::Perform { request, resume };
+                }
+            };
+        }
     }
 
     pub fn and_then(self, next: impl FnOnce(Value) -> Computation + 'static) -> Computation {
         match self {
-            Computation::Done(Ok(value)) => next(value),
+            Computation::Done(Ok(value)) => Computation::step(move || next(value)),
             Computation::Done(Err(error)) => Computation::Done(Err(error)),
-            Computation::Step(step) => Computation::step(move || step().and_then(next)),
-            Computation::Perform { request, resume } => Computation::Perform {
+            Computation::Step(mut step) => {
+                step.continuations
+                    .push_back(ComputationContinuation::Value(Box::new(next)));
+                Computation::Step(step)
+            }
+            Computation::Perform {
                 request,
-                resume: Box::new(move |value| resume(value).and_then(next)),
-            },
+                mut resume,
+            } => {
+                resume
+                    .continuations
+                    .push_back(ComputationContinuation::Value(Box::new(next)));
+                Computation::Perform { request, resume }
+            }
         }
     }
 
@@ -1374,12 +1471,21 @@ impl Computation {
         next: impl FnOnce(Result<Value, Diagnostic>) -> Computation + 'static,
     ) -> Computation {
         match self {
-            Computation::Done(result) => next(result),
-            Computation::Step(step) => Computation::step(move || step().map_result(next)),
-            Computation::Perform { request, resume } => Computation::Perform {
+            Computation::Done(result) => Computation::step(move || next(result)),
+            Computation::Step(mut step) => {
+                step.continuations
+                    .push_back(ComputationContinuation::Result(Box::new(next)));
+                Computation::Step(step)
+            }
+            Computation::Perform {
                 request,
-                resume: Box::new(move |value| resume(value).map_result(next)),
-            },
+                mut resume,
+            } => {
+                resume
+                    .continuations
+                    .push_back(ComputationContinuation::Result(Box::new(next)));
+                Computation::Perform { request, resume }
+            }
         }
     }
 
@@ -1387,11 +1493,20 @@ impl Computation {
         match self {
             Computation::Done(Ok(value)) => Computation::Done(Ok(value)),
             Computation::Done(Err(error)) => Computation::Done(Err(error.at(&origin))),
-            Computation::Step(step) => Computation::step(move || step().at(origin)),
-            Computation::Perform { request, resume } => Computation::Perform {
+            Computation::Step(mut step) => {
+                step.continuations
+                    .push_back(ComputationContinuation::Origin(origin));
+                Computation::Step(step)
+            }
+            Computation::Perform {
                 request,
-                resume: Box::new(move |value| resume(value).at(origin)),
-            },
+                mut resume,
+            } => {
+                resume
+                    .continuations
+                    .push_back(ComputationContinuation::Origin(origin));
+                Computation::Perform { request, resume }
+            }
         }
     }
 }
@@ -1413,7 +1528,7 @@ pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
     loop {
         match computation {
             Computation::Done(result) => return result,
-            Computation::Step(step) => computation = step(),
+            Computation::Step(step) => computation = step.advance(),
             Computation::Perform { request, .. } => {
                 return Err(Diagnostic::new(
                     "BLOT_UNHANDLED_EFFECT",
@@ -1568,8 +1683,8 @@ pub fn evaluate_expression(
             Diagnostic::new(
                 "BLOT_EVALUATION_LIMIT",
                 format!(
-                    "Evaluation exceeded its deterministic limit of {} steps.",
-                    runtime.limit
+                    "Evaluation of `{module_path}` expression {} at bytes {}..{} exceeded its deterministic limit of {} steps.",
+                    expression_id.0, span.start, span.end, runtime.limit
                 ),
                 span,
             )
@@ -2005,7 +2120,10 @@ fn evaluate_dynamic_case(
             arms,
             span,
         ),
-        RuntimeMeaning::Plain | RuntimeMeaning::SharedStore | RuntimeMeaning::ReusableStore => {
+        RuntimeMeaning::Plain
+        | RuntimeMeaning::DeferredStore
+        | RuntimeMeaning::SharedStore
+        | RuntimeMeaning::ReusableStore => {
             let boolean = runtime
                 .residual
                 .as_ref()
@@ -2232,11 +2350,14 @@ fn evaluate_integer_case(
                     ));
                 }
             },
-            Pattern::Wildcard { .. } if fallback.is_none() => fallback = Some(arm.body),
+            Pattern::Unit { .. } if fallback.is_none() => {}
+            Pattern::Name { .. } | Pattern::Wildcard { .. } if fallback.is_none() => {
+                fallback = Some(arm)
+            }
             _ => {
                 return Computation::error(Diagnostic::new(
                     "BLOT_UNSUPPORTED_LOWERING",
-                    "A dynamic integer case requires literal or staged pinned integer arms followed by one wildcard.",
+                    "A dynamic integer case requires literal or staged pinned integer arms followed by one wildcard or binding arm.",
                     span,
                 ));
             }
@@ -2245,10 +2366,18 @@ fn evaluate_integer_case(
     let Some(fallback) = fallback else {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "The final dynamic integer arm must be a wildcard.",
+            "The final dynamic integer arm must be a wildcard or binding arm.",
             span,
         ));
     };
+    if matches.is_empty() {
+        let scope =
+            match integer_fallback_scope(&loaded, environment, &target, fallback.pattern, span) {
+                Ok(scope) => scope,
+                Err(error) => return Computation::error(error),
+            };
+        return evaluate_expression(context, module_path, fallback.body, scope, runtime);
+    }
     let Some(trace) = runtime.residual.clone() else {
         return Computation::error(Diagnostic::new(
             "BLOT_RUST_INVARIANT",
@@ -2277,13 +2406,32 @@ fn evaluate_integer_case(
         module_path,
         environment,
         runtime,
+        target,
         Rc::new(matches),
-        fallback,
+        Rc::new(fallback),
         0,
         switch,
         Vec::new(),
         span,
     )
+}
+
+fn integer_fallback_scope(
+    module: &Module,
+    environment: Environment,
+    target: &RuntimeValue,
+    pattern: PatternId,
+    span: Span,
+) -> Result<Environment, Diagnostic> {
+    let scope = child_env(Some(environment));
+    if match_pattern(module, pattern, &Value::Runtime(target.clone()), &scope) {
+        return Ok(scope);
+    }
+    Err(Diagnostic::new(
+        "BLOT_RUST_INVARIANT",
+        "A checked dynamic integer fallback did not match its runtime value.",
+        span,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2292,8 +2440,9 @@ fn evaluate_integer_switch_arm(
     module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
+    target: RuntimeValue,
     matches: Rc<Vec<(Value, ExpressionId)>>,
-    fallback: ExpressionId,
+    fallback: Rc<crate::ast::Arm>,
     index: usize,
     switch: Rc<crate::hir::ResidualSwitch>,
     outcomes: Vec<(usize, Option<Value>)>,
@@ -2306,26 +2455,33 @@ fn evaluate_integer_switch_arm(
             span,
         ));
     };
-    let (block, body) = match matches.get(index) {
-        Some((_, body)) => (switch.arms[index], *body),
-        None => (switch.fallback, fallback),
+    let (block, body, fallback_pattern) = match matches.get(index) {
+        Some((_, body)) => (switch.arms[index], *body, None),
+        None => (switch.fallback, fallback.body, Some(fallback.pattern)),
     };
     trace.borrow_mut().select_block(block);
+    let scope = if let Some(pattern) = fallback_pattern {
+        let loaded = match module(&context, &module_path) {
+            Ok(module) => module,
+            Err(error) => return Computation::error(error),
+        };
+        match integer_fallback_scope(&loaded, environment.clone(), &target, pattern, span) {
+            Ok(scope) => scope,
+            Err(error) => return Computation::error(error),
+        }
+    } else {
+        child_env(Some(environment.clone()))
+    };
     let next_context = context.clone();
     let join_context = context.clone();
     let next_module = module_path.clone();
     let next_environment = environment.clone();
     let next_runtime = runtime.clone();
+    let next_target = target.clone();
     let next_matches = matches.clone();
+    let next_fallback = fallback.clone();
     let next_switch = switch.clone();
-    evaluate_expression(
-        context,
-        module_path,
-        body,
-        child_env(Some(environment)),
-        runtime,
-    )
-    .map_result(move |result| {
+    evaluate_expression(context, module_path, body, scope, runtime).map_result(move |result| {
         let value = match result {
             Ok(value) => Some(value),
             Err(error) if error.code == "BLOT_PANIC" => {
@@ -2343,8 +2499,9 @@ fn evaluate_integer_switch_arm(
                 next_module,
                 next_environment,
                 next_runtime,
+                next_target,
                 next_matches,
-                fallback,
+                next_fallback,
                 index + 1,
                 next_switch,
                 outcomes,
@@ -3671,14 +3828,7 @@ fn apply_with_expected(
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
             };
-            let crosses_development_boundary = runtime.residual.as_ref().is_some_and(|trace| {
-                trace
-                    .borrow()
-                    .crosses_development_boundary(runtime.module.as_str(), closure_module.as_str())
-            });
-            if (self_name.is_some() || crosses_development_boundary)
-                && let Some(trace) = runtime.residual.clone()
-            {
+            if let Some(trace) = runtime.residual.clone() {
                 let name = self_name.clone().unwrap_or_else(|| {
                     let definition = loaded.arena.expression_span(body);
                     format!("{closure_module}@{}", definition.start)
@@ -3694,6 +3844,10 @@ fn apply_with_expected(
                         environment: &environment,
                         signature: signature.as_deref(),
                         reuse: reuse_assertion.is_some(),
+                        root_application: matches!(
+                            application.compiler_steps.last(),
+                            Some(CompilerApplication::RuntimeExportParameter(_))
+                        ),
                     },
                     &argument,
                     expected_argument.as_ref(),
@@ -3748,20 +3902,12 @@ fn apply_with_expected(
                 },
                 _ => argument,
             };
-            if let Value::DeferredScratch { capacity } = &argument
-                && let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body)
+            if let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body)
                 && let Some(trace) = &runtime.residual
             {
                 let expected = substitute_signature(domain, &scope);
-                match trace.borrow_mut().primitive(
-                    "@scratch.with_capacity",
-                    &[(**capacity).clone()],
-                    &[],
-                    Some(&expected),
-                    span,
-                ) {
-                    Ok(Some(specialized)) => argument = specialized,
-                    Ok(None) => {}
+                match specialize_deferred_scratch(trace, argument, &expected, span) {
+                    Ok(specialized) => argument = specialized,
                     Err(error) => return Computation::error(error),
                 }
             }
@@ -3788,8 +3934,20 @@ fn apply_with_expected(
                 creation_scope,
             });
             Computation::step(move || {
-                evaluate_expression(context, closure_module, body, scope, closure_runtime).and_then(
-                    move |mut value| {
+                evaluate_expression(context, closure_module, body, scope, closure_runtime)
+                    .map_result(move |result| {
+                        let mut value = match result {
+                            Ok(value) => value,
+                            Err(mut error) => {
+                                if let Some((_, compilation)) = &residual_compilation {
+                                    error.message = format!(
+                                        "{} While outlining residual closure `{}`.",
+                                        error.message, compilation.name
+                                    );
+                                }
+                                return Computation::error(error);
+                            }
+                        };
                         if let Some((trace, scope)) = reuse_scope
                             && let Err(error) = trace.borrow().finish_reuse_scope(
                                 scope,
@@ -3822,8 +3980,7 @@ fn apply_with_expected(
                             Ok(value) => Computation::value(value),
                             Err(error) => Computation::error(error),
                         }
-                    },
-                )
+                    })
             })
         }
         Value::Tag {
@@ -3885,10 +4042,7 @@ fn apply_with_expected(
                 host,
                 application,
             };
-            Computation::Perform {
-                request: Box::new(request),
-                resume: Box::new(Computation::value),
-            }
+            Computation::perform(Box::new(request), Computation::value)
         }
         Value::Continuation { used, resume } => {
             if *used.borrow() {
@@ -4347,7 +4501,7 @@ fn drive(
         Computation::Step(step) => Computation::step(move || {
             drive(
                 context,
-                step(),
+                step.advance(),
                 effect_id,
                 handler,
                 span,
@@ -4366,20 +4520,17 @@ fn drive(
                 let next_handler = handler.clone();
                 let next_runtime = runtime.clone();
                 let next_application = application.clone();
-                return Computation::Perform {
-                    request,
-                    resume: Box::new(move |value| {
-                        drive(
-                            next_context,
-                            resume(value),
-                            effect_id,
-                            next_handler,
-                            span,
-                            next_runtime,
-                            next_application,
-                        )
-                    }),
-                };
+                return Computation::perform(request, move |value| {
+                    drive(
+                        next_context,
+                        resume.advance(value),
+                        effect_id,
+                        next_handler,
+                        span,
+                        next_runtime,
+                        next_application,
+                    )
+                });
             };
             let resume: Resume = Rc::new(RefCell::new(Some(Box::new({
                 let next_context = context.clone();
@@ -4389,7 +4540,7 @@ fn drive(
                 move |value| {
                     drive(
                         next_context,
-                        resume(value),
+                        resume.advance(value),
                         effect_id,
                         next_handler,
                         span,
@@ -4900,6 +5051,54 @@ fn adapt_argument(argument: Value, expected: &Value, span: Span) -> Result<Value
     Ok(Value::Shape(adapted))
 }
 
+fn specialize_deferred_scratch(
+    trace: &Rc<RefCell<crate::hir::ResidualTrace>>,
+    argument: Value,
+    expected: &Value,
+    span: Span,
+) -> Result<Value, Diagnostic> {
+    let expected = match expected {
+        Value::Extended { inner, .. } => inner.as_ref(),
+        expected => expected,
+    };
+    match (argument, expected) {
+        (Value::DeferredScratch { capacity }, Value::ScratchType(_)) => trace
+            .borrow_mut()
+            .primitive(
+                "@scratch.with_capacity",
+                &[*capacity],
+                &[],
+                Some(expected),
+                span,
+            )?
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    "A residual Scratch constructor did not produce a runtime value.",
+                    span,
+                )
+            }),
+        (Value::Shape(arguments), Value::Shape(fields)) => {
+            let mut specialized = OrderedFields::default();
+            for (name, expected) in fields {
+                let argument = arguments.get(name).cloned().ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        format!("A checked residual argument omitted field `.{name}`."),
+                        span,
+                    )
+                })?;
+                specialized.insert(
+                    name.clone(),
+                    specialize_deferred_scratch(trace, argument, expected, span)?,
+                );
+            }
+            Ok(Value::Shape(specialized))
+        }
+        (argument, _) => Ok(argument),
+    }
+}
+
 fn signature_body(mut signature: &Value) -> &Value {
     while let Value::Forall { body, .. } = signature {
         signature = body;
@@ -5120,31 +5319,38 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
 }
 
 fn admits_omission(value: &Value) -> bool {
-    match value {
-        Value::Unit => true,
-        Value::Extended { inner, .. } => admits_omission(inner),
-        Value::Union(members) => members.iter().any(admits_omission),
-        _ => false,
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Unit => return true,
+            Value::Extended { inner, .. } => pending.push(inner),
+            Value::Union(members) => pending.extend(members.iter()),
+            _ => {}
+        }
     }
+    false
 }
 
 fn pattern_names(module: &Module, pattern: PatternId) -> Vec<String> {
-    match &module.arena.patterns[pattern.0 as usize] {
-        Pattern::Name { name, .. } => vec![name.clone()],
-        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => elements
-            .iter()
-            .flat_map(|pattern| pattern_names(module, *pattern))
-            .collect(),
-        Pattern::Constructor {
-            payload: Some(payload),
-            ..
-        } => pattern_names(module, *payload),
-        Pattern::Shape { fields, .. } => fields
-            .iter()
-            .flat_map(|field| pattern_names(module, field.pattern))
-            .collect(),
-        _ => Vec::new(),
+    let mut names = Vec::new();
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match &module.arena.patterns[pattern.0 as usize] {
+            Pattern::Name { name, .. } => names.push(name.clone()),
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+                pending.extend(elements.iter().rev());
+            }
+            Pattern::Constructor {
+                payload: Some(payload),
+                ..
+            } => pending.push(*payload),
+            Pattern::Shape { fields, .. } => {
+                pending.extend(fields.iter().rev().map(|field| field.pattern));
+            }
+            _ => {}
+        }
     }
+    names
 }
 
 fn free_names_expression(module: &Module, root: ExpressionId) -> HashSet<String> {
@@ -5288,22 +5494,25 @@ fn collect_free(
 }
 
 fn pattern_pins(module: &Module, pattern: PatternId) -> Vec<String> {
-    match &module.arena.patterns[pattern.0 as usize] {
-        Pattern::Pin { name, .. } => vec![name.clone()],
-        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => elements
-            .iter()
-            .flat_map(|pattern| pattern_pins(module, *pattern))
-            .collect(),
-        Pattern::Constructor {
-            payload: Some(payload),
-            ..
-        } => pattern_pins(module, *payload),
-        Pattern::Shape { fields, .. } => fields
-            .iter()
-            .flat_map(|field| pattern_pins(module, field.pattern))
-            .collect(),
-        _ => Vec::new(),
+    let mut pins = Vec::new();
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match &module.arena.patterns[pattern.0 as usize] {
+            Pattern::Pin { name, .. } => pins.push(name.clone()),
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+                pending.extend(elements.iter().rev());
+            }
+            Pattern::Constructor {
+                payload: Some(payload),
+                ..
+            } => pending.push(*payload),
+            Pattern::Shape { fields, .. } => {
+                pending.extend(fields.iter().rev().map(|field| field.pattern));
+            }
+            _ => {}
+        }
     }
+    pins
 }
 
 fn current_import(context: &Context, importer: &str, specifier: &str) -> Option<String> {
@@ -5329,6 +5538,122 @@ impl BigIntExt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_computation_continuations_run_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut computation = Computation::step(|| Computation::value(Value::Unit));
+                for _ in 0..20_000 {
+                    computation = computation.and_then(|_| Computation::value(Value::Unit));
+                }
+                assert!(matches!(run(computation), Ok(Value::Unit)));
+
+                let request = Perform {
+                    effect_id: 0,
+                    effect_name: "Test".to_owned(),
+                    operation: "resume".to_owned(),
+                    argument: Value::Unit,
+                    result_type: Value::Unit,
+                    operation_ownership: EffectOperationOwnership::unrestricted(),
+                    span: Span { start: 0, end: 0 },
+                    host: true,
+                    application: ApplicationSite::expression(
+                        ModuleRevision::new("continuation-test.blot"),
+                        ExpressionId(0),
+                    ),
+                };
+                let mut computation = Computation::perform(Box::new(request), Computation::value);
+                for _ in 0..20_000 {
+                    computation = computation.and_then(|_| Computation::value(Value::Unit));
+                }
+                let Computation::Perform { resume, .. } = computation else {
+                    panic!("test effect should remain suspended")
+                };
+                assert!(matches!(run(resume.advance(Value::Unit)), Ok(Value::Unit)));
+            })
+            .expect("small-stack computation test thread should start")
+            .join()
+            .expect("deep continuations should return through the computation trampoline");
+    }
+
+    #[test]
+    fn deep_omissible_types_are_inspected_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut value = Value::Unit;
+                for _ in 0..20_000 {
+                    value = Value::Extended {
+                        inner: Box::new(value),
+                        members: OrderedFields::default(),
+                    };
+                }
+
+                assert!(admits_omission(&value));
+                std::mem::forget(value);
+            })
+            .expect("small-stack omission test thread should start")
+            .join()
+            .expect("deep omission checks should use an explicit worklist");
+    }
+
+    #[test]
+    fn deep_pattern_capture_names_are_collected_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let span = Span { start: 0, end: 0 };
+                let mut arena = crate::ast::AstArena::default();
+                let first_name = arena.pattern(Pattern::Name {
+                    name: "first".to_owned(),
+                    qualifier: crate::ast::Qualifier::None,
+                    span,
+                });
+                let first_pin = arena.pattern(Pattern::Pin {
+                    name: "first_pin".to_owned(),
+                    span,
+                });
+                let second_name = arena.pattern(Pattern::Name {
+                    name: "second".to_owned(),
+                    qualifier: crate::ast::Qualifier::None,
+                    span,
+                });
+                let second_pin = arena.pattern(Pattern::Pin {
+                    name: "second_pin".to_owned(),
+                    span,
+                });
+                let mut root = arena.pattern(Pattern::Tuple {
+                    elements: vec![first_name, first_pin, second_name, second_pin],
+                    span,
+                });
+                for depth in 0..20_000 {
+                    root = arena.pattern(Pattern::Shape {
+                        fields: vec![crate::ast::ShapePatternField {
+                            name: format!("field{depth}"),
+                            pattern: root,
+                        }],
+                        span,
+                    });
+                }
+                let result = arena.expression(Expression::Unit { span });
+                let module = Module {
+                    parameter: None,
+                    declarations: Vec::new(),
+                    result,
+                    result_effects: crate::ast::ResultEffects::Pure,
+                    span,
+                    arena,
+                };
+
+                assert_eq!(pattern_names(&module, root), ["first", "second"]);
+                assert_eq!(pattern_pins(&module, root), ["first_pin", "second_pin"]);
+            })
+            .expect("small-stack pattern capture test thread should start")
+            .join()
+            .expect("deep pattern capture names should use an explicit worklist");
+    }
 
     #[derive(Clone)]
     struct CountedFactKey {

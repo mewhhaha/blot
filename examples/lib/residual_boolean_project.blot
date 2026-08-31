@@ -1,0 +1,10 @@
+open import "blot:prelude"
+
+const Project = { .values = [Int]; }
+
+const project :: Int -> Project
+const project = fn runtime_token => {
+  .values = [runtime_token];
+}
+
+return { .project = project; }

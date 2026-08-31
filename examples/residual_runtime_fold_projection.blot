@@ -1,0 +1,15 @@
+open import "blot:prelude"
+
+const project = fn runtime_token => {
+  .runtime_token = runtime_token;
+  .magazine = 12;
+}
+
+const folded_project_value :: Int -> Int
+const folded_project_value = fn state => fold (
+  [(project state).magazine],
+  0,
+  fn (sum, value) => sum + value
+)
+
+return { .folded_project_value = folded_project_value; }

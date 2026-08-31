@@ -1,0 +1,8 @@
+open import "blot:prelude"
+
+const captured_unit :: Int -> Int
+const captured_unit = fn value => do:
+  let read = fn () => value
+  return read ()
+
+return { .captured_unit = captured_unit; }

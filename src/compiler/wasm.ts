@@ -1243,6 +1243,22 @@ function decodeRuntimeHir(value: unknown): BlotRuntimeModule {
       for (const operation of operations) decodeRuntimeConstant(operation);
     }
   }
+  const staticStores = module.staticStores;
+  if (!Array.isArray(staticStores)) {
+    throw new TypeError("Rust Runtime HIR result has no static Store table");
+  }
+  for (const staticStore of staticStores) {
+    if (typeof staticStore !== "object" || staticStore === null) {
+      throw new TypeError("Rust Runtime HIR static Store is not an object");
+    }
+    const values = (staticStore as Record<string, unknown>).values;
+    if (!Array.isArray(values)) {
+      throw new TypeError("Rust Runtime HIR static Store has no value table");
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = decodeRuntimeWireConstant(values[index]);
+    }
+  }
   return value as BlotRuntimeModule;
 }
 
@@ -1250,21 +1266,22 @@ function decodeRuntimeConstant(value: unknown): void {
   if (typeof value !== "object" || value === null) return;
   const operation = value as Record<string, unknown>;
   if (operation.kind !== "constant") return;
-  const wire = operation.value;
+  operation.value = decodeRuntimeWireConstant(operation.value);
+}
+
+function decodeRuntimeWireConstant(wire: unknown): unknown {
   if (typeof wire !== "object" || wire === null) {
     throw new TypeError("Rust Runtime HIR constant has no wire value");
   }
   const constant = wire as Record<string, unknown>;
   if (constant.kind === "unit") {
-    operation.value = null;
-    return;
+    return null;
   }
   if (constant.kind === "signed-integer-64") {
     if (typeof constant.value !== "string") {
       throw new TypeError("Rust Runtime HIR integer constant is not text");
     }
-    operation.value = BigInt(constant.value);
-    return;
+    return BigInt(constant.value);
   }
   if (constant.kind === "integer-32") {
     if (typeof constant.value !== "number") {
@@ -1272,15 +1289,13 @@ function decodeRuntimeConstant(value: unknown): void {
         "Rust Runtime HIR integer-32 constant is not numeric",
       );
     }
-    operation.value = constant.value;
-    return;
+    return constant.value;
   }
   if (
     constant.kind === "float-32" || constant.kind === "float-64" ||
     constant.kind === "boolean" || constant.kind === "text"
   ) {
-    operation.value = constant.value;
-    return;
+    return constant.value;
   }
   throw new TypeError(
     `Rust Runtime HIR constant has unknown kind ${String(constant.kind)}`,

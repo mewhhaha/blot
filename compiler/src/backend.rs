@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
@@ -25,6 +26,7 @@ const MAX_STRUCTURED_LOOP_BLOCKS: usize = 128;
 #[derive(Clone, Copy)]
 struct DynamicHelpers {
     realloc: u32,
+    heap_start: u32,
     text_compare: Option<u32>,
     text_contains: Option<u32>,
     text_scalar_count: Option<u32>,
@@ -32,6 +34,17 @@ struct DynamicHelpers {
     text_find_from: Option<u32>,
     utf8_validator: Option<u32>,
     i64_to_text: Option<u32>,
+}
+
+struct StaticData {
+    text_offsets: HashMap<(usize, usize), u32>,
+    store_offsets: HashMap<(usize, usize), (u32, u32)>,
+}
+
+#[derive(Clone, Copy)]
+struct Dispatcher {
+    local: u32,
+    depth: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +68,48 @@ struct PublicExport<'a> {
     result_type: &'a AbiType,
     result_runtime_type: usize,
     call_id: u32,
+}
+
+struct ValueLocalAllocation {
+    value_locals: HashMap<usize, Vec<u32>>,
+    local_types: Vec<ValType>,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct FunctionType {
+    parameters: Vec<ValType>,
+    results: Vec<ValType>,
+}
+
+struct FunctionTypes {
+    section: TypeSection,
+    indices: HashMap<FunctionType, u32>,
+}
+
+impl FunctionTypes {
+    fn new() -> Self {
+        Self {
+            section: TypeSection::new(),
+            indices: HashMap::new(),
+        }
+    }
+
+    fn intern(&mut self, parameters: Vec<ValType>, results: Vec<ValType>) -> u32 {
+        let function_type = FunctionType {
+            parameters,
+            results,
+        };
+        if let Some(index) = self.indices.get(&function_type) {
+            return *index;
+        }
+        let index = self.section.len();
+        self.section.ty().function(
+            function_type.parameters.iter().copied(),
+            function_type.results.iter().copied(),
+        );
+        self.indices.insert(function_type, index);
+        index
+    }
 }
 
 #[derive(Clone)]
@@ -812,32 +867,176 @@ fn append_code_function(
     Ok(())
 }
 
+fn pool_static_data(
+    module: &RuntimeModule,
+    static_end: &mut u32,
+    pooled_data: &mut HashMap<(u32, Vec<u8>), u32>,
+    data_segments: &mut Vec<(u32, Vec<u8>)>,
+    alignment: u32,
+    bytes: Vec<u8>,
+) -> Result<u32, String> {
+    let key = (alignment, bytes.clone());
+    if let Some(offset) = pooled_data.get(&key) {
+        return Ok(*offset);
+    }
+    let offset = static_end
+        .checked_add(alignment - 1)
+        .map(|end| end / alignment * alignment)
+        .ok_or_else(|| format!("{}: static data exceeds memory32", module.source))?;
+    let byte_length = u32::try_from(bytes.len())
+        .map_err(|_| format!("{}: static data exceeds memory32", module.source))?;
+    *static_end = offset
+        .checked_add(byte_length)
+        .ok_or_else(|| format!("{}: static data exceeds memory32", module.source))?;
+    pooled_data.insert(key, offset);
+    if !bytes.is_empty() {
+        data_segments.push((offset, bytes));
+    }
+    Ok(offset)
+}
+
+fn scalar_store_literal_bytes(
+    module: &RuntimeModule,
+    operation: &RuntimeOperation,
+    definitions: &HashMap<usize, &RuntimeOperation>,
+) -> Result<Option<(u32, Vec<u8>, u32)>, String> {
+    let RuntimeType::Store { element_type } = module
+        .types
+        .get(operation.type_id)
+        .ok_or_else(|| format!("{}: store.literal has no Store type", module.source))?
+    else {
+        return Err(format!(
+            "{}: store.literal result is not a Store",
+            module.source
+        ));
+    };
+    let element_type = *element_type;
+    let alignment = match module.types.get(element_type) {
+        Some(RuntimeType::Unit | RuntimeType::Boolean) => 1,
+        Some(RuntimeType::Integer32 | RuntimeType::Float32) => 4,
+        Some(RuntimeType::SignedInteger64 | RuntimeType::Float64) => 8,
+        _ => return Ok(None),
+    };
+    let constants = if let Some(store_id) = operation.static_store {
+        let store = module.static_stores.get(store_id).ok_or_else(|| {
+            format!(
+                "{}: store.literal references unknown static Store {store_id}",
+                module.source
+            )
+        })?;
+        if store.element_type != element_type {
+            return Err(format!(
+                "{}: store.literal static Store element type {} does not match {}",
+                module.source, store.element_type, element_type
+            ));
+        }
+        store.values.iter().collect::<Vec<_>>()
+    } else {
+        let mut constants = Vec::with_capacity(operation.operands.len());
+        for operand in &operation.operands {
+            let Some(constant) = definitions.get(operand) else {
+                return Ok(None);
+            };
+            let Some(value) = constant.value.as_ref() else {
+                return Ok(None);
+            };
+            if constant.kind != "constant" || constant.type_id != element_type {
+                return Ok(None);
+            }
+            constants.push(value);
+        }
+        constants
+    };
+    let mut bytes = Vec::new();
+    for constant in &constants {
+        match (module.types.get(element_type), *constant) {
+            (Some(RuntimeType::Unit), WireConstant::Unit) => {}
+            (Some(RuntimeType::Boolean), WireConstant::Boolean(value)) => {
+                bytes.push(u8::from(*value));
+            }
+            (Some(RuntimeType::Integer32), WireConstant::SignedInteger32(value)) => {
+                bytes.extend(value.to_le_bytes());
+            }
+            (Some(RuntimeType::SignedInteger64), WireConstant::SignedInteger64(value)) => {
+                let value = value.parse::<i64>().map_err(|error| {
+                    format!("{}: invalid residual i64 {value}: {error}", module.source)
+                })?;
+                bytes.extend(value.to_le_bytes());
+            }
+            (Some(RuntimeType::Float32), WireConstant::Float32(value)) => {
+                bytes.extend(value.to_bits().to_le_bytes());
+            }
+            (Some(RuntimeType::Float64), WireConstant::Float64(value)) => {
+                bytes.extend(value.to_bits().to_le_bytes());
+            }
+            _ => return Ok(None),
+        }
+    }
+    let length = u32::try_from(constants.len())
+        .map_err(|_| format!("{}: Store literal length exceeds memory32", module.source))?;
+    Ok(Some((alignment, bytes, length)))
+}
+
 fn emit_dynamic_module(
     module: &RuntimeModule,
     manifest: &AbiManifest,
     manifest_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
     let mut static_end = 1_024_u32;
-    let mut text_offsets = HashMap::new();
+    let mut static_data = StaticData {
+        text_offsets: HashMap::new(),
+        store_offsets: HashMap::new(),
+    };
+    let mut pooled_data = HashMap::new();
     let mut data_segments = Vec::new();
     for function in &module.functions {
+        let definitions = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .map(|operation| (operation.result, operation))
+            .collect::<HashMap<_, _>>();
         for block in &function.blocks {
             for operation in &block.operations {
-                let Some(WireConstant::Text(value)) = &operation.value else {
+                if let Some(WireConstant::Text(value)) = &operation.value {
+                    let offset = pool_static_data(
+                        module,
+                        &mut static_end,
+                        &mut pooled_data,
+                        &mut data_segments,
+                        1,
+                        value.as_bytes().to_vec(),
+                    )?;
+                    static_data
+                        .text_offsets
+                        .insert((function.id, operation.result), offset);
+                    continue;
+                }
+                if operation.kind != "store.literal" {
+                    continue;
+                }
+                let Some((alignment, bytes, length)) =
+                    scalar_store_literal_bytes(module, operation, &definitions)?
+                else {
                     continue;
                 };
-                let offset = static_end;
-                static_end = static_end
-                    .checked_add(value.len() as u32)
-                    .ok_or_else(|| format!("{}: residual text exceeds memory32", module.source))?;
-                text_offsets.insert((function.id, operation.result), offset);
-                data_segments.push((offset, value.as_bytes().to_vec()));
+                let offset = pool_static_data(
+                    module,
+                    &mut static_end,
+                    &mut pooled_data,
+                    &mut data_segments,
+                    alignment,
+                    bytes,
+                )?;
+                static_data
+                    .store_offsets
+                    .insert((function.id, operation.result), (offset, length));
             }
         }
     }
     let heap_start = align_to(static_end, 8);
 
-    let mut types = TypeSection::new();
+    let mut types = FunctionTypes::new();
     let mut imports = ImportSection::new();
     for imported in &manifest.imports {
         let mut parameters = imported
@@ -853,7 +1052,7 @@ fn emit_dynamic_module(
             parameters.push(ValType::I32);
             Vec::new()
         };
-        let type_index = add_function_type(&mut types, parameters, results);
+        let type_index = types.intern(parameters, results);
         imports.import(
             &imported.module,
             &imported.name,
@@ -874,7 +1073,7 @@ fn emit_dynamic_module(
             parameters.push(ValType::I32);
             Vec::new()
         };
-        let type_index = add_function_type(&mut types, parameters, results);
+        let type_index = types.intern(parameters, results);
         imports.import(
             &link.module,
             &format!("blot:dev:{}", link.name),
@@ -886,8 +1085,7 @@ fn emit_dynamic_module(
     let mut code = CodeSection::new();
     let mut branch_hints = BranchHints::new();
     let imported_function_count = (manifest.imports.len() + manifest.links.len()) as u32;
-    let realloc_type = add_function_type(
-        &mut types,
+    let realloc_type = types.intern(
         vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         vec![ValType::I32],
     );
@@ -897,7 +1095,7 @@ fn emit_dynamic_module(
         &mut code,
         &mut branch_hints,
         realloc_index,
-        realloc_function(),
+        realloc_function(heap_start),
     )?;
 
     let has_operation = |kind: &str| {
@@ -911,8 +1109,7 @@ fn emit_dynamic_module(
         })
     };
     let text_compare_index = if has_operation("text.compare") {
-        let type_index = add_function_type(
-            &mut types,
+        let type_index = types.intern(
             vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
             vec![ValType::I32],
         );
@@ -929,8 +1126,7 @@ fn emit_dynamic_module(
         None
     };
     let text_contains_index = if has_operation("text.contains") {
-        let type_index = add_function_type(
-            &mut types,
+        let type_index = types.intern(
             vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
             vec![ValType::I32],
         );
@@ -948,11 +1144,7 @@ fn emit_dynamic_module(
     };
     let text_scalar_count_index = if has_operation("text.length") || has_operation("text.find-from")
     {
-        let type_index = add_function_type(
-            &mut types,
-            vec![ValType::I32, ValType::I32],
-            vec![ValType::I64],
-        );
+        let type_index = types.intern(vec![ValType::I32, ValType::I32], vec![ValType::I64]);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         code.function(&text_scalar_count_function());
@@ -964,8 +1156,7 @@ fn emit_dynamic_module(
         || has_operation("text.slice")
         || has_operation("text.find-from")
     {
-        let type_index = add_function_type(
-            &mut types,
+        let type_index = types.intern(
             vec![ValType::I32, ValType::I32, ValType::I64],
             vec![ValType::I32],
         );
@@ -977,8 +1168,7 @@ fn emit_dynamic_module(
         None
     };
     let text_find_from_index = if has_operation("text.find-from") {
-        let type_index = add_function_type(
-            &mut types,
+        let type_index = types.intern(
             vec![
                 ValType::I32,
                 ValType::I32,
@@ -996,8 +1186,7 @@ fn emit_dynamic_module(
         None
     };
     let utf8_validator_index = if has_operation("host.call") || has_operation("call.external") {
-        let type_index =
-            add_function_type(&mut types, vec![ValType::I32, ValType::I32], Vec::new());
+        let type_index = types.intern(vec![ValType::I32, ValType::I32], Vec::new());
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         append_code_function(
@@ -1011,11 +1200,7 @@ fn emit_dynamic_module(
         None
     };
     let i64_to_text_index = if has_operation("text.from-i64") {
-        let type_index = add_function_type(
-            &mut types,
-            vec![ValType::I64],
-            vec![ValType::I32, ValType::I32],
-        );
+        let type_index = types.intern(vec![ValType::I64], vec![ValType::I32, ValType::I32]);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         append_code_function(
@@ -1030,6 +1215,7 @@ fn emit_dynamic_module(
     };
     let dynamic_helpers = DynamicHelpers {
         realloc: realloc_index,
+        heap_start,
         text_compare: text_compare_index,
         text_contains: text_contains_index,
         text_scalar_count: text_scalar_count_index,
@@ -1058,7 +1244,7 @@ fn emit_dynamic_module(
             parameters.extend(flattened_runtime_type(module, *type_id)?);
         }
         let results = flattened_runtime_type(module, signature.result)?;
-        let type_index = add_function_type(&mut types, parameters, results);
+        let type_index = types.intern(parameters, results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         runtime_function_indices.insert(function.id, function_index);
@@ -1079,7 +1265,7 @@ fn emit_dynamic_module(
                 function,
                 manifest,
                 dynamic_helpers,
-                &text_offsets,
+                &static_data,
                 &runtime_function_indices,
             )?,
         )?;
@@ -1129,7 +1315,7 @@ fn emit_dynamic_module(
             .iter()
             .flat_map(flattened_type)
             .collect();
-        let type_index = add_function_type(&mut types, wasm_parameters, wasm_results);
+        let type_index = types.intern(wasm_parameters, wasm_results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         append_code_function(
@@ -1148,13 +1334,13 @@ fn emit_dynamic_module(
                     call_id: export_ordinal as u32 + 1,
                 },
                 dynamic_helpers,
-                &text_offsets,
+                &static_data,
                 &runtime_function_indices,
             )?,
         )?;
         function_exports.push((wasm_name.clone(), function_index));
         if let Some(post_return) = &manifest_export.post_return {
-            let post_type = add_function_type(&mut types, vec![ValType::I32], Vec::new());
+            let post_type = types.intern(vec![ValType::I32], Vec::new());
             let post_index = imported_function_count + functions.len();
             functions.function(post_type);
             append_code_function(
@@ -1198,7 +1384,7 @@ fn emit_dynamic_module(
         data.active(0, &ConstExpr::i32_const(offset as i32), contents);
     }
     let mut wasm = Module::new();
-    wasm.section(&types);
+    wasm.section(&types.section);
     if !manifest.imports.is_empty() {
         wasm.section(&imports);
     }
@@ -1220,12 +1406,244 @@ fn emit_dynamic_module(
     Ok(wasm.finish())
 }
 
+fn allocate_value_locals(
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    parameter_count: u32,
+    mut value_locals: HashMap<usize, Vec<u32>>,
+) -> Result<ValueLocalAllocation, String> {
+    let mut definitions = BTreeMap::new();
+    for block in &function.blocks {
+        for parameter in &block.parameters {
+            if !value_locals.contains_key(&parameter.value) {
+                definitions.insert(parameter.value, parameter.type_id);
+            }
+        }
+        for operation in &block.operations {
+            definitions.insert(operation.result, operation.type_id);
+        }
+    }
+
+    let mut block_definitions = HashMap::new();
+    let mut block_uses = HashMap::new();
+    for block in &function.blocks {
+        let mut defined = block
+            .parameters
+            .iter()
+            .map(|parameter| parameter.value)
+            .collect::<HashSet<_>>();
+        let mut used = HashSet::new();
+        for operation in &block.operations {
+            for operand in &operation.operands {
+                if !defined.contains(operand) {
+                    used.insert(*operand);
+                }
+            }
+            defined.insert(operation.result);
+        }
+        for operand in terminator_operands(&block.terminator) {
+            if !defined.contains(&operand) {
+                used.insert(operand);
+            }
+        }
+        block_definitions.insert(block.id, defined);
+        block_uses.insert(block.id, used);
+    }
+
+    let mut live_in = function
+        .blocks
+        .iter()
+        .map(|block| (block.id, HashSet::new()))
+        .collect::<HashMap<_, _>>();
+    let mut live_out = live_in.clone();
+    loop {
+        let mut changed = false;
+        for block in function.blocks.iter().rev() {
+            let mut next_live_out = HashSet::new();
+            for target in terminator_targets(&block.terminator) {
+                let target_live = live_in.get(&target).ok_or_else(|| {
+                    format!(
+                        "{}: function {} targets unknown block {target}",
+                        module.source, function.name
+                    )
+                })?;
+                next_live_out.extend(target_live);
+            }
+            let mut next_live_in = block_uses.get(&block.id).cloned().unwrap_or_default();
+            let defined = block_definitions.get(&block.id).ok_or_else(|| {
+                format!(
+                    "{}: function {} omitted liveness facts for block {}",
+                    module.source, function.name, block.id
+                )
+            })?;
+            next_live_in.extend(
+                next_live_out
+                    .iter()
+                    .filter(|value| !defined.contains(value)),
+            );
+            if live_out.get(&block.id) != Some(&next_live_out) {
+                live_out.insert(block.id, next_live_out);
+                changed = true;
+            }
+            if live_in.get(&block.id) != Some(&next_live_in) {
+                live_in.insert(block.id, next_live_in);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut interference = definitions
+        .keys()
+        .map(|value| (*value, HashSet::new()))
+        .collect::<HashMap<_, _>>();
+    for block in &function.blocks {
+        let mut live = live_out.get(&block.id).cloned().ok_or_else(|| {
+            format!(
+                "{}: function {} omitted live-out facts for block {}",
+                module.source, function.name, block.id
+            )
+        })?;
+        live.extend(terminator_operands(&block.terminator));
+        for operation in block.operations.iter().rev() {
+            // Emitters may inspect operands after assigning the result.
+            live.extend(&operation.operands);
+            record_interference(&mut interference, operation.result, &live);
+            live.remove(&operation.result);
+        }
+        for parameter in block.parameters.iter().rev() {
+            record_interference(&mut interference, parameter.value, &live);
+            live.remove(&parameter.value);
+        }
+    }
+
+    let mut layout_groups: Vec<(Vec<ValType>, Vec<usize>)> = Vec::new();
+    for (value, type_id) in definitions {
+        let layout = flattened_runtime_type(module, type_id)?;
+        if let Some((_, values)) = layout_groups
+            .iter_mut()
+            .find(|(existing, _)| *existing == layout)
+        {
+            values.push(value);
+        } else {
+            layout_groups.push((layout, vec![value]));
+        }
+    }
+
+    let mut local_types = Vec::new();
+    for (layout, mut values) in layout_groups {
+        values.sort_by_key(|value| {
+            (
+                Reverse(interference.get(value).map_or(0, HashSet::len)),
+                *value,
+            )
+        });
+        let mut colors: Vec<(Vec<u32>, Vec<usize>)> = Vec::new();
+        for value in values {
+            let conflicts = interference.get(&value).ok_or_else(|| {
+                format!(
+                    "{}: function {} omitted interference facts for value {value}",
+                    module.source, function.name
+                )
+            })?;
+            if let Some((locals, occupants)) = colors
+                .iter_mut()
+                .find(|(_, occupants)| occupants.iter().all(|other| !conflicts.contains(other)))
+            {
+                value_locals.insert(value, locals.clone());
+                occupants.push(value);
+                continue;
+            }
+            let local_offset = u32::try_from(local_types.len()).map_err(|_| {
+                format!(
+                    "{}: function {} requires more than memory32 locals",
+                    module.source, function.name
+                )
+            })?;
+            let start = parameter_count.checked_add(local_offset).ok_or_else(|| {
+                format!(
+                    "{}: function {} local index exceeds memory32",
+                    module.source, function.name
+                )
+            })?;
+            let width = u32::try_from(layout.len()).map_err(|_| {
+                format!(
+                    "{}: function {} local layout exceeds memory32",
+                    module.source, function.name
+                )
+            })?;
+            let end = start.checked_add(width).ok_or_else(|| {
+                format!(
+                    "{}: function {} local range exceeds memory32",
+                    module.source, function.name
+                )
+            })?;
+            let locals = (start..end).collect::<Vec<_>>();
+            local_types.extend(&layout);
+            value_locals.insert(value, locals.clone());
+            colors.push((locals, vec![value]));
+        }
+    }
+    Ok(ValueLocalAllocation {
+        value_locals,
+        local_types,
+    })
+}
+
+fn record_interference(
+    interference: &mut HashMap<usize, HashSet<usize>>,
+    definition: usize,
+    live: &HashSet<usize>,
+) {
+    for other in live {
+        if *other == definition || !interference.contains_key(other) {
+            continue;
+        }
+        interference.entry(definition).or_default().insert(*other);
+        interference.entry(*other).or_default().insert(definition);
+    }
+}
+
+fn terminator_operands(terminator: &RuntimeTerminator) -> Vec<usize> {
+    match terminator {
+        RuntimeTerminator::Branch { arguments, .. } => arguments.clone(),
+        RuntimeTerminator::Conditional {
+            condition,
+            consequent_arguments,
+            alternate_arguments,
+            ..
+        } => std::iter::once(*condition)
+            .chain(consequent_arguments.iter().copied())
+            .chain(alternate_arguments.iter().copied())
+            .collect(),
+        RuntimeTerminator::Switch { selector, .. } => vec![*selector],
+        RuntimeTerminator::Return { value, .. } => vec![*value],
+        RuntimeTerminator::Trap { .. } => Vec::new(),
+    }
+}
+
+fn compact_local_declarations(local_types: &[ValType]) -> Vec<(u32, ValType)> {
+    let mut declarations = Vec::new();
+    for type_ in local_types {
+        if let Some((count, previous)) = declarations.last_mut()
+            && previous == type_
+        {
+            *count += 1;
+            continue;
+        }
+        declarations.push((1, *type_));
+    }
+    declarations
+}
+
 fn dynamic_internal_function(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    static_data: &StaticData,
     runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<Function, String> {
     let signature = module.signatures.get(function.signature).ok_or_else(|| {
@@ -1271,27 +1689,9 @@ fn dynamic_internal_function(
         parameter_count += flattened.len() as u32;
     }
 
-    let mut definitions = BTreeMap::new();
-    for block in &function.blocks {
-        for parameter in &block.parameters {
-            if !value_locals.contains_key(&parameter.value) {
-                definitions.insert(parameter.value, parameter.type_id);
-            }
-        }
-        for operation in &block.operations {
-            definitions.insert(operation.result, operation.type_id);
-        }
-    }
-    let mut local_types = Vec::new();
-    for (value, type_id) in definitions {
-        let flattened = flattened_runtime_type(module, type_id)?;
-        let start = parameter_count + local_types.len() as u32;
-        local_types.extend(flattened.iter().copied());
-        value_locals.insert(
-            value,
-            (start..start + flattened.len() as u32).collect::<Vec<_>>(),
-        );
-    }
+    let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
+    let value_locals = allocation.value_locals;
+    let mut local_types = allocation.local_types;
     let structured_loop = structured_loop_eligible(function);
     let dispatcher = if structured_loop {
         None
@@ -1306,10 +1706,20 @@ fn dynamic_internal_function(
     local_types.push(ValType::I32);
     let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
+    let iteration_checkpoint = if structured_loop && iteration_region_eligible(function) {
+        let checkpoint = parameter_count + local_types.len() as u32;
+        local_types.push(ValType::I32);
+        Some(checkpoint)
+    } else {
+        None
+    };
 
-    let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
+    let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
     if structured_loop {
+        if let Some(checkpoint) = iteration_checkpoint {
+            instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
+        }
         instructions.loop_(BlockType::Empty);
         emit_structured_loop_block(
             &mut instructions,
@@ -1318,12 +1728,13 @@ fn dynamic_internal_function(
             function.entry_block,
             manifest,
             helpers,
-            text_offsets,
+            static_data,
             &value_locals,
             scratch_pointer,
             scratch_length,
             scratch_index,
             runtime_function_indices,
+            iteration_checkpoint,
             StructuredResult::Internal,
             0,
         )?;
@@ -1333,13 +1744,17 @@ fn dynamic_internal_function(
         instructions
             .i32_const(function.entry_block as i32)
             .local_set(dispatcher)
+            .block(BlockType::Empty)
             .loop_(BlockType::Empty);
-        for block in &function.blocks {
-            instructions
-                .local_get(dispatcher)
-                .i32_const(block.id as i32)
-                .i32_eq()
-                .if_(BlockType::Empty);
+        for _ in &function.blocks {
+            instructions.block(BlockType::Empty);
+        }
+        instructions.local_get(dispatcher).br_table(
+            (0..function.blocks.len() as u32).rev(),
+            function.blocks.len() as u32 + 1,
+        );
+        for block in function.blocks.iter().rev() {
+            instructions.end();
             let tail_call = direct_tail_call(function, block);
             let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
             for operation in &block.operations[..operation_count] {
@@ -1350,7 +1765,7 @@ fn dynamic_internal_function(
                     operation,
                     manifest,
                     helpers,
-                    text_offsets,
+                    static_data,
                     &value_locals,
                     scratch_pointer,
                     scratch_length,
@@ -1374,12 +1789,14 @@ fn dynamic_internal_function(
                     function,
                     &block.terminator,
                     &value_locals,
-                    dispatcher,
+                    Dispatcher {
+                        local: dispatcher,
+                        depth: block.id as u32,
+                    },
                 )?;
             }
-            instructions.end();
         }
-        instructions.unreachable().end().unreachable().end();
+        instructions.end().end().unreachable().end();
     }
     Ok(wasm_function)
 }
@@ -1390,7 +1807,7 @@ fn dynamic_export_function(
     manifest: &AbiManifest,
     public_export: PublicExport<'_>,
     helpers: DynamicHelpers,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    static_data: &StaticData,
     runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<Function, String> {
     let entry = function
@@ -1439,27 +1856,9 @@ fn dynamic_export_function(
         );
         parameter_count += runtime_flattened.len() as u32;
     }
-    let mut definitions = BTreeMap::new();
-    for block in &function.blocks {
-        for parameter in &block.parameters {
-            if !value_locals.contains_key(&parameter.value) {
-                definitions.insert(parameter.value, parameter.type_id);
-            }
-        }
-        for operation in &block.operations {
-            definitions.insert(operation.result, operation.type_id);
-        }
-    }
-    let mut local_types = Vec::new();
-    for (value, type_id) in definitions {
-        let flattened = flattened_runtime_type(module, type_id)?;
-        let start = parameter_count + local_types.len() as u32;
-        local_types.extend(flattened.iter().copied());
-        value_locals.insert(
-            value,
-            (start..start + flattened.len() as u32).collect::<Vec<_>>(),
-        );
-    }
+    let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
+    let value_locals = allocation.value_locals;
+    let mut local_types = allocation.local_types;
     let structured_loop = structured_loop_eligible(function);
     let dispatcher = if structured_loop {
         None
@@ -1474,10 +1873,20 @@ fn dynamic_export_function(
     local_types.push(ValType::I32);
     let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let mut wasm_function = Function::new(local_types.into_iter().map(|type_| (1, type_)));
+    let iteration_checkpoint = if structured_loop && iteration_region_eligible(function) {
+        let checkpoint = parameter_count + local_types.len() as u32;
+        local_types.push(ValType::I32);
+        Some(checkpoint)
+    } else {
+        None
+    };
+    let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
     begin_call(&mut instructions, public_export.call_id);
     if structured_loop {
+        if let Some(checkpoint) = iteration_checkpoint {
+            instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
+        }
         instructions.loop_(BlockType::Empty);
         emit_structured_loop_block(
             &mut instructions,
@@ -1486,12 +1895,13 @@ fn dynamic_export_function(
             function.entry_block,
             manifest,
             helpers,
-            text_offsets,
+            static_data,
             &value_locals,
             scratch_pointer,
             scratch_length,
             scratch_index,
             runtime_function_indices,
+            iteration_checkpoint,
             StructuredResult::Canonical(CanonicalResult {
                 type_: public_export.result_type,
                 runtime_type: public_export.result_runtime_type,
@@ -1506,13 +1916,17 @@ fn dynamic_export_function(
         instructions
             .i32_const(function.entry_block as i32)
             .local_set(dispatcher)
+            .block(BlockType::Empty)
             .loop_(BlockType::Empty);
-        for block in &function.blocks {
-            instructions
-                .local_get(dispatcher)
-                .i32_const(block.id as i32)
-                .i32_eq()
-                .if_(BlockType::Empty);
+        for _ in &function.blocks {
+            instructions.block(BlockType::Empty);
+        }
+        instructions.local_get(dispatcher).br_table(
+            (0..function.blocks.len() as u32).rev(),
+            function.blocks.len() as u32 + 1,
+        );
+        for block in function.blocks.iter().rev() {
+            instructions.end();
             for operation in &block.operations {
                 emit_dynamic_operation(
                     &mut instructions,
@@ -1521,7 +1935,7 @@ fn dynamic_export_function(
                     operation,
                     manifest,
                     helpers,
-                    text_offsets,
+                    static_data,
                     &value_locals,
                     scratch_pointer,
                     scratch_length,
@@ -1535,7 +1949,10 @@ fn dynamic_export_function(
                 function,
                 &block.terminator,
                 &value_locals,
-                dispatcher,
+                Dispatcher {
+                    local: dispatcher,
+                    depth: block.id as u32,
+                },
                 CanonicalResult {
                     type_: public_export.result_type,
                     runtime_type: public_export.result_runtime_type,
@@ -1543,9 +1960,8 @@ fn dynamic_export_function(
                     realloc: helpers.realloc,
                 },
             )?;
-            instructions.end();
         }
-        instructions.unreachable().end().unreachable().end();
+        instructions.end().end().unreachable().end();
     }
     Ok(wasm_function)
 }
@@ -1558,7 +1974,7 @@ fn emit_dynamic_operation(
     operation: &RuntimeOperation,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    static_data: &StaticData,
     value_locals: &HashMap<usize, Vec<u32>>,
     scratch_pointer: u32,
     scratch_length: u32,
@@ -1588,7 +2004,8 @@ fn emit_dynamic_operation(
                     .local_set(result[0]);
             }
             WireConstant::Text(value) => {
-                let offset = text_offsets
+                let offset = static_data
+                    .text_offsets
                     .get(&(function.id, operation.result))
                     .ok_or_else(|| {
                         format!("{}: residual text has no data offset", module.source)
@@ -2126,6 +2543,64 @@ fn emit_dynamic_operation(
             let pointer = locals_for(module, value_locals, operation.operands[0])?;
             emit_load_canonical_result(instructions, &target_layout, result, pointer[0], 0)?;
         }
+        "store.literal" => {
+            if let Some((offset, length)) = static_data
+                .store_offsets
+                .get(&(function.id, operation.result))
+            {
+                instructions
+                    .i32_const(*offset as i32)
+                    .local_set(result[0])
+                    .i32_const(*length as i32)
+                    .local_set(result[1]);
+                return Ok(());
+            }
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(operation.type_id)
+                .ok_or_else(|| format!("{}: store.literal has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.literal result is not a Store",
+                    module.source
+                ));
+            };
+            let element_type_id = *element_type;
+            let element_type = internal_memory_type(module, element_type_id)?;
+            let element_layout = memory_layout(&element_type);
+            let length = u32::try_from(operation.operands.len())
+                .map_err(|_| format!("{}: Store literal length exceeds memory32", module.source))?;
+            instructions
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(element_layout.alignment as i32)
+                .i32_const(length as i32)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
+                .local_set(result[0])
+                .i32_const(length as i32)
+                .local_set(result[1]);
+            for (index, operand) in operation.operands.iter().enumerate() {
+                let value = locals_for(module, value_locals, *operand)?;
+                instructions
+                    .local_get(result[0])
+                    .i32_const(index as i32)
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .i32_add()
+                    .local_set(scratch_pointer);
+                emit_store_public_result(
+                    instructions,
+                    module,
+                    element_type_id,
+                    &element_type,
+                    value,
+                    scratch_pointer,
+                    0,
+                )?;
+            }
+        }
         "store.empty" => {
             instructions
                 .i32_const(0)
@@ -2280,7 +2755,26 @@ fn emit_dynamic_operation(
                     .local_get(store[1])
                     .local_set(result[1]);
             } else {
+                instructions
+                    .local_get(store[0])
+                    .i32_const(helpers.heap_start as i32)
+                    .i32_lt_u()
+                    .if_(BlockType::Empty)
+                    .local_get(store[0])
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .i32_const(element_layout.alignment as i32)
+                    .local_get(store[1])
+                    .i32_const(element_layout.size as i32)
+                    .i32_mul()
+                    .call(helpers.realloc)
+                    .local_set(result[0])
+                    .local_get(store[1])
+                    .local_set(result[1])
+                    .else_();
                 assign_locals(instructions, result, store)?;
+                instructions.end();
             }
             instructions
                 .local_get(index[0])
@@ -2567,6 +3061,57 @@ fn structured_loop_eligible(function: &RuntimeFunction) -> bool {
     has_back_edge && expanded_blocks <= MAX_STRUCTURED_LOOP_BLOCKS
 }
 
+fn iteration_region_eligible(function: &RuntimeFunction) -> bool {
+    let Some(entry) = function.blocks.get(function.entry_block) else {
+        return false;
+    };
+    let mut found_back_edge = false;
+    for block in &function.blocks {
+        let branches = match &block.terminator {
+            RuntimeTerminator::Branch {
+                target, arguments, ..
+            } if *target == function.entry_block => vec![arguments.as_slice()],
+            RuntimeTerminator::Conditional {
+                consequent,
+                consequent_arguments,
+                alternate,
+                alternate_arguments,
+                ..
+            } => {
+                let mut branches = Vec::new();
+                if *consequent == function.entry_block {
+                    branches.push(consequent_arguments.as_slice());
+                }
+                if *alternate == function.entry_block {
+                    branches.push(alternate_arguments.as_slice());
+                }
+                branches
+            }
+            RuntimeTerminator::Switch { .. }
+            | RuntimeTerminator::Return { .. }
+            | RuntimeTerminator::Trap { .. }
+            | RuntimeTerminator::Branch { .. } => Vec::new(),
+        };
+        for arguments in branches {
+            found_back_edge = true;
+            if arguments.len() != entry.parameters.len() {
+                return false;
+            }
+            if entry
+                .parameters
+                .iter()
+                .zip(arguments)
+                .any(|(parameter, argument)| {
+                    parameter.ownership == "owned" && parameter.value != *argument
+                })
+            {
+                return false;
+            }
+        }
+    }
+    found_back_edge
+}
+
 fn structured_loop_expansion(
     function: &RuntimeFunction,
     block_id: usize,
@@ -2630,12 +3175,13 @@ fn emit_structured_loop_block(
     block_id: usize,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    static_data: &StaticData,
     value_locals: &HashMap<usize, Vec<u32>>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
     runtime_function_indices: &HashMap<usize, u32>,
+    iteration_checkpoint: Option<u32>,
     result: StructuredResult<'_>,
     loop_depth: u32,
 ) -> Result<(), String> {
@@ -2665,7 +3211,7 @@ fn emit_structured_loop_block(
             operation,
             manifest,
             helpers,
-            text_offsets,
+            static_data,
             value_locals,
             scratch_pointer,
             scratch_length,
@@ -2695,12 +3241,13 @@ fn emit_structured_loop_block(
             arguments,
             manifest,
             helpers,
-            text_offsets,
+            static_data,
             value_locals,
             scratch_pointer,
             scratch_length,
             scratch_index,
             runtime_function_indices,
+            iteration_checkpoint,
             result,
             loop_depth,
         )?,
@@ -2722,12 +3269,13 @@ fn emit_structured_loop_block(
                 consequent_arguments,
                 manifest,
                 helpers,
-                text_offsets,
+                static_data,
                 value_locals,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
+                iteration_checkpoint,
                 result,
                 loop_depth + 1,
             )?;
@@ -2740,12 +3288,13 @@ fn emit_structured_loop_block(
                 alternate_arguments,
                 manifest,
                 helpers,
-                text_offsets,
+                static_data,
                 value_locals,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
+                iteration_checkpoint,
                 result,
                 loop_depth + 1,
             )?;
@@ -2773,12 +3322,13 @@ fn emit_structured_loop_target(
     arguments: &[usize],
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    static_data: &StaticData,
     value_locals: &HashMap<usize, Vec<u32>>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
     runtime_function_indices: &HashMap<usize, u32>,
+    iteration_checkpoint: Option<u32>,
     result: StructuredResult<'_>,
     loop_depth: u32,
 ) -> Result<(), String> {
@@ -2791,6 +3341,9 @@ fn emit_structured_loop_target(
         value_locals,
     )?;
     if target == function.entry_block {
+        if let Some(checkpoint) = iteration_checkpoint {
+            instructions.local_get(checkpoint).global_set(HEAP_GLOBAL);
+        }
         instructions.br(loop_depth);
         return Ok(());
     }
@@ -2801,12 +3354,13 @@ fn emit_structured_loop_target(
         target,
         manifest,
         helpers,
-        text_offsets,
+        static_data,
         value_locals,
         scratch_pointer,
         scratch_length,
         scratch_index,
         runtime_function_indices,
+        iteration_checkpoint,
         result,
         loop_depth,
     )
@@ -2912,7 +3466,7 @@ fn emit_internal_terminator(
     function: &RuntimeFunction,
     terminator: &RuntimeTerminator,
     value_locals: &HashMap<usize, Vec<u32>>,
-    dispatcher: u32,
+    dispatcher: Dispatcher,
 ) -> Result<(), String> {
     match terminator {
         RuntimeTerminator::Branch {
@@ -2928,8 +3482,8 @@ fn emit_internal_terminator(
             )?;
             instructions
                 .i32_const(*target as i32)
-                .local_set(dispatcher)
-                .br(1);
+                .local_set(dispatcher.local)
+                .br(dispatcher.depth);
         }
         RuntimeTerminator::Conditional {
             condition,
@@ -2951,7 +3505,7 @@ fn emit_internal_terminator(
             )?;
             instructions
                 .i32_const(*consequent as i32)
-                .local_set(dispatcher)
+                .local_set(dispatcher.local)
                 .else_();
             assign_block_arguments(
                 instructions,
@@ -2963,9 +3517,9 @@ fn emit_internal_terminator(
             )?;
             instructions
                 .i32_const(*alternate as i32)
-                .local_set(dispatcher)
+                .local_set(dispatcher.local)
                 .end()
-                .br(1);
+                .br(dispatcher.depth);
         }
         RuntimeTerminator::Switch {
             selector,
@@ -2998,7 +3552,7 @@ fn emit_dynamic_terminator(
     function: &RuntimeFunction,
     terminator: &RuntimeTerminator,
     value_locals: &HashMap<usize, Vec<u32>>,
-    dispatcher: u32,
+    dispatcher: Dispatcher,
     canonical_result: CanonicalResult<'_>,
 ) -> Result<(), String> {
     match terminator {
@@ -3015,8 +3569,8 @@ fn emit_dynamic_terminator(
             )?;
             instructions
                 .i32_const(*target as i32)
-                .local_set(dispatcher)
-                .br(1);
+                .local_set(dispatcher.local)
+                .br(dispatcher.depth);
         }
         RuntimeTerminator::Conditional {
             condition,
@@ -3038,7 +3592,7 @@ fn emit_dynamic_terminator(
             )?;
             instructions
                 .i32_const(*consequent as i32)
-                .local_set(dispatcher)
+                .local_set(dispatcher.local)
                 .else_();
             assign_block_arguments(
                 instructions,
@@ -3050,9 +3604,9 @@ fn emit_dynamic_terminator(
             )?;
             instructions
                 .i32_const(*alternate as i32)
-                .local_set(dispatcher)
+                .local_set(dispatcher.local)
                 .end()
-                .br(1);
+                .br(dispatcher.depth);
         }
         RuntimeTerminator::Switch {
             selector,
@@ -3086,7 +3640,7 @@ fn emit_switch_dispatch(
     cases: &[crate::hir::RuntimeSwitchCase],
     fallback: usize,
     value_locals: &HashMap<usize, Vec<u32>>,
-    dispatcher: u32,
+    dispatcher: Dispatcher,
 ) -> Result<(), String> {
     let selector_local = locals_for(module, value_locals, selector)?[0];
     let dense_i32 = cases
@@ -3104,14 +3658,14 @@ fn emit_switch_dispatch(
             instructions
                 .end()
                 .i32_const(case.target as i32)
-                .local_set(dispatcher)
-                .br((cases.len() - index + 1) as u32);
+                .local_set(dispatcher.local)
+                .br((cases.len() - index) as u32 + dispatcher.depth);
         }
         instructions
             .end()
             .i32_const(fallback as i32)
-            .local_set(dispatcher)
-            .br(1);
+            .local_set(dispatcher.local)
+            .br(dispatcher.depth);
         return Ok(());
     }
     let mut ordered = cases
@@ -3120,8 +3674,14 @@ fn emit_switch_dispatch(
         .collect::<Result<Vec<_>, String>>()?;
     ordered.sort_by_key(|(value, _)| *value);
     let ordered = ordered.iter().map(|(_, case)| *case).collect::<Vec<_>>();
-    emit_balanced_switch_selection(instructions, selector_local, &ordered, fallback, dispatcher)?;
-    instructions.br(1);
+    emit_balanced_switch_selection(
+        instructions,
+        selector_local,
+        &ordered,
+        fallback,
+        dispatcher.local,
+    )?;
+    instructions.br(dispatcher.depth);
     Ok(())
 }
 
@@ -5305,16 +5865,6 @@ fn emit_utf8_range(instructions: &mut InstructionSink<'_>, value: u32, minimum: 
         .end();
 }
 
-fn add_function_type(
-    types: &mut TypeSection,
-    parameters: Vec<ValType>,
-    results: Vec<ValType>,
-) -> u32 {
-    let index = types.len();
-    types.ty().function(parameters, results);
-    index
-}
-
 fn add_i32_global(globals: &mut GlobalSection, value: i32, mutable: bool) {
     globals.global(
         GlobalType {
@@ -5326,13 +5876,15 @@ fn add_i32_global(globals: &mut GlobalSection, value: i32, mutable: bool) {
     );
 }
 
-fn realloc_function() -> Function {
-    let mut function = Function::new([(4, ValType::I32)]);
+fn realloc_function(heap_start: u32) -> Function {
+    let mut function = Function::new([(6, ValType::I32)]);
     let mut instructions = function.instructions();
     let new_pointer = 4;
     let end_pointer = 5;
     let required_pages = 6;
     let copy_length = 7;
+    let old_capacity = 8;
+    let new_capacity = 9;
     instructions
         .local_get(2)
         .i32_const(1)
@@ -5357,30 +5909,126 @@ fn realloc_function() -> Function {
         .if_(BlockType::Result(ValType::I32))
         .i32_const(0)
         .else_()
+        .i32_const(0)
+        .local_set(old_capacity)
         .local_get(0)
         .i32_eqz()
         .i32_eqz()
-        .local_get(1)
-        .local_get(3)
-        .i32_le_u()
-        .i32_and()
         .local_get(0)
-        .local_get(1)
-        .i32_add()
-        .global_get(HEAP_GLOBAL)
-        .i32_eq()
+        .i32_const(heap_start as i32)
+        .i32_ge_u()
         .i32_and()
+        .if_(BlockType::Empty)
         .local_get(0)
-        .local_get(2)
-        .i32_const(1)
+        .i32_const(4)
         .i32_sub()
-        .i32_and()
+        .i32_load(wasm_encoder::MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        })
+        .local_set(old_capacity)
+        .end()
+        .local_get(old_capacity)
         .i32_eqz()
+        .i32_eqz()
+        .local_get(3)
+        .local_get(old_capacity)
+        .i32_le_u()
         .i32_and()
         .if_(BlockType::Result(ValType::I32))
         .local_get(0)
         .else_()
+        .local_get(3)
+        .local_set(new_capacity)
+        .local_get(old_capacity)
+        .i32_const(i32::MAX)
+        .i32_le_u()
+        .if_(BlockType::Empty)
+        .local_get(old_capacity)
+        .i32_const(2)
+        .i32_mul()
+        .local_get(new_capacity)
+        .i32_gt_u()
+        .if_(BlockType::Empty)
+        .local_get(old_capacity)
+        .i32_const(2)
+        .i32_mul()
+        .local_set(new_capacity)
+        .end()
+        .end()
+        .local_get(new_capacity)
+        .i32_const(16)
+        .i32_lt_u()
+        .if_(BlockType::Empty)
+        .i32_const(16)
+        .local_set(new_capacity)
+        .end()
+        .local_get(old_capacity)
+        .i32_eqz()
+        .i32_eqz()
+        .local_get(0)
+        .local_get(old_capacity)
+        .i32_add()
         .global_get(HEAP_GLOBAL)
+        .i32_eq()
+        .i32_and()
+        .if_(BlockType::Result(ValType::I32))
+        .local_get(0)
+        .local_get(new_capacity)
+        .i32_add()
+        .local_tee(end_pointer)
+        .local_get(0)
+        .i32_lt_u()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .local_get(end_pointer)
+        .memory_size(0)
+        .i32_const(16)
+        .i32_shl()
+        .i32_gt_u()
+        .if_(BlockType::Empty)
+        .local_get(end_pointer)
+        .i32_const(1)
+        .i32_sub()
+        .i32_const(16)
+        .i32_shr_u()
+        .i32_const(1)
+        .i32_add()
+        .local_tee(required_pages)
+        .memory_size(0)
+        .i32_sub()
+        .memory_grow(0)
+        .i32_const(-1)
+        .i32_eq()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .end()
+        .local_get(0)
+        .i32_const(4)
+        .i32_sub()
+        .local_get(new_capacity)
+        .i32_store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        })
+        .local_get(end_pointer)
+        .global_set(HEAP_GLOBAL)
+        .local_get(0)
+        .else_()
+        .global_get(HEAP_GLOBAL)
+        .i32_const(4)
+        .i32_add()
+        .local_tee(new_pointer)
+        .global_get(HEAP_GLOBAL)
+        .i32_lt_u()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .local_get(new_pointer)
         .local_get(2)
         .i32_const(1)
         .i32_sub()
@@ -5389,9 +6037,8 @@ fn realloc_function() -> Function {
         .i32_const(-1)
         .i32_mul()
         .i32_and()
-        .end()
         .local_tee(new_pointer)
-        .local_get(3)
+        .local_get(new_capacity)
         .i32_add()
         .local_tee(end_pointer)
         .local_get(new_pointer)
@@ -5424,10 +6071,6 @@ fn realloc_function() -> Function {
         .end()
         .local_get(0)
         .if_(BlockType::Empty)
-        .local_get(new_pointer)
-        .local_get(0)
-        .i32_ne()
-        .if_(BlockType::Empty)
         .local_get(1)
         .local_get(3)
         .i32_lt_u()
@@ -5442,10 +6085,20 @@ fn realloc_function() -> Function {
         .local_get(copy_length)
         .memory_copy(0, 0)
         .end()
-        .end()
+        .local_get(new_pointer)
+        .i32_const(4)
+        .i32_sub()
+        .local_get(new_capacity)
+        .i32_store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        })
         .local_get(end_pointer)
         .global_set(HEAP_GLOBAL)
         .local_get(new_pointer)
+        .end()
+        .end()
         .end()
         .end();
     function
@@ -5734,6 +6387,157 @@ mod tests {
     }
 
     #[test]
+    fn loop_region_accepts_unchanged_owned_parameters() {
+        let mut owned = parameter(0);
+        owned.ownership = "owned";
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![owned],
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Branch {
+                target: 0,
+                arguments: vec![0],
+                span: span(),
+            },
+        }]);
+
+        assert!(iteration_region_eligible(&function));
+    }
+
+    #[test]
+    fn loop_region_rejects_replaced_owned_parameters() {
+        let mut owned = parameter(0);
+        owned.ownership = "owned";
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![owned],
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Branch {
+                target: 0,
+                arguments: vec![1],
+                span: span(),
+            },
+        }]);
+
+        assert!(!iteration_region_eligible(&function));
+    }
+
+    #[test]
+    fn bounded_structured_loop_restores_its_heap_region() {
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![parameter(0)],
+            operations: Vec::new(),
+            terminator: RuntimeTerminator::Branch {
+                target: 0,
+                arguments: vec![0],
+                span: span(),
+            },
+        }]);
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "iteration-region-test".to_owned(),
+            types: vec![RuntimeType::Unit, RuntimeType::Boolean],
+            signatures: vec![crate::hir::RuntimeSignature {
+                parameters: vec![1],
+                result: 1,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions: vec![function],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+        let manifest = build_manifest(&module).expect("test manifest should close");
+        let wasm =
+            emit_dynamic_module(&module, &manifest, b"{}").expect("iteration region should emit");
+        let body = wasmparser::Parser::new(0)
+            .parse_all(&wasm)
+            .filter_map(
+                |payload| match payload.expect("emitted Wasm should parse") {
+                    wasmparser::Payload::CodeSectionEntry(body) => Some(body),
+                    _ => None,
+                },
+            )
+            .nth(1)
+            .expect("module should contain realloc and the runtime function");
+        let restores_heap = body
+            .get_operators_reader()
+            .expect("loop operators should parse")
+            .into_iter()
+            .any(|operator| {
+                matches!(
+                    operator.expect("operator should parse"),
+                    wasmparser::Operator::GlobalSet {
+                        global_index: HEAP_GLOBAL
+                    }
+                )
+            });
+
+        assert!(restores_heap);
+    }
+
+    #[test]
+    fn generic_dispatch_uses_one_indexed_branch_table() {
+        let function = runtime_function(vec![
+            conditional_block(0, 1, 2),
+            branch_block(1, 3),
+            branch_block(2, 3),
+            return_block(3),
+        ]);
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "indexed-dispatch-test".to_owned(),
+            types: vec![RuntimeType::Unit, RuntimeType::Boolean],
+            signatures: vec![crate::hir::RuntimeSignature {
+                parameters: vec![1],
+                result: 1,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions: vec![function],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+        let manifest = build_manifest(&module).expect("test manifest should close");
+        let wasm =
+            emit_dynamic_module(&module, &manifest, b"{}").expect("generic dispatcher should emit");
+        let body = wasmparser::Parser::new(0)
+            .parse_all(&wasm)
+            .filter_map(
+                |payload| match payload.expect("emitted Wasm should parse") {
+                    wasmparser::Payload::CodeSectionEntry(body) => Some(body),
+                    _ => None,
+                },
+            )
+            .nth(1)
+            .expect("module should contain realloc and the runtime function");
+        let operators = body
+            .get_operators_reader()
+            .expect("dispatcher operators should parse")
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("dispatcher operators should decode");
+
+        assert_eq!(
+            operators
+                .iter()
+                .filter(|operator| matches!(operator, wasmparser::Operator::BrTable { .. }))
+                .count(),
+            1,
+        );
+        assert!(
+            !operators
+                .iter()
+                .any(|operator| matches!(operator, wasmparser::Operator::I32Eq))
+        );
+    }
+
+    #[test]
     fn recursive_representation_is_private_to_runtime_hir() {
         let module = RuntimeModule {
             format: "blot-runtime-hir",
@@ -5741,6 +6545,7 @@ mod tests {
             source: "recursive-boundary-test".to_owned(),
             types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
             signatures: Vec::new(),
+            static_stores: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
@@ -5766,6 +6571,7 @@ mod tests {
                 RuntimeType::Scratch { element_type: 1 },
             ],
             signatures: Vec::new(),
+            static_stores: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
@@ -5794,6 +6600,7 @@ mod tests {
                 RuntimeType::Store { element_type: 1 },
             ],
             signatures: Vec::new(),
+            static_stores: Vec::new(),
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
@@ -5849,6 +6656,83 @@ mod tests {
                 .iter()
                 .any(|operator| matches!(operator, Operator::V128Load { .. }))
         );
+    }
+
+    #[test]
+    fn operation_results_do_not_overwrite_their_operand_locals() {
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![
+                plain_operation(1, Vec::new()),
+                plain_operation(2, vec![1]),
+                plain_operation(3, vec![2]),
+            ],
+            terminator: RuntimeTerminator::Return {
+                value: 3,
+                span: span(),
+            },
+        }]);
+        let module = allocation_test_module(function.clone());
+
+        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
+            .expect("operation chain should allocate");
+
+        assert_eq!(allocation.local_types, vec![ValType::I32; 2]);
+        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
+        assert_ne!(allocation.value_locals[&2], allocation.value_locals[&3]);
+        assert_eq!(allocation.value_locals[&1], allocation.value_locals[&3]);
+    }
+
+    #[test]
+    fn simultaneously_live_ssa_values_keep_distinct_wasm_locals() {
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![
+                plain_operation(1, Vec::new()),
+                plain_operation(2, Vec::new()),
+                plain_operation(3, vec![1, 2]),
+            ],
+            terminator: RuntimeTerminator::Return {
+                value: 3,
+                span: span(),
+            },
+        }]);
+        let module = allocation_test_module(function.clone());
+
+        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
+            .expect("overlapping values should allocate");
+
+        assert_eq!(allocation.local_types, vec![ValType::I32; 3]);
+        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
+        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&3]);
+        assert_ne!(allocation.value_locals[&2], allocation.value_locals[&3]);
+    }
+
+    #[test]
+    fn adjacent_wasm_locals_use_counted_declarations() {
+        assert_eq!(
+            compact_local_declarations(&[
+                ValType::I32,
+                ValType::I32,
+                ValType::F32,
+                ValType::F32,
+                ValType::I32,
+            ]),
+            vec![(2, ValType::I32), (2, ValType::F32), (1, ValType::I32),]
+        );
+    }
+
+    #[test]
+    fn equal_physical_function_types_share_one_type_entry() {
+        let mut types = FunctionTypes::new();
+
+        let first = types.intern(vec![ValType::I32], vec![ValType::I64]);
+        let second = types.intern(vec![ValType::I32], vec![ValType::I64]);
+
+        assert_eq!(first, second);
+        assert_eq!(types.section.len(), 1);
     }
 
     #[test]
@@ -5925,6 +6809,49 @@ mod tests {
             field: None,
             function: Some(2),
             signature: None,
+            static_store: None,
+        }
+    }
+
+    fn plain_operation(result: usize, operands: Vec<usize>) -> RuntimeOperation {
+        RuntimeOperation {
+            kind: "scalar",
+            result,
+            type_id: 1,
+            operands,
+            ownership: "plain",
+            span: span(),
+            value: None,
+            update: None,
+            case: None,
+            capability: None,
+            operation: None,
+            operator: Some("boolean.not"),
+            conversion: None,
+            lane: None,
+            field: None,
+            function: None,
+            signature: None,
+            static_store: None,
+        }
+    }
+
+    fn allocation_test_module(function: RuntimeFunction) -> RuntimeModule {
+        RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "local-allocation-test".to_owned(),
+            types: vec![RuntimeType::Unit, RuntimeType::Boolean],
+            signatures: vec![crate::hir::RuntimeSignature {
+                parameters: Vec::new(),
+                result: 1,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions: vec![function],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
         }
     }
 

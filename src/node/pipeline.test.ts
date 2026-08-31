@@ -173,6 +173,39 @@ test("multiple named runtime exports survive Runtime HIR and ABI lowering", asyn
   }
 });
 
+test("mutating an owned literal does not change its pooled peer", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-pooled-store-"));
+  const path = join(directory, "pooled-store.blot");
+  const compiler = await Compiler.create();
+  try {
+    await writeFile(
+      path,
+      `open import "blot:prelude"
+const original :: Int -> Int
+const original = fn ignored => Array.expect_get ((&[10, 20, 30]), 0)
+const changed :: Int -> Int
+const changed = fn replacement => do:
+  let values :: [Int]
+  let values = [10, 20, 30]
+  let updated = @array.set values 0 replacement
+  return Array.expect_get ((&updated), 0)
+return { .original = original; .changed = changed; }
+`,
+    );
+    const artifact = await compiler.compile(path);
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+    );
+    const changed = exportedFunction(instantiated.instance, "blot:changed");
+    const original = exportedFunction(instantiated.instance, "blot:original");
+    assert.equal(changed(99n), 99n);
+    assert.equal(original(0n), 10n);
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("array exports preserve the complete closed Option ABI", async () => {
   const compiler = await Compiler.create();
   try {

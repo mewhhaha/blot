@@ -175,6 +175,18 @@ pub struct Env {
     captured: Cell<bool>,
 }
 
+impl Drop for Env {
+    fn drop(&mut self) {
+        let mut parent = self.parent.get_mut().take();
+        while let Some(environment) = parent {
+            let Ok(mut environment) = Rc::try_unwrap(environment) else {
+                break;
+            };
+            parent = environment.parent.get_mut().take();
+        }
+    }
+}
+
 pub fn child_env(parent: Option<Environment>) -> Environment {
     child_env_with_identity(parent, None)
 }
@@ -1171,6 +1183,7 @@ fn applied_equal(left: &Value, right: &Value) -> bool {
 pub enum RuntimeMeaning {
     #[default]
     Plain,
+    DeferredStore,
     SharedStore,
     ReusableStore,
     Ordering,
@@ -1731,6 +1744,22 @@ mod type_value_tests {
             &ordinary,
             &child_env(None)
         ));
+    }
+
+    #[test]
+    fn deep_environment_chains_drop_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut environment = None;
+                for _ in 0..20_000 {
+                    environment = Some(child_env(environment));
+                }
+                drop(environment);
+            })
+            .expect("small-stack drop thread should start")
+            .join()
+            .expect("deep environment chain should drop iteratively");
     }
 
     #[test]

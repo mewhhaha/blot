@@ -124,13 +124,19 @@ previous Store version remains observable, the Rust comparison must copy as
 well. Reports distinguish that required persistent cost from a missed ownership
 optimization.
 
-For an affine arena whose node payload does not allocate between appends, the
-latest Store allocation ends at the scratch heap cursor. Each authorized append
-therefore extends the allocation by one fixed-size node in `O(1)`, construction
-of `n` nodes is `O(n)`, and indexed traversal is `O(n)`. If a node payload
-allocates first or another live allocation follows the Store, growth may move
-and copy the existing `O(n)` prefix; the benchmark must expose that fallback
-rather than describing every arena workload as linear.
+An owned Store allocation retains a private geometric capacity. Each authorized
+append is amortized `O(1)`, construction of `n` fixed-size elements is `O(n)`,
+and indexed traversal is `O(n)`. Growth at the heap cursor extends in place;
+otherwise it moves and copies the initialized prefix only when capacity is
+exhausted. A persistent append still allocates and copies its `O(n)` prefix
+because an earlier Store version remains observable, so repeated persistent
+growth remains `O(n^2)`.
+
+A closed scalar `store.literal` contributes `O(n)` static bytes and no runtime
+construction steps. A non-scalar literal performs one `O(n)` allocation and `n`
+writes. Equal pooled scalar literals do not increase static bytes after the
+first occurrence. Pooling occurs before Runtime-HIR serialization, so the
+literal's scalar producer operations are absent from every backend artifact.
 
 ## 3. Size parameters
 
@@ -257,12 +263,26 @@ rebinding removes the last visible alias, and benchmarks report both retained
 fact count and wall time.
 
 For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
-the fallback dispatcher can perform `O(D H)` block-identity comparisons. A
-reducible entry cycle instead executes one structured path per iteration and no
-dispatcher comparisons. Unfolding shared acyclic joins can increase emitted `Q`,
-so eligibility includes a fixed expansion budget and otherwise preserves the
-dispatcher. HIR removal of known boolean and sum round-trips reduces both the
-expansion and the executed administrative steps without changing source work.
+the fallback dispatcher emits `O(H)` branch targets and executes one indexed
+`br_table` per transition, for `O(D)` dispatch operations rather than `O(D H)`
+block-identity comparisons. A reducible entry cycle instead executes one
+structured path per iteration and no dispatcher operation. Unfolding shared
+acyclic joins can increase emitted `Q`, so eligibility includes a fixed
+expansion budget and otherwise preserves the dispatcher. HIR removal of known
+boolean and sum round-trips reduces both the expansion and the executed
+administrative steps without changing source work. For closed sums this removal
+applies to the canonical integer switch over the constructor tag, not a
+reconstructed chain of equality conditionals.
+
+Runtime-HIR normalization scans operations and table references to a fixed
+point. Exact type and signature interning adds work proportional to their closed
+structural size and publishes only compacted identifiers. WebAssembly local
+allocation performs block liveness followed by interference coloring within
+equal physical representations; its cost is a compiler cost, while the emitted
+local count is bounded by simultaneously live values rather than total SSA
+definitions. A proved iteration allocation region restores one cursor per
+backedge, so temporary allocation within a loop is bounded by the largest
+iteration instead of the sum across iterations.
 
 Cold capsule loading hashes and decompresses `O(C)`, validates the `M` bundled
 flat ASTs, and resolves the `X` external edges through installed manifests. It

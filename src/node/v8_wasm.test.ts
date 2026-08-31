@@ -54,3 +54,46 @@ test("V8 executes the Wasm 3 target and accepts branch metadata", async () => {
     compiler.destroy();
   }
 });
+
+test("cabi_realloc grows the active allocation geometrically", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(resolve("examples/minimal.blot"));
+    const instance = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+    );
+    const realloc = instance.instance.exports.cabi_realloc as
+      | ((
+        oldPointer: number,
+        oldSize: number,
+        alignment: number,
+        newSize: number,
+      ) => number)
+      | undefined;
+    const memory = instance.instance.exports.memory as
+      | WebAssembly.Memory
+      | undefined;
+    assert.equal(typeof realloc, "function");
+    assert.ok(memory instanceof WebAssembly.Memory);
+    if (realloc === undefined || memory === undefined) {
+      throw new Error("minimal artifact omitted its canonical allocator");
+    }
+
+    const first = realloc(0, 0, 8, 8);
+    new DataView(memory.buffer).setBigInt64(first, 0x102030405060708n, true);
+    const withinInitialCapacity = realloc(first, 8, 8, 16);
+    const grownAtHeapTop = realloc(withinInitialCapacity, 16, 8, 17);
+    assert.equal(withinInitialCapacity, first);
+    assert.equal(grownAtHeapTop, first);
+
+    realloc(0, 0, 8, 16);
+    const moved = realloc(grownAtHeapTop, 17, 8, 40);
+    assert.notEqual(moved, first);
+    assert.equal(
+      new DataView(memory.buffer).getBigInt64(moved, true),
+      0x102030405060708n,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});

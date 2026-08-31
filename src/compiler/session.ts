@@ -765,8 +765,19 @@ export class Compiler implements CompilerHost {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
-    this.#compiler.destroyCompilerSession(this.#inspectionHandle);
-    this.#compiler.destroyCompilerSession(this.#handle);
+    try {
+      this.#compiler.destroyCompilerSession(this.#inspectionHandle);
+    } catch (error) {
+      throw new CompilerInvariantFailure(
+        "syntax-inspection session teardown",
+        error,
+      );
+    }
+    try {
+      this.#compiler.destroyCompilerSession(this.#handle);
+    } catch (error) {
+      throw new CompilerInvariantFailure("semantic session teardown", error);
+    }
   }
 
   async #request<T>(operation: () => T | Promise<T>): Promise<T> {

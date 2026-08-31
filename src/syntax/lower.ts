@@ -2793,7 +2793,7 @@ function lowerMultiCaseColumn(
     tag: "case",
     target: { tag: "var", name: cachedName, span },
     arms: [{
-      pattern: eraseBinders(pattern),
+      pattern,
       body: lowerMultiCaseColumn(
         row,
         remaining,
@@ -2843,40 +2843,25 @@ function lowerMultiCaseBody(
   for (let column = row.patterns.length - 1; column >= 0; column -= 1) {
     const pattern = row.patterns[column];
     expect(pattern !== undefined, `multi-subject case lost pattern ${column}`);
-    if (pattern.tag === "wildcard") continue;
+    if (pattern.tag !== "name") continue;
     const subjectName = cached[column];
     expect(
       subjectName !== null && subjectName !== undefined,
       `multi-subject case column ${column} was not evaluated`,
     );
     const target: Expr = { tag: "var", name: subjectName, span };
-    if (pattern.tag === "name") {
-      body = {
-        tag: "block",
-        declarations: [{
-          tag: "binding",
-          kind: "let",
-          tags: [],
-          pattern,
-          value: target,
-          span,
-        }],
-        result: body,
-        resultEffects: "ambient",
-        span,
-      };
-      continue;
-    }
     body = {
-      tag: "case",
-      target,
-      arms: [{ pattern, body }, {
-        pattern: { tag: "wildcard", span },
-        body: compilerPanic(
-          "multi-subject case probe disagreed with its binding",
-          span,
-        ),
+      tag: "block",
+      declarations: [{
+        tag: "binding",
+        kind: "let",
+        tags: [],
+        pattern,
+        value: target,
+        span,
       }],
+      result: body,
+      resultEffects: "ambient",
       span,
     };
   }

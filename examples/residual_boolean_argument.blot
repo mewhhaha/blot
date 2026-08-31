@@ -1,0 +1,18 @@
+open import "blot:prelude"
+
+const ProjectProvider = import "./lib/residual_boolean_project.blot"
+const Host =
+  @effect.host {
+    .observe = (Int, Bool) -> Unit;
+    .value = Unit -> Int;
+  }
+
+let observe = fn (value, done) => do:
+  use Host.observe (value, done)
+  return ()
+
+use runtime_token <- Host.value ()
+for value in Iter.items (ProjectProvider.project runtime_token).values:
+  use observe (value, False)
+
+return ()

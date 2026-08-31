@@ -4,7 +4,7 @@
     "checkedModuleCertificate": 16,
     "moduleSnapshotSchema": 2,
     "valueCapsuleSchema": 4,
-    "runtimeHir": 7
+    "runtimeHir": 9
   },
   "operators": [
     {
@@ -726,27 +726,27 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 10955
+      "lines": 11845
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 7629
-    },
-    {
-      "path": "compiler/src/ownership.rs",
-      "lines": 6516
+      "lines": 8489
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 6001
+      "lines": 6928
+    },
+    {
+      "path": "compiler/src/ownership.rs",
+      "lines": 6658
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 5735
+      "lines": 6060
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3786
+      "lines": 3765
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -762,7 +762,7 @@
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 3150
+      "lines": 3135
     },
     {
       "path": "compiler/src/qcore.rs",
@@ -778,7 +778,7 @@
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 2057
+      "lines": 2086
     }
   ]
 }

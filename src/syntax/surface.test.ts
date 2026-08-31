@@ -45,6 +45,41 @@ Deno.test("a multi-subject case suspends its subjects during surface lowering", 
   assertEquals(parsed.module.result.fn.body.fn.deferred, true);
 });
 
+Deno.test("a multi-subject structural probe binds its payload once", async () => {
+  const parsed = await parse(`return case #Some 1, #True of
+  #Some value, #True => value
+  _, _ => 0
+`);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const firstSubject = parsed.module.result;
+  assertEquals(firstSubject.tag, "apply");
+  if (firstSubject.tag !== "apply") return;
+  assertEquals(firstSubject.fn.tag, "lambda");
+  if (firstSubject.fn.tag !== "lambda") return;
+  const secondSubject = firstSubject.fn.body;
+  assertEquals(secondSubject.tag, "apply");
+  if (secondSubject.tag !== "apply") return;
+  assertEquals(secondSubject.fn.tag, "lambda");
+  if (secondSubject.fn.tag !== "lambda") return;
+  const lowered = secondSubject.fn.body;
+  assertEquals(lowered.tag, "block");
+  if (lowered.tag !== "block") return;
+  assertEquals(lowered.result.tag, "apply");
+  if (lowered.result.tag !== "apply") return;
+  assertEquals(lowered.result.fn.tag, "lambda");
+  if (lowered.result.fn.tag !== "lambda") return;
+  const probe = lowered.result.fn.body;
+  assertEquals(probe.tag, "case");
+  if (probe.tag !== "case") return;
+  const pattern = probe.arms[0]?.pattern;
+  assertEquals(pattern?.tag, "constructor");
+  if (pattern?.tag !== "constructor") return;
+  assertEquals(pattern.payload?.tag, "name");
+  if (pattern.payload?.tag !== "name") return;
+  assertEquals(pattern.payload.name, "value");
+});
+
 Deno.test("a block-bodied lambda is an ordinary infix operand", async () => {
   const parsed = await parse(`let call = fn callback => callback 41
 let value = call $ fn input => fn amount => do:

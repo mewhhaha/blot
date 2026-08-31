@@ -200,6 +200,10 @@ export type BlotRuntimeOperation =
       readonly kind: "store.empty";
     }
     | {
+      readonly kind: "store.literal";
+      readonly staticStore?: number;
+    }
+    | {
       readonly kind: "store.new";
     }
     | {
@@ -372,6 +376,10 @@ export type BlotRuntimeModule = {
   readonly source: string;
   readonly types: readonly BlotRuntimeType[];
   readonly signatures: readonly BlotRuntimeSignature[];
+  readonly staticStores: readonly {
+    readonly elementType: number;
+    readonly values: readonly (bigint | number | boolean | null)[];
+  }[];
   readonly functions: readonly BlotRuntimeFunction[];
   readonly capabilities: readonly BlotRuntimeCapability[];
   readonly links: readonly BlotRuntimeLink[];
@@ -591,6 +599,20 @@ export function validateBlotRuntimeModule(
   }
   module.types.forEach((type, typeId) => validateType(module, type, typeId));
   module.types.forEach((_, typeId) => runtimeLayoutWitness(module, typeId));
+  module.staticStores.forEach((store, storeId) => {
+    const elementType = requireType(
+      module,
+      store.elementType,
+      `static Store ${storeId} element`,
+    );
+    store.values.forEach((value, index) => {
+      if (!isStaticStoreValue(elementType, value)) {
+        throw new TypeError(
+          `${module.source}: static Store ${storeId} value ${index} does not match element type ${store.elementType}`,
+        );
+      }
+    });
+  });
   module.signatures.forEach((signature, signatureId) => {
     signature.parameters.forEach((type, parameter) =>
       requireType(
@@ -1047,6 +1069,42 @@ function validateOperation(
   linkOperations: ReadonlyMap<string, number>,
   values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
+  if (operation.kind === "store.literal") {
+    const resultType = module.types[operation.type];
+    if (resultType.kind !== "store") {
+      throw new TypeError(
+        `${module.source}: store.literal ${function_.name}:${operation.result} has non-Store result type ${operation.type}`,
+      );
+    }
+    if (operation.staticStore !== undefined) {
+      if (operation.operands.length !== 0) {
+        throw new TypeError(
+          `${module.source}: static store.literal ${function_.name}:${operation.result} retains runtime operands`,
+        );
+      }
+      const staticStore = module.staticStores[operation.staticStore];
+      if (staticStore === undefined) {
+        throw new TypeError(
+          `${module.source}: store.literal ${function_.name}:${operation.result} references absent static Store ${operation.staticStore}`,
+        );
+      }
+      if (staticStore.elementType !== resultType.elementType) {
+        throw new TypeError(
+          `${module.source}: store.literal ${function_.name}:${operation.result} static Store element type ${staticStore.elementType} does not match ${resultType.elementType}`,
+        );
+      }
+    }
+    for (const operand of operation.operands) {
+      const definition = values.get(operand);
+      if (
+        definition === undefined || definition.type !== resultType.elementType
+      ) {
+        throw new TypeError(
+          `${module.source}: store.literal ${function_.name}:${operation.result} operand ${operand} does not have element type ${resultType.elementType}`,
+        );
+      }
+    }
+  }
   if (operation.kind.startsWith("scratch.")) {
     validateScratchOperation(module, function_, operation, values);
   }
@@ -1180,6 +1238,22 @@ function validateOperation(
       );
     }
   }
+}
+
+function isStaticStoreValue(
+  type: BlotRuntimeType,
+  value: bigint | number | boolean | null,
+): boolean {
+  if (type.kind === "unit") return value === null;
+  if (type.kind === "boolean") return typeof value === "boolean";
+  if (type.kind === "signed-integer-64") return typeof value === "bigint";
+  if (type.kind === "integer-32") {
+    return typeof value === "number" && Number.isInteger(value);
+  }
+  if (type.kind === "float-32" || type.kind === "float-64") {
+    return typeof value === "number";
+  }
+  return false;
 }
 
 function validateScratchOperation(

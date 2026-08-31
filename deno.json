@@ -18,6 +18,7 @@
     "inspect": "deno run --allow-read scripts/inspect_plan.ts",
     "parse": "deno run --allow-read scripts/parse.ts",
     "audit:lints": "deno run --allow-read scripts/audit_lints.ts",
+    "audit:lowerings": "deno run --allow-read scripts/audit_lowerings.ts",
     "verify:simplifications": "deno run --allow-read scripts/verify_simplifications.ts",
     "game-loop:desktop": "deno run --allow-env=HOME,XDG_CACHE_HOME,LD_LIBRARY_PATH --allow-net=archive.archlinux.org --allow-read --allow-write --allow-run scripts/run_game_loop_desktop.ts"
   },

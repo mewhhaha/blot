@@ -457,6 +457,7 @@ fn build_unit_module(
         source: root.to_owned(),
         types: module.types.clone(),
         signatures: module.signatures.clone(),
+        static_stores: module.static_stores.clone(),
         functions,
         capabilities: module.capabilities.clone(),
         links,
@@ -467,6 +468,7 @@ fn build_unit_module(
 }
 
 fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
+    retain_referenced_static_stores(module)?;
     let mut signature_ids = BTreeSet::new();
     let mut host_operations = BTreeSet::new();
     for function in &module.functions {
@@ -543,6 +545,7 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
     }
 
     let mut type_ids = BTreeSet::from([0]);
+    type_ids.extend(module.static_stores.iter().map(|store| store.element_type));
     for function in &module.functions {
         for block in &function.blocks {
             type_ids.extend(block.parameters.iter().map(|parameter| parameter.type_id));
@@ -658,6 +661,9 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
             }
         }
     }
+    for store in &mut module.static_stores {
+        store.element_type = type_map[&store.element_type];
+    }
     for capability in &mut module.capabilities {
         for operation in &mut capability.operations {
             operation.signature = signature_map[&operation.signature];
@@ -673,6 +679,45 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
     }
     module.types = types;
     module.signatures = signatures;
+    Ok(())
+}
+
+fn retain_referenced_static_stores(module: &mut RuntimeModule) -> Result<(), String> {
+    let retained_ids = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| operation.static_store)
+        .collect::<BTreeSet<_>>();
+    let store_map = retained_ids
+        .iter()
+        .enumerate()
+        .map(|(next, previous)| (*previous, next))
+        .collect::<HashMap<_, _>>();
+    let retained_stores = retained_ids
+        .iter()
+        .map(|store_id| {
+            module.static_stores.get(*store_id).cloned().ok_or_else(|| {
+                format!(
+                    "{}: development unit references absent static Store {store_id}",
+                    module.source
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for operation in module
+        .functions
+        .iter_mut()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.operations)
+    {
+        let Some(store_id) = &mut operation.static_store else {
+            continue;
+        };
+        *store_id = store_map[store_id];
+    }
+    module.static_stores = retained_stores;
     Ok(())
 }
 
@@ -962,6 +1007,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_static_store_edits_do_not_change_consumer_identity() {
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("project".to_owned(), "project.blot".to_owned()),
+        ]);
+        let initial = split_runtime_module(&static_store_program(41), "game", &configured)
+            .expect("initial development program should split");
+        let edited = split_runtime_module(&static_store_program(42), "game", &configured)
+            .expect("edited development program should split");
+        fn unit_module<'a>(program: &'a DevelopmentProgram, name: &str) -> &'a RuntimeModule {
+            &program
+                .units
+                .iter()
+                .find(|unit| unit.name == name)
+                .unwrap_or_else(|| panic!("development program omitted {name} unit"))
+                .module
+        }
+        let initial_game = unit_module(&initial, "game");
+        let edited_game = unit_module(&edited, "game");
+
+        assert!(initial_game.static_stores.is_empty());
+        assert!(edited_game.static_stores.is_empty());
+        assert_eq!(
+            development_module_identity(initial_game).expect("initial game identity should encode"),
+            development_module_identity(edited_game).expect("edited game identity should encode")
+        );
+        assert_ne!(
+            development_module_identity(unit_module(&initial, "project"))
+                .expect("initial project identity should encode"),
+            development_module_identity(unit_module(&edited, "project"))
+                .expect("edited project identity should encode")
+        );
+    }
+
+    #[test]
     fn split_units_emit_linked_wasm_artifacts() {
         let configured = BTreeMap::from([
             ("game".to_owned(), "game.blot".to_owned()),
@@ -1026,6 +1106,7 @@ mod tests {
             field: None,
             function,
             signature: None,
+            static_store: None,
         };
         RuntimeModule {
             format: "blot-runtime-hir",
@@ -1037,6 +1118,7 @@ mod tests {
                 result: 0,
                 effects: Vec::new(),
             }],
+            static_stores: Vec::new(),
             functions: vec![
                 RuntimeFunction {
                     id: 0,
@@ -1076,6 +1158,98 @@ mod tests {
                         },
                     }],
                     span: span("math.blot"),
+                },
+            ],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: vec![RuntimeExport::Runtime {
+                source_name: "default".to_owned(),
+                phase: "runtime",
+                wasm_name: "blot:default".to_owned(),
+                function: 0,
+                signature: 0,
+                ownership: "owned",
+            }],
+        }
+    }
+
+    fn static_store_program(value: i64) -> RuntimeModule {
+        let span = |file: &str| RuntimeSpan {
+            file: file.to_owned(),
+            start: 0,
+            end: 1,
+        };
+        let operation = |kind, function, static_store, file| RuntimeOperation {
+            kind,
+            result: 0,
+            type_id: 1,
+            operands: Vec::new(),
+            ownership: "owned",
+            span: span(file),
+            value: None,
+            update: None,
+            case: None,
+            capability: None,
+            operation: None,
+            operator: None,
+            conversion: None,
+            lane: None,
+            field: None,
+            function,
+            signature: None,
+            static_store,
+        };
+        RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "game.blot".to_owned(),
+            types: vec![
+                RuntimeType::SignedInteger64,
+                RuntimeType::Store { element_type: 0 },
+            ],
+            signatures: vec![RuntimeSignature {
+                parameters: Vec::new(),
+                result: 1,
+                effects: Vec::new(),
+            }],
+            static_stores: vec![crate::hir::RuntimeStaticStore {
+                element_type: 0,
+                values: vec![crate::hir::WireConstant::SignedInteger64(value.to_string())],
+            }],
+            functions: vec![
+                RuntimeFunction {
+                    id: 0,
+                    name: "entry".to_owned(),
+                    signature: 0,
+                    reuse: None,
+                    entry_block: 0,
+                    blocks: vec![RuntimeBlock {
+                        id: 0,
+                        parameters: Vec::new(),
+                        operations: vec![operation("call.direct", Some(1), None, "game.blot")],
+                        terminator: RuntimeTerminator::Return {
+                            value: 0,
+                            span: span("game.blot"),
+                        },
+                    }],
+                    span: span("game.blot"),
+                },
+                RuntimeFunction {
+                    id: 1,
+                    name: "project".to_owned(),
+                    signature: 0,
+                    reuse: None,
+                    entry_block: 0,
+                    blocks: vec![RuntimeBlock {
+                        id: 0,
+                        parameters: Vec::new(),
+                        operations: vec![operation("store.literal", None, Some(0), "project.blot")],
+                        terminator: RuntimeTerminator::Return {
+                            value: 0,
+                            span: span("project.blot"),
+                        },
+                    }],
+                    span: span("project.blot"),
                 },
             ],
             capabilities: Vec::new(),

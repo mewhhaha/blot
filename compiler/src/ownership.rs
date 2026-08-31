@@ -1557,6 +1557,54 @@ fn scope_pattern_owned(pattern: PatternId, scope: &ScopeRef, module: &Module) ->
     }
 }
 
+fn visible_pattern_owned(
+    pattern: PatternId,
+    scope: &ScopeRef,
+    analysis: &Analysis<'_>,
+) -> Produced {
+    match &analysis.module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name {
+            name, qualifier, ..
+        } => analysis
+            .lookup(scope, name)
+            .map(|(binding, _)| {
+                let binding = binding.borrow();
+                if binding.ownership_demanded
+                    || spendable(*qualifier)
+                    || spendable(binding.qualifier)
+                {
+                    binding.owned.clone()
+                } else {
+                    Produced::None
+                }
+            })
+            .unwrap_or(Produced::None),
+        Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => Produced::Sequence(
+            elements
+                .iter()
+                .map(|pattern| visible_pattern_owned(*pattern, scope, analysis))
+                .collect(),
+        ),
+        Pattern::Constructor { payload, .. } => Produced::Variant(Box::new(
+            payload
+                .map(|pattern| visible_pattern_owned(pattern, scope, analysis))
+                .unwrap_or(Produced::None),
+        )),
+        Pattern::Shape { fields, .. } => Produced::Shape(
+            fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.name.clone(),
+                        visible_pattern_owned(field.pattern, scope, analysis),
+                    )
+                })
+                .collect(),
+        ),
+        _ => Produced::None,
+    }
+}
+
 fn project_owned_path(
     expression: ExpressionId,
     scope: &ScopeRef,
@@ -2247,6 +2295,51 @@ fn walk_apply(
     let callee = walk(function, scope, analysis, Use::Project);
     let (parameter, input, result, callback_requirements, defining_module) =
         function_contract(function, &callee, scope, analysis);
+    let recursive_lambda = match &analysis.module.arena.expressions[function.0 as usize] {
+        Expression::Var { name, .. } => analysis
+            .lookup(scope, name)
+            .and_then(|(binding, _)| binding.borrow().value)
+            .and_then(|value| {
+                let Expression::Rec { lambda, .. } =
+                    analysis.module.arena.expressions[value.0 as usize]
+                else {
+                    return None;
+                };
+                Some(lambda)
+            }),
+        _ => None,
+    };
+    let recursive_call = recursive_lambda.is_some();
+    let recursive_signature = recursive_lambda.and_then(|lambda| {
+        let Expression::Lambda { body, .. } = analysis.module.arena.expressions[lambda.0 as usize]
+        else {
+            return None;
+        };
+        Some((
+            closure_parameter_type(body, analysis).cloned(),
+            closure_result_type(body, analysis).cloned(),
+        ))
+    });
+    let recursive_accumulator_unsettled =
+        recursive_signature
+            .as_ref()
+            .is_some_and(|(parameter, result)| {
+                let (Some(Type::Record(parameter_fields)), Some(Type::Record(result_fields))) =
+                    (parameter, result)
+                else {
+                    return false;
+                };
+                parameter_fields.len() == 2
+                    && parameter_fields
+                        .iter()
+                        .any(|(name, type_)| name == "1" && matches!(type_, Type::Top))
+                    && result_fields
+                        .iter()
+                        .any(|(name, _)| name.parse::<usize>().is_err())
+            });
+    let recursive_result_type = recursive_signature
+        .as_ref()
+        .and_then(|(_, result)| result.clone());
     let input = analysis
         .expression_types
         .get(&argument)
@@ -2274,6 +2367,23 @@ fn walk_apply(
         )
     };
     let argument_value = require_contract_store_access(&input, argument_value, analysis);
+    let refined_recursive_contract =
+        if recursive_call && recursive_accumulator_unsettled && !relevant(&result) {
+            parameter.and_then(|parameter| {
+                let input = visible_pattern_owned(parameter, scope, analysis);
+                let result = recursive_result_type
+                    .as_ref()
+                    .and_then(|type_| recursive_structural_owned_result(&input, Some(type_)));
+                result.map(|result| (input, result))
+            })
+        } else {
+            None
+        };
+    let recursive_transfer = refined_recursive_contract.is_some();
+    let result = refined_recursive_contract
+        .as_ref()
+        .map(|(_, result)| result.clone())
+        .unwrap_or(result);
     if contains_borrow(&argument_value)
         && !parameter_accepts_borrow(parameter, &argument_value, contract_module)
         && !trusted_borrow_operation(function, analysis.module)
@@ -2298,8 +2408,8 @@ fn walk_apply(
         || (contains_shared(&argument_value) && demands_ownership(&input)))
         && !parameter_accepts_ownership(&input, &argument_value)
         && !trusted_scalar_operation(function, analysis.module)
-        && !(obligation(&argument_value) == Obligation::Affine
-            && local_recursive_call(function, scope, analysis))
+        && !recursive_transfer
+        && !(obligation(&argument_value) == Obligation::Affine && recursive_call)
     {
         analysis.report(
             "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
@@ -2315,7 +2425,11 @@ fn walk_apply(
         scope,
         analysis,
     );
-    let result = substitute_parameters(result, parameter, &argument_value, contract_module);
+    let relation_argument = refined_recursive_contract
+        .as_ref()
+        .map(|(input, _)| input)
+        .unwrap_or(&argument_value);
+    let result = substitute_parameters(result, parameter, relation_argument, contract_module);
     shared_array_result(
         expression,
         resolve_pending(result, span, analysis),
@@ -2969,22 +3083,6 @@ fn set_unique_store_access(produced: Produced, source: PatternId, path: &[String
         ),
         produced => produced,
     }
-}
-
-fn local_recursive_call(function: ExpressionId, scope: &ScopeRef, analysis: &Analysis<'_>) -> bool {
-    let Expression::Var { name, .. } = &analysis.module.arena.expressions[function.0 as usize]
-    else {
-        return false;
-    };
-    analysis
-        .lookup(scope, name)
-        .and_then(|(binding, _)| binding.borrow().value)
-        .is_some_and(|value| {
-            matches!(
-                analysis.module.arena.expressions[value.0 as usize],
-                Expression::Rec { .. }
-            )
-        })
 }
 
 fn walk_call_argument(
@@ -4284,22 +4382,66 @@ fn recursive_owned_result(input: &Produced, result_type: Option<&Type>) -> Optio
     if !matches!(result_type, Some(Type::Array(_) | Type::Region(_))) {
         return None;
     }
+    recursive_structural_owned_result(input, result_type)
+}
+
+fn recursive_structural_owned_result(
+    input: &Produced,
+    result_type: Option<&Type>,
+) -> Option<Produced> {
     let mut candidates = Vec::new();
     recursive_owned_candidates(input, &mut candidates);
-    if candidates.len() == 1 {
-        let candidate = candidates.pop()?;
-        if let Some(Type::Region(element)) = result_type {
+    let candidate = if candidates.len() == 1 {
+        candidates.pop()?
+    } else {
+        return None;
+    };
+    recursive_result_ownership(result_type?, candidate)
+}
+
+fn recursive_result_ownership(type_: &Type, candidate: Produced) -> Option<Produced> {
+    match type_ {
+        Type::Forall { body, .. } => recursive_result_ownership(body, candidate),
+        Type::Array(_) | Type::Scratch(_) => Some(candidate),
+        Type::Region(element) => {
             let region = region_authority(candidate);
             if type_may_carry_ownership(element) {
                 Some(region)
             } else {
                 Some(clear_region_elements(region))
             }
-        } else {
-            Some(candidate)
         }
-    } else {
-        None
+        Type::Record(fields) => {
+            let mut ownership = Vec::with_capacity(fields.len());
+            let mut selected = false;
+            for (name, field_type) in fields {
+                let field = recursive_result_ownership(field_type, candidate.clone());
+                if field.is_some() && selected {
+                    return None;
+                }
+                selected |= field.is_some();
+                ownership.push((name.clone(), field.unwrap_or(Produced::None)));
+            }
+            if !selected {
+                return None;
+            }
+            if ownership
+                .iter()
+                .enumerate()
+                .all(|(index, (name, _))| name == &index.to_string())
+            {
+                return Some(Produced::Sequence(
+                    ownership.into_iter().map(|(_, value)| value).collect(),
+                ));
+            }
+            Some(Produced::Shape(ownership.into_iter().collect()))
+        }
+        Type::RecordUpdate { base, fields } => {
+            let updated =
+                crate::typecheck::record_update_type(base.as_ref().clone(), fields.clone());
+            recursive_result_ownership(&updated, candidate)
+        }
+        _ => None,
     }
 }
 

@@ -1,0 +1,13 @@
+open import "blot:prelude"
+
+const OffsetOptions = { .offset_y? = Int; }
+
+const resolve_offset :: OffsetOptions -> Int
+const resolve_offset = fn options => case options.offset_y of
+  () => 0
+  present => @satisfies present Int + 1
+
+const dynamic_offset :: Int -> Int
+const dynamic_offset = fn offset_y => resolve_offset { .offset_y = offset_y; }
+
+return { .dynamic_offset = dynamic_offset; }

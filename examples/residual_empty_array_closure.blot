@@ -1,0 +1,13 @@
+open import "blot:prelude"
+
+const captured_empty_children :: Int -> Int
+const captured_empty_children = fn value => do:
+  let run_children = fn children => do:
+    for child in Iter.items children:
+      use child
+
+    return value
+
+  return run_children []
+
+return { .captured_empty_children = captured_empty_children; }

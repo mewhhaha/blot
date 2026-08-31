@@ -24,6 +24,7 @@ function acceptedModule(): BlotRuntimeModule {
       { parameters: [], result: 1, effects: [] },
       { parameters: [1], result: 1, effects: ["Console"] },
     ],
+    staticStores: [],
     functions: [
       {
         id: 0,
@@ -497,6 +498,128 @@ Deno.test("Blot Runtime HIR rejects owned Store reuse without ownership evidence
   assertThrows(
     () => validateBlotRuntimeModule(invalid),
     /claims owned reuse with plain ownership/,
+  );
+});
+
+Deno.test("Blot Runtime HIR accepts a closed Store literal", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const literal: BlotRuntimeModule = {
+    ...module,
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.literal",
+          result: 4,
+          type: 3,
+          operands: [1],
+          ownership: "owned",
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  validateBlotRuntimeModule(literal);
+});
+
+Deno.test("Blot Runtime HIR accepts a pooled static Store literal", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const literal: BlotRuntimeModule = {
+    ...module,
+    staticStores: [{ elementType: 1, values: [41n, 42n] }],
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.literal",
+          result: 4,
+          type: 3,
+          operands: [],
+          ownership: "owned",
+          staticStore: 0,
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  validateBlotRuntimeModule(literal);
+});
+
+Deno.test("Blot Runtime HIR rejects runtime operands on a pooled Store literal", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    staticStores: [{ elementType: 1, values: [42n] }],
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.literal",
+          result: 4,
+          type: 3,
+          operands: [1],
+          ownership: "owned",
+          staticStore: 0,
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /retains runtime operands/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects an ill-typed static Store value", () => {
+  const module: BlotRuntimeModule = {
+    ...acceptedModule(),
+    staticStores: [{ elementType: 1, values: [42] }],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(module),
+    /value 0 does not match element type 1/,
+  );
+});
+
+Deno.test("Blot Runtime HIR rejects a Store literal with the wrong element type", () => {
+  const module = acceptedModule();
+  const main = module.functions[0];
+  const entry = main.blocks[0];
+  const invalid: BlotRuntimeModule = {
+    ...module,
+    functions: [{
+      ...main,
+      blocks: [{
+        ...entry,
+        operations: [...entry.operations, {
+          kind: "store.literal",
+          result: 4,
+          type: 3,
+          operands: [0],
+          ownership: "owned",
+          span,
+        }],
+      }, ...main.blocks.slice(1)],
+    }, ...module.functions.slice(1)],
+  };
+
+  assertThrows(
+    () => validateBlotRuntimeModule(invalid),
+    /operand 0 does not have element type 1/,
   );
 });
 

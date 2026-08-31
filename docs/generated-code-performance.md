@@ -177,6 +177,64 @@ Blot artifact is 1,425 bytes; its Rust counterpart's exported hot function is
 and standard-library support. Complete artifact size and hot-function size are
 therefore both reported rather than conflated.
 
+## 2026-08-30 switch-normalization observation
+
+Runtime-HIR schema 6 made integer and closed-sum cases native `switch`
+terminators. The known-sum fold still expected the older tag-equality
+conditional, so iterator `Option` dispatch survived specialization and forced
+surface iteration back through the generic CFG dispatcher. The fold now maps
+locally constructed sum cases through the canonical switch and passes their
+payloads directly to the selected arms.
+
+The compiler artifact SHA-256 was
+`9b4921ba4dfd04932006ee8480dc44a122f482ccb8f35f81f8dd68a36e2bc700`. The
+environment was Deno 2.9.5, V8 15.0.245.2-rusty, and rustc 1.97.1. Both sides
+were compiled and measured by the same benchmark procedure described above.
+
+| Workload at `n=1,024` | Blot Wasm | Rust Wasm | Blot / Rust |
+| --------------------- | --------: | --------: | ----------: |
+| direct tail recursion |    737 ns |    736 ns |       1.00× |
+| nonlinear loop mix    |   3.64 µs |   3.53 µs |       1.03× |
+| range fold            |    709 ns |    666 ns |       1.06× |
+| surface iteration     |    734 ns |    812 ns |       0.90× |
+
+Surface iteration measured 1.15× Rust at 16 iterations, 1.01× at 64, 0.95× at
+256, and 0.90× at 1,024. Its Runtime HIR contains one entry cycle, no sum
+operations, and no switch. The emitted hot function is a 197-byte structured
+loop rather than the 387-byte dispatcher observed before the fold was restored;
+the complete Blot artifact is 1,626 bytes.
+
+## 2026-08-31 whole-case lowering audit
+
+`deno task audit:lowerings` prepares and emits the two owned sorting examples
+and the shrubbery game-loop case study. It rejects invalid Wasm, duplicate exact
+Runtime-HIR types or signatures, pooled literals with residual producers, unused
+total operations, persistent Store growth inside a lowered surface loop, and
+artifacts that exceed checked-in structural budgets. The compiler artifact
+SHA-256 was `b9fedd365268e8458291bb671b7593321455e273488424e2ec13ab4eff8e0d52`.
+
+| Source              | Functions | Blocks | Operations | Largest CFG | Static elements | Dynamic literal elements | Wasm types | Wasm locals | Local declarations | Wasm bytes |
+| ------------------- | --------: | -----: | ---------: | ----------: | --------------: | -----------------------: | ---------: | ----------: | -----------------: | ---------: |
+| owned radix sorts   |        53 |    216 |        841 |          10 |             257 |                       65 |         28 |         977 |                263 |     20,320 |
+| owned merge sort    |        12 |     49 |        230 |          13 |               0 |                       12 |         11 |         207 |                 46 |      6,721 |
+| shrubbery game loop |        45 |    764 |      3,025 |         101 |              65 |                       64 |         36 |       1,338 |                300 |     67,192 |
+
+Ordinary first-order helpers become shared residual functions instead of being
+copied into each caller. Recursive results settle once for all callers, and a
+generic product argument materializes an empty `Scratch T` as soon as a sibling
+field closes `T`. Multi-subject structural cases bind payloads in their first
+successful probe rather than testing the same pattern again. The 112-block game
+budget retains headroom over the current 101-block renderer while rejecting the
+149-block duplicated-pattern lowering found during this audit.
+
+Closed scalar Store contents are pooled in Runtime HIR, unused total producers
+are removed, and equal logical and physical signatures are interned. Wasm local
+counts cover shared residual functions after outlining; liveness coloring and
+counted declarations keep their declaration vectors to 263, 46, and 300 entries.
+Structured loops additionally reclaim iteration-local allocations only when
+every owned backedge parameter is the identical incoming Runtime-HIR value.
+These are structural compiler observations, not runtime timings.
+
 ## Artifact size
 
 Marginal bytes subtract a boundary-matched baseline: host roundtrip for the

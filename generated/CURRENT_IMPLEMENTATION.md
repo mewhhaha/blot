@@ -11,7 +11,7 @@
 | Checked-module certificate | 16 |
 | Module snapshot | 2 |
 | Value capsule | 4 |
-| Runtime HIR | 7 |
+| Runtime HIR | 9 |
 | Public ABI | 2.0 |
 
 ## Supported public values

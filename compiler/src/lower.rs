@@ -3286,14 +3286,13 @@ fn lower_multi_case_column(
         arena,
     )?;
     let fallback = lower_multi_case_rows(remaining, subject_names, cached, span, depth + 1, arena)?;
-    let tested_pattern = erase_binders(pattern, arena);
     let wildcard = arena.pattern(Pattern::Wildcard { span });
     let target = variable(&subject_name, span, arena);
     Ok(arena.expression(Expression::Case {
         target,
         arms: vec![
             Arm {
-                pattern: tested_pattern,
+                pattern,
                 body: consequence,
             },
             Arm {
@@ -3330,44 +3329,24 @@ fn lower_multi_case_body(
     }
 
     for (column, pattern) in row.patterns.iter().copied().enumerate().rev() {
-        if matches!(arena.patterns[pattern.0 as usize], Pattern::Wildcard { .. }) {
+        if !matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. }) {
             continue;
         }
         let subject_name = cached[column]
             .as_ref()
             .ok_or_else(|| format!("multi-subject case column {column} was not evaluated"))?;
         let target = variable(subject_name, span, arena);
-        if matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. }) {
-            let binding = arena.declaration(Declaration::Binding {
-                kind: DeclarationKind::Let,
-                tags: Vec::new(),
-                pattern,
-                value: target,
-                span,
-            });
-            body = arena.expression(Expression::Block {
-                declarations: vec![binding],
-                result: body,
-                result_effects: ResultEffects::Ambient,
-                span,
-            });
-            continue;
-        }
-        let wildcard = arena.pattern(Pattern::Wildcard { span });
-        let impossible = compiler_panic(
-            "multi-subject case probe disagreed with its binding",
+        let binding = arena.declaration(Declaration::Binding {
+            kind: DeclarationKind::Let,
+            tags: Vec::new(),
+            pattern,
+            value: target,
             span,
-            arena,
-        );
-        body = arena.expression(Expression::Case {
-            target,
-            arms: vec![
-                Arm { pattern, body },
-                Arm {
-                    pattern: wildcard,
-                    body: impossible,
-                },
-            ],
+        });
+        body = arena.expression(Expression::Block {
+            declarations: vec![binding],
+            result: body,
+            result_effects: ResultEffects::Ambient,
             span,
         });
     }

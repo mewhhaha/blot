@@ -190,6 +190,13 @@ Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
+A multi-subject case becomes deferred subject computations and ordinary nested
+cases. A subject is demanded only when the selected row first tests its column.
+The first structural probe retains its binders for the rest of that successful
+path; elaboration must not erase those binders and emit a second pattern test to
+recover them. An irrefutable name column binds the cached subject with an
+ordinary local declaration.
+
 An incremental frontend result must equal a fresh result, including diagnostics,
 spans, compact edges, and resolved identities.
 
@@ -321,6 +328,14 @@ are separate certificate fields. Type specialization may refine only element
 shareability. Destructive operations and calls propagate `Unique` Store access;
 a branch join uses `Unique` when any continuing alternative requires it.
 
+When a recursive closure's result relation is initially lazy, checking its call
+argument may reveal the Store authority carried by a synthetic fold accumulator.
+The checker may publish that post-argument relation only when the closed
+parameter and result shapes identify one unambiguous authority path. It
+substitutes the symbolic parameter relation into the result rather than treating
+the runtime representation as ownership evidence. An absent or ambiguous path
+remains without authority.
+
 The checker enforces mode-specific rules: affine discard is permitted; linear
 paths require one consuming action on every terminating exit. A consuming
 operation is not assumed to run a domain-specific finalizer unless its own
@@ -366,6 +381,58 @@ Specialization closes:
 It inserts explicit representation coercions and attaches replayed ownership
 permission to destructive operations.
 
+Before an evaluator-visible function body runs, its argument is adapted against
+the domain after call-site substitutions. This adaptation is structural: when
+one field closes a quantified element representation, a deferred `Scratch` in
+another field of the same product is materialized with that representation
+before pattern binding. An empty builder therefore cannot carry an unresolved
+element variable into `Scratch.finish` merely because its evidence arrived in a
+sibling field.
+
+One production preparation builds one residual specialization graph for all
+runtime function exports. A specialization identity includes its source closure,
+closed signature, argument and result representations, capture representations,
+and Store-reuse witness. Equal identities share one function even when reached
+from different exports. Recursive identities enter the graph before their bodies
+are evaluated. Store authority returned through a recursive aggregate is
+initially deferred, settled at control-flow joins, and published with the
+completed identity; a later call must not infer that authority again from the
+backend representation.
+
+A recursive result whose finite representation is not yet known uses a private
+indirect identity plus a separate settlement fact. The target type identifier is
+not a settlement marker because `Unit` is a valid finite representation with
+identifier zero. A finite branch or completed body settles the identity exactly
+once; incompatible settlements or a completed recursion with no finite branch
+are invariant failures.
+
+Every residual application with a closed first-order argument and result enters
+that graph, including non-recursive source helpers. Static applications and
+applications whose argument, result, or capture still contains a staged
+iterator, deferred value, higher-order value, continuation, effect operation, or
+symbolic ordering remain in the evaluator because their behavior depends on
+compile-time state. The root application that supplies a public export remains
+the root being compiled instead of gaining a redundant call wrapper. A
+non-recursive helper with a union result also remains evaluator-visible so its
+known constructor can normalize the immediately surrounding case before Runtime
+HIR. These distinctions follow closed value shape and call position; source
+names and development-unit membership are not specialization premises.
+
+Source opacity alone does not make a recursive result representation-open. The
+eight SIMD vector and mask types are opaque to source reflection but have closed
+first-order Runtime HIR layouts, so they may occur inside residual arguments and
+recursive results. Ordinary helpers with opaque results remain evaluator-visible
+because their bodies may consume staged instruction immediates; representation
+closure alone does not prove those operands residual-safe. Other opaque values
+remain staged unless their target policy defines a concrete internal
+representation and the specialization contract records their staged operands.
+
+Evaluation continuations are an explicit ordered work queue across both pure
+steps and effect suspension. Composing declarations, origin enrichment, result
+mapping, or effect resumption must extend that queue rather than nest host
+closures; lowered source depth therefore does not consume the compiler Wasm call
+stack before the documented evaluation fuel is reached.
+
 A closed production-supported internal program that remains representation-open
 at Runtime-HIR construction exposes an invariant failure. An explicitly
 unsupported public type or experimental target feature may yield target refusal
@@ -377,11 +444,26 @@ Runtime HIR is constructed only after representation closure. The producer emits
 closed operations, values, control flow, Store lineage, host requests with
 normalized input/result ownership, traps, and public metadata.
 
+Before validation, Runtime-HIR normalization pools closed scalar Store literals
+in the module's typed static-Store table, removes unused total operations to a
+fixed point, and interns structurally equal closed types and signatures. It does
+not remove calls, host operations, allocation, mutation, reads, or arithmetic
+whose checked operation may trap. Every rewritten reference is validated against
+the compacted tables; the backend consumes those facts and does not repeat type
+or effect inference.
+
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked
 result representation, and emits parameter-free switch edges followed by
 ordinary branches into a shared join. Validators and emitters consume this
 terminator directly rather than reconstructing a case tree from source.
+
+Runtime-HIR simplification removes a closed-sum switch when every incoming join
+edge carries a locally constructed sum, every constructor maps to a distinct
+arm, and the dispatch tag and arm payload projections are the joined sum's only
+readers. It redirects each constructor edge to its arm and passes the payload as
+an arm parameter. If any premise is absent, the switch remains unchanged for the
+ordinary validator and emitter path.
 
 The validator independently checks:
 
@@ -638,6 +720,10 @@ belongs to another unit is refused because it would move a function value over
 the boundary. Each link carries one closed first-order signature derived from
 the checker facts. The splitter does not infer a replacement signature from
 backend layout.
+
+Production and development preparation use the same residual outlining rule. The
+splitter partitions the resulting graph; it does not cause additional closures
+to be outlined or preserve evaluator inlining according to unit membership.
 
 For development unit `U`, the compiler deterministically serializes the complete
 normalized Runtime-HIR module for `U`, including link signatures, link targets,

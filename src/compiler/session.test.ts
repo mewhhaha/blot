@@ -26,6 +26,133 @@ test("Rust compiler host exposes check, prepare, compile", async () => {
   }
 });
 
+test("present optional integer arm returns its bound runtime value", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/dynamic_optional_field.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const dynamicOffset = instantiated.instance.exports[
+      "blot:dynamic_offset"
+    ];
+    assert.equal(typeof dynamicOffset, "function");
+    if (typeof dynamicOffset !== "function") {
+      throw new Error(
+        "dynamic optional field artifact omitted blot:dynamic_offset",
+      );
+    }
+    assert.equal((dynamicOffset as (offset: bigint) => bigint)(41n), 42n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("nested runtime closure preserves its unit argument", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/residual_unit_closure.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const capturedUnit = instantiated.instance.exports["blot:captured_unit"];
+    assert.equal(typeof capturedUnit, "function");
+    if (typeof capturedUnit !== "function") {
+      throw new Error("residual closure artifact omitted blot:captured_unit");
+    }
+    assert.equal((capturedUnit as (value: bigint) => bigint)(41n), 41n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("nested runtime closure accepts a representation-free empty array", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/residual_empty_array_closure.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const capturedEmptyChildren =
+      instantiated.instance.exports["blot:captured_empty_children"];
+    assert.equal(typeof capturedEmptyChildren, "function");
+    if (typeof capturedEmptyChildren !== "function") {
+      throw new Error(
+        "residual closure artifact omitted blot:captured_empty_children",
+      );
+    }
+    assert.equal(
+      (capturedEmptyChildren as (value: bigint) => bigint)(42n),
+      42n,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("runtime fold residualizes a recursive step with a concrete argument", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/residual_runtime_fold_projection.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    const foldedProjectValue =
+      instantiated.instance.exports["blot:folded_project_value"];
+    assert.equal(typeof foldedProjectValue, "function");
+    if (typeof foldedProjectValue !== "function") {
+      throw new Error(
+        "runtime fold artifact omitted blot:folded_project_value",
+      );
+    }
+    assert.equal((foldedProjectValue as (value: bigint) => bigint)(41n), 12n);
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("static Boolean argument crosses residual iteration", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/residual_boolean_argument.blot",
+    );
+    const observations: Array<readonly [bigint, number]> = [];
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+      {
+        "blot:host/Host": {
+          observe(value: bigint, done: number) {
+            observations.push([value, done]);
+          },
+          value() {
+            return 41n;
+          },
+        },
+      },
+    );
+    const run = instantiated.instance.exports["blot:default"];
+    assert.equal(typeof run, "function");
+    if (typeof run !== "function") {
+      throw new Error("residual Boolean artifact omitted blot:default");
+    }
+
+    run();
+
+    assert.deepEqual(observations, [[41n, 0]]);
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("failed discovery keeps candidates out of semantic and artifact state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-inspection-isolation-"));
   const path = join(directory, "main.blot");
