@@ -578,7 +578,7 @@ return count
     assert(field !== null);
     assertStringIncludes(
       field.contents.value,
-      "let Array.length :: ['a] -> Int",
+      "let Array.length :: forall 'q0. ['q0] -> Int",
     );
     const imported = await service.hover(uri, { line: 0, character: 7 });
     assert(imported !== null);

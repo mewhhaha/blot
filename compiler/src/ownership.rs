@@ -326,6 +326,7 @@ fn validate_produced(module: &Module, produced: &Produced) -> Result<(), String>
 }
 
 struct Binding {
+    id: usize,
     pattern: PatternId,
     name: String,
     qualifier: Qualifier,
@@ -382,6 +383,7 @@ struct Analysis<'a> {
     contracts: HashMap<ExpressionId, OwnershipContract>,
     callback_requirements: Vec<CallbackRequirement>,
     bindings: Vec<BindingRef>,
+    next_binding_id: usize,
 }
 
 pub(crate) fn check(
@@ -404,6 +406,7 @@ pub(crate) fn check(
         contracts: HashMap::new(),
         callback_requirements: Vec::new(),
         bindings: Vec::new(),
+        next_binding_id: 0,
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -561,7 +564,10 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 *root = Some(pattern);
             }
             let qualifier = inherited(*qualifier, &owned);
+            let id = analysis.next_binding_id;
+            analysis.next_binding_id += 1;
             let binding = Rc::new(RefCell::new(Binding {
+                id,
                 pattern,
                 name: name.clone(),
                 qualifier,
@@ -712,7 +718,7 @@ fn use_name(
             binding.qualifier = Qualifier::None;
         }
         if let Some(captured_by) = captured_by {
-            install_capture(&captured_by, &binding, Qualifier::None);
+            install_capture(&captured_by, &binding, Qualifier::None, analysis);
         }
         return shared;
     }
@@ -732,24 +738,24 @@ fn use_name(
             // A later move upgrades it to an owning closure; a read-only body
             // shares it only after the complete capture use is known.
             push_unique(&mut captured_by.borrow_mut().borrowed_captures, &binding);
-            install_capture(&captured_by, &binding, qualifier);
+            install_capture(&captured_by, &binding, qualifier, analysis);
             return use_name(name, span, scope, analysis, kind);
         }
         if matches!(kind, Use::Borrow)
             && qualifier == Qualifier::None
             && contains_shared(&binding.borrow().owned)
         {
-            install_capture(&captured_by, &binding, Qualifier::None);
+            install_capture(&captured_by, &binding, Qualifier::None, analysis);
             return use_name(name, span, scope, analysis, kind);
         }
         if qualifier == Qualifier::Borrow || matches!(kind, Use::Borrow) {
             push_unique(&mut captured_by.borrow_mut().borrowed_captures, &binding);
-            install_capture(&captured_by, &binding, Qualifier::Borrow);
+            install_capture(&captured_by, &binding, Qualifier::Borrow, analysis);
             return use_name(name, span, scope, analysis, kind);
         }
         if spendable(qualifier) {
             push_unique(&mut captured_by.borrow_mut().captures, &binding);
-            install_capture(&captured_by, &binding, qualifier);
+            install_capture(&captured_by, &binding, qualifier, analysis);
             return use_name(name, span, scope, analysis, kind);
         }
     }
@@ -775,11 +781,19 @@ fn use_name(
     Produced::None
 }
 
-fn install_capture(scope: &ScopeRef, source: &BindingRef, qualifier: Qualifier) {
+fn install_capture(
+    scope: &ScopeRef,
+    source: &BindingRef,
+    qualifier: Qualifier,
+    analysis: &mut Analysis,
+) {
+    let id = analysis.next_binding_id;
+    analysis.next_binding_id += 1;
     let source = source.borrow();
     scope.borrow_mut().bindings.insert(
         source.name.clone(),
         Rc::new(RefCell::new(Binding {
+            id,
             pattern: source.pattern,
             name: source.name.clone(),
             qualifier,
@@ -1027,7 +1041,10 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             }
             _ => (None, Produced::None, None),
         };
+        let id = analysis.next_binding_id;
+        analysis.next_binding_id += 1;
         let binding = Rc::new(RefCell::new(Binding {
+            id,
             pattern: *pattern,
             name: name.clone(),
             qualifier: *qualifier,
@@ -4240,39 +4257,65 @@ fn close_scope(scope: &ScopeRef, analysis: &mut Analysis) {
     }
 }
 
-type Snapshot = Vec<(BindingRef, Option<Span>, Produced, bool, bool)>;
+struct BindingSnapshot {
+    id: usize,
+    binding: BindingRef,
+    moved: Option<Span>,
+    owned: Produced,
+    partial: bool,
+    ownership_demanded: bool,
+}
+
+struct Snapshot {
+    bindings: Vec<BindingSnapshot>,
+    positions: HashMap<usize, usize>,
+}
+
+impl Snapshot {
+    fn binding(&self, id: usize) -> Option<&BindingSnapshot> {
+        self.positions
+            .get(&id)
+            .map(|position| &self.bindings[*position])
+    }
+}
 
 fn snapshot(scope: &ScopeRef) -> Snapshot {
-    let mut snapshot = Vec::new();
+    let mut bindings = Vec::new();
+    let mut positions = HashMap::new();
     let mut seen = HashSet::new();
     let mut current = Some(scope.clone());
     while let Some(scope) = current {
         let scope = scope.borrow();
         for binding in scope.bindings.values() {
-            let address = Rc::as_ptr(binding) as usize;
-            if seen.insert(address) && spendable(binding.borrow().qualifier) {
+            let id = binding.borrow().id;
+            if seen.insert(id) && spendable(binding.borrow().qualifier) {
                 let binding_state = binding.borrow();
-                snapshot.push((
-                    binding.clone(),
-                    binding_state.moved,
-                    binding_state.owned.clone(),
-                    binding_state.partial,
-                    binding_state.ownership_demanded,
-                ));
+                positions.insert(id, bindings.len());
+                bindings.push(BindingSnapshot {
+                    id,
+                    binding: binding.clone(),
+                    moved: binding_state.moved,
+                    owned: binding_state.owned.clone(),
+                    partial: binding_state.partial,
+                    ownership_demanded: binding_state.ownership_demanded,
+                });
             }
         }
         current = scope.parent.clone();
     }
-    snapshot
+    Snapshot {
+        bindings,
+        positions,
+    }
 }
 
 fn restore(snapshot: &Snapshot) {
-    for (binding, moved, owned, partial, ownership_demanded) in snapshot {
-        let mut binding = binding.borrow_mut();
-        binding.moved = *moved;
-        binding.owned = owned.clone();
-        binding.partial = *partial;
-        binding.ownership_demanded = *ownership_demanded;
+    for state in &snapshot.bindings {
+        let mut binding = state.binding.borrow_mut();
+        binding.moved = state.moved;
+        binding.owned = state.owned.clone();
+        binding.partial = state.partial;
+        binding.ownership_demanded = state.ownership_demanded;
     }
 }
 
@@ -4280,26 +4323,26 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
     if outcomes.is_empty() {
         return;
     }
-    for (binding, _, prior_owned, prior_partial, prior_ownership_demanded) in before {
+    for prior in &before.bindings {
+        let binding = &prior.binding;
         let states = outcomes
             .iter()
             .map(|outcome| {
                 outcome
-                    .iter()
-                    .find(|(candidate, ..)| Rc::ptr_eq(candidate, binding))
-                    .map(|(_, moved, owned, partial, ownership_demanded)| {
-                        (*moved, owned.clone(), *partial, *ownership_demanded)
+                    .binding(prior.id)
+                    .map(|state| {
+                        (
+                            state.moved,
+                            &state.owned,
+                            state.partial,
+                            state.ownership_demanded,
+                        )
                     })
-                    .unwrap_or((
-                        None,
-                        prior_owned.clone(),
-                        *prior_partial,
-                        *prior_ownership_demanded,
-                    ))
+                    .unwrap_or((None, &prior.owned, prior.partial, prior.ownership_demanded))
             })
             .collect::<Vec<_>>();
-        let some = states.iter().any(|(moved, ..)| moved.is_some());
-        let every = states.iter().all(|(moved, ..)| moved.is_some());
+        let some = states.iter().any(|state| state.0.is_some());
+        let every = states.iter().all(|state| state.0.is_some());
         if some && !every && binding.borrow().qualifier == Qualifier::Linear {
             analysis.report(
                 "BLOT_LINEAR_BRANCH_DISAGREEMENT",
@@ -4314,7 +4357,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
         if binding.borrow().qualifier == Qualifier::Linear
             && states
                 .iter()
-                .any(|(_, owned, partial, _)| owned != &first.1 || partial != &first.2)
+                .any(|state| state.1 != first.1 || state.2 != first.2)
         {
             analysis.report(
                 "BLOT_LINEAR_BRANCH_DISAGREEMENT",
@@ -4327,10 +4370,10 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
         }
         let chosen = states
             .iter()
-            .find(|(moved, ..)| moved.is_some())
+            .find(|state| state.0.is_some())
             .unwrap_or(first);
         let owned = states.iter().fold(chosen.1.clone(), |owned, state| {
-            merge_store_access_requirements(owned, &state.1)
+            merge_store_access_requirements(owned, state.1)
         });
         let mut binding = binding.borrow_mut();
         binding.moved = chosen.0;

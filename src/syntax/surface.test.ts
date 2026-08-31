@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import type { Expr } from "./ast.ts";
 import { parse, parseConcrete } from "./parse.ts";
+import { encodePortableModule } from "./portable.ts";
 
 Deno.test("a deferred lambda parameter is recorded on the lambda", async () => {
   const parsed = await parse(`let lazy = fn ~value => value
@@ -26,7 +27,7 @@ return lazy
   assertEquals(parsed.diagnostics[0]?.code, "BLOT_BAD_DEFERRED_PARAMETER");
 });
 
-Deno.test("a multi-subject case suspends its subjects during surface lowering", async () => {
+Deno.test("a multi-subject case wraps each subject in one strict thunk", async () => {
   const parsed = await parse(`return case #True, @panic "not demanded" of
   #True, _ => 1
   #False, _ => 2
@@ -35,14 +36,27 @@ Deno.test("a multi-subject case suspends its subjects during surface lowering", 
   if (!parsed.ok) return;
   assertEquals(parsed.module.result.tag, "apply");
   if (parsed.module.result.tag !== "apply") return;
-  assertEquals(parsed.module.result.fn.tag, "lambda");
-  if (parsed.module.result.fn.tag !== "lambda") return;
-  assertEquals(parsed.module.result.fn.deferred, true);
-  assertEquals(parsed.module.result.fn.body.tag, "apply");
-  if (parsed.module.result.fn.body.tag !== "apply") return;
-  assertEquals(parsed.module.result.fn.body.fn.tag, "lambda");
-  if (parsed.module.result.fn.body.fn.tag !== "lambda") return;
-  assertEquals(parsed.module.result.fn.body.fn.deferred, true);
+  const coverage = parsed.module.result.fn;
+  assertEquals(coverage.tag, "lambda");
+  if (coverage.tag !== "lambda") return;
+  const firstSubject = coverage.body;
+  assertEquals(firstSubject.tag, "apply");
+  if (firstSubject.tag !== "apply") return;
+  assertEquals(firstSubject.fn.tag, "lambda");
+  assertEquals(firstSubject.arg.tag, "lambda");
+  if (firstSubject.fn.tag !== "lambda") return;
+  assertEquals(firstSubject.fn.deferred, undefined);
+  if (firstSubject.arg.tag !== "lambda") return;
+  assertEquals(firstSubject.arg.parameter.tag, "unit");
+  const secondSubject = firstSubject.fn.body;
+  assertEquals(secondSubject.tag, "apply");
+  if (secondSubject.tag !== "apply") return;
+  assertEquals(secondSubject.fn.tag, "lambda");
+  assertEquals(secondSubject.arg.tag, "lambda");
+  if (secondSubject.fn.tag !== "lambda") return;
+  assertEquals(secondSubject.fn.deferred, undefined);
+  if (secondSubject.arg.tag !== "lambda") return;
+  assertEquals(secondSubject.arg.parameter.tag, "unit");
 });
 
 Deno.test("a multi-subject structural probe binds its payload once", async () => {
@@ -52,7 +66,11 @@ Deno.test("a multi-subject structural probe binds its payload once", async () =>
 `);
   assert(parsed.ok);
   if (!parsed.ok) return;
-  const firstSubject = parsed.module.result;
+  assertEquals(parsed.module.result.tag, "apply");
+  if (parsed.module.result.tag !== "apply") return;
+  assertEquals(parsed.module.result.fn.tag, "lambda");
+  if (parsed.module.result.fn.tag !== "lambda") return;
+  const firstSubject = parsed.module.result.fn.body;
   assertEquals(firstSubject.tag, "apply");
   if (firstSubject.tag !== "apply") return;
   assertEquals(firstSubject.fn.tag, "lambda");
@@ -63,13 +81,16 @@ Deno.test("a multi-subject structural probe binds its payload once", async () =>
   assertEquals(secondSubject.fn.tag, "lambda");
   if (secondSubject.fn.tag !== "lambda") return;
   const lowered = secondSubject.fn.body;
-  assertEquals(lowered.tag, "block");
-  if (lowered.tag !== "block") return;
-  assertEquals(lowered.result.tag, "apply");
-  if (lowered.result.tag !== "apply") return;
-  assertEquals(lowered.result.fn.tag, "lambda");
-  if (lowered.result.fn.tag !== "lambda") return;
-  const probe = lowered.result.fn.body;
+  assertEquals(lowered.tag, "apply");
+  if (lowered.tag !== "apply") return;
+  assertEquals(lowered.fn.tag, "lambda");
+  if (lowered.fn.tag !== "lambda") return;
+  const cachedSubject = lowered.fn.body;
+  assertEquals(cachedSubject.tag, "apply");
+  if (cachedSubject.tag !== "apply") return;
+  assertEquals(cachedSubject.fn.tag, "lambda");
+  if (cachedSubject.fn.tag !== "lambda") return;
+  const probe = cachedSubject.fn.body;
   assertEquals(probe.tag, "case");
   if (probe.tag !== "case") return;
   const pattern = probe.arms[0]?.pattern;
@@ -78,6 +99,35 @@ Deno.test("a multi-subject structural probe binds its payload once", async () =>
   assertEquals(pattern.payload?.tag, "name");
   if (pattern.payload?.tag !== "name") return;
   assertEquals(pattern.payload.name, "value");
+});
+
+Deno.test("dense multi-subject cases lower to a linear-size AST", async () => {
+  const width = 8;
+  const subjects = Array.from(
+    { length: width },
+    (_, index) => `subject${index}`,
+  );
+  const arms = Array.from({ length: width }, (_, row) => {
+    const patterns = subjects.map((_, column) => {
+      if ((row + column) % 2 === 0) return "#True";
+      return "#False";
+    });
+    return `  ${patterns.join(", ")} => 64`;
+  });
+  arms.push(`  ${subjects.map(() => "_").join(", ")} => 64`);
+  const parsed = await parse(
+    `let choose = fn (${subjects.join(", ")}) => case ${subjects.join(", ")} of
+${arms.join("\n")}
+return choose (${subjects.map(() => "#True").join(", ")})
+`,
+  );
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  const expressions = encodePortableModule(parsed.module).arena.expressions;
+  assert(
+    expressions.length < width * width * 32,
+    `dense case lowered to ${expressions.length} expressions`,
+  );
 });
 
 Deno.test("a block-bodied lambda is an ordinary infix operand", async () => {

@@ -896,6 +896,12 @@ diagnostic at the smallest disagreeing path. Borrowing a path never changes the
 tree, but the borrow retains that exact path and cannot be used to recover its
 parent.
 
+Every ownership binding receives a dense analysis-local identity. Branch
+snapshots preserve their established binding order for diagnostics and index
+states by that identity, so pointwise agreement performs one lookup per live
+binding and continuing branch rather than searching every snapshot by allocation
+address.
+
 The prefix markers `!e`, `?e`, and `&e` do not change `e`'s value type. They
 request, respectively, an exact move, an at-most-once move, or a borrow in
 `Omega`. An application admits `?e` only when `e` carries an affine obligation
@@ -1327,12 +1333,46 @@ bound graph, never a transported certificate. Residual closure signatures and
 diagnostic strings are materialized from the graph only at a boundary that
 consumes them; recursive closure inference itself carries the shared type.
 
-Closed-union deduplication compares types structurally with scoped
-alpha-equivalence. Pretty printing is not an identity operation and must not be
-used to construct a union, constraint, cache, or visited key. Evaluated closure
-inference inspects only the closure body's free names and bridges the matching
-captured values. Scanning every value in every captured frame would make an
-unused environment part of inference cost without changing the judgment.
+Settlement memoization is keyed by inference variable and polarity and is
+cleared whenever a new constraint is admitted. A same-polarity recursive back
+edge makes the entries reached after its repeated component entry ineligible for
+caching from that partial traversal; the completed entry result may be reused.
+An opposite-polarity back edge makes both occurrences ineligible. Thus a cached
+settlement is always a completed polar observation, never the provisional top or
+bottom used to cut a cycle.
+
+Closure certificates normally retain the quantified residual signature. A
+compiler-generated closure whose residual signature cannot be reified, or a
+case-lowered closure whose signature exceeds the fixed per-root reference
+budget, receives a closed representation signature instead: parameter, effect,
+and result evidence are settled positively and remaining representation holes
+are explicitly quantified. Statically applied administrative case closures do
+not cross the certificate boundary. Generated applications publish a runtime
+type fact only when lowering identifies a subject force or a saturated row
+fallback; those facts retain their quantified residual type. Source expression
+facts may use an exact settlement only when positive and negative settlement
+agree and the result is closed; otherwise they retain the residual-signature
+path. These are representation and fact-publication decisions after inference,
+not alternate typing judgments.
+
+All executable row-fallback and subject-force calls in one inference context
+share monomorphic solver facts. Each evaluated-closure specialization receives a
+fresh context, so those facts cannot make traversal order part of a published
+closure signature. Every generated thunk is checked where it is constructed;
+reusing a subject-force result therefore does not constrain a different row's
+thunk backward with that row's branch refinement. Introducing another
+application variable at every force would reconstruct an expanding chain of
+equivalent closure constraints.
+
+Closed-union deduplication uses a canonical structural key with scoped
+alpha-equivalence. Types containing unresolved variables retain the ordinary
+structural comparison. Pretty printing is not an identity operation and must not
+be used to construct a union, constraint, cache, or visited key. Finite record,
+update, and variant comparisons build label indexes for the duration of the
+operation while preserving the authoritative source field order. Evaluated
+closure inference inspects only the closure body's free names and bridges the
+matching captured values. Scanning every value in every captured frame would
+make an unused environment part of inference cost without changing the judgment.
 
 ## 7. Implementation stages and gates
 

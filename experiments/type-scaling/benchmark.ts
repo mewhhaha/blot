@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { Compiler } from "../../src/compiler/session.ts";
 
 let samples = 3;
-const sizes = [8, 16, 32, 64, 128, 256] as const;
+let sizes: readonly number[] = [8, 16, 32, 64, 128, 256];
 const phases = ["frontend", "check", "prepare", "compile"] as const;
 const generators = {
   ordinary: ordinarySource,
@@ -17,6 +17,11 @@ const generators = {
   wrapper: wrapperSource,
   measure: measureSource,
   evidence: evidenceSource,
+  dense_case: denseCaseSource,
+  operator_chain: operatorChainSource,
+  literal_union: literalUnionSource,
+  projection: projectionSource,
+  ownership: ownershipSource,
 } as const;
 
 type Phase = typeof phases[number];
@@ -29,6 +34,18 @@ for (const argument of requested) {
     samples = Number.parseInt(argument.slice("--samples=".length), 10);
     if (!Number.isSafeInteger(samples) || samples < 1 || samples % 2 === 0) {
       throw new Error("type-scaling samples must be a positive odd integer");
+    }
+    continue;
+  }
+  if (argument.startsWith("--sizes=")) {
+    sizes = argument.slice("--sizes=".length).split(",").map((value) =>
+      Number.parseInt(value, 10)
+    );
+    if (
+      sizes.length === 0 ||
+      sizes.some((size) => !Number.isSafeInteger(size) || size < 1)
+    ) {
+      throw new Error("type-scaling sizes must be positive integers");
     }
     continue;
   }
@@ -161,10 +178,10 @@ try {
     };
   });
 
-  const slopes: Record<string, Record<Phase, number>> = {};
+  const slopes: Record<string, Record<Phase, number | null>> = {};
   for (const family of selectedFamilies) {
     const familyRows = rows.filter((row) => row.family === family);
-    const byPhase = {} as Record<Phase, number>;
+    const byPhase = {} as Record<Phase, number | null>;
     for (const phase of phases) {
       byPhase[phase] = logSlope(
         familyRows.map((row) => row.size),
@@ -204,6 +221,12 @@ try {
         wrapper: "O(N) wrapper bodies with identity relationships",
         measure: "O(N) wrapper depth transporting one measured array length",
         evidence: "O(N) independent structural proof packages",
+        dense_case:
+          "O(N) source cells in one dense, demand-driven multi-subject case",
+        operator_chain: "O(N) terms in one left-associative operator chain",
+        literal_union: "O(N) closed singleton members in one type union",
+        projection: "O(N) fields and projections in one structural record",
+        ownership: "O(N) live owned bindings across O(N) total case arms",
       },
       work_gate: workGate,
       estimated_log_log_slope: slopes,
@@ -216,7 +239,7 @@ try {
     throw new Error(
       `${failedWorkGate.family} semantic decision work grew ${
         failedWorkGate.last_doubling.toFixed(3)
-      }x; expected at most 2.25x`,
+      }x; expected at most ${failedWorkGate.maximum_doubling}x`,
     );
   }
 } finally {
@@ -357,6 +380,84 @@ function evidenceSource(size: number): string {
   );
 }
 
+function denseCaseSource(size: number): string {
+  const width = 8;
+  const rowCount = Math.max(1, Math.ceil(size / width));
+  const names = Array.from({ length: width }, (_, index) => `subject${index}`);
+  const arms: string[] = [];
+  for (let row = 0; row < rowCount; row += 1) {
+    const patterns = names.map((_, column) => {
+      if ((row & (1 << column)) === 0) return "#False";
+      return "#True";
+    });
+    arms.push(`  ${patterns.join(", ")} => ${size}`);
+  }
+  arms.push(`  ${names.map(() => "_").join(", ")} => ${size}`);
+  const selectedRow = rowCount - 1;
+  const subjectValues = names.map((_, column) => {
+    if ((selectedRow & (1 << column)) === 0) return "#False";
+    return "#True";
+  });
+  return moduleSource([
+    `let choose = fn (${names.join(", ")}) => case ${names.join(", ")} of\n${
+      arms.join("\n")
+    }`,
+  ], `choose (${subjectValues.join(", ")})`);
+}
+
+function operatorChainSource(size: number): string {
+  return moduleSource([], Array.from({ length: size }, () => "1").join(" + "));
+}
+
+function literalUnionSource(size: number): string {
+  const members = Array.from({ length: size }, (_, index) => index);
+  return moduleSource([
+    `const Choice = ${members.join(" | ")}`,
+    "let value :: Choice",
+    `let value = ${size - 1}`,
+  ], "value + 1");
+}
+
+function projectionSource(size: number): string {
+  const typeFields = Array.from(
+    { length: size },
+    (_, index) => `.field${index} = Int;`,
+  );
+  const valueFields = Array.from(
+    { length: size },
+    (_, index) => `.field${index} = 1;`,
+  );
+  const declarations = [
+    `const Record = { ${typeFields.join(" ")} }`,
+    "let record :: Record",
+    `let record = { ${valueFields.join(" ")} }`,
+    "let total0 = record.field0",
+  ];
+  for (let index = 1; index < size; index += 1) {
+    declarations.push(
+      `let total${index} = total${index - 1} + record.field${index}`,
+    );
+  }
+  return moduleSource(declarations, `total${size - 1}`);
+}
+
+function ownershipSource(size: number): string {
+  const declarations = ["const consume = fn !value => @int.add value 0"];
+  for (let index = 0; index < size; index += 1) {
+    declarations.push(`let !token${index} = ${index}`);
+  }
+  const arms = Array.from(
+    { length: size },
+    (_, index) => `  ${index} => ${size}`,
+  );
+  arms.push(`  _ => ${size}`);
+  declarations.push(`let selected = case 0 of\n${arms.join("\n")}`);
+  for (let index = 0; index < size; index += 1) {
+    declarations.push(`let _ = consume (!token${index})`);
+  }
+  return moduleSource(declarations, "selected");
+}
+
 function moduleSource(declarations: readonly string[], result: string): string {
   return `open import "blot:prelude"\n\n${
     declarations.join("\n")
@@ -382,10 +483,22 @@ function scalingGate(
 ): readonly {
   readonly family: Family;
   readonly last_doubling: number;
+  readonly maximum_doubling: number;
   readonly passed: boolean;
 }[] {
   const gates = [];
-  for (const family of ["wrapper", "measure", "evidence"] as const) {
+  for (
+    const [family, maximumDoubling] of [
+      ["wrapper", 2.25],
+      ["measure", 2.25],
+      ["evidence", 2.25],
+      ["dense_case", 3.5],
+      ["operator_chain", 2.25],
+      ["literal_union", 2.25],
+      ["projection", 2.25],
+      ["ownership", 2.25],
+    ] as const
+  ) {
     const familyRows = rows.filter((row) => row.family === family);
     if (familyRows.length < 2) continue;
     const previous = familyRows.at(-2)?.semantic_decisions;
@@ -400,7 +513,8 @@ function scalingGate(
     gates.push({
       family,
       last_doubling: lastDoubling,
-      passed: lastDoubling <= 2.25,
+      maximum_doubling: maximumDoubling,
+      passed: lastDoubling <= maximumDoubling,
     });
   }
   return gates;
@@ -450,7 +564,11 @@ function median(values: readonly number[]): number {
   return result;
 }
 
-function logSlope(xs: readonly number[], ys: readonly number[]): number {
+function logSlope(
+  xs: readonly number[],
+  ys: readonly number[],
+): number | null {
+  if (xs.length < 2) return null;
   const logXs = xs.map(Math.log);
   const logYs = ys.map(Math.log);
   const meanX = mean(logXs);
@@ -466,7 +584,7 @@ function logSlope(xs: readonly number[], ys: readonly number[]): number {
     numerator += (x - meanX) * (y - meanY);
     denominator += (x - meanX) * (x - meanX);
   }
-  if (denominator === 0) throw new Error("scaling sizes have no variance");
+  if (denominator === 0) return null;
   return numerator / denominator;
 }
 

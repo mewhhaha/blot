@@ -386,6 +386,12 @@ function it derives Runtime-HIR block liveness, assigns identical flattened
 representations to the same local tuple only when their live ranges do not
 interfere, and emits adjacent equal local types as counted declarations. These
 are physical layout choices over validated values, not another type judgment.
+ABI closure computes each directly demanded flattened Runtime-HIR representation
+once, including demanded product-field starting offsets. A type used only
+through an indirect representation remains unflattened. Function emission
+indexes validated SSA value types once. Projection, assignment, direct-call, and
+local-allocation emission consume these indexes rather than rescanning earlier
+product fields or function definitions.
 
 A structured entry loop may use an iteration allocation region only when each
 owned entry parameter is carried across every entry backedge as the exact same

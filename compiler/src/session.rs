@@ -8121,6 +8121,53 @@ mod tests {
     }
 
     #[test]
+    fn multi_subject_refinements_do_not_narrow_recursive_loop_signatures() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            for padding in 0..8 {
+                let mut text = "\n".repeat(padding);
+                text.push_str(concat!(
+                    "open import \"blot:prelude\"\n",
+                    "let classify = fn () => do:\n",
+                    "  let total = 0\n",
+                    "  for index in Iter.range (0, 4):\n",
+                    "    let stem = index == 0\n",
+                    "    let x = index % 2\n",
+                    "    let z = index % 3\n",
+                    "    let color = case stem, x, z of\n",
+                    "      #True, _, _ => 1\n",
+                    "      #False, 0, 0 => 2\n",
+                    "      #False, _, _ => 3\n",
+                    "    total := total + color\n",
+                    "  return total\n",
+                    "return classify ()\n",
+                ));
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source("main.blot".to_owned(), source(&text))
+                    .expect("loop matrix source should load");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("loop matrix source should configure");
+
+                let prepared = session.prepare_runtime_hir("main.blot");
+
+                assert_eq!(prepared["ok"], true, "padding {padding}: {prepared}");
+            }
+        });
+    }
+
+    #[test]
     fn staggered_boolean_case_rejects_a_missing_combination() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -8214,43 +8261,123 @@ mod tests {
     }
 
     #[test]
-    fn multi_subject_case_lowering_grows_polynomially_with_subject_count() {
-        let mut expression_counts = Vec::new();
-        for subject_count in [8, 16] {
-            let names = (0..subject_count)
-                .map(|index| format!("subject{index}"))
-                .collect::<Vec<_>>();
-            let mut text = format!(
-                "let choose = fn ({}) => case {} of\n",
-                names.join(", "),
-                names.join(", ")
+    fn dense_multi_subject_case_lowering_grows_polynomially() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
             );
-            for selected in 0..subject_count {
-                let patterns = (0..subject_count)
-                    .map(|index| if index == selected { "#True" } else { "_" })
+            let mut expression_counts = Vec::new();
+            let mut settle_visits = Vec::new();
+            for subject_count in [4, 8] {
+                let names = (0..subject_count)
+                    .map(|index| format!("subject{index}"))
                     .collect::<Vec<_>>();
-                text.push_str(&format!("  {} => {selected}\n", patterns.join(", ")));
+                let mut text = format!(
+                    "open import \"blot:prelude\"\nlet choose = fn ({}) => case {} of\n",
+                    names.join(", "),
+                    names.join(", ")
+                );
+                for row in 0..subject_count {
+                    let patterns = (0..subject_count)
+                        .map(|column| {
+                            if (row + column) % 2 == 0 {
+                                "#True"
+                            } else {
+                                "#False"
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    text.push_str(&format!("  {} => {row}\n", patterns.join(", ")));
+                }
+                text.push_str(&format!("  {} => 0\n", vec!["_"; subject_count].join(", ")));
+                let arguments = (0..subject_count)
+                    .map(|index| if index % 2 == 0 { "#True" } else { "#False" })
+                    .collect::<Vec<_>>();
+                text.push_str(&format!("return choose ({})\n", arguments.join(", ")));
+                let path = format!("multi-{subject_count}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(path.clone(), source(&text))
+                    .expect("multi-subject source should lower");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("multi-subject source should configure");
+                let expression_count = session.context.modules.borrow()[&path]
+                    .module
+                    .arena
+                    .expressions
+                    .len();
+                expression_counts.push(expression_count);
+                let analysis = session.analyze_module(&path);
+                assert_eq!(analysis["ok"], true, "{analysis}");
+                settle_visits.push(
+                    analysis["work"]["settleVisits"]
+                        .as_u64()
+                        .expect("settlement work should be reported"),
+                );
             }
-            text.push_str("return choose\n");
-            let path = format!("multi-{subject_count}.blot");
-            let mut session = CompilerSession::default();
-            session
-                .add_source(path.clone(), source(&text))
-                .expect("multi-subject source should lower");
-            let expression_count = session.context.modules.borrow()[&path]
-                .module
-                .arena
-                .expressions
-                .len();
-            expression_counts.push(expression_count);
-        }
+            assert!(
+                expression_counts[1] <= expression_counts[0] * 10,
+                "doubling subjects expanded expressions from {} to {}",
+                expression_counts[0],
+                expression_counts[1]
+            );
+            assert!(
+                settle_visits[1] <= settle_visits[0] * 10,
+                "doubling subjects expanded settlement work from {} to {}",
+                settle_visits[0],
+                settle_visits[1]
+            );
+        });
+    }
 
-        assert!(
-            expression_counts[1] <= expression_counts[0] * 5,
-            "doubling subjects expanded expressions from {} to {}",
-            expression_counts[0],
-            expression_counts[1]
-        );
+    #[test]
+    fn long_left_associative_chains_export_check_and_prepare_without_growing_the_stack() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            for term_count in [128, 1_024] {
+                let mut text = "open import \"blot:prelude\"\nreturn 1".to_owned();
+                for _ in 1..term_count {
+                    text.push_str(" + 1");
+                }
+                text.push('\n');
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source("main.blot".to_owned(), source(&text))
+                    .expect("long operator chain should lower");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("long operator chain should configure");
+
+                let ast = session.module_ast("main.blot");
+                let checked = session.check_module("main.blot");
+                let evaluated = session.evaluate_module("main.blot");
+                let prepared = session.prepare_runtime_hir("main.blot");
+
+                assert!(ast.is_ok(), "{ast:?}");
+                assert_eq!(checked["type"], "Int", "{checked}");
+                assert_eq!(evaluated["display"], term_count.to_string(), "{evaluated}");
+                assert_eq!(prepared["ok"], true, "{prepared}");
+            }
+        });
     }
 
     #[test]

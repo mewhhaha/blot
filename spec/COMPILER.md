@@ -190,17 +190,40 @@ Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
-A multi-subject case becomes deferred subject computations and ordinary nested
-cases. A subject is demanded only when the selected row first tests its column.
-The first structural probe retains its binders for the rest of that successful
-path; elaboration must not erase those binders and emit a second pattern test to
-recover them. An irrefutable name column binds the cached subject with an
-ordinary local declaration. Exhaustiveness is checked through one unused closure
-containing an ordinary tuple case whose row binders are erased. The witness has
-one tuple pattern per guard-free source row and an unspellable leading
-constructor column that preserves multi-subject diagnostic provenance. It must
-not recursively expand the Cartesian prefix matrix because that changes an
-`O(rows * subjects)` surface obligation into exponential AST growth.
+A multi-subject case becomes strict nullary subject computations and ordinary
+nested cases. A subject is demanded only when the selected row first tests its
+column. The first structural probe retains its binders for the rest of that
+successful path; elaboration must not erase those binders and emit a second
+pattern test to recover them. An irrefutable name column binds the cached
+subject with an ordinary local declaration. Exhaustiveness is checked through
+one unused closure containing an ordinary tuple case whose row binders are
+erased. The witness has one tuple pattern per guard-free source row and an
+unspellable leading constructor column that preserves multi-subject diagnostic
+provenance. It must not recursively expand the Cartesian prefix matrix because
+that changes an `O(rows * subjects)` surface obligation into exponential AST
+growth. Each source subject is captured by one strict nullary thunk and forced
+only when its column is first inspected. The forced value is cached; a later row
+receives either the original thunk or a new thunk over that cached value.
+
+Executable row failure is bound once as an unspellable strict continuation over
+one tuple of subject thunks. Every row in one matrix uses the same
+compiler-local continuation identity, so inference shares one monomorphic
+result/effect fact per matrix instead of retaining an isomorphic type graph for
+every row. Tuple passing keeps continuation type depth constant as subject count
+grows. Lowering records non-serialized provenance for the administrative
+closures that must remain static and for the subject-force and
+saturated-fallback applications that may survive staging. Only the latter
+applications publish backend type facts; omitting another generated application
+from editor facts does not permit omitting a fact that Runtime HIR can observe.
+
+A uniform left-associative operator chain longer than the compiler's direct-tree
+limit elaborates to ordinary sequential local bindings. Each binding contains
+one binary application and the next consumes its result. This preserves the
+declared left-to-right grouping and evaluation order while bounding recursive
+AST and checker depth. The compiler-local intermediates remain monomorphic,
+preserving the type-variable relationships of the original unbroken expression
+rather than introducing source-level `let` generalization. Mixed-precedence and
+shorter chains retain the ordinary fixity tree.
 
 An incremental frontend result must equal a fresh result, including diagnostics,
 spans, compact edges, and resolved identities.
@@ -458,12 +481,16 @@ Entry parameters stay aligned with the closed function signature. It then
 interns structurally equal closed types, signatures, and alpha-normalized
 function bodies. Function equivalence is refined through direct-call equivalence
 classes; calls and exports are rewritten to the first canonical body. Source
-names and spans select that representative but do not prevent body sharing.
-Outside the proved representation cancellations above, normalization does not
-remove calls, host operations, allocation, mutation, reads, or arithmetic whose
-checked operation may trap. Every rewritten reference is validated against the
-compacted tables; the backend consumes those facts and does not repeat type or
-effect inference.
+names and spans select that representative but do not prevent body sharing. The
+direct-call graph is condensed into strongly connected components and processed
+callee-first. An acyclic body is canonicalized once; only a recursive component
+iterates local call classes. Canonical local recursion labels are independent of
+source function identifiers, so equivalent recursive components still share one
+body. Outside the proved representation cancellations above, normalization does
+not remove calls, host operations, allocation, mutation, reads, or arithmetic
+whose checked operation may trap. Every rewritten reference is validated against
+the compacted tables; the backend consumes those facts and does not repeat type
+or effect inference.
 
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked
@@ -530,6 +557,14 @@ The emitter accepts only validated Runtime HIR and public layout. It produces:
 - optional deterministic side products explicitly named by the build contract;
   and
 - no untracked source-semantic fact.
+
+ABI closure computes each directly demanded internal runtime layout once and
+records demanded product field offsets beside it. A type used only behind an
+indirect representation does not need, and may not admit, a WebAssembly-local
+flattening. Function emission also indexes every SSA value by its validated
+Runtime-HIR type. Local allocation, branch agreement, direct calls, aggregate
+construction, and projection consume those facts; they must not rescan function
+definitions or recursively re-derive layouts.
 
 A target trap is permitted only when related to a specified source trap or a
 versioned malformed-boundary/ownership trap. A defensive internal check may

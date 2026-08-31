@@ -7,12 +7,15 @@ use serde::{Deserialize, Serialize};
 
 thread_local! {
     static UNION_VISITS: Cell<u64> = const { Cell::new(0) };
+    #[cfg(test)]
+    static CLOSED_TYPE_COMPARISONS: Cell<u64> = const { Cell::new(0) };
 }
 
 use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
 use crate::ast::{
-    Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, MULTI_CASE_COVERAGE_TAG,
-    Module, Pattern, PatternId, Qualifier, ShapeMember, Span,
+    Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId,
+    FIXITY_INTERMEDIATE_PREFIX, MULTI_CASE_COVERAGE_TAG, Module, Pattern, PatternId, Qualifier,
+    ShapeMember, Span,
 };
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
@@ -137,12 +140,16 @@ pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) 
     match base {
         Type::Record(fields) => {
             let mut fields = fields.into_iter().collect::<Vec<_>>();
+            let mut positions = fields
+                .iter()
+                .enumerate()
+                .map(|(index, (name, _))| (name.clone(), index))
+                .collect::<HashMap<_, _>>();
             for (name, type_) in updates {
-                if let Some((_, current)) =
-                    fields.iter_mut().find(|(candidate, _)| candidate == &name)
-                {
-                    *current = type_;
+                if let Some(index) = positions.get(&name).copied() {
+                    fields[index].1 = type_;
                 } else {
+                    positions.insert(name.clone(), fields.len());
                     fields.push((name, type_));
                 }
             }
@@ -150,13 +157,16 @@ pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) 
         }
         Type::RecordUpdate { base, fields } => {
             let mut combined = fields.into_iter().collect::<Vec<_>>();
+            let mut positions = combined
+                .iter()
+                .enumerate()
+                .map(|(index, (name, _))| (name.clone(), index))
+                .collect::<HashMap<_, _>>();
             for (name, type_) in updates {
-                if let Some((_, current)) = combined
-                    .iter_mut()
-                    .find(|(candidate, _)| candidate == &name)
-                {
-                    *current = type_;
+                if let Some(index) = positions.get(&name).copied() {
+                    combined[index].1 = type_;
                 } else {
+                    positions.insert(name.clone(), combined.len());
                     combined.push((name, type_));
                 }
             }
@@ -648,13 +658,18 @@ impl ConstraintTypeArena {
         right: &[(String, ConstraintTypeId)],
         rigids: &mut Vec<(VariableId, VariableId)>,
     ) -> bool {
-        left.len() == right.len()
-            && left.iter().all(|(name, type_)| {
-                right
-                    .iter()
-                    .find(|(candidate, _)| candidate == name)
-                    .is_some_and(|(_, candidate)| self.same_with_rigids(*type_, *candidate, rigids))
-            })
+        if left.len() != right.len() {
+            return false;
+        }
+        let right = right
+            .iter()
+            .map(|(name, type_)| (name.as_str(), *type_))
+            .collect::<HashMap<_, _>>();
+        left.iter().all(|(name, type_)| {
+            right
+                .get(name.as_str())
+                .is_some_and(|candidate| self.same_with_rigids(*type_, *candidate, rigids))
+        })
     }
 }
 
@@ -681,6 +696,13 @@ struct WorkItem {
 struct ResidualVariable {
     type_: Type,
     unresolved: BTreeSet<VariableId>,
+}
+
+#[derive(Default)]
+struct SettleTraversal {
+    active: Vec<(VariableId, bool)>,
+    positions: HashMap<VariableId, usize>,
+    uncacheable: HashSet<(VariableId, bool)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1294,6 +1316,36 @@ impl FlatTypeBuilder {
         self.interned.insert(node, id);
         id
     }
+}
+
+fn interface_type_exceeds_budget(type_: &Type) -> bool {
+    let mut types = FlatTypeBuilder::default();
+    let Some(root) = flatten_interface_type(type_, &mut HashSet::new(), &mut types) else {
+        return false;
+    };
+    validate_flat_type_reference_budget("closure signature", &types.nodes, [root]).is_err()
+}
+
+const CASE_CLOSURE_REFERENCE_BUDGET: u64 = 8 * 1024;
+
+fn interface_type_exceeds_reference_budget(type_: &Type, budget: u64) -> bool {
+    let mut types = FlatTypeBuilder::default();
+    let Some(root) = flatten_interface_type(type_, &mut HashSet::new(), &mut types) else {
+        return false;
+    };
+    let overflow = budget.saturating_add(1);
+    let mut expanded = vec![0_u64; types.nodes.len()];
+    let mut children = Vec::new();
+    for (index, node) in types.nodes.iter().enumerate() {
+        children.clear();
+        append_flat_type_children(node, &mut children);
+        expanded[index] = children.iter().fold(1_u64, |count, child| {
+            count
+                .saturating_add(expanded[child.0 as usize])
+                .min(overflow)
+        });
+    }
+    expanded[root.0 as usize] > budget
 }
 
 impl FlatTypeArena {
@@ -2045,6 +2097,13 @@ struct ExpressionAnalysis {
     reported: bool,
 }
 
+#[derive(Clone)]
+struct SyntheticCallFact {
+    deferred: bool,
+    effects: Type,
+    result: Type,
+}
+
 type StructuralReadabilityCandidates =
     ModuleFacts<(ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
 
@@ -2074,6 +2133,9 @@ pub struct Checker {
     specialization_depth: Cell<u32>,
     active_closures: RefCell<Vec<(String, ExpressionId)>>,
     deferred_predicate_closures: RefCell<HashSet<(String, ExpressionId)>>,
+    synthetic_calls: RefCell<HashMap<(String, u64, String, usize), SyntheticCallFact>>,
+    synthetic_call_context: Cell<u64>,
+    next_synthetic_call_context: Cell<u64>,
     modules: RefCell<HashMap<String, Result<CheckedModule, Diagnostic>>>,
     active: RefCell<Vec<String>>,
     closure_types: RefCell<ModuleFacts<ExpressionId, Type>>,
@@ -2158,6 +2220,9 @@ impl Checker {
             specialization_depth: Cell::new(0),
             active_closures: RefCell::new(Vec::new()),
             deferred_predicate_closures: RefCell::new(HashSet::new()),
+            synthetic_calls: RefCell::new(HashMap::new()),
+            synthetic_call_context: Cell::new(0),
+            next_synthetic_call_context: Cell::new(1),
             modules: RefCell::new(HashMap::new()),
             active: RefCell::new(Vec::new()),
             closure_types: RefCell::new(ModuleFacts::default()),
@@ -2509,6 +2574,9 @@ impl Checker {
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
         self.deferred_predicate_closures.borrow_mut().clear();
+        self.synthetic_calls.borrow_mut().clear();
+        self.synthetic_call_context.set(0);
+        self.next_synthetic_call_context.set(1);
     }
 
     pub fn sealed_boundary_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -2543,6 +2611,9 @@ impl Checker {
         self.analysis_expression_types
             .borrow_mut()
             .remove_modules(paths);
+        self.synthetic_calls
+            .borrow_mut()
+            .retain(|(path, _, _, _), _| !paths.contains(path));
         self.expression_analyses.borrow_mut().remove_modules(paths);
         self.declaration_tags.borrow_mut().remove_modules(paths);
         self.ownership_facts
@@ -2601,7 +2672,7 @@ impl Checker {
                 let effects = self.settle(checked.effects.clone(), true);
                 serde_json::json!({
                     "ok": true,
-                    "type": self.show(&checked.result),
+                    "type": self.show_settled(&checked.result),
                     "effects": show_effects(&effects),
                 })
             }
@@ -2826,7 +2897,7 @@ impl Checker {
             .collect::<Vec<_>>();
         serde_json::json!({
             "ok": true,
-            "type": self.show(&checked.result),
+            "type": self.show_settled(&checked.result),
             "effects": show_effects(&self.settle(checked.effects, true)),
             "types": types,
             "tags": tags,
@@ -3034,21 +3105,21 @@ impl Checker {
         {
             return Some(analysis.display);
         }
-        self.expression_type(path, expression)
-            .map(|type_| self.show(&type_))
+        self.settled_expression_type(path, expression)
+            .map(|type_| self.show_settled(&type_))
     }
 
     pub(crate) fn expression_is_nullary_unit(&self, path: &str, expression: ExpressionId) -> bool {
         if let Some(analysis) = self.expression_analyses.borrow().get(path, &expression) {
             return analysis.nullary_unit;
         }
-        let Some(type_) = self.expression_type(path, expression) else {
+        let Some(type_) = self.settled_expression_type(path, expression) else {
             return false;
         };
         nullary_unit_type(&type_)
     }
 
-    fn expression_type(&self, path: &str, expression: ExpressionId) -> Option<Type> {
+    fn settled_expression_type(&self, path: &str, expression: ExpressionId) -> Option<Type> {
         let direct = self
             .analysis_expression_types
             .borrow()
@@ -3239,17 +3310,47 @@ impl Checker {
         let mut analyzed_closure_signatures = self
             .closure_types_for_path(path)
             .into_iter()
+            .filter(|(body, _)| {
+                !loaded
+                    .module
+                    .arena
+                    .synthetic_static_closure_bodies
+                    .contains(body)
+            })
             .map(|(body, type_)| {
-                let (mut signature, type_recursive) =
+                let synthetic = loaded.module.arena.synthetic_closure_bodies.contains(&body);
+                let (mut signature, mut type_recursive) =
                     self.residual_signature_analysis(type_.clone());
+                if synthetic
+                    && self.reify_runtime_type(&signature).is_none()
+                    && let Some(compact) = self.representation_function_signature(&type_)
+                {
+                    signature = compact;
+                    type_recursive = false;
+                }
+                let case_lowered =
+                    synthetic || loaded.module.arena.synthetic_expressions.contains(&body);
+                if case_lowered
+                    && interface_type_exceeds_reference_budget(
+                        &signature,
+                        CASE_CLOSURE_REFERENCE_BUDGET,
+                    )
+                    && let Some(compact) = self.representation_function_signature(&type_)
+                {
+                    signature = compact;
+                    type_recursive = false;
+                }
+                if interface_type_exceeds_budget(&signature)
+                    && let Some(compact) = self.representation_function_signature(&type_)
+                {
+                    signature = compact;
+                    type_recursive = false;
+                }
                 let recursive = type_recursive
                     || self
                         .recursive_closure_bodies
                         .borrow()
                         .contains_key(path, &body);
-                if !recursive {
-                    signature = self.settle(signature, true);
-                }
                 if synthetic_recursive_bodies.contains(&body) {
                     signature = stable_loop_signature(signature);
                 }
@@ -3272,8 +3373,22 @@ impl Checker {
             .into_iter()
             .flatten()
             .map(|(expression, type_)| {
-                let type_ = self.residual_signature(type_.clone());
-                (*expression, self.settle(type_, true))
+                let synthetic = loaded
+                    .module
+                    .arena
+                    .synthetic_expressions
+                    .contains(expression);
+                let type_ = if synthetic {
+                    self.residual_signature(type_.clone())
+                } else if let Some(settled) = self.exact_settlement(type_)
+                    && closed_checked_type(&settled, &mut HashSet::new())
+                {
+                    settled
+                } else {
+                    let residual = self.residual_signature(type_.clone());
+                    self.settle(residual, true)
+                };
+                (*expression, type_)
             })
             .collect::<Vec<_>>();
         expression_types.sort_by_key(|(expression, _)| expression.0);
@@ -3348,7 +3463,7 @@ impl Checker {
                 (
                     *expression,
                     ExpressionAnalysis {
-                        display: self.show(&settled),
+                        display: self.show_settled(&settled),
                         analysis_display: self.show_analysis(type_),
                         nullary_unit: nullary_unit_type(&settled),
                         reported: true,
@@ -3357,25 +3472,42 @@ impl Checker {
             })
             .collect::<HashMap<_, _>>();
         for (index, expression) in loaded.module.arena.expressions.iter().enumerate() {
-            if !matches!(
-                expression,
-                Expression::Lambda { .. } | Expression::Rec { .. }
-            ) {
+            let body = match expression {
+                Expression::Lambda { body, .. } => *body,
+                Expression::Rec { lambda, .. } => {
+                    let Expression::Lambda { body, .. } =
+                        loaded.module.arena.expressions[lambda.0 as usize]
+                    else {
+                        continue;
+                    };
+                    body
+                }
+                _ => continue,
+            };
+            let expression = ExpressionId(index as u32);
+            if loaded
+                .module
+                .arena
+                .synthetic_expressions
+                .contains(&expression)
+            {
                 continue;
             }
-            let expression = ExpressionId(index as u32);
             if expression_analyses.contains_key(&expression) {
                 continue;
             }
-            let Some(type_) = self.expression_type(path, expression) else {
+            let Some((_, type_)) = closure_signatures
+                .iter()
+                .find(|(candidate, _)| *candidate == body)
+            else {
                 continue;
             };
             expression_analyses.insert(
                 expression,
                 ExpressionAnalysis {
-                    display: self.show(&type_),
-                    analysis_display: self.show_analysis(&type_),
-                    nullary_unit: nullary_unit_type(&type_),
+                    display: self.show_settled(type_),
+                    analysis_display: self.show_analysis(type_),
+                    nullary_unit: nullary_unit_type(type_),
                     reported: false,
                 },
             );
@@ -4537,7 +4669,9 @@ impl Checker {
                             ));
                         }
                     };
-                    let typing = if kind == DeclarationKind::Effect {
+                    let typing = if kind == DeclarationKind::Effect
+                        || name.starts_with(FIXITY_INTERMEDIATE_PREFIX)
+                    {
                         Typing::Mono(body)
                     } else {
                         Typing::Scheme {
@@ -4721,12 +4855,19 @@ impl Checker {
             values,
             dependencies,
         );
-        if let Ok(inferred) = &inferred {
-            self.analysis_expression_types.borrow_mut().insert(
-                path.to_owned(),
-                expression_id,
-                inferred.type_.clone(),
-            );
+        if let Ok(inferred) = &inferred
+            && !module.arena.synthetic_expressions.contains(&expression_id)
+        {
+            if !matches!(
+                module.arena.expressions[expression_id.0 as usize],
+                Expression::Lambda { .. } | Expression::Rec { .. }
+            ) {
+                self.analysis_expression_types.borrow_mut().insert(
+                    path.to_owned(),
+                    expression_id,
+                    inferred.type_.clone(),
+                );
+            }
             if let Some(fact) = simplification_fact(module, expression_id, values, &self.context) {
                 self.simplifications
                     .borrow_mut()
@@ -4772,6 +4913,11 @@ impl Checker {
                 module.arena.expressions[expression_id.0 as usize],
                 Expression::Apply { .. }
             )
+            && (!module.arena.synthetic_expressions.contains(&expression_id)
+                || module
+                    .arena
+                    .synthetic_runtime_type_expressions
+                    .contains(&expression_id))
             && intrinsic_head(module, expression_id) != Some("@import")
         {
             self.expression_types.borrow_mut().insert(
@@ -5177,18 +5323,21 @@ impl Checker {
                     .as_ref()
                     .and_then(closure_signature)
                     .and_then(|signature| self.bridge(&signature));
-                if let Some(argument) = contextual_argument.as_ref()
-                    && contains_function(&self.settle(argument.type_.clone(), true))
-                    && let Some(Value::Closure {
-                        module: closure_module,
-                        parameter,
-                        body,
-                        environment: closure_values,
-                        self_name,
-                        deferred,
-                        ..
-                    }) = evaluated_function.as_ref()
+                let synthetic_expression =
+                    module.arena.synthetic_expressions.contains(&expression_id);
+                if let Some(Value::Closure {
+                    module: closure_module,
+                    parameter,
+                    body,
+                    environment: closure_values,
+                    self_name,
+                    deferred,
+                    ..
+                }) = evaluated_function.as_ref()
                     && self_name.is_none()
+                    && !synthetic_expression
+                    && let Some(argument) = contextual_argument.as_ref()
+                    && contains_function(&self.settle(argument.type_.clone(), true))
                 {
                     self.record_specialization(closure_module, *body, &argument.type_, path, span)?;
                     let function = self.infer_evaluated_closure(
@@ -5248,6 +5397,49 @@ impl Checker {
                     }
                 };
                 let argument_type = argument.type_.clone();
+                let synthetic_subject = matches!(
+                    &module.arena.expressions[member_callee.0 as usize],
+                    Expression::Var { name, .. }
+                        if name.starts_with("case_fallback_subject$")
+                            || name.starts_with("case_subject$")
+                );
+                let synthetic_call = match &module.arena.expressions[member_callee.0 as usize] {
+                    Expression::Var { name, .. }
+                        if name.starts_with("case_fallback$")
+                            || name.starts_with("case_fallback_subject$")
+                            || name.starts_with("case_subject$") =>
+                    {
+                        Some((
+                            path.to_owned(),
+                            self.synthetic_call_context.get(),
+                            name.clone(),
+                            member_arguments.len(),
+                        ))
+                    }
+                    _ => None,
+                };
+                if evaluated_function.is_none()
+                    && let Some(call) = synthetic_call
+                        .as_ref()
+                        .and_then(|key| self.synthetic_calls.borrow().get(key).cloned())
+                {
+                    if !synthetic_subject {
+                        self.constrain(
+                            function.type_,
+                            Type::Function {
+                                deferred: call.deferred,
+                                parameter: Rc::new(argument_type),
+                                effects: Rc::new(call.effects.clone()),
+                                result: Rc::new(call.result.clone()),
+                            },
+                            span,
+                        )?;
+                    }
+                    return Ok(Inferred {
+                        type_: call.result,
+                        effects: self.join_effects(argument.effects, call.effects)?,
+                    });
+                }
                 let result = self.fresh();
                 let performed = self.fresh();
                 let deferred = self.deferred_call(&function.type_);
@@ -5261,8 +5453,28 @@ impl Checker {
                     },
                     span,
                 )?;
-                let inferred_result = self.settle(result.clone(), true);
-                let unsettled_result = matches!(inferred_result, Type::Top | Type::Bottom);
+                if evaluated_function.is_none()
+                    && let Some(key) = synthetic_call
+                {
+                    self.synthetic_calls.borrow_mut().insert(
+                        key,
+                        SyntheticCallFact {
+                            deferred,
+                            effects: performed.clone(),
+                            result: result.clone(),
+                        },
+                    );
+                }
+                let can_specialize = !synthetic_expression
+                    && matches!(
+                        evaluated_function.as_ref(),
+                        Some(Value::Closure {
+                            self_name: None,
+                            ..
+                        })
+                    );
+                let unsettled_result = can_specialize
+                    && matches!(self.settle(result.clone(), true), Type::Top | Type::Bottom);
                 let requires_specialization = evaluated_function.as_ref().is_some_and(|value| {
                     let Value::Closure { module, body, .. } = value else {
                         return false;
@@ -5284,6 +5496,7 @@ impl Checker {
                 });
                 let mut selected_effects = None;
                 let selected_result = if self.specialization_depth.get() == 0
+                    && !synthetic_expression
                     && (unsettled_result || requires_specialization)
                     && let Some(Value::Closure {
                         module: closure_module,
@@ -6095,11 +6308,13 @@ impl Checker {
                 .borrow_mut()
                 .insert(path.to_owned(), body, expected.clone());
         }
-        self.analysis_expression_types.borrow_mut().insert(
-            path.to_owned(),
-            expression,
-            expected.clone(),
-        );
+        if !module.arena.synthetic_expressions.contains(&expression) {
+            self.analysis_expression_types.borrow_mut().insert(
+                path.to_owned(),
+                expression,
+                expected.clone(),
+            );
+        }
         if self
             .expression_types
             .borrow()
@@ -6173,102 +6388,115 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         parameter_type: Option<Type>,
     ) -> Result<Type, Diagnostic> {
-        let EvaluatedClosure {
-            module_path: closure_module,
-            parameter,
-            body,
-            captures: closure_values,
-            self_name,
-            deferred,
-        } = closure;
-        let closure_loaded = self
-            .context
-            .modules
-            .borrow()
-            .get(closure_module)
-            .cloned()
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    "BLOT_UNRESOLVED_IMPORT",
-                    format!("Module `{closure_module}` was not loaded."),
-                    module.span,
-                )
-            })?;
-        let closure_ast = closure_loaded.module;
-        let free_names =
-            closure_free_names(&self.context, closure_module, parameter, body, self_name)?
-                .into_iter()
-                .collect::<BTreeSet<_>>();
-        self.capture_candidates
-            .set(self.capture_candidates.get() + free_names.len() as u64);
-        let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
-        for name in free_names {
-            let Some(value) = lookup(closure_values, &name) else {
-                continue;
-            };
-            self.captures_bridged.set(self.captures_bridged.get() + 1);
-            let type_ = self.bridge(&value).unwrap_or_else(|| self.fresh());
-            let phase = if closure_module == path {
-                environment.binding_phase(&name).unwrap_or(Phase::Comptime)
-            } else {
-                Phase::Comptime
-            };
-            Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
-            Rc::make_mut(&mut scope.phases).insert(name, phase);
-        }
-        let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));
-        if let Some((name, type_)) = &recursive {
-            Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_.clone()));
-            let phase = if closure_module == path {
-                environment.binding_phase(name).unwrap_or(self.phase.get())
-            } else {
-                Phase::Comptime
-            };
-            Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
-        }
-        let parameter_type = match parameter_type {
-            Some(parameter_type) => parameter_type,
-            None => self.fresh(),
-        };
-        let parameter_phase = Phase::Runtime;
-        self.bind_pattern_at_phase(
-            &closure_ast,
-            parameter,
-            parameter_type.clone(),
-            &mut scope,
-            parameter_phase,
+        let previous_synthetic_call_context = self.synthetic_call_context.get();
+        let synthetic_call_context = self.next_synthetic_call_context.get();
+        self.next_synthetic_call_context.set(
+            synthetic_call_context
+                .checked_add(1)
+                .expect("synthetic-call inference context overflowed"),
         );
-        let previous_specialization_depth = self.specialization_depth.get();
-        self.specialization_depth
-            .set(previous_specialization_depth + 1);
-        self.active_closures
-            .borrow_mut()
-            .push((closure_module.to_owned(), body));
-        let inferred = self.infer(
-            closure_module,
-            &closure_ast,
-            body,
-            &scope,
-            closure_values,
-            dependencies,
-        );
-        self.active_closures.borrow_mut().pop();
-        self.specialization_depth.set(previous_specialization_depth);
-        let inferred = inferred?;
-        let function = Type::Function {
-            deferred,
-            parameter: Rc::new(parameter_type),
-            effects: Rc::new(inferred.effects),
-            result: Rc::new(inferred.type_),
-        };
-        if let Some((_, recursive)) = recursive {
-            self.constrain(function.clone(), recursive, closure_ast.span)?;
-        }
-        self.closure_types
-            .borrow_mut()
-            .entry(closure_module.to_owned(), body)
-            .or_insert_with(|| function.clone());
-        Ok(function)
+        self.synthetic_call_context.set(synthetic_call_context);
+        let inferred = (|| {
+            let EvaluatedClosure {
+                module_path: closure_module,
+                parameter,
+                body,
+                captures: closure_values,
+                self_name,
+                deferred,
+            } = closure;
+            let closure_loaded = self
+                .context
+                .modules
+                .borrow()
+                .get(closure_module)
+                .cloned()
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_UNRESOLVED_IMPORT",
+                        format!("Module `{closure_module}` was not loaded."),
+                        module.span,
+                    )
+                })?;
+            let closure_ast = closure_loaded.module;
+            let free_names =
+                closure_free_names(&self.context, closure_module, parameter, body, self_name)?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+            self.capture_candidates
+                .set(self.capture_candidates.get() + free_names.len() as u64);
+            let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
+            for name in free_names {
+                let Some(value) = lookup(closure_values, &name) else {
+                    continue;
+                };
+                self.captures_bridged.set(self.captures_bridged.get() + 1);
+                let type_ = self.bridge(&value).unwrap_or_else(|| self.fresh());
+                let phase = if closure_module == path {
+                    environment.binding_phase(&name).unwrap_or(Phase::Comptime)
+                } else {
+                    Phase::Comptime
+                };
+                Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
+                Rc::make_mut(&mut scope.phases).insert(name, phase);
+            }
+            let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));
+            if let Some((name, type_)) = &recursive {
+                Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_.clone()));
+                let phase = if closure_module == path {
+                    environment.binding_phase(name).unwrap_or(self.phase.get())
+                } else {
+                    Phase::Comptime
+                };
+                Rc::make_mut(&mut scope.phases).insert(name.clone(), phase);
+            }
+            let parameter_type = match parameter_type {
+                Some(parameter_type) => parameter_type,
+                None => self.fresh(),
+            };
+            let parameter_phase = Phase::Runtime;
+            self.bind_pattern_at_phase(
+                &closure_ast,
+                parameter,
+                parameter_type.clone(),
+                &mut scope,
+                parameter_phase,
+            );
+            let previous_specialization_depth = self.specialization_depth.get();
+            self.specialization_depth
+                .set(previous_specialization_depth + 1);
+            self.active_closures
+                .borrow_mut()
+                .push((closure_module.to_owned(), body));
+            let inferred = self.infer(
+                closure_module,
+                &closure_ast,
+                body,
+                &scope,
+                closure_values,
+                dependencies,
+            );
+            self.active_closures.borrow_mut().pop();
+            self.specialization_depth.set(previous_specialization_depth);
+            let inferred = inferred?;
+            let function = Type::Function {
+                deferred,
+                parameter: Rc::new(parameter_type),
+                effects: Rc::new(inferred.effects),
+                result: Rc::new(inferred.type_),
+            };
+            if let Some((_, recursive)) = recursive {
+                self.constrain(function.clone(), recursive, closure_ast.span)?;
+            }
+            self.closure_types
+                .borrow_mut()
+                .entry(closure_module.to_owned(), body)
+                .or_insert_with(|| function.clone());
+            Ok(function)
+        })();
+        self.synthetic_call_context
+            .set(previous_synthetic_call_context);
+        inferred
     }
 
     fn requirement(&self, value: Value) -> Requirement {
@@ -7098,10 +7326,12 @@ impl Checker {
                 true
             }
             (ConstraintTypeNode::Record(left_fields), ConstraintTypeNode::Record(right_fields)) => {
+                let left_fields = left_fields
+                    .iter()
+                    .map(|(name, type_)| (name.as_str(), *type_))
+                    .collect::<HashMap<_, _>>();
                 for (name, right_field) in right_fields {
-                    let Some((_, left_field)) =
-                        left_fields.iter().find(|(candidate, _)| candidate == &name)
-                    else {
+                    let Some(left_field) = left_fields.get(name.as_str()).copied() else {
                         let right_type = self.expand_constraint(right_field);
                         if admits_omission(&right_type) {
                             continue;
@@ -7113,7 +7343,7 @@ impl Checker {
                         );
                     };
                     work.push_back(WorkItem {
-                        left: *left_field,
+                        left: left_field,
                         right: right_field,
                         span,
                     });
@@ -7124,12 +7354,14 @@ impl Checker {
                 ConstraintTypeNode::RecordUpdate { base, fields },
                 ConstraintTypeNode::Record(right_fields),
             ) => {
+                let fields = fields
+                    .iter()
+                    .map(|(name, type_)| (name.as_str(), *type_))
+                    .collect::<HashMap<_, _>>();
                 for (name, right_field) in right_fields {
-                    if let Some((_, updated)) =
-                        fields.iter().find(|(candidate, _)| candidate == &name)
-                    {
+                    if let Some(updated) = fields.get(name.as_str()).copied() {
                         work.push_back(WorkItem {
-                            left: *updated,
+                            left: updated,
                             right: right_field,
                             span,
                         });
@@ -7159,16 +7391,17 @@ impl Checker {
                 if left_fields.len() != right_fields.len() {
                     false
                 } else {
+                    let right_fields = right_fields
+                        .iter()
+                        .map(|(name, type_)| (name.as_str(), *type_))
+                        .collect::<HashMap<_, _>>();
                     work.push_back(WorkItem {
                         left: left_base,
                         right: right_base,
                         span,
                     });
                     for (name, left_field) in left_fields {
-                        let Some((_, right_field)) = right_fields
-                            .iter()
-                            .find(|(candidate, _)| candidate == &name)
-                        else {
+                        let Some(right_field) = right_fields.get(name.as_str()).copied() else {
                             return self.type_error(
                                 self.expand_constraint(left),
                                 self.expand_constraint(right),
@@ -7177,7 +7410,7 @@ impl Checker {
                         };
                         work.push_back(WorkItem {
                             left: left_field,
-                            right: *right_field,
+                            right: right_field,
                             span,
                         });
                     }
@@ -7230,23 +7463,21 @@ impl Checker {
                     open: right_open,
                 },
             ) => {
+                let right_cases = right
+                    .iter()
+                    .map(|(name, type_)| (name.as_str(), *type_))
+                    .collect::<HashMap<_, _>>();
                 if !right_open
                     && (left_open
                         || left
                             .iter()
-                            .any(|(name, _)| !right.iter().any(|(candidate, _)| candidate == name)))
+                            .any(|(name, _)| !right_cases.contains_key(name.as_str())))
                 {
                     false
                 } else {
                     for (name, left) in left {
-                        if let Some((_, right)) =
-                            right.iter().find(|(candidate, _)| candidate == &name)
-                        {
-                            work.push_back(WorkItem {
-                                left,
-                                right: *right,
-                                span,
-                            });
+                        if let Some(right) = right_cases.get(name.as_str()).copied() {
+                            work.push_back(WorkItem { left, right, span });
                         }
                     }
                     true
@@ -7475,7 +7706,7 @@ impl Checker {
     }
 
     fn settle(&self, type_: Type, positive: bool) -> Type {
-        self.settle_seen(type_, positive, &mut HashSet::new(), &mut true)
+        self.settle_seen(type_, positive, &mut SettleTraversal::default())
     }
 
     fn residual_signature(&self, type_: Type) -> Type {
@@ -7820,23 +8051,25 @@ impl Checker {
         }
     }
 
-    fn settle_seen(
-        &self,
-        type_: Type,
-        positive: bool,
-        seen: &mut HashSet<VariableId>,
-        cacheable: &mut bool,
-    ) -> Type {
+    fn settle_seen(&self, type_: Type, positive: bool, traversal: &mut SettleTraversal) -> Type {
         self.settle_visits.set(self.settle_visits.get() + 1);
         match type_ {
             Type::Variable(id) => {
                 if let Some(settled) = self.settled_variables.borrow().get(&(id, positive)) {
                     return settled.clone();
                 }
-                if !seen.insert(id) {
-                    *cacheable = false;
+                if let Some(&cycle_start) = traversal.positions.get(&id) {
+                    traversal
+                        .uncacheable
+                        .extend(traversal.active[cycle_start + 1..].iter().copied());
+                    if traversal.active[cycle_start].1 != positive {
+                        traversal.uncacheable.insert((id, positive));
+                        traversal.uncacheable.insert(traversal.active[cycle_start]);
+                    }
                     return if positive { Type::Bottom } else { Type::Top };
                 }
+                traversal.positions.insert(id, traversal.active.len());
+                traversal.active.push((id, positive));
                 let variable = self.variables.borrow()[id as usize].clone();
                 let bounds = if positive {
                     variable.lower
@@ -7846,9 +8079,14 @@ impl Checker {
                 let mut settled = bounds
                     .into_iter()
                     .map(|bound| self.expand_constraint(bound))
-                    .map(|bound| self.settle_seen(bound, positive, seen, cacheable))
+                    .map(|bound| self.settle_seen(bound, positive, traversal))
                     .collect::<Vec<_>>();
-                seen.remove(&id);
+                let active = traversal
+                    .active
+                    .pop()
+                    .expect("a settling variable was active");
+                debug_assert_eq!(active, (id, positive));
+                traversal.positions.remove(&id);
                 let settled = if settled.is_empty() {
                     if positive { Type::Bottom } else { Type::Top }
                 } else if settled.len() == 1 {
@@ -7858,7 +8096,7 @@ impl Checker {
                 } else {
                     meet_types(settled)
                 };
-                if *cacheable {
+                if !traversal.uncacheable.remove(&(id, positive)) {
                     self.settled_variables
                         .borrow_mut()
                         .insert((id, positive), settled.clone());
@@ -7867,12 +8105,7 @@ impl Checker {
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Rc::new(self.settle_seen(
-                    Rc::unwrap_or_clone(body),
-                    positive,
-                    seen,
-                    cacheable,
-                )),
+                body: Rc::new(self.settle_seen(Rc::unwrap_or_clone(body), positive, traversal)),
             },
             Type::Function {
                 deferred,
@@ -7884,73 +8117,58 @@ impl Checker {
                 parameter: Rc::new(self.settle_seen(
                     Rc::unwrap_or_clone(parameter),
                     !positive,
-                    seen,
-                    cacheable,
+                    traversal,
                 )),
                 effects: Rc::new(self.settle_seen(
                     Rc::unwrap_or_clone(effects),
                     positive,
-                    seen,
-                    cacheable,
+                    traversal,
                 )),
-                result: Rc::new(self.settle_seen(
-                    Rc::unwrap_or_clone(result),
-                    positive,
-                    seen,
-                    cacheable,
-                )),
+                result: Rc::new(self.settle_seen(Rc::unwrap_or_clone(result), positive, traversal)),
             },
             Type::Record(fields) => Type::Record(
                 fields
                     .into_iter()
-                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, traversal)))
                     .collect(),
             ),
             Type::RecordUpdate { base, fields } => record_update_type(
-                self.settle_seen(Rc::unwrap_or_clone(base), positive, seen, cacheable),
+                self.settle_seen(Rc::unwrap_or_clone(base), positive, traversal),
                 fields
                     .into_iter()
-                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, traversal)))
                     .collect(),
             ),
             Type::Array(element) => Type::Array(Rc::new(self.settle_seen(
                 Rc::unwrap_or_clone(element),
                 positive,
-                seen,
-                cacheable,
+                traversal,
             ))),
             Type::Region(element) => Type::Region(Rc::new(self.settle_seen(
                 Rc::unwrap_or_clone(element),
                 positive,
-                seen,
-                cacheable,
+                traversal,
             ))),
             Type::Scratch(element) => Type::Scratch(Rc::new(self.settle_seen(
                 Rc::unwrap_or_clone(element),
                 positive,
-                seen,
-                cacheable,
+                traversal,
             ))),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Rc::new(self.settle_seen(
-                    Rc::unwrap_or_clone(tail),
-                    positive,
-                    seen,
-                    cacheable,
-                )),
+                tail: Rc::new(self.settle_seen(Rc::unwrap_or_clone(tail), positive, traversal)),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
-                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, seen, cacheable)))
+                    .map(|(name, type_)| (name, self.settle_seen(type_, positive, traversal)))
                     .collect(),
                 open,
             },
             Type::Union(members) => union_types(
                 members
                     .into_iter()
-                    .map(|member| self.settle_seen(member, positive, seen, cacheable))
+                    .map(|member| self.settle_seen(member, positive, traversal))
                     .collect(),
             ),
             other => other,
@@ -8805,6 +9023,9 @@ impl Checker {
     }
 
     fn show_analysis(&self, type_: &Type) -> String {
+        if let Some(type_) = self.exact_settlement(type_) {
+            return self.show_settled(&type_);
+        }
         let signature = self.residual_signature(type_.clone());
         let mut replacements = HashMap::new();
         let body = match signature {
@@ -8825,7 +9046,174 @@ impl Checker {
             let index = replacements.len();
             replacements.insert(variable, Type::Opaque(type_variable_name(index)));
         }
-        self.show(&substitute_rigid(body, &replacements))
+        self.show_settled(&substitute_rigid(body, &replacements))
+    }
+
+    fn exact_settlement(&self, type_: &Type) -> Option<Type> {
+        let positive = self.settle(type_.clone(), true);
+        let negative = self.settle(type_.clone(), false);
+        same_type(&positive, &negative).then_some(positive)
+    }
+
+    fn representation_function_signature(&self, type_: &Type) -> Option<Type> {
+        let Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } = type_
+        else {
+            return None;
+        };
+        let parameter = self.settle((**parameter).clone(), true);
+        let mut effects = self.settle((**effects).clone(), true);
+        let result = self.settle((**result).clone(), true);
+        if empty_effects(&effects) {
+            effects = Type::Effects(BTreeSet::new());
+        }
+        let mut variables = Vec::new();
+        let parameter =
+            quantify_settlement_holes(parameter, self.next_skolem.as_ref(), &mut variables)?;
+        let effects =
+            quantify_settlement_holes(effects, self.next_skolem.as_ref(), &mut variables)?;
+        let result = quantify_settlement_holes(result, self.next_skolem.as_ref(), &mut variables)?;
+        let signature = Type::Function {
+            deferred: *deferred,
+            parameter: Rc::new(parameter),
+            effects: Rc::new(effects),
+            result: Rc::new(result),
+        };
+        if variables.is_empty() {
+            Some(signature)
+        } else {
+            Some(Type::Forall {
+                variables,
+                body: Rc::new(signature),
+            })
+        }
+    }
+}
+
+fn quantify_settlement_holes(
+    type_: Type,
+    next_skolem: &Cell<VariableId>,
+    variables: &mut Vec<VariableId>,
+) -> Option<Type> {
+    match type_ {
+        Type::Variable(_) => None,
+        Type::Top | Type::Bottom => {
+            let variable = next_skolem.get();
+            next_skolem.set(variable.checked_add(1)?);
+            variables.push(variable);
+            Some(Type::Rigid(variable))
+        }
+        Type::Forall {
+            variables: bound,
+            body,
+        } => Some(Type::Forall {
+            variables: bound,
+            body: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(body),
+                next_skolem,
+                variables,
+            )?),
+        }),
+        Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => Some(Type::Function {
+            deferred,
+            parameter: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(parameter),
+                next_skolem,
+                variables,
+            )?),
+            effects: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(effects),
+                next_skolem,
+                variables,
+            )?),
+            result: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(result),
+                next_skolem,
+                variables,
+            )?),
+        }),
+        Type::Record(fields) => Some(Type::Record(
+            fields
+                .into_iter()
+                .map(|(name, field)| {
+                    Some((
+                        name,
+                        quantify_settlement_holes(field, next_skolem, variables)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into(),
+        )),
+        Type::RecordUpdate { base, fields } => Some(Type::RecordUpdate {
+            base: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(base),
+                next_skolem,
+                variables,
+            )?),
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| {
+                    Some((
+                        name,
+                        quantify_settlement_holes(field, next_skolem, variables)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into(),
+        }),
+        Type::Array(element) => Some(Type::Array(Rc::new(quantify_settlement_holes(
+            Rc::unwrap_or_clone(element),
+            next_skolem,
+            variables,
+        )?))),
+        Type::Region(element) => Some(Type::Region(Rc::new(quantify_settlement_holes(
+            Rc::unwrap_or_clone(element),
+            next_skolem,
+            variables,
+        )?))),
+        Type::Scratch(element) => Some(Type::Scratch(Rc::new(quantify_settlement_holes(
+            Rc::unwrap_or_clone(element),
+            next_skolem,
+            variables,
+        )?))),
+        Type::Variant { cases, open } => Some(Type::Variant {
+            cases: cases
+                .into_iter()
+                .map(|(name, payload)| {
+                    Some((
+                        name,
+                        quantify_settlement_holes(payload, next_skolem, variables)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into(),
+            open,
+        }),
+        Type::OpenEffects { labels, tail } => Some(Type::OpenEffects {
+            labels,
+            tail: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(tail),
+                next_skolem,
+                variables,
+            )?),
+        }),
+        Type::Union(members) => Some(Type::Union(
+            members
+                .into_iter()
+                .map(|member| quantify_settlement_holes(member, next_skolem, variables))
+                .collect::<Option<Vec<_>>>()?
+                .into(),
+        )),
+        other => Some(other),
     }
 }
 
@@ -9080,18 +9468,94 @@ fn free_rigid_variables(
 /// domain, once per iteration — and printing all of them describes the
 /// solver's bookkeeping rather than the type.
 fn union_members(members: &[Type]) -> Vec<&Type> {
+    let mut keep = vec![true; members.len()];
+    let first_bottom = members
+        .iter()
+        .position(|member| matches!(member, Type::Bottom));
+    let has_inhabited_member = members.iter().any(|member| !matches!(member, Type::Bottom));
+    for (index, member) in members.iter().enumerate() {
+        if matches!(member, Type::Bottom) && (has_inhabited_member || Some(index) != first_bottom) {
+            keep[index] = false;
+        }
+    }
+
+    let mut ranges: [Vec<usize>; 4] = std::array::from_fn(|_| Vec::new());
+    for (index, member) in members.iter().enumerate() {
+        let Type::Range { domain, .. } = member else {
+            continue;
+        };
+        let domain = match domain {
+            Domain::Int => 0,
+            Domain::Text => 1,
+            Domain::Float => 2,
+            Domain::Float32 => 3,
+        };
+        ranges[domain].push(index);
+    }
+    for ranges in &mut ranges {
+        ranges.sort_by(|left, right| {
+            let Type::Range {
+                low: left_low,
+                high: left_high,
+                ..
+            } = &members[*left]
+            else {
+                unreachable!("a range bucket contains only ranges")
+            };
+            let Type::Range {
+                low: right_low,
+                high: right_high,
+                ..
+            } = &members[*right]
+            else {
+                unreachable!("a range bucket contains only ranges")
+            };
+            left_low
+                .cmp(right_low)
+                .then_with(|| match (left_high, right_high) {
+                    (None, None) => std::cmp::Ordering::Equal,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (Some(left), Some(right)) => right.cmp(left),
+                })
+                .then(left.cmp(right))
+        });
+        let mut widest_high: Option<&Option<Scalar>> = None;
+        for index in ranges {
+            let Type::Range { high, .. } = &members[*index] else {
+                unreachable!("a range bucket contains only ranges")
+            };
+            if widest_high.is_some_and(|outer| match (outer, high) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(outer), Some(inner)) => outer >= inner,
+            }) {
+                keep[*index] = false;
+                continue;
+            }
+            widest_high = Some(high);
+        }
+    }
+
+    for (index, member) in members.iter().enumerate() {
+        if !keep[index] || matches!(member, Type::Bottom | Type::Range { .. }) {
+            continue;
+        }
+        keep[index] = !members.iter().enumerate().any(|(other, candidate)| {
+            if matches!(candidate, Type::Bottom | Type::Range { .. }) {
+                return false;
+            }
+            // Keep the first of two members that cover each other, so an
+            // exact repeat leaves one behind rather than none.
+            let earlier = other < index;
+            (earlier || !covers(member, candidate)) && covers(candidate, member)
+        });
+    }
+
     members
         .iter()
         .enumerate()
-        .filter(|(index, member)| {
-            !members.iter().enumerate().any(|(other, candidate)| {
-                // Keep the first of two members that cover each other, so an
-                // exact repeat leaves one behind rather than none.
-                let earlier = other < *index;
-                (earlier || !covers(member, candidate)) && covers(candidate, member)
-            })
-        })
-        .map(|(_, member)| member)
+        .filter_map(|(index, member)| keep[index].then_some(member))
         .collect()
 }
 
@@ -9141,11 +9605,12 @@ fn covers(outer: &Type, inner: &Type) -> bool {
 
 fn show_union(members: Vec<String>) -> String {
     let mut shown = Vec::new();
+    let mut seen = HashSet::new();
     for member in members {
         if member == "⊥" {
             continue;
         }
-        if shown.contains(&member) {
+        if !seen.insert(member.clone()) {
             continue;
         }
         shown.push(member);
@@ -11493,13 +11958,18 @@ fn same_fields(
     right: &[(String, Type)],
     rigids: &mut Vec<(VariableId, VariableId)>,
 ) -> bool {
-    left.len() == right.len()
-        && left.iter().all(|(name, type_)| {
-            right
-                .iter()
-                .find(|(candidate, _)| candidate == name)
-                .is_some_and(|(_, candidate)| same_type_with_rigids(type_, candidate, rigids))
-        })
+    if left.len() != right.len() {
+        return false;
+    }
+    let right = right
+        .iter()
+        .map(|(name, type_)| (name.as_str(), type_))
+        .collect::<HashMap<_, _>>();
+    left.iter().all(|(name, type_)| {
+        right
+            .get(name.as_str())
+            .is_some_and(|candidate| same_type_with_rigids(type_, candidate, rigids))
+    })
 }
 
 fn admits_omission(type_: &Type) -> bool {
@@ -11569,17 +12039,22 @@ fn unrepresentable_integer(type_: &Type) -> Option<&Type> {
 }
 
 fn union_types(types: Vec<Type>) -> Type {
-    fn append(members: &mut Vec<Type>, type_: Type) -> bool {
+    fn append(members: &mut Vec<Type>, closed: &mut HashSet<String>, type_: Type) -> bool {
         UNION_VISITS.with(|visits| visits.set(visits.get() + 1));
         match type_ {
             Type::Bottom => true,
             Type::Top => false,
-            Type::Union(nested) => nested.into_iter().all(|member| append(members, member)),
+            Type::Union(nested) => nested
+                .into_iter()
+                .all(|member| append(members, closed, member)),
             type_ => {
-                if !members
-                    .iter()
-                    .any(|existing| same_closed_type(existing, &type_))
-                {
+                let unique = match closed_type_key(&type_) {
+                    Some(key) => closed.insert(key),
+                    None => !members
+                        .iter()
+                        .any(|existing| same_closed_type(existing, &type_)),
+                };
+                if unique {
                     members.push(type_);
                 }
                 true
@@ -11588,7 +12063,11 @@ fn union_types(types: Vec<Type>) -> Type {
     }
 
     let mut members = Vec::new();
-    if !types.into_iter().all(|type_| append(&mut members, type_)) {
+    let mut closed = HashSet::new();
+    if !types
+        .into_iter()
+        .all(|type_| append(&mut members, &mut closed, type_))
+    {
         return Type::Top;
     }
     match members.len() {
@@ -11599,18 +12078,25 @@ fn union_types(types: Vec<Type>) -> Type {
 }
 
 fn same_closed_type(left: &Type, right: &Type) -> bool {
+    #[cfg(test)]
+    CLOSED_TYPE_COMPARISONS.with(|comparisons| comparisons.set(comparisons.get() + 1));
     fn fields(
         left: &[(String, Type)],
         right: &[(String, Type)],
         binders: &mut Vec<(VariableId, VariableId)>,
     ) -> bool {
-        left.len() == right.len()
-            && left.iter().all(|(name, type_)| {
-                right
-                    .iter()
-                    .find(|(candidate, _)| candidate == name)
-                    .is_some_and(|(_, candidate)| visit(type_, candidate, binders))
-            })
+        if left.len() != right.len() {
+            return false;
+        }
+        let right = right
+            .iter()
+            .map(|(name, type_)| (name.as_str(), type_))
+            .collect::<HashMap<_, _>>();
+        left.iter().all(|(name, type_)| {
+            right
+                .get(name.as_str())
+                .is_some_and(|candidate| visit(type_, candidate, binders))
+        })
     }
 
     fn visit(left: &Type, right: &Type, binders: &mut Vec<(VariableId, VariableId)>) -> bool {
@@ -11797,10 +12283,12 @@ fn meet_types(mut types: Vec<Type>) -> Type {
 
 fn merge_fields(fields: Vec<(String, Type)>) -> Vec<(String, Type)> {
     let mut merged: Vec<(String, Type)> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
     for (name, type_) in fields {
-        if let Some((_, existing)) = merged.iter_mut().find(|(candidate, _)| candidate == &name) {
-            *existing = join_types(vec![existing.clone(), type_]);
+        if let Some(index) = positions.get(&name).copied() {
+            merged[index].1 = join_types(vec![merged[index].1.clone(), type_]);
         } else {
+            positions.insert(name.clone(), merged.len());
             merged.push((name, type_));
         }
     }
@@ -12759,6 +13247,27 @@ mod tests {
         assert_eq!(union_members(&[one, two]).len(), 2);
     }
 
+    #[test]
+    fn closed_union_normalization_does_not_compare_every_member_pair() {
+        const MEMBER_COUNT: usize = 2_048;
+        let members = (0..MEMBER_COUNT)
+            .map(|value| Type::Range {
+                domain: Domain::Int,
+                low: Some(Scalar::Int(value.into())),
+                high: Some(Scalar::Int(value.into())),
+            })
+            .collect();
+        CLOSED_TYPE_COMPARISONS.with(|comparisons| comparisons.set(0));
+
+        let normalized = union_types(members);
+
+        let Type::Union(members) = normalized else {
+            panic!("distinct singleton ranges should remain a union");
+        };
+        assert_eq!(members.len(), MEMBER_COUNT);
+        assert_eq!(CLOSED_TYPE_COMPARISONS.with(Cell::get), 0);
+    }
+
     /// Nothing inhabits `⊥`, so it disappears beside anything else — but a
     /// union of nothing else is still `⊥`.
     #[test]
@@ -12893,6 +13402,41 @@ mod tests {
         let residual = checker.residual_signature(recursive);
 
         assert!(same_type(&residual, &store));
+    }
+
+    #[test]
+    fn settling_a_recursive_component_reuses_its_complete_entry_result() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let first = checker.fresh();
+        let second = checker.fresh();
+        let Type::Variable(first_id) = first.clone() else {
+            unreachable!("fresh always returns a variable")
+        };
+        let Type::Variable(second_id) = second.clone() else {
+            unreachable!("fresh always returns a variable")
+        };
+        let first_bound = checker.constraint_type(&first);
+        let second_bound = checker.constraint_type(&second);
+        let int_bound = checker.constraint_type(&int_type());
+        let text_bound = checker.constraint_type(&text_type());
+        {
+            let mut variables = checker.variables.borrow_mut();
+            variables[first_id as usize].lower = vec![second_bound, int_bound];
+            variables[second_id as usize].lower = vec![first_bound, text_bound];
+        }
+
+        let settled_first = checker.settle(first, true);
+        let visits_after_first = checker.settle_visits.get();
+        let settled_second = checker.settle(second, true);
+        let second_visits = checker.settle_visits.get() - visits_after_first;
+        let expected = union_types(vec![int_type(), text_type()]);
+
+        assert!(same_type(&settled_first, &expected));
+        assert!(same_type(&settled_second, &expected));
+        assert!(
+            second_visits <= 4,
+            "cached recursive settlement took {second_visits} visits"
+        );
     }
 
     #[test]

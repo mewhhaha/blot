@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
@@ -56,6 +56,12 @@ struct CanonicalResult<'a> {
 }
 
 #[derive(Clone, Copy)]
+struct CanonicalDestination {
+    pointer: u32,
+    offset: u32,
+}
+
+#[derive(Clone, Copy)]
 enum StructuredResult<'a> {
     Internal,
     Canonical(CanonicalResult<'a>),
@@ -70,9 +76,167 @@ struct PublicExport<'a> {
     call_id: u32,
 }
 
+struct DynamicExport<'a> {
+    function: &'a RuntimeFunction,
+    public: PublicExport<'a>,
+}
+
 struct ValueLocalAllocation {
     value_locals: HashMap<usize, Vec<u32>>,
+    value_types: HashMap<usize, usize>,
     local_types: Vec<ValType>,
+}
+
+#[derive(Clone, Copy)]
+struct FunctionEmissionFacts<'a> {
+    runtime_layouts: &'a RuntimeTypeLayouts,
+    value_locals: &'a HashMap<usize, Vec<u32>>,
+    value_types: &'a HashMap<usize, usize>,
+}
+
+struct RuntimeTypeLayouts {
+    flattened: Vec<OnceCell<Vec<ValType>>>,
+    product_offsets: Vec<OnceCell<Vec<usize>>>,
+    pending: RefCell<HashSet<usize>>,
+}
+
+impl RuntimeTypeLayouts {
+    fn new(module: &RuntimeModule) -> Result<Self, String> {
+        Ok(Self {
+            flattened: std::iter::repeat_with(OnceCell::new)
+                .take(module.types.len())
+                .collect(),
+            product_offsets: std::iter::repeat_with(OnceCell::new)
+                .take(module.types.len())
+                .collect(),
+            pending: RefCell::new(HashSet::new()),
+        })
+    }
+
+    fn flattened<'a>(
+        &'a self,
+        module: &RuntimeModule,
+        type_id: usize,
+    ) -> Result<&'a [ValType], String> {
+        let cell = self
+            .flattened
+            .get(type_id)
+            .ok_or_else(|| format!("{}: runtime type {type_id} does not exist", module.source))?;
+        if let Some(flattened) = cell.get() {
+            return Ok(flattened);
+        }
+        if !self.pending.borrow_mut().insert(type_id) {
+            return Err(format!(
+                "{}: runtime type {type_id} recursively contains itself without indirection",
+                module.source
+            ));
+        }
+        let result = (|| {
+            let type_ = module.types.get(type_id).ok_or_else(|| {
+                format!("{}: runtime type {type_id} does not exist", module.source)
+            })?;
+            match type_ {
+                RuntimeType::Unit => Ok(Vec::new()),
+                RuntimeType::Integer32 | RuntimeType::Boolean => Ok(vec![ValType::I32]),
+                RuntimeType::SignedInteger64 => Ok(vec![ValType::I64]),
+                RuntimeType::Float32 => Ok(vec![ValType::F32]),
+                RuntimeType::Float64 => Ok(vec![ValType::F64]),
+                RuntimeType::Text | RuntimeType::Store { .. } => {
+                    Ok(vec![ValType::I32, ValType::I32])
+                }
+                RuntimeType::Scratch { .. } => Ok(vec![ValType::I32, ValType::I32, ValType::I32]),
+                RuntimeType::Indirect { .. } => Ok(vec![ValType::I32]),
+                RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
+                RuntimeType::Product { fields, .. } => {
+                    let mut result = Vec::new();
+                    for field in fields {
+                        result.extend_from_slice(self.flattened(module, field.type_id)?);
+                    }
+                    Ok(result)
+                }
+                RuntimeType::Sum { cases, .. } => {
+                    let mut payload = Vec::new();
+                    for case_ in cases {
+                        let case = self.flattened(module, case_.payload_type)?;
+                        if case.is_empty() {
+                            continue;
+                        }
+                        let (wide, narrow) = if case.len() > payload.len() {
+                            (case, payload.as_slice())
+                        } else {
+                            (payload.as_slice(), case)
+                        };
+                        if wide[..narrow.len()] != narrow[..] {
+                            return Err(format!(
+                                "{}: dynamic sum payloads require different Wasm layouts",
+                                module.source
+                            ));
+                        }
+                        if case.len() > payload.len() {
+                            payload = case.to_vec();
+                        }
+                    }
+                    let mut result = vec![ValType::I32];
+                    result.extend(payload);
+                    Ok(result)
+                }
+                RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } => Ok(self.flattened(module, *representation_type)?.to_vec()),
+            }
+        })();
+        self.pending.borrow_mut().remove(&type_id);
+        let result = result?;
+        cell.set(result).map_err(|_| {
+            format!(
+                "{}: runtime type {type_id} layout was initialized twice",
+                module.source
+            )
+        })?;
+        Ok(cell.get().expect("runtime type layout was initialized"))
+    }
+
+    fn product_offset(
+        &self,
+        module: &RuntimeModule,
+        type_id: usize,
+        field: usize,
+    ) -> Result<usize, String> {
+        let cell = self
+            .product_offsets
+            .get(type_id)
+            .ok_or_else(|| format!("{}: runtime type {type_id} does not exist", module.source))?;
+        if cell.get().is_none() {
+            let Some(RuntimeType::Product { fields, .. }) = module.types.get(type_id) else {
+                return Err(format!(
+                    "{}: runtime type {type_id} is not a product",
+                    module.source
+                ));
+            };
+            let mut offset = 0;
+            let mut offsets = Vec::with_capacity(fields.len());
+            for product_field in fields {
+                offsets.push(offset);
+                offset += self.flattened(module, product_field.type_id)?.len();
+            }
+            cell.set(offsets).map_err(|_| {
+                format!(
+                    "{}: runtime product type {type_id} offsets were initialized twice",
+                    module.source
+                )
+            })?;
+        }
+        cell.get()
+            .and_then(|offsets| offsets.get(field))
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "{}: runtime product type {type_id} has no field {field}",
+                    module.source
+                )
+            })
+    }
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -121,6 +285,7 @@ pub struct CompiledModule {
 
 pub struct ClosedProgram {
     runtime: RuntimeModule,
+    runtime_layouts: RuntimeTypeLayouts,
     public_layout: PublicLayout,
     compiled: RefCell<Option<CompiledModule>>,
 }
@@ -246,7 +411,8 @@ struct AbiManifest {
 }
 
 pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
-    let manifest = build_manifest(&runtime)?;
+    let runtime_layouts = RuntimeTypeLayouts::new(&runtime)?;
+    let manifest = build_manifest(&runtime, &runtime_layouts)?;
     let mut manifest_text = serde_json::to_string_pretty(&manifest)
         .map_err(|error| format!("could not serialize Blot ABI manifest: {error}"))?;
     manifest_text.push('\n');
@@ -260,6 +426,7 @@ pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
     capabilities.dedup();
     Ok(ClosedProgram {
         runtime,
+        runtime_layouts,
         public_layout: PublicLayout {
             manifest,
             bytes,
@@ -280,6 +447,7 @@ impl ClosedProgram {
         }
         let wasm = emit_dynamic_module(
             &self.runtime,
+            &self.runtime_layouts,
             &self.public_layout.manifest,
             &self.public_layout.bytes,
         )?;
@@ -293,7 +461,10 @@ impl ClosedProgram {
     }
 }
 
-fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
+fn build_manifest(
+    module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
+) -> Result<AbiManifest, String> {
     let mut exports = Vec::new();
     for exported in &module.exports {
         match exported {
@@ -405,7 +576,7 @@ fn build_manifest(module: &RuntimeModule) -> Result<AbiManifest, String> {
             });
         }
     }
-    let required_features = required_wasm_features(module)?;
+    let required_features = required_wasm_features(module, runtime_layouts)?;
     let links = module
         .links
         .iter()
@@ -554,11 +725,20 @@ fn forwards_to_return(
     }
 }
 
-fn runtime_type_uses_simd(module: &RuntimeModule, type_id: usize) -> Result<bool, String> {
-    Ok(flattened_runtime_type(module, type_id)?.contains(&ValType::V128))
+fn runtime_type_uses_simd(
+    module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
+    type_id: usize,
+) -> Result<bool, String> {
+    Ok(runtime_layouts
+        .flattened(module, type_id)?
+        .contains(&ValType::V128))
 }
 
-fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, String> {
+fn required_wasm_features(
+    module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
+) -> Result<Vec<&'static str>, String> {
     let internal_ids = internally_emitted_runtime_function_ids(module);
     let internal_functions = module
         .functions
@@ -587,7 +767,7 @@ fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, S
                 module.source, function.id, function.signature
             )
         })?;
-        uses_multi_value |= flattened_runtime_type(module, signature.result)?.len() > 1;
+        uses_multi_value |= runtime_layouts.flattened(module, signature.result)?.len() > 1;
     }
     if uses_multi_value {
         features.insert("multi-value");
@@ -607,14 +787,14 @@ fn required_wasm_features(module: &RuntimeModule) -> Result<Vec<&'static str>, S
             .copied()
             .chain(std::iter::once(signature.result))
         {
-            uses_simd |= runtime_type_uses_simd(module, type_id)?;
+            uses_simd |= runtime_type_uses_simd(module, runtime_layouts, type_id)?;
         }
         for block in &function.blocks {
             for parameter in &block.parameters {
-                uses_simd |= runtime_type_uses_simd(module, parameter.type_id)?;
+                uses_simd |= runtime_type_uses_simd(module, runtime_layouts, parameter.type_id)?;
             }
             for operation in &block.operations {
-                uses_simd |= runtime_type_uses_simd(module, operation.type_id)?;
+                uses_simd |= runtime_type_uses_simd(module, runtime_layouts, operation.type_id)?;
             }
         }
     }
@@ -995,6 +1175,7 @@ fn scalar_store_literal_bytes(
 
 fn emit_dynamic_module(
     module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
     manifest: &AbiManifest,
     manifest_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -1257,9 +1438,11 @@ fn emit_dynamic_module(
         })?;
         let mut parameters = Vec::new();
         for type_id in &signature.parameters {
-            parameters.extend(flattened_runtime_type(module, *type_id)?);
+            parameters.extend_from_slice(runtime_layouts.flattened(module, *type_id)?);
         }
-        let results = flattened_runtime_type(module, signature.result)?;
+        let results = runtime_layouts
+            .flattened(module, signature.result)?
+            .to_vec();
         let type_index = types.intern(parameters, results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
@@ -1278,6 +1461,7 @@ fn emit_dynamic_module(
             function_index,
             dynamic_internal_function(
                 module,
+                runtime_layouts,
                 function,
                 manifest,
                 dynamic_helpers,
@@ -1340,15 +1524,18 @@ fn emit_dynamic_module(
             function_index,
             dynamic_export_function(
                 module,
-                runtime_function,
-                manifest,
-                PublicExport {
-                    parameter_types: &public_function.parameters,
-                    parameter_runtime_types: &signature.parameters,
-                    result_type: result,
-                    result_runtime_type: signature.result,
-                    call_id: export_ordinal as u32 + 1,
+                runtime_layouts,
+                DynamicExport {
+                    function: runtime_function,
+                    public: PublicExport {
+                        parameter_types: &public_function.parameters,
+                        parameter_runtime_types: &signature.parameters,
+                        result_type: result,
+                        result_runtime_type: signature.result,
+                        call_id: export_ordinal as u32 + 1,
+                    },
                 },
+                manifest,
                 dynamic_helpers,
                 &static_data,
                 &runtime_function_indices,
@@ -1424,18 +1611,22 @@ fn emit_dynamic_module(
 
 fn allocate_value_locals(
     module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
     function: &RuntimeFunction,
     parameter_count: u32,
     mut value_locals: HashMap<usize, Vec<u32>>,
 ) -> Result<ValueLocalAllocation, String> {
     let mut definitions = BTreeMap::new();
+    let mut value_types = HashMap::new();
     for block in &function.blocks {
         for parameter in &block.parameters {
+            value_types.insert(parameter.value, parameter.type_id);
             if !value_locals.contains_key(&parameter.value) {
                 definitions.insert(parameter.value, parameter.type_id);
             }
         }
         for operation in &block.operations {
+            value_types.insert(operation.result, operation.type_id);
             definitions.insert(operation.result, operation.type_id);
         }
     }
@@ -1575,15 +1766,14 @@ fn allocate_value_locals(
         }
     }
 
-    let mut layout_groups: Vec<(Vec<ValType>, Vec<usize>)> = Vec::new();
+    let mut layout_groups = Vec::<(Vec<ValType>, Vec<usize>)>::new();
+    let mut layout_group_indices: HashMap<Vec<ValType>, usize> = HashMap::new();
     for (value, type_id) in definitions {
-        let layout = flattened_runtime_type(module, type_id)?;
-        if let Some((_, values)) = layout_groups
-            .iter_mut()
-            .find(|(existing, _)| *existing == layout)
-        {
-            values.push(value);
+        let layout = runtime_layouts.flattened(module, type_id)?.to_vec();
+        if let Some(index) = layout_group_indices.get(&layout).copied() {
+            layout_groups[index].1.push(value);
         } else {
+            layout_group_indices.insert(layout.clone(), layout_groups.len());
             layout_groups.push((layout, vec![value]));
         }
     }
@@ -1651,6 +1841,7 @@ fn allocate_value_locals(
     }
     Ok(ValueLocalAllocation {
         value_locals,
+        value_types,
         local_types,
     })
 }
@@ -1689,6 +1880,7 @@ fn compact_local_declarations(local_types: &[ValType]) -> Vec<(u32, ValType)> {
 
 fn dynamic_internal_function(
     module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
     function: &RuntimeFunction,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
@@ -1730,7 +1922,7 @@ fn dynamic_internal_function(
                 module.source, function.id
             ));
         }
-        let flattened = flattened_runtime_type(module, *type_id)?;
+        let flattened = runtime_layouts.flattened(module, *type_id)?;
         value_locals.insert(
             parameter.value,
             (parameter_count..parameter_count + flattened.len() as u32).collect(),
@@ -1738,8 +1930,15 @@ fn dynamic_internal_function(
         parameter_count += flattened.len() as u32;
     }
 
-    let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
+    let allocation = allocate_value_locals(
+        module,
+        runtime_layouts,
+        function,
+        parameter_count,
+        value_locals,
+    )?;
     let value_locals = allocation.value_locals;
+    let value_types = allocation.value_types;
     let mut local_types = allocation.local_types;
     let control_flow = structured_control_flow(function);
     let dispatcher = if control_flow.is_some() {
@@ -1764,6 +1963,11 @@ fn dynamic_internal_function(
     } else {
         None
     };
+    let facts = FunctionEmissionFacts {
+        runtime_layouts,
+        value_locals: &value_locals,
+        value_types: &value_types,
+    };
 
     let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
@@ -1781,7 +1985,7 @@ fn dynamic_internal_function(
                 manifest,
                 helpers,
                 static_data,
-                &value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -1801,7 +2005,7 @@ fn dynamic_internal_function(
                 manifest,
                 helpers,
                 static_data,
-                &value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -1840,7 +2044,7 @@ fn dynamic_internal_function(
                         manifest,
                         helpers,
                         static_data,
-                        &value_locals,
+                        facts,
                         scratch_pointer,
                         scratch_length,
                         scratch_index,
@@ -1853,7 +2057,7 @@ fn dynamic_internal_function(
                         module,
                         function,
                         operation,
-                        &value_locals,
+                        facts,
                         runtime_function_indices,
                     )?;
                 } else {
@@ -1862,7 +2066,7 @@ fn dynamic_internal_function(
                         module,
                         function,
                         &block.terminator,
-                        &value_locals,
+                        facts,
                         Dispatcher {
                             local: dispatcher,
                             depth: block.id as u32,
@@ -1878,13 +2082,17 @@ fn dynamic_internal_function(
 
 fn dynamic_export_function(
     module: &RuntimeModule,
-    function: &RuntimeFunction,
+    runtime_layouts: &RuntimeTypeLayouts,
+    exported: DynamicExport<'_>,
     manifest: &AbiManifest,
-    public_export: PublicExport<'_>,
     helpers: DynamicHelpers,
     static_data: &StaticData,
     runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<Function, String> {
+    let DynamicExport {
+        function,
+        public: public_export,
+    } = exported;
     let entry = function
         .blocks
         .iter()
@@ -1917,7 +2125,7 @@ fn dynamic_export_function(
                 module.source, function.id
             ));
         }
-        let runtime_flattened = flattened_runtime_type(module, *runtime_type)?;
+        let runtime_flattened = runtime_layouts.flattened(module, *runtime_type)?;
         let public_flattened = flattened_type(public_type);
         if runtime_flattened != public_flattened {
             return Err(format!(
@@ -1931,8 +2139,15 @@ fn dynamic_export_function(
         );
         parameter_count += runtime_flattened.len() as u32;
     }
-    let allocation = allocate_value_locals(module, function, parameter_count, value_locals)?;
+    let allocation = allocate_value_locals(
+        module,
+        runtime_layouts,
+        function,
+        parameter_count,
+        value_locals,
+    )?;
     let value_locals = allocation.value_locals;
+    let value_types = allocation.value_types;
     let mut local_types = allocation.local_types;
     let control_flow = structured_control_flow(function);
     let dispatcher = if control_flow.is_some() {
@@ -1956,6 +2171,11 @@ fn dynamic_export_function(
         Some(checkpoint)
     } else {
         None
+    };
+    let facts = FunctionEmissionFacts {
+        runtime_layouts,
+        value_locals: &value_locals,
+        value_types: &value_types,
     };
     let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
@@ -1981,7 +2201,7 @@ fn dynamic_export_function(
                 manifest,
                 helpers,
                 static_data,
-                &value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -2001,7 +2221,7 @@ fn dynamic_export_function(
                 manifest,
                 helpers,
                 static_data,
-                &value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -2037,7 +2257,7 @@ fn dynamic_export_function(
                         manifest,
                         helpers,
                         static_data,
-                        &value_locals,
+                        facts,
                         scratch_pointer,
                         scratch_length,
                         scratch_index,
@@ -2049,7 +2269,7 @@ fn dynamic_export_function(
                     module,
                     function,
                     &block.terminator,
-                    &value_locals,
+                    facts,
                     Dispatcher {
                         local: dispatcher,
                         depth: block.id as u32,
@@ -2072,12 +2292,13 @@ fn emit_dynamic_operation(
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
     runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let result = locals_for(module, value_locals, operation.result)?;
     match operation.kind {
         "constant" => match operation
@@ -2404,7 +2625,8 @@ fn emit_dynamic_operation(
         "scalar" => {
             let left = locals_for(module, value_locals, operation.operands[0])?;
             let right = locals_for(module, value_locals, operation.operands[1])?;
-            let operand_type = runtime_value_type(function, operation.operands[0])?;
+            let operand_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
             if matches!(module.types[operand_type], RuntimeType::SignedInteger64) {
                 emit_i64_operation(
                     instructions,
@@ -2442,7 +2664,8 @@ fn emit_dynamic_operation(
         }
         "scalar.unary" => {
             let operand = locals_for(module, value_locals, operation.operands[0])?;
-            let operand_type = runtime_value_type(function, operation.operands[0])?;
+            let operand_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
             instructions.local_get(operand[0]);
             match (&module.types[operand_type], operation.operator) {
                 (RuntimeType::Float32, Some("negate")) => {
@@ -2504,17 +2727,17 @@ fn emit_dynamic_operation(
                 module,
                 function,
                 operation,
-                value_locals,
+                facts,
                 result[0],
             )?;
         }
         "product.make" => {
-            let expected = flattened_runtime_type(module, operation.type_id)?;
+            let expected = facts.runtime_layouts.flattened(module, operation.type_id)?;
             let mut actual = Vec::new();
             for operand in &operation.operands {
-                actual.extend(flattened_runtime_type(
+                actual.extend_from_slice(facts.runtime_layouts.flattened(
                     module,
-                    runtime_value_type(function, *operand)?,
+                    runtime_value_type(function, facts.value_types, *operand)?,
                 )?);
             }
             if actual != expected {
@@ -2532,7 +2755,8 @@ fn emit_dynamic_operation(
             }
         }
         "product.project" => {
-            let product_type = runtime_value_type(function, operation.operands[0])?;
+            let product_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
             let RuntimeType::Product { fields, .. } = &module.types[product_type] else {
                 return Err(format!(
                     "{}: product.project reads a non-product",
@@ -2542,10 +2766,16 @@ fn emit_dynamic_operation(
             let field = operation
                 .field
                 .ok_or_else(|| format!("{}: product.project omitted its field", module.source))?;
-            let mut offset = 0;
-            for field_type in fields.iter().take(field) {
-                offset += flattened_runtime_type(module, field_type.type_id)?.len();
+            if field >= fields.len() {
+                return Err(format!(
+                    "{}: product.project field {field} is outside a {}-field product",
+                    module.source,
+                    fields.len()
+                ));
             }
+            let offset = facts
+                .runtime_layouts
+                .product_offset(module, product_type, field)?;
             let product = locals_for(module, value_locals, operation.operands[0])?;
             assign_locals(
                 instructions,
@@ -2564,7 +2794,7 @@ fn emit_dynamic_operation(
                 .local_set(result[0]);
             let payload = locals_for(module, value_locals, operation.operands[0])?;
             assign_locals(instructions, &result[1..1 + payload.len()], payload)?;
-            let flattened = flattened_runtime_type(module, operation.type_id)?;
+            let flattened = facts.runtime_layouts.flattened(module, operation.type_id)?;
             for (local, type_) in result[1 + payload.len()..]
                 .iter()
                 .zip(flattened[1 + payload.len()..].iter())
@@ -2619,7 +2849,8 @@ fn emit_dynamic_operation(
             }
         }
         "indirect.load" => {
-            let indirect_type = runtime_value_type(function, operation.operands[0])?;
+            let indirect_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
             let RuntimeType::Indirect { target_type } = module
                 .types
                 .get(indirect_type)
@@ -2690,11 +2921,14 @@ fn emit_dynamic_operation(
                 emit_store_public_result(
                     instructions,
                     module,
+                    facts.runtime_layouts,
                     element_type_id,
                     &element_type,
                     value,
-                    scratch_pointer,
-                    0,
+                    CanonicalDestination {
+                        pointer: scratch_pointer,
+                        offset: 0,
+                    },
                 )?;
             }
         }
@@ -2713,7 +2947,8 @@ fn emit_dynamic_operation(
                 .local_set(result[0]);
         }
         "store.read" => {
-            let store_type = runtime_value_type(function, operation.operands[0])?;
+            let store_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
             let RuntimeType::Store { element_type } = module
                 .types
                 .get(store_type)
@@ -2802,11 +3037,14 @@ fn emit_dynamic_operation(
             emit_store_public_result(
                 instructions,
                 module,
+                facts.runtime_layouts,
                 element_type_id,
                 &element_type,
                 initial,
-                scratch_pointer,
-                0,
+                CanonicalDestination {
+                    pointer: scratch_pointer,
+                    offset: 0,
+                },
             )?;
             instructions
                 .local_get(scratch_index)
@@ -2897,11 +3135,14 @@ fn emit_dynamic_operation(
             emit_store_public_result(
                 instructions,
                 module,
+                facts.runtime_layouts,
                 element_type_id,
                 &element_type,
                 value,
-                scratch_pointer,
-                0,
+                CanonicalDestination {
+                    pointer: scratch_pointer,
+                    offset: 0,
+                },
             )?;
         }
         "store.grow" => {
@@ -2965,11 +3206,14 @@ fn emit_dynamic_operation(
             emit_store_public_result(
                 instructions,
                 module,
+                facts.runtime_layouts,
                 element_type_id,
                 &element_type,
                 value,
-                scratch_pointer,
-                0,
+                CanonicalDestination {
+                    pointer: scratch_pointer,
+                    offset: 0,
+                },
             )?;
         }
         "scratch.with-capacity" => {
@@ -3103,11 +3347,14 @@ fn emit_dynamic_operation(
             emit_store_public_result(
                 instructions,
                 module,
+                facts.runtime_layouts,
                 element_type_id,
                 &element_type,
                 value,
-                scratch_pointer,
-                0,
+                CanonicalDestination {
+                    pointer: scratch_pointer,
+                    offset: 0,
+                },
             )?;
         }
         "scratch.finish" => {
@@ -3284,7 +3531,7 @@ fn emit_structured_block(
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
@@ -3293,6 +3540,7 @@ fn emit_structured_block(
     result: StructuredResult<'_>,
     loop_depth: u32,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let block = function.blocks.get(block_id).ok_or_else(|| {
         format!(
             "{}: structured control flow references unknown block {block_id}",
@@ -3320,7 +3568,7 @@ fn emit_structured_block(
             manifest,
             helpers,
             static_data,
-            value_locals,
+            facts,
             scratch_pointer,
             scratch_length,
             scratch_index,
@@ -3333,7 +3581,7 @@ fn emit_structured_block(
             module,
             function,
             operation,
-            value_locals,
+            facts,
             runtime_function_indices,
         )?;
         return Ok(());
@@ -3350,7 +3598,7 @@ fn emit_structured_block(
             manifest,
             helpers,
             static_data,
-            value_locals,
+            facts,
             scratch_pointer,
             scratch_length,
             scratch_index,
@@ -3378,7 +3626,7 @@ fn emit_structured_block(
                 manifest,
                 helpers,
                 static_data,
-                value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -3397,7 +3645,7 @@ fn emit_structured_block(
                 manifest,
                 helpers,
                 static_data,
-                value_locals,
+                facts,
                 scratch_pointer,
                 scratch_length,
                 scratch_index,
@@ -3412,7 +3660,7 @@ fn emit_structured_block(
             return Err("a Runtime HIR switch entered structured emission".to_owned());
         }
         RuntimeTerminator::Return { value, .. } => {
-            emit_structured_return(instructions, module, value_locals, *value, result)?;
+            emit_structured_return(instructions, module, facts, *value, result)?;
         }
         RuntimeTerminator::Trap { .. } => {
             instructions.unreachable();
@@ -3431,7 +3679,7 @@ fn emit_structured_target(
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
@@ -3440,14 +3688,7 @@ fn emit_structured_target(
     result: StructuredResult<'_>,
     loop_depth: u32,
 ) -> Result<(), String> {
-    assign_block_arguments(
-        instructions,
-        module,
-        function,
-        target,
-        arguments,
-        value_locals,
-    )?;
+    assign_block_arguments(instructions, module, function, target, arguments, facts)?;
     if target == function.entry_block {
         if let Some(checkpoint) = iteration_checkpoint {
             instructions.local_get(checkpoint).global_set(HEAP_GLOBAL);
@@ -3463,7 +3704,7 @@ fn emit_structured_target(
         manifest,
         helpers,
         static_data,
-        value_locals,
+        facts,
         scratch_pointer,
         scratch_length,
         scratch_index,
@@ -3477,16 +3718,17 @@ fn emit_structured_target(
 fn emit_structured_return(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     value: usize,
     result: StructuredResult<'_>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     match result {
         StructuredResult::Internal => {
             emit_local_values(instructions, locals_for(module, value_locals, value)?);
         }
         StructuredResult::Canonical(canonical) => {
-            emit_canonical_return(instructions, module, value_locals, value, canonical)?;
+            emit_canonical_return(instructions, module, facts, value, canonical)?;
         }
     }
     instructions.return_();
@@ -3498,9 +3740,10 @@ fn emit_direct_tail_call(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     operation: &RuntimeOperation,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let target = operation
         .function
         .ok_or_else(|| format!("{}: call.direct omitted its function", module.source))?;
@@ -3535,9 +3778,13 @@ fn emit_direct_tail_call(
                 module.source, target_function.signature
             )
         })?;
-    let caller_results = flattened_runtime_type(module, caller_signature.result)?;
-    let operation_results = flattened_runtime_type(module, operation.type_id)?;
-    let target_results = flattened_runtime_type(module, target_signature.result)?;
+    let caller_results = facts
+        .runtime_layouts
+        .flattened(module, caller_signature.result)?;
+    let operation_results = facts.runtime_layouts.flattened(module, operation.type_id)?;
+    let target_results = facts
+        .runtime_layouts
+        .flattened(module, target_signature.result)?;
     if caller_results != operation_results || caller_results != target_results {
         return Err(format!(
             "{}: tail call from function {} changes its Wasm result layout",
@@ -3553,9 +3800,9 @@ fn emit_direct_tail_call(
         ));
     }
     for (operand, parameter_type) in operation.operands.iter().zip(&target_signature.parameters) {
-        let operand_type = runtime_value_type(function, *operand)?;
-        if flattened_runtime_type(module, operand_type)?
-            != flattened_runtime_type(module, *parameter_type)?
+        let operand_type = runtime_value_type(function, facts.value_types, *operand)?;
+        if facts.runtime_layouts.flattened(module, operand_type)?
+            != facts.runtime_layouts.flattened(module, *parameter_type)?
         {
             return Err(format!(
                 "{}: tail call to function {target} changes an argument's Wasm layout",
@@ -3573,21 +3820,15 @@ fn emit_internal_terminator(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     terminator: &RuntimeTerminator,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     dispatcher: Dispatcher,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     match terminator {
         RuntimeTerminator::Branch {
             target, arguments, ..
         } => {
-            assign_block_arguments(
-                instructions,
-                module,
-                function,
-                *target,
-                arguments,
-                value_locals,
-            )?;
+            assign_block_arguments(instructions, module, function, *target, arguments, facts)?;
             instructions
                 .i32_const(*target as i32)
                 .local_set(dispatcher.local)
@@ -3609,7 +3850,7 @@ fn emit_internal_terminator(
                 function,
                 *consequent,
                 consequent_arguments,
-                value_locals,
+                facts,
             )?;
             instructions
                 .i32_const(*consequent as i32)
@@ -3621,7 +3862,7 @@ fn emit_internal_terminator(
                 function,
                 *alternate,
                 alternate_arguments,
-                value_locals,
+                facts,
             )?;
             instructions
                 .i32_const(*alternate as i32)
@@ -3659,22 +3900,16 @@ fn emit_dynamic_terminator(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     terminator: &RuntimeTerminator,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     dispatcher: Dispatcher,
     canonical_result: CanonicalResult<'_>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     match terminator {
         RuntimeTerminator::Branch {
             target, arguments, ..
         } => {
-            assign_block_arguments(
-                instructions,
-                module,
-                function,
-                *target,
-                arguments,
-                value_locals,
-            )?;
+            assign_block_arguments(instructions, module, function, *target, arguments, facts)?;
             instructions
                 .i32_const(*target as i32)
                 .local_set(dispatcher.local)
@@ -3696,7 +3931,7 @@ fn emit_dynamic_terminator(
                 function,
                 *consequent,
                 consequent_arguments,
-                value_locals,
+                facts,
             )?;
             instructions
                 .i32_const(*consequent as i32)
@@ -3708,7 +3943,7 @@ fn emit_dynamic_terminator(
                 function,
                 *alternate,
                 alternate_arguments,
-                value_locals,
+                facts,
             )?;
             instructions
                 .i32_const(*alternate as i32)
@@ -3731,7 +3966,7 @@ fn emit_dynamic_terminator(
             dispatcher,
         )?,
         RuntimeTerminator::Return { value, .. } => {
-            emit_canonical_return(instructions, module, value_locals, *value, canonical_result)?;
+            emit_canonical_return(instructions, module, facts, *value, canonical_result)?;
             instructions.return_();
         }
         RuntimeTerminator::Trap { .. } => {
@@ -3856,10 +4091,11 @@ fn emit_balanced_switch_selection(
 fn emit_canonical_return(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     value: usize,
     canonical_result: CanonicalResult<'_>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let result = locals_for(module, value_locals, value)?;
     let flattened = flattened_type(canonical_result.type_);
     if flattened.len() <= 1 {
@@ -3879,11 +4115,14 @@ fn emit_canonical_return(
     emit_store_public_result(
         instructions,
         module,
+        facts.runtime_layouts,
         canonical_result.runtime_type,
         canonical_result.type_,
         result,
-        canonical_result.pointer,
-        0,
+        CanonicalDestination {
+            pointer: canonical_result.pointer,
+            offset: 0,
+        },
     )?;
     instructions.local_get(canonical_result.pointer);
     Ok(())
@@ -3895,8 +4134,9 @@ fn assign_block_arguments(
     function: &RuntimeFunction,
     target: usize,
     arguments: &[usize],
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let block = function
         .blocks
         .get(target)
@@ -3913,9 +4153,9 @@ fn assign_block_arguments(
     for (parameter, argument) in block.parameters.iter().zip(arguments) {
         let destination = locals_for(module, value_locals, parameter.value)?;
         let source = locals_for(module, value_locals, *argument)?;
-        let argument_type = runtime_value_type(function, *argument)?;
-        let argument_layout = flattened_runtime_type(module, argument_type)?;
-        let parameter_layout = flattened_runtime_type(module, parameter.type_id)?;
+        let argument_type = runtime_value_type(function, facts.value_types, *argument)?;
+        let argument_layout = facts.runtime_layouts.flattened(module, argument_type)?;
+        let parameter_layout = facts.runtime_layouts.flattened(module, parameter.type_id)?;
         if argument_layout != parameter_layout {
             let argument_kind = module
                 .types
@@ -3998,12 +4238,13 @@ fn emit_dynamic_vector_operation(
     module: &RuntimeModule,
     function: &RuntimeFunction,
     operation: &RuntimeOperation,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    facts: FunctionEmissionFacts<'_>,
     result: u32,
 ) -> Result<(), String> {
+    let value_locals = facts.value_locals;
     let vector_type_id = match module.types.get(operation.type_id) {
         Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. }) => operation.type_id,
-        _ => runtime_value_type(function, operation.operands[0])?,
+        _ => runtime_value_type(function, facts.value_types, operation.operands[0])?,
     };
     let (element, lanes) = match &module.types[vector_type_id] {
         RuntimeType::Vector { element, lanes } | RuntimeType::Mask { element, lanes } => {
@@ -4445,66 +4686,6 @@ fn emit_local_pair(instructions: &mut InstructionSink<'_>, operands: &[u32]) {
     instructions.local_get(operands[0]).local_get(operands[1]);
 }
 
-fn flattened_runtime_type(module: &RuntimeModule, type_id: usize) -> Result<Vec<ValType>, String> {
-    let type_ = module
-        .types
-        .get(type_id)
-        .ok_or_else(|| format!("{}: runtime type {type_id} does not exist", module.source))?;
-    match type_ {
-        RuntimeType::Unit => Ok(Vec::new()),
-        RuntimeType::Integer32 | RuntimeType::Boolean => Ok(vec![ValType::I32]),
-        RuntimeType::SignedInteger64 => Ok(vec![ValType::I64]),
-        RuntimeType::Float32 => Ok(vec![ValType::F32]),
-        RuntimeType::Float64 => Ok(vec![ValType::F64]),
-        RuntimeType::Text | RuntimeType::Store { .. } => Ok(vec![ValType::I32, ValType::I32]),
-        RuntimeType::Scratch { .. } => Ok(vec![ValType::I32, ValType::I32, ValType::I32]),
-        RuntimeType::Indirect { .. } => Ok(vec![ValType::I32]),
-        RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
-        RuntimeType::Product { fields, .. } => {
-            let mut result = Vec::new();
-            for field in fields {
-                result.extend(flattened_runtime_type(module, field.type_id)?);
-            }
-            Ok(result)
-        }
-        RuntimeType::Sum { cases, .. } => {
-            // One case's payload occupies the sum's payload locals from the
-            // first one on: `sum.make` zero-fills whatever it does not write and
-            // `sum.payload` reads back only its own case's width. A narrower
-            // case therefore costs nothing as long as it is a prefix of the
-            // widest, which is what lets a defunctionalized function choice give
-            // each alternative its own capture product.
-            let mut payload: Vec<ValType> = Vec::new();
-            for case_ in cases {
-                let flattened = flattened_runtime_type(module, case_.payload_type)?;
-                if flattened.is_empty() {
-                    continue;
-                }
-                let (wide, narrow) = match flattened.len() > payload.len() {
-                    true => (&flattened, &payload),
-                    false => (&payload, &flattened),
-                };
-                if wide[..narrow.len()] != narrow[..] {
-                    return Err(format!(
-                        "{}: dynamic sum payloads require different Wasm layouts",
-                        module.source
-                    ));
-                }
-                if flattened.len() > payload.len() {
-                    payload = flattened;
-                }
-            }
-            let mut result = vec![ValType::I32];
-            result.extend(payload);
-            Ok(result)
-        }
-        RuntimeType::Sealed {
-            representation_type,
-            ..
-        } => flattened_runtime_type(module, *representation_type),
-    }
-}
-
 fn runtime_kind(type_: &RuntimeType) -> &'static str {
     match type_ {
         RuntimeType::Unit => "unit",
@@ -4525,27 +4706,17 @@ fn runtime_kind(type_: &RuntimeType) -> &'static str {
     }
 }
 
-fn runtime_value_type(function: &RuntimeFunction, value: usize) -> Result<usize, String> {
-    for block in &function.blocks {
-        if let Some(parameter) = block
-            .parameters
-            .iter()
-            .find(|parameter| parameter.value == value)
-        {
-            return Ok(parameter.type_id);
-        }
-        if let Some(operation) = block
-            .operations
-            .iter()
-            .find(|operation| operation.result == value)
-        {
-            return Ok(operation.type_id);
-        }
-    }
-    Err(format!(
-        "runtime function {} omitted the type of value {value}",
-        function.name
-    ))
+fn runtime_value_type(
+    function: &RuntimeFunction,
+    value_types: &HashMap<usize, usize>,
+    value: usize,
+) -> Result<usize, String> {
+    value_types.get(&value).copied().ok_or_else(|| {
+        format!(
+            "runtime function {} omitted the type of value {value}",
+            function.name
+        )
+    })
 }
 
 fn emit_i32_operator(
@@ -4967,12 +5138,13 @@ fn emit_load_canonical_result(
 fn emit_store_public_result(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
     runtime_type_id: usize,
     public_type: &AbiType,
     source: &[u32],
-    pointer: u32,
-    offset: u32,
+    destination: CanonicalDestination,
 ) -> Result<(), String> {
+    let CanonicalDestination { pointer, offset } = destination;
     let runtime_type = module.types.get(runtime_type_id).ok_or_else(|| {
         format!(
             "{}: public result references unknown runtime type {runtime_type_id}",
@@ -5026,11 +5198,11 @@ fn emit_store_public_result(
         ) => emit_store_public_result(
             instructions,
             module,
+            runtime_layouts,
             *representation_type,
             inner,
             source,
-            pointer,
-            offset,
+            destination,
         )?,
         (
             RuntimeType::Product { fields, .. },
@@ -5041,7 +5213,7 @@ fn emit_store_public_result(
             let mut runtime_offsets = BTreeMap::new();
             let mut runtime_offset = 0;
             for field in fields {
-                let width = flattened_runtime_type(module, field.type_id)?.len();
+                let width = runtime_layouts.flattened(module, field.type_id)?.len();
                 runtime_offsets.insert(field.name.as_str(), (field.type_id, runtime_offset, width));
                 runtime_offset += width;
             }
@@ -5063,11 +5235,14 @@ fn emit_store_public_result(
                 emit_store_public_result(
                     instructions,
                     module,
+                    runtime_layouts,
                     *field_type_id,
                     &field.type_,
                     &source[*field_offset..*field_offset + *field_width],
-                    pointer,
-                    offset + field.offset,
+                    CanonicalDestination {
+                        pointer,
+                        offset: offset + field.offset,
+                    },
                 )?;
             }
         }
@@ -5116,16 +5291,20 @@ fn emit_store_public_result(
                     size => return Err(format!("unsupported variant discriminant size {size}")),
                 }
                 if let Some(payload) = &public_cases[public_case_index].payload {
-                    let payload_width =
-                        flattened_runtime_type(module, runtime_case.payload_type)?.len();
+                    let payload_width = runtime_layouts
+                        .flattened(module, runtime_case.payload_type)?
+                        .len();
                     emit_store_public_result(
                         instructions,
                         module,
+                        runtime_layouts,
                         runtime_case.payload_type,
                         payload,
                         &source[1..1 + payload_width],
-                        pointer,
-                        offset + layout.payload_offset,
+                        CanonicalDestination {
+                            pointer,
+                            offset: offset + layout.payload_offset,
+                        },
                     )?;
                 }
                 instructions.end();
@@ -6408,7 +6587,42 @@ fn align_to(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{RuntimeBlock, RuntimeBlockParameter, RuntimeSpan};
+    use crate::hir::{RuntimeBlock, RuntimeBlockParameter, RuntimeCase, RuntimeSpan};
+
+    #[test]
+    fn unused_heterogeneous_sum_does_not_require_a_local_wasm_layout() {
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "unused-heterogeneous-sum-test".to_owned(),
+            types: vec![
+                RuntimeType::Unit,
+                RuntimeType::Float32,
+                RuntimeType::Integer32,
+                RuntimeType::Sum {
+                    name: "Choice".to_owned(),
+                    cases: vec![
+                        RuntimeCase {
+                            name: "Single".to_owned(),
+                            payload_type: 1,
+                        },
+                        RuntimeCase {
+                            name: "Number".to_owned(),
+                            payload_type: 2,
+                        },
+                    ],
+                },
+            ],
+            signatures: Vec::new(),
+            static_stores: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        close(module).expect("an unused private sum should not need a Wasm-local layout");
+    }
 
     #[test]
     fn immediate_trap_branches_receive_false_hints() {
@@ -6561,9 +6775,11 @@ mod tests {
             links: Vec::new(),
             exports: Vec::new(),
         };
-        let manifest = build_manifest(&module).expect("test manifest should close");
-        let wasm =
-            emit_dynamic_module(&module, &manifest, b"{}").expect("iteration region should emit");
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
+        let manifest =
+            build_manifest(&module, &runtime_layouts).expect("test manifest should close");
+        let wasm = emit_dynamic_module(&module, &runtime_layouts, &manifest, b"{}")
+            .expect("iteration region should emit");
         let body = wasmparser::Parser::new(0)
             .parse_all(&wasm)
             .filter_map(
@@ -6615,8 +6831,10 @@ mod tests {
             links: Vec::new(),
             exports: Vec::new(),
         };
-        let manifest = build_manifest(&module).expect("test manifest should close");
-        let wasm = emit_dynamic_module(&module, &manifest, b"{}")
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
+        let manifest =
+            build_manifest(&module, &runtime_layouts).expect("test manifest should close");
+        let wasm = emit_dynamic_module(&module, &runtime_layouts, &manifest, b"{}")
             .expect("acyclic structured function should emit");
         let body = wasmparser::Parser::new(0)
             .parse_all(&wasm)
@@ -6665,9 +6883,11 @@ mod tests {
             links: Vec::new(),
             exports: Vec::new(),
         };
-        let manifest = build_manifest(&module).expect("test manifest should close");
-        let wasm =
-            emit_dynamic_module(&module, &manifest, b"{}").expect("generic dispatcher should emit");
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
+        let manifest =
+            build_manifest(&module, &runtime_layouts).expect("test manifest should close");
+        let wasm = emit_dynamic_module(&module, &runtime_layouts, &manifest, b"{}")
+            .expect("generic dispatcher should emit");
         let body = wasmparser::Parser::new(0)
             .parse_all(&wasm)
             .filter_map(
@@ -6836,9 +7056,11 @@ mod tests {
             },
         }]);
         let module = allocation_test_module(function.clone());
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
 
-        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
-            .expect("operation chain should allocate");
+        let allocation =
+            allocate_value_locals(&module, &runtime_layouts, &function, 0, HashMap::new())
+                .expect("operation chain should allocate");
 
         assert_eq!(allocation.local_types, vec![ValType::I32; 2]);
         assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
@@ -6862,9 +7084,11 @@ mod tests {
             },
         }]);
         let module = allocation_test_module(function.clone());
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
 
-        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
-            .expect("overlapping values should allocate");
+        let allocation =
+            allocate_value_locals(&module, &runtime_layouts, &function, 0, HashMap::new())
+                .expect("overlapping values should allocate");
 
         assert_eq!(allocation.local_types, vec![ValType::I32; 3]);
         assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
@@ -6889,9 +7113,11 @@ mod tests {
             },
         }]);
         let module = allocation_test_module(function.clone());
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
 
-        let allocation = allocate_value_locals(&module, &function, 0, HashMap::new())
-            .expect("wide live product should allocate");
+        let allocation =
+            allocate_value_locals(&module, &runtime_layouts, &function, 0, HashMap::new())
+                .expect("wide live product should allocate");
 
         assert_eq!(allocation.local_types.len(), WIDTH + 1);
     }
@@ -7001,7 +7227,9 @@ mod tests {
             ownership: "plain",
         });
 
-        let features = required_wasm_features(&module).expect("features should close");
+        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
+        let features =
+            required_wasm_features(&module, &runtime_layouts).expect("features should close");
 
         assert!(features.contains(&"tail-call"));
         assert_eq!(

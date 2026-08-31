@@ -3081,6 +3081,10 @@ struct MultiCaseArm {
     body: ExpressionId,
 }
 
+struct MultiCaseSubject {
+    name: String,
+}
+
 fn lower_case_targets(
     targets: Vec<ExpressionId>,
     arms: &[MultiCaseArm],
@@ -3119,16 +3123,29 @@ fn lower_case_targets(
         return lower_guards(target, &arms, span, arena);
     }
 
+    let synthetic_start = arena.expressions.len();
+
     let mut subject_names = Vec::new();
     for index in 0..targets.len() {
         let name = format!("case_subject${}${}${index}", span.start, span.end);
         subject_names.push(name);
     }
 
-    let cached = vec![None; subject_names.len()];
-    let mut result = lower_multi_case_rows(arms, &subject_names, &cached, span, 0, arena)?;
+    let subjects = subject_names
+        .iter()
+        .map(|name| MultiCaseSubject { name: name.clone() })
+        .collect::<Vec<_>>();
+    let cached = vec![None; subjects.len()];
+    let mut result = lower_multi_case_rows(arms, &subjects, &cached, span, 0, arena)?;
     let coverage_targets = targets.clone();
     for (target, name) in targets.into_iter().zip(subject_names).rev() {
+        let thunk_parameter = arena.pattern(Pattern::Unit { span });
+        let target = arena.expression(Expression::Lambda {
+            parameter: thunk_parameter,
+            body: target,
+            deferred: false,
+            span,
+        });
         let parameter = arena.pattern(Pattern::Name {
             name,
             qualifier: Qualifier::None,
@@ -3137,7 +3154,7 @@ fn lower_case_targets(
         let function = arena.expression(Expression::Lambda {
             parameter,
             body: result,
-            deferred: true,
+            deferred: false,
             span,
         });
         result = arena.expression(Expression::Apply {
@@ -3171,12 +3188,13 @@ fn lower_case_targets(
         argument: coverage,
         span,
     });
+    arena.mark_expressions_synthetic_from(synthetic_start);
     Ok(result)
 }
 
 fn lower_multi_case_rows(
     rows: &[MultiCaseArm],
-    subject_names: &[String],
+    subjects: &[MultiCaseSubject],
     cached: &[Option<String>],
     span: Span,
     depth: usize,
@@ -3189,39 +3207,86 @@ fn lower_multi_case_rows(
             arena,
         ));
     };
-    lower_multi_case_column(
-        row,
+    let fallback_name = format!("case_fallback${}${}", span.start, span.end);
+    let fallback_subjects = subjects
+        .iter()
+        .enumerate()
+        .map(|(column, _)| MultiCaseSubject {
+            name: format!("case_fallback_subject${}${}${column}", span.start, span.end),
+        })
+        .collect::<Vec<_>>();
+    let fallback_cached = vec![None; fallback_subjects.len()];
+    let mut fallback = lower_multi_case_rows(
         &rows[1..],
-        subject_names,
-        cached,
+        &fallback_subjects,
+        &fallback_cached,
         span,
-        depth,
-        0,
+        depth + 1,
         arena,
-    )
+    )?;
+    let parameters = fallback_subjects
+        .into_iter()
+        .map(|subject| {
+            arena.pattern(Pattern::Name {
+                name: subject.name,
+                qualifier: Qualifier::None,
+                span,
+            })
+        })
+        .collect();
+    let parameter = arena.pattern(Pattern::Tuple {
+        elements: parameters,
+        span,
+    });
+    arena.synthetic_static_closure_bodies.insert(fallback);
+    fallback = arena.expression(Expression::Lambda {
+        parameter,
+        body: fallback,
+        deferred: false,
+        span,
+    });
+    let fallback_parameter = arena.pattern(Pattern::Name {
+        name: fallback_name.clone(),
+        qualifier: Qualifier::None,
+        span,
+    });
+    let result =
+        lower_multi_case_column(row, subjects, cached, &fallback_name, span, depth, 0, arena)?;
+    arena.synthetic_static_closure_bodies.insert(result);
+    let function = arena.expression(Expression::Lambda {
+        parameter: fallback_parameter,
+        body: result,
+        deferred: false,
+        span,
+    });
+    Ok(arena.expression(Expression::Apply {
+        function,
+        argument: fallback,
+        span,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn lower_multi_case_column(
     row: &MultiCaseArm,
-    remaining: &[MultiCaseArm],
-    subject_names: &[String],
+    subjects: &[MultiCaseSubject],
     cached: &[Option<String>],
+    fallback_name: &str,
     span: Span,
     depth: usize,
     column: usize,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     if column == row.patterns.len() {
-        return lower_multi_case_body(row, remaining, subject_names, cached, span, depth, arena);
+        return lower_multi_case_body(row, subjects, cached, fallback_name, span, arena);
     }
     let pattern = row.patterns[column];
     if matches!(arena.patterns[pattern.0 as usize], Pattern::Wildcard { .. }) {
         return lower_multi_case_column(
             row,
-            remaining,
-            subject_names,
+            subjects,
             cached,
+            fallback_name,
             span,
             depth,
             column + 1,
@@ -3231,7 +3296,14 @@ fn lower_multi_case_column(
 
     let Some(subject_name) = cached[column].clone() else {
         let subject_name = format!("case_value${}${}${depth}${column}", span.start, span.end);
-        let argument = variable(&subject_names[column], span, arena);
+        let function = variable(&subjects[column].name, span, arena);
+        let argument = arena.expression(Expression::Unit { span });
+        let argument = arena.expression(Expression::Apply {
+            function,
+            argument,
+            span,
+        });
+        arena.synthetic_runtime_type_expressions.insert(argument);
         let parameter = arena.pattern(Pattern::Name {
             name: subject_name.clone(),
             qualifier: Qualifier::None,
@@ -3241,9 +3313,9 @@ fn lower_multi_case_column(
         next_cached[column] = Some(subject_name);
         let body = lower_multi_case_column(
             row,
-            remaining,
-            subject_names,
+            subjects,
             &next_cached,
+            fallback_name,
             span,
             depth + 1,
             column,
@@ -3265,9 +3337,9 @@ fn lower_multi_case_column(
     if matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. }) {
         return lower_multi_case_column(
             row,
-            remaining,
-            subject_names,
+            subjects,
             cached,
+            fallback_name,
             span,
             depth,
             column + 1,
@@ -3277,15 +3349,15 @@ fn lower_multi_case_column(
 
     let consequence = lower_multi_case_column(
         row,
-        remaining,
-        subject_names,
+        subjects,
         cached,
+        fallback_name,
         span,
         depth + 1,
         column + 1,
         arena,
     )?;
-    let fallback = lower_multi_case_rows(remaining, subject_names, cached, span, depth + 1, arena)?;
+    let fallback = lower_multi_case_fallback_call(fallback_name, subjects, cached, span, arena);
     let wildcard = arena.pattern(Pattern::Wildcard { span });
     let target = variable(&subject_name, span, arena);
     Ok(arena.expression(Expression::Case {
@@ -3304,20 +3376,17 @@ fn lower_multi_case_column(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_multi_case_body(
     row: &MultiCaseArm,
-    remaining: &[MultiCaseArm],
-    subject_names: &[String],
+    subjects: &[MultiCaseSubject],
     cached: &[Option<String>],
+    fallback_name: &str,
     span: Span,
-    depth: usize,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let mut body = row.body;
     if let Some(condition) = row.guard {
-        let fallback =
-            lower_multi_case_rows(remaining, subject_names, cached, span, depth + 1, arena)?;
+        let fallback = lower_multi_case_fallback_call(fallback_name, subjects, cached, span, arena);
         body = arena.expression(Expression::If {
             branches: vec![Branch {
                 condition,
@@ -3351,6 +3420,41 @@ fn lower_multi_case_body(
         });
     }
     Ok(body)
+}
+
+fn lower_multi_case_fallback_call(
+    fallback_name: &str,
+    subjects: &[MultiCaseSubject],
+    cached: &[Option<String>],
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    let elements = subjects
+        .iter()
+        .zip(cached)
+        .map(|(subject, cached_name)| match cached_name {
+            None => variable(&subject.name, span, arena),
+            Some(cached_name) => {
+                let body = variable(cached_name, span, arena);
+                let parameter = arena.pattern(Pattern::Unit { span });
+                arena.expression(Expression::Lambda {
+                    parameter,
+                    body,
+                    deferred: false,
+                    span,
+                })
+            }
+        })
+        .collect();
+    let argument = arena.expression(Expression::Tuple { elements, span });
+    let function = variable(fallback_name, span, arena);
+    let result = arena.expression(Expression::Apply {
+        function,
+        argument,
+        span,
+    });
+    arena.synthetic_runtime_type_expressions.insert(result);
+    result
 }
 
 fn multi_case_coverage_witness(

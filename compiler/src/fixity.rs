@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 
-use crate::ast::{AstArena, Expression, ExpressionId, Span};
+use crate::ast::{
+    AstArena, Declaration, DeclarationKind, Expression, ExpressionId, FIXITY_INTERMEDIATE_PREFIX,
+    Pattern, Qualifier, ResultEffects, Span,
+};
+
+const MAX_DIRECT_OPERATOR_CHAIN: usize = 64;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Associativity {
@@ -70,6 +75,72 @@ impl FixityTable {
         steps: &[ChainStep],
         arena: &mut AstArena,
     ) -> Result<ExpressionId, String> {
+        if steps.len() >= MAX_DIRECT_OPERATOR_CHAIN {
+            let mut precedence = None;
+            let mut flat_left_chain = true;
+            for step in steps {
+                let fixity = self.infix(step)?;
+                if fixity.associativity != Associativity::Left {
+                    flat_left_chain = false;
+                }
+                if let Some(precedence) = precedence {
+                    if fixity.precedence != precedence {
+                        flat_left_chain = false;
+                    }
+                } else {
+                    precedence = Some(fixity.precedence);
+                }
+            }
+            if flat_left_chain {
+                let mut declarations = Vec::with_capacity(steps.len());
+                let mut result = first;
+                for (index, step) in steps.iter().enumerate() {
+                    let fixity = self.infix(step)?;
+                    let span = Span {
+                        start: arena.expression_span(result).start,
+                        end: arena.expression_span(step.right).end,
+                    };
+                    let callee = target_expression(fixity, step.span, arena)?;
+                    let applied_left = arena.expression(Expression::Apply {
+                        function: callee,
+                        argument: result,
+                        span,
+                    });
+                    let value = arena.expression(Expression::Apply {
+                        function: applied_left,
+                        argument: step.right,
+                        span,
+                    });
+                    let name = format!(
+                        "{FIXITY_INTERMEDIATE_PREFIX}{}${}${index}",
+                        span.start, span.end
+                    );
+                    let pattern = arena.pattern(Pattern::Name {
+                        name: name.clone(),
+                        qualifier: Qualifier::None,
+                        span,
+                    });
+                    declarations.push(arena.declaration(Declaration::Binding {
+                        kind: DeclarationKind::Let,
+                        tags: Vec::new(),
+                        pattern,
+                        value,
+                        span,
+                    }));
+                    result = arena.expression(Expression::Var { name, span });
+                }
+                let span = Span {
+                    start: arena.expression_span(first).start,
+                    end: arena.expression_span(result).end,
+                };
+                return Ok(arena.expression(Expression::Block {
+                    declarations,
+                    result,
+                    result_effects: ResultEffects::Ambient,
+                    span,
+                }));
+            }
+        }
         let mut position = 0;
         let folded = self.climb(first, steps, &mut position, 0, arena)?;
         if position != steps.len() {

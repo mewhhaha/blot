@@ -1,7 +1,10 @@
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::artifact_limits::{ARTIFACT_EXPANDED_REFERENCE_LIMIT, ARTIFACT_REFERENCE_PATH_LIMIT};
+
+pub(crate) const FIXITY_INTERMEDIATE_PREFIX: &str = "fixity$";
 
 pub(crate) const MULTI_CASE_COVERAGE_TAG: &str = "case_coverage$";
 
@@ -264,11 +267,27 @@ pub enum Declaration {
     },
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct AstArena {
     pub expressions: Vec<Expression>,
     pub patterns: Vec<Pattern>,
     pub declarations: Vec<Declaration>,
+    #[serde(skip)]
+    pub synthetic_expressions: HashSet<ExpressionId>,
+    #[serde(skip)]
+    pub synthetic_closure_bodies: HashSet<ExpressionId>,
+    #[serde(skip)]
+    pub synthetic_runtime_type_expressions: HashSet<ExpressionId>,
+    #[serde(skip)]
+    pub synthetic_static_closure_bodies: HashSet<ExpressionId>,
+}
+
+impl PartialEq for AstArena {
+    fn eq(&self, other: &Self) -> bool {
+        self.expressions == other.expressions
+            && self.patterns == other.patterns
+            && self.declarations == other.declarations
+    }
 }
 
 impl AstArena {
@@ -288,6 +307,20 @@ impl AstArena {
         let id = DeclarationId(self.declarations.len() as u32);
         self.declarations.push(declaration);
         id
+    }
+
+    pub fn mark_expressions_synthetic_from(&mut self, first: usize) {
+        self.synthetic_closure_bodies
+            .extend(
+                self.expressions[first..]
+                    .iter()
+                    .filter_map(|expression| match expression {
+                        Expression::Lambda { body, .. } => Some(*body),
+                        _ => None,
+                    }),
+            );
+        self.synthetic_expressions
+            .extend((first..self.expressions.len()).map(|index| ExpressionId(index as u32)));
     }
 
     pub fn expression_span(&self, id: ExpressionId) -> Span {

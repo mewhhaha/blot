@@ -1465,11 +1465,12 @@ tuple evaluates all three elements before matching it. Both forms use the same
 row ordering, pattern bindings, guards, result typing, and cross-product
 coverage rule. A guarded row still contributes nothing to coverage.
 
-Comma-separated cases are surface syntax. Lowering captures each subject as an
-affine deferred argument, caches a demanded argument in an ordinary strict
-binding, and emits ordinary nested `case`, `if`, application, and block nodes.
-The checker also sees a non-executed decision tree made from the unguarded rows,
-so exhaustiveness is proved without making the executable path eager. No
+Comma-separated cases are surface syntax. Lowering captures each subject in a
+strict nullary closure, caches a demanded value in an ordinary strict binding,
+and passes the remaining closures as one tuple to the next row. The generated
+tree contains only ordinary `case`, `if`, lambda, application, tuple, and block
+nodes. The checker also sees a non-executed tuple case made from the unguarded
+rows, so exhaustiveness is proved without making the executable path eager. No
 multi-subject case node reaches inference, ownership, evaluation, Runtime HIR,
 or a backend. The editor linter offers this form when nested single-subject
 cases form the same decision matrix without depending on an outer arm's

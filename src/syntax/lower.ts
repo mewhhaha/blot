@@ -2639,33 +2639,7 @@ function lowerCaseTargets(
     span,
     0,
   );
-  // Fall-through wildcards make every executable probe locally total. This
-  // unused closure is inferred first so the same subject parameters still have
-  // to satisfy the complete unguarded matrix, without demanding them at run time.
-  result = {
-    tag: "block",
-    declarations: [{
-      tag: "binding",
-      kind: "let",
-      tags: [],
-      pattern: { tag: "wildcard", span },
-      value: {
-        tag: "lambda",
-        parameter: { tag: "unit", span },
-        body: multiCaseCoverageWitness(
-          arms,
-          subjectNames,
-          targets.map(() => null),
-          span,
-        ),
-        span,
-      },
-      span,
-    }],
-    result,
-    resultEffects: "ambient",
-    span,
-  };
+  const coverageTargets = targets;
   for (let index = targets.length - 1; index >= 0; index -= 1) {
     const target = targets[index];
     const name = subjectNames[index];
@@ -2677,14 +2651,35 @@ function lowerCaseTargets(
         tag: "lambda",
         parameter: { tag: "name", name, qualifier: "none", span },
         body: result,
-        deferred: true,
         span,
       },
-      arg: target,
+      arg: {
+        tag: "lambda",
+        parameter: { tag: "unit", span },
+        body: target,
+        span,
+      },
       span,
     };
   }
-  return result;
+  // Executable probes are locally total, so this unused closure checks the
+  // complete source matrix without demanding its subjects at run time.
+  return {
+    tag: "apply",
+    fn: {
+      tag: "lambda",
+      parameter: { tag: "wildcard", span },
+      body: result,
+      span,
+    },
+    arg: {
+      tag: "lambda",
+      parameter: { tag: "unit", span },
+      body: multiCaseCoverageWitness(arms, coverageTargets, span),
+      span,
+    },
+    span,
+  };
 }
 
 function lowerMultiCaseRows(
@@ -2701,22 +2696,63 @@ function lowerMultiCaseRows(
       span,
     );
   }
-  return lowerMultiCaseColumn(
-    row,
-    rows.slice(1),
-    subjectNames,
-    cached,
-    span,
-    depth,
-    0,
+  const fallbackName = `case_fallback$${span.start}$${span.end}`;
+  const fallbackSubjects = subjectNames.map((_, column) =>
+    `case_fallback_subject$${span.start}$${span.end}$${column}`
   );
+  const fallbackBody = lowerMultiCaseRows(
+    rows.slice(1),
+    fallbackSubjects,
+    fallbackSubjects.map(() => null),
+    span,
+    depth + 1,
+  );
+  const fallback: Expr = {
+    tag: "lambda",
+    parameter: {
+      tag: "tuple",
+      elements: fallbackSubjects.map((name) => ({
+        tag: "name",
+        name,
+        qualifier: "none",
+        span,
+      })),
+      span,
+    },
+    body: fallbackBody,
+    span,
+  };
+  return {
+    tag: "apply",
+    fn: {
+      tag: "lambda",
+      parameter: {
+        tag: "name",
+        name: fallbackName,
+        qualifier: "none",
+        span,
+      },
+      body: lowerMultiCaseColumn(
+        row,
+        subjectNames,
+        cached,
+        fallbackName,
+        span,
+        depth,
+        0,
+      ),
+      span,
+    },
+    arg: fallback,
+    span,
+  };
 }
 
 function lowerMultiCaseColumn(
   row: MultiCaseArm,
-  remaining: readonly MultiCaseArm[],
   subjectNames: readonly string[],
   cached: readonly (string | null)[],
+  fallbackName: string,
   span: Span,
   depth: number,
   column: number,
@@ -2724,11 +2760,10 @@ function lowerMultiCaseColumn(
   if (column === row.patterns.length) {
     return lowerMultiCaseBody(
       row,
-      remaining,
       subjectNames,
       cached,
+      fallbackName,
       span,
-      depth,
     );
   }
   const pattern = row.patterns[column];
@@ -2736,9 +2771,9 @@ function lowerMultiCaseColumn(
   if (pattern.tag === "wildcard") {
     return lowerMultiCaseColumn(
       row,
-      remaining,
       subjectNames,
       cached,
+      fallbackName,
       span,
       depth,
       column + 1,
@@ -2747,43 +2782,51 @@ function lowerMultiCaseColumn(
 
   const cachedName = cached[column];
   if (cachedName === null || cachedName === undefined) {
-    const subject = subjectNames[column];
-    expect(subject !== undefined, `multi-subject case lost subject ${column}`);
-    const subjectName =
+    const subjectName = subjectNames[column];
+    expect(
+      subjectName !== undefined,
+      `multi-subject case lost subject ${column}`,
+    );
+    const cachedSubjectName =
       `case_value$${span.start}$${span.end}$${depth}$${column}`;
     const nextCached = [...cached];
-    nextCached[column] = subjectName;
+    nextCached[column] = cachedSubjectName;
     return {
       tag: "apply",
       fn: {
         tag: "lambda",
         parameter: {
           tag: "name",
-          name: subjectName,
+          name: cachedSubjectName,
           qualifier: "none",
           span,
         },
         body: lowerMultiCaseColumn(
           row,
-          remaining,
           subjectNames,
           nextCached,
+          fallbackName,
           span,
           depth + 1,
           column,
         ),
         span,
       },
-      arg: { tag: "var", name: subject, span },
+      arg: {
+        tag: "apply",
+        fn: { tag: "var", name: subjectName, span },
+        arg: { tag: "unit", span },
+        span,
+      },
       span,
     };
   }
   if (pattern.tag === "name") {
     return lowerMultiCaseColumn(
       row,
-      remaining,
       subjectNames,
       cached,
+      fallbackName,
       span,
       depth,
       column + 1,
@@ -2796,21 +2839,20 @@ function lowerMultiCaseColumn(
       pattern,
       body: lowerMultiCaseColumn(
         row,
-        remaining,
         subjectNames,
         cached,
+        fallbackName,
         span,
         depth + 1,
         column + 1,
       ),
     }, {
       pattern: { tag: "wildcard", span },
-      body: lowerMultiCaseRows(
-        remaining,
+      body: lowerMultiCaseFallbackCall(
+        fallbackName,
         subjectNames,
         cached,
         span,
-        depth + 1,
       ),
     }],
     span,
@@ -2819,23 +2861,21 @@ function lowerMultiCaseColumn(
 
 function lowerMultiCaseBody(
   row: MultiCaseArm,
-  remaining: readonly MultiCaseArm[],
   subjectNames: readonly string[],
   cached: readonly (string | null)[],
+  fallbackName: string,
   span: Span,
-  depth: number,
 ): Expr {
   let body = row.body;
   if (row.guard !== null) {
     body = {
       tag: "if",
       branches: [{ condition: row.guard, consequence: body }],
-      fallback: lowerMultiCaseRows(
-        remaining,
+      fallback: lowerMultiCaseFallbackCall(
+        fallbackName,
         subjectNames,
         cached,
         span,
-        depth + 1,
       ),
       span,
     };
@@ -2868,103 +2908,59 @@ function lowerMultiCaseBody(
   return body;
 }
 
-function multiCaseCoverageWitness(
-  rows: readonly MultiCaseArm[],
+function lowerMultiCaseFallbackCall(
+  fallbackName: string,
   subjectNames: readonly string[],
   cached: readonly (string | null)[],
   span: Span,
 ): Expr {
-  return multiCaseCoverageColumn(
-    rows.filter((row) => row.guard === null),
-    subjectNames,
-    cached,
-    span,
-    0,
-  );
-}
-
-function multiCaseCoverageColumn(
-  rows: readonly MultiCaseArm[],
-  subjectNames: readonly string[],
-  cached: readonly (string | null)[],
-  span: Span,
-  column: number,
-): Expr {
-  if (column === subjectNames.length) {
-    return compilerPanic(
-      "complete multi-subject case reached its failure path",
+  const elements = subjectNames.map((subjectName, column): Expr => {
+    const cachedName = cached[column];
+    if (cachedName === null || cachedName === undefined) {
+      return { tag: "var", name: subjectName, span };
+    }
+    return {
+      tag: "lambda",
+      parameter: { tag: "unit", span },
+      body: { tag: "var", name: cachedName, span },
       span,
-    );
-  }
-  const groups = new Map<
-    string,
-    { readonly pattern: Pattern; readonly rows: MultiCaseArm[] }
-  >();
-  for (const row of rows) {
-    const pattern = row.patterns[column];
-    expect(pattern !== undefined, `multi-subject case lost pattern ${column}`);
-    const key = patternStructureKey(pattern);
-    const existing = groups.get(key);
-    if (existing === undefined) groups.set(key, { pattern, rows: [row] });
-    else existing.rows.push(row);
-  }
-  let subjectName = cached[column];
-  if (subjectName === null || subjectName === undefined) {
-    subjectName = subjectNames[column];
-  }
-  expect(
-    subjectName !== null && subjectName !== undefined,
-    `multi-subject case lost subject ${column}`,
-  );
+    };
+  });
   return {
-    tag: "case",
-    target: { tag: "var", name: subjectName, span },
-    arms: [...groups.values()].map((group) => ({
-      pattern: eraseBinders(group.pattern),
-      body: multiCaseCoverageColumn(
-        group.rows,
-        subjectNames,
-        cached,
-        span,
-        column + 1,
-      ),
-    })),
+    tag: "apply",
+    fn: { tag: "var", name: fallbackName, span },
+    arg: { tag: "tuple", elements, span },
     span,
   };
 }
 
-function patternStructureKey(pattern: Pattern): string {
-  switch (pattern.tag) {
-    case "name":
-    case "wildcard":
-      return "*";
-    case "pin":
-      return `pin:${pattern.name}`;
-    case "int":
-      return `int:${pattern.value}`;
-    case "float":
-      return `float:${pattern.value}`;
-    case "text":
-      return `text:${JSON.stringify(pattern.value)}`;
-    case "unit":
-      return "unit";
-    case "tuple":
-    case "array":
-      return `${pattern.tag}:${
-        pattern.elements.map(patternStructureKey).join(",")
-      }`;
-    case "constructor":
-      if (pattern.payload === null) return `constructor:${pattern.name}`;
-      return `constructor:${pattern.name}(${
-        patternStructureKey(pattern.payload)
-      })`;
-    case "shape":
-      return `shape:${
-        pattern.fields.map((field) =>
-          `${field.name}:${patternStructureKey(field.pattern)}`
-        ).join(",")
-      }`;
-  }
+function multiCaseCoverageWitness(
+  rows: readonly MultiCaseArm[],
+  targets: readonly Expr[],
+  span: Span,
+): Expr {
+  return {
+    tag: "case",
+    target: {
+      tag: "tuple",
+      elements: [{ tag: "tag", name: "case_coverage$", span }, ...targets],
+      span,
+    },
+    arms: rows.filter((row) => row.guard === null).map((row) => ({
+      pattern: {
+        tag: "tuple",
+        elements: [{
+          tag: "constructor",
+          name: "case_coverage$",
+          payload: null,
+          span,
+        }, ...row.patterns.map(eraseBinders)],
+        span,
+      },
+      body: { tag: "unit", span },
+    })),
+    span,
+  };
 }
 
 function compilerPanic(message: string, span: Span): Expr {

@@ -1,9 +1,11 @@
 # Type-mechanics compilation scaling
 
-`pnpm benchmark:type-scaling` generates eight families at sizes 8, 16, 32, 64,
-128, and 256, qualifies their emitted Wasm observations, and then measures four
-cumulative compiler boundaries. The default is three fresh sessions per point;
-`--samples=N` selects any positive odd sample count.
+`pnpm benchmark:type-scaling` generates thirteen families at sizes 8, 16, 32,
+64, 128, and 256, qualifies their emitted Wasm observations, and then measures
+four cumulative compiler boundaries. The default is three fresh sessions per
+point; `--samples=N` selects any positive odd sample count and
+`--sizes=16,32,64` selects positive source sizes. A single selected size reports
+`null` timing slopes.
 
 The timed boundary is a warm compiler session whose measured module is not yet
 resident. Each path is visited once per phase and sample, and alternating case
@@ -20,16 +22,21 @@ synchronization are inside. The cumulative measurements are:
 
 The generated families each grow one intended dimension linearly:
 
-| family        | growing mechanic                                        |
-| ------------- | ------------------------------------------------------- |
-| `ordinary`    | declarations and arithmetic applications                |
-| `structural`  | one exact record and one structural width requirement   |
-| `union`       | a closed constructor set and one-column exhaustive case |
-| `polymorphic` | fresh uses of one inferred principal type               |
-| `refinement`  | fixed-size predicates normalized into integer regions   |
-| `wrapper`     | nested generic identity wrappers                        |
-| `measure`     | wrapper depth carrying one fixed-array length measure   |
-| `evidence`    | independent structural packages carrying index evidence |
+| family           | growing mechanic                                        |
+| ---------------- | ------------------------------------------------------- |
+| `ordinary`       | declarations and arithmetic applications                |
+| `structural`     | one exact record and one structural width requirement   |
+| `union`          | a closed constructor set and one-column exhaustive case |
+| `polymorphic`    | fresh uses of one inferred principal type               |
+| `refinement`     | fixed-size predicates normalized into integer regions   |
+| `wrapper`        | nested generic identity wrappers                        |
+| `measure`        | wrapper depth carrying one fixed-array length measure   |
+| `evidence`       | independent structural packages carrying index evidence |
+| `dense_case`     | dense demand-driven multi-subject case cells            |
+| `operator_chain` | terms in one left-associative operator chain            |
+| `literal_union`  | closed singleton members in one type union              |
+| `projection`     | fields projected from one structural record             |
+| `ownership`      | live owned bindings observed across case arms           |
 
 All programs return their size as an `i64`. The benchmark fails before timing if
 checking, Runtime HIR preparation, emission, Wasm validation, or observation
@@ -49,11 +56,14 @@ Each row also includes resident Rust checker work schema 3: unique type nodes,
 recursive intern attempts, constraints, settle/freshen/union visits, boundary
 materializations, closure free-name candidates, captures actually bridged,
 opened interface fields actually demanded, and peak pending solver worklist
-items. The executable scaling gate uses the semantic decisions whose required
-count is linear in these sources—constraints, boundary materializations, and
-capture selection—and requires the final doubling to stay at or below 2.25.
-Recursive graph visits remain visible separately; timing is never replaced by
-the gate.
+items. The executable scaling gate uses constraints, boundary materializations,
+and capture selection. The wrapper, measure, evidence, operator-chain,
+literal-union, projection, and ownership families require the final doubling to
+stay at or below 2.25. Dense multi-subject cases use a 3.5 ceiling: their
+generated AST is linear, while relationships between ordered row fallbacks still
+produce superlinear solver work; keeping the ceiling below a quadratic doubling
+catches a return to copied fallback trees. Recursive graph visits remain visible
+separately; timing is never replaced by the gate.
 
 ## Current results
 
@@ -81,11 +91,17 @@ uncached-module floor through 256 elements. Predicate refinements add visible
 but controlled semantic work: 256 independently normalized predicates compile in
 373 ms.
 
+With compiler artifact
+`8b754748559bfe117c7302764f828daab36cdf33c7ef596b723f068994b6c81b`, the
+deterministic 128-to-256 work ratios for the focused lanes are 1.927 for
+`dense_case`, 2.007 for `operator_chain`, 2.000 for `literal_union`, 2.006 for
+`projection`, and 1.989 for `ownership`; all pass their family gates.
+
 The profile identified recursive `Type` clone/drop/allocation and repeated
 materialization as the expensive representation work. Immutable recursive type
-edges and member lists now share their graph, closed-union equality uses
-alpha-aware structural comparison with pointer fast paths rather than formatted
-keys, settle/residual variable readings are cached conservatively, and evaluated
+edges and member lists now share their graph, closed unions use canonical
+alpha-aware structural keys rather than pairwise comparison or display strings,
+settle/residual variable readings are cached conservatively, and evaluated
 closures bridge only names that are actually free in their body. A chain of 256
 identity wrappers compiles in 604 ms, while the corrected fixed-input length
 chain compiles in 731 ms. Their frontends remain about 101 ms, locating the
