@@ -325,7 +325,6 @@ impl ConstraintTypeArena {
     }
 
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
-        self.intern_attempts += 1;
         let node = match type_ {
             Type::Variable(id) => ConstraintTypeNode::Variable(*id),
             Type::Rigid(id) => ConstraintTypeNode::Rigid(*id),
@@ -385,6 +384,11 @@ impl ConstraintTypeArena {
             Type::Top => ConstraintTypeNode::Top,
             Type::Bottom => ConstraintTypeNode::Bottom,
         };
+        self.intern_node(node)
+    }
+
+    fn intern_node(&mut self, node: ConstraintTypeNode) -> ConstraintTypeId {
+        self.intern_attempts += 1;
         if let Some(id) = self.interned.get(&node) {
             return *id;
         }
@@ -4619,6 +4623,15 @@ impl Checker {
                 for bound in recursive_bounds {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
+                let generalized = kind != DeclarationKind::Effect
+                    && names
+                        .iter()
+                        .all(|name| !name.starts_with(FIXITY_INTERMEDIATE_PREFIX));
+                let scheme_replacements = if generalized && !recursive {
+                    self.project_scheme_constraints(&inferred.type_, self.level.get())
+                } else {
+                    HashMap::new()
+                };
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
@@ -4669,14 +4682,12 @@ impl Checker {
                             ));
                         }
                     };
-                    let typing = if kind == DeclarationKind::Effect
-                        || name.starts_with(FIXITY_INTERMEDIATE_PREFIX)
-                    {
+                    let typing = if !generalized {
                         Typing::Mono(body)
                     } else {
                         Typing::Scheme {
                             level: self.level.get(),
-                            body,
+                            body: substitute_inference_variables(body, &scheme_replacements),
                         }
                     };
                     Rc::make_mut(&mut types.names).insert(name.clone(), typing);
@@ -6797,105 +6808,272 @@ impl Checker {
             .any(|candidate| types.same(*candidate, bound_id))
     }
 
-    fn freshen(&self, type_: Type, level: u32, fresh: &mut HashMap<VariableId, Type>) -> Type {
-        self.freshen_visits.set(self.freshen_visits.get() + 1);
-        match type_ {
-            Type::Variable(id) if self.variables.borrow()[id as usize].level > level => {
-                if let Some(type_) = fresh.get(&id) {
-                    return type_.clone();
+    fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
+        let mut roots = BTreeSet::new();
+        let mut pending = vec![type_];
+        while let Some(type_) = pending.pop() {
+            match type_ {
+                Type::Variable(variable) => {
+                    roots.insert(*variable);
                 }
-                let replacement = self.fresh();
-                fresh.insert(id, replacement.clone());
-                if self.empty_array_elements.borrow().contains(&id)
-                    && let Type::Variable(replacement) = &replacement
-                {
-                    self.empty_array_elements.borrow_mut().insert(*replacement);
+                Type::Forall { body, .. } => pending.push(body),
+                Type::Function {
+                    parameter,
+                    effects,
+                    result,
+                    ..
+                } => {
+                    pending.push(parameter);
+                    pending.push(effects);
+                    pending.push(result);
                 }
-                let source = self.variables.borrow()[id as usize].clone();
-                let lower = source
-                    .lower
-                    .into_iter()
-                    .map(|bound| self.expand_constraint(bound))
-                    .map(|bound| self.freshen(bound, level, fresh))
-                    .map(|bound| self.constraint_type(&bound))
-                    .collect();
-                let upper = source
-                    .upper
-                    .into_iter()
-                    .map(|bound| self.expand_constraint(bound))
-                    .map(|bound| self.freshen(bound, level, fresh))
-                    .map(|bound| self.constraint_type(&bound))
-                    .collect();
-                let Type::Variable(replacement_id) = replacement else {
-                    unreachable!("fresh always returns a variable")
-                };
-                let mut variables = self.variables.borrow_mut();
-                variables[replacement_id as usize].lower = lower;
-                variables[replacement_id as usize].upper = upper;
-                Type::Variable(replacement_id)
+                Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                    pending.extend(fields.iter().map(|(_, field)| field));
+                }
+                Type::RecordUpdate { base, fields } => {
+                    pending.push(base);
+                    pending.extend(fields.iter().map(|(_, field)| field));
+                }
+                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                    pending.push(element);
+                }
+                Type::OpenEffects { tail, .. } => pending.push(tail),
+                Type::Union(members) => pending.extend(members.iter()),
+                Type::Rigid(_)
+                | Type::Range { .. }
+                | Type::Unit
+                | Type::Effects(_)
+                | Type::Opaque(_)
+                | Type::Top
+                | Type::Bottom => {}
             }
-            Type::Forall { variables, body } => Type::Forall {
+        }
+        let snapshots = {
+            let variables = self.variables.borrow();
+            roots
+                .iter()
+                .copied()
+                .filter(|variable| variables[*variable as usize].level > level)
+                .map(|variable| (variable, variables[variable as usize].clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut replacements = HashMap::with_capacity(snapshots.len());
+        for (variable, source) in &snapshots {
+            let replacement = self.fresh();
+            let Type::Variable(replacement_id) = replacement else {
+                unreachable!("fresh always returns a variable")
+            };
+            self.variables.borrow_mut()[replacement_id as usize].level = source.level;
+            if self.empty_array_elements.borrow().contains(variable) {
+                self.empty_array_elements
+                    .borrow_mut()
+                    .insert(replacement_id);
+            }
+            replacements.insert(*variable, Type::Variable(replacement_id));
+        }
+        for (variable, source) in snapshots {
+            let Type::Variable(replacement) = replacements[&variable] else {
+                unreachable!("scheme roots are replaced by variables")
+            };
+            let rewrite = |bound| {
+                let bound = self.expand_constraint(bound);
+                let bound = substitute_inference_variables(bound, &replacements);
+                self.constraint_type(&bound)
+            };
+            let lower = self
+                .project_scheme_bounds(variable, source.lower, BoundDirection::Lower, &roots, level)
+                .into_iter()
+                .map(rewrite)
+                .collect();
+            let upper = self
+                .project_scheme_bounds(variable, source.upper, BoundDirection::Upper, &roots, level)
+                .into_iter()
+                .map(rewrite)
+                .collect();
+            let mut variables = self.variables.borrow_mut();
+            variables[replacement as usize].lower = lower;
+            variables[replacement as usize].upper = upper;
+        }
+        replacements
+    }
+
+    fn project_scheme_bounds(
+        &self,
+        owner: VariableId,
+        bounds: Vec<ConstraintTypeId>,
+        direction: BoundDirection,
+        roots: &BTreeSet<VariableId>,
+        level: u32,
+    ) -> Vec<ConstraintTypeId> {
+        let mut projected = Vec::new();
+        let mut pending = VecDeque::from(bounds);
+        let mut visited = HashSet::new();
+        while let Some(bound) = pending.pop_front() {
+            let variable = self.constraint_types.borrow().variable(bound);
+            let Some(variable) = variable else {
+                if !projected.contains(&bound) {
+                    projected.push(bound);
+                }
+                continue;
+            };
+            if variable == owner {
+                continue;
+            }
+            if roots.contains(&variable)
+                || self.variables.borrow()[variable as usize].level <= level
+            {
+                if !projected.contains(&bound) {
+                    projected.push(bound);
+                }
+                continue;
+            }
+            if !visited.insert(variable) {
+                continue;
+            }
+            let variable = self.variables.borrow()[variable as usize].clone();
+            match direction {
+                BoundDirection::Lower => pending.extend(variable.lower),
+                BoundDirection::Upper => pending.extend(variable.upper),
+            }
+        }
+        projected
+    }
+
+    fn freshen(&self, type_: Type, level: u32, fresh: &mut HashMap<VariableId, Type>) -> Type {
+        let root = self.constraint_type(&type_);
+        let root = self.freshen_constraint(root, level, fresh, &mut HashMap::new());
+        self.expand_constraint(root)
+    }
+
+    fn freshen_constraint(
+        &self,
+        type_: ConstraintTypeId,
+        level: u32,
+        fresh: &mut HashMap<VariableId, Type>,
+        rewritten: &mut HashMap<ConstraintTypeId, ConstraintTypeId>,
+    ) -> ConstraintTypeId {
+        if let Some(rewritten) = rewritten.get(&type_) {
+            return *rewritten;
+        }
+        self.freshen_visits.set(self.freshen_visits.get() + 1);
+        let node = self.constraint_types.borrow().nodes[type_.0 as usize].clone();
+        if let ConstraintTypeNode::Variable(variable) = node {
+            if self.variables.borrow()[variable as usize].level <= level {
+                rewritten.insert(type_, type_);
+                return type_;
+            }
+            if let Some(replacement) = fresh.get(&variable) {
+                let replacement_type = self.constraint_type(replacement);
+                rewritten.insert(type_, replacement_type);
+                return replacement_type;
+            }
+            let replacement = self.fresh();
+            fresh.insert(variable, replacement.clone());
+            if self.empty_array_elements.borrow().contains(&variable)
+                && let Type::Variable(replacement) = &replacement
+            {
+                self.empty_array_elements.borrow_mut().insert(*replacement);
+            }
+            let Type::Variable(replacement) = replacement else {
+                unreachable!("fresh always returns a variable")
+            };
+            let replacement_type = self.constraint_type(&Type::Variable(replacement));
+            rewritten.insert(type_, replacement_type);
+            let source = self.variables.borrow()[variable as usize].clone();
+            let lower = source
+                .lower
+                .into_iter()
+                .map(|bound| self.freshen_constraint(bound, level, fresh, rewritten))
+                .collect();
+            let upper = source
+                .upper
+                .into_iter()
+                .map(|bound| self.freshen_constraint(bound, level, fresh, rewritten))
+                .collect();
+            let mut variables = self.variables.borrow_mut();
+            variables[replacement as usize].lower = lower;
+            variables[replacement as usize].upper = upper;
+            return replacement_type;
+        }
+        let rebuilt = match node {
+            ConstraintTypeNode::Forall { variables, body } => ConstraintTypeNode::Forall {
                 variables,
-                body: Rc::new(self.freshen(Rc::unwrap_or_clone(body), level, fresh)),
+                body: self.freshen_constraint(body, level, fresh, rewritten),
             },
-            Type::Function {
+            ConstraintTypeNode::Function {
                 deferred,
                 parameter,
                 effects,
                 result,
-            } => Type::Function {
+            } => ConstraintTypeNode::Function {
                 deferred,
-                parameter: Rc::new(self.freshen(Rc::unwrap_or_clone(parameter), level, fresh)),
-                effects: Rc::new(self.freshen(Rc::unwrap_or_clone(effects), level, fresh)),
-                result: Rc::new(self.freshen(Rc::unwrap_or_clone(result), level, fresh)),
+                parameter: self.freshen_constraint(parameter, level, fresh, rewritten),
+                effects: self.freshen_constraint(effects, level, fresh, rewritten),
+                result: self.freshen_constraint(result, level, fresh, rewritten),
             },
-            Type::Record(fields) => Type::Record(
-                fields
-                    .into_iter()
-                    .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
-                    .collect(),
+            ConstraintTypeNode::Record(fields) => ConstraintTypeNode::Record(
+                self.freshen_constraint_fields(fields, level, fresh, rewritten),
             ),
-            Type::RecordUpdate { base, fields } => Type::RecordUpdate {
-                base: Rc::new(self.freshen(Rc::unwrap_or_clone(base), level, fresh)),
-                fields: fields
-                    .into_iter()
-                    .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
-                    .collect(),
+            ConstraintTypeNode::RecordUpdate { base, fields } => ConstraintTypeNode::RecordUpdate {
+                base: self.freshen_constraint(base, level, fresh, rewritten),
+                fields: self.freshen_constraint_fields(fields, level, fresh, rewritten),
             },
-            Type::Array(element) => Type::Array(Rc::new(self.freshen(
-                Rc::unwrap_or_clone(element),
-                level,
-                fresh,
-            ))),
-            Type::Region(element) => Type::Region(Rc::new(self.freshen(
-                Rc::unwrap_or_clone(element),
-                level,
-                fresh,
-            ))),
-            Type::Scratch(element) => Type::Scratch(Rc::new(self.freshen(
-                Rc::unwrap_or_clone(element),
-                level,
-                fresh,
-            ))),
-            Type::OpenEffects { labels, tail } => Type::OpenEffects {
-                labels,
-                tail: Rc::new(self.freshen(Rc::unwrap_or_clone(tail), level, fresh)),
-            },
-            Type::Variant { cases, open } => Type::Variant {
-                cases: cases
-                    .into_iter()
-                    .map(|(name, type_)| (name, self.freshen(type_, level, fresh)))
-                    .collect(),
+            ConstraintTypeNode::Array(element) => {
+                ConstraintTypeNode::Array(self.freshen_constraint(element, level, fresh, rewritten))
+            }
+            ConstraintTypeNode::Region(element) => ConstraintTypeNode::Region(
+                self.freshen_constraint(element, level, fresh, rewritten),
+            ),
+            ConstraintTypeNode::Scratch(element) => ConstraintTypeNode::Scratch(
+                self.freshen_constraint(element, level, fresh, rewritten),
+            ),
+            ConstraintTypeNode::Variant { cases, open } => ConstraintTypeNode::Variant {
+                cases: self.freshen_constraint_fields(cases, level, fresh, rewritten),
                 open,
             },
-            Type::Union(members) => Type::Union(
+            ConstraintTypeNode::OpenEffects { labels, tail } => ConstraintTypeNode::OpenEffects {
+                labels,
+                tail: self.freshen_constraint(tail, level, fresh, rewritten),
+            },
+            ConstraintTypeNode::Union(members) => ConstraintTypeNode::Union(
                 members
                     .into_iter()
-                    .map(|member| self.freshen(member, level, fresh))
+                    .map(|member| self.freshen_constraint(member, level, fresh, rewritten))
                     .collect(),
             ),
-            other => other,
-        }
+            ConstraintTypeNode::Variable(_)
+            | ConstraintTypeNode::Rigid(_)
+            | ConstraintTypeNode::Range { .. }
+            | ConstraintTypeNode::Unit
+            | ConstraintTypeNode::Effects(_)
+            | ConstraintTypeNode::Opaque(_)
+            | ConstraintTypeNode::Top
+            | ConstraintTypeNode::Bottom => {
+                rewritten.insert(type_, type_);
+                return type_;
+            }
+        };
+        let rewritten_type = self.constraint_types.borrow_mut().intern_node(rebuilt);
+        rewritten.insert(type_, rewritten_type);
+        rewritten_type
+    }
+
+    fn freshen_constraint_fields(
+        &self,
+        fields: Vec<(String, ConstraintTypeId)>,
+        level: u32,
+        fresh: &mut HashMap<VariableId, Type>,
+        rewritten: &mut HashMap<ConstraintTypeId, ConstraintTypeId>,
+    ) -> Vec<(String, ConstraintTypeId)> {
+        fields
+            .into_iter()
+            .map(|(name, field)| {
+                (
+                    name,
+                    self.freshen_constraint(field, level, fresh, rewritten),
+                )
+            })
+            .collect()
     }
 
     fn instantiate_forall(&self, variables: Vec<VariableId>, body: Type) -> Type {
@@ -10787,6 +10965,90 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
     }
 }
 
+fn substitute_inference_variables(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
+    match type_ {
+        Type::Variable(id) => replacements.get(&id).cloned().unwrap_or(Type::Variable(id)),
+        Type::Forall { variables, body } => Type::Forall {
+            variables,
+            body: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(body),
+                replacements,
+            )),
+        },
+        Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => Type::Function {
+            deferred,
+            parameter: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(parameter),
+                replacements,
+            )),
+            effects: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(effects),
+                replacements,
+            )),
+            result: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(result),
+                replacements,
+            )),
+        },
+        Type::Record(fields) => Type::Record(
+            fields
+                .into_iter()
+                .map(|(name, field)| (name, substitute_inference_variables(field, replacements)))
+                .collect(),
+        ),
+        Type::RecordUpdate { base, fields } => Type::RecordUpdate {
+            base: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(base),
+                replacements,
+            )),
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| (name, substitute_inference_variables(field, replacements)))
+                .collect(),
+        },
+        Type::Array(element) => Type::Array(Rc::new(substitute_inference_variables(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
+        Type::Region(element) => Type::Region(Rc::new(substitute_inference_variables(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
+        Type::Scratch(element) => Type::Scratch(Rc::new(substitute_inference_variables(
+            Rc::unwrap_or_clone(element),
+            replacements,
+        ))),
+        Type::OpenEffects { labels, tail } => Type::OpenEffects {
+            labels,
+            tail: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(tail),
+                replacements,
+            )),
+        },
+        Type::Variant { cases, open } => Type::Variant {
+            cases: cases
+                .into_iter()
+                .map(|(name, payload)| {
+                    (name, substitute_inference_variables(payload, replacements))
+                })
+                .collect(),
+            open,
+        },
+        Type::Union(members) => Type::Union(
+            members
+                .into_iter()
+                .map(|member| substitute_inference_variables(member, replacements))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 fn remove_type(type_: Type, removed: &Type) -> Type {
     match type_ {
         Type::Union(members) => join_types(
@@ -10801,170 +11063,311 @@ fn remove_type(type_: Type, removed: &Type) -> Type {
 }
 
 #[derive(Clone)]
-enum Witness {
-    Unknown,
+enum CoveragePattern {
+    Any,
+    Refutable,
     Unit,
     Int(BigInt),
     Text(String),
-    Constructor(String, Option<Rc<Witness>>),
-    Tuple(Vec<Witness>),
-    Shape(BTreeMap<String, Witness>),
+    Constructor(String, Option<Rc<CoveragePattern>>),
+    Tuple(Rc<[Rc<CoveragePattern>]>),
+    Shape(Rc<BTreeMap<String, Rc<CoveragePattern>>>),
 }
+
+type CoverageRow = Vec<Rc<CoveragePattern>>;
 
 fn patterns_cover(module: &Module, arms: &[crate::ast::Arm], type_: &Type) -> bool {
-    let Some(witnesses) = enumerate_type(type_, 256) else {
-        return false;
-    };
-    !witnesses.is_empty()
-        && witnesses.iter().all(|witness| {
-            arms.iter()
-                .any(|arm| pattern_covers(module, arm.pattern, witness))
-        })
+    let rows = arms
+        .iter()
+        .map(|arm| vec![coverage_pattern(module, arm.pattern)])
+        .collect::<Vec<_>>();
+    coverage_matrix(&rows, std::slice::from_ref(type_))
 }
 
-fn enumerate_type(type_: &Type, limit: usize) -> Option<Vec<Witness>> {
-    match type_ {
-        Type::Unit => Some(vec![Witness::Unit]),
+fn coverage_pattern(module: &Module, pattern: PatternId) -> Rc<CoveragePattern> {
+    Rc::new(match &module.arena.patterns[pattern.0 as usize] {
+        Pattern::Name { .. } | Pattern::Wildcard { .. } => CoveragePattern::Any,
+        Pattern::Pin { .. } | Pattern::Float { .. } | Pattern::Array { .. } => {
+            CoveragePattern::Refutable
+        }
+        Pattern::Int { value, .. } => CoveragePattern::Int(value.clone()),
+        Pattern::Text { value, .. } => CoveragePattern::Text(value.clone()),
+        Pattern::Unit { .. } => CoveragePattern::Unit,
+        Pattern::Constructor { name, payload, .. } => CoveragePattern::Constructor(
+            name.clone(),
+            payload.map(|payload| coverage_pattern(module, payload)),
+        ),
+        Pattern::Tuple { elements, .. } => CoveragePattern::Tuple(
+            elements
+                .iter()
+                .map(|pattern| coverage_pattern(module, *pattern))
+                .collect(),
+        ),
+        Pattern::Shape { fields, .. } => CoveragePattern::Shape(Rc::new(
+            fields
+                .iter()
+                .map(|field| (field.name.clone(), coverage_pattern(module, field.pattern)))
+                .collect(),
+        )),
+    })
+}
+
+fn coverage_matrix(rows: &[CoverageRow], types: &[Type]) -> bool {
+    if types.is_empty() {
+        return !rows.is_empty();
+    }
+    if rows.is_empty() {
+        return matches!(types[0], Type::Bottom);
+    }
+    let rest = &types[1..];
+    match &types[0] {
+        Type::Bottom => true,
+        Type::Unit => coverage_matrix(&specialize_unit(rows), rest),
         Type::Range {
             domain: Domain::Int,
-            low: Some(Scalar::Int(low)),
-            high: Some(Scalar::Int(high)),
-        } => {
-            let width = high - low;
-            if width < BigInt::from(0) || width >= BigInt::from(limit) {
-                return Some(vec![Witness::Unknown]);
-            }
-            let mut witnesses = Vec::new();
-            let mut value = low.clone();
-            while value <= *high {
-                witnesses.push(Witness::Int(value.clone()));
-                value += 1;
-            }
-            Some(witnesses)
-        }
+            low,
+            high,
+        } => coverage_integer_range(rows, rest, low, high),
         Type::Range {
             domain: Domain::Text,
             low: Some(Scalar::Text(low)),
             high: Some(Scalar::Text(high)),
-        } if low == high => Some(vec![Witness::Text(low.clone())]),
-        Type::Variant { cases, open: false } => {
-            let mut witnesses = Vec::new();
-            for (name, payload) in cases {
-                for payload in enumerate_type(payload, limit)? {
-                    witnesses.push(Witness::Constructor(name.clone(), Some(Rc::new(payload))));
-                    if witnesses.len() > limit {
-                        return None;
-                    }
-                }
-            }
-            Some(witnesses)
-        }
-        Type::Variant { cases, open: true } => {
-            let mut witnesses = Vec::new();
-            for (name, payload) in cases {
-                for payload in enumerate_type(payload, limit)? {
-                    witnesses.push(Witness::Constructor(name.clone(), Some(Rc::new(payload))));
-                    if witnesses.len() > limit {
-                        return Some(vec![Witness::Unknown]);
-                    }
-                }
-            }
-            witnesses.push(Witness::Unknown);
-            Some(witnesses)
-        }
-        Type::Union(members) => {
-            let mut witnesses = Vec::new();
-            for member in members {
-                witnesses.extend(enumerate_type(member, limit)?);
-                if witnesses.len() > limit {
-                    return None;
-                }
-            }
-            Some(witnesses)
-        }
-        Type::Record(fields)
-            if fields
-                .iter()
-                .enumerate()
-                .all(|(index, (name, _))| name == &index.to_string()) =>
-        {
-            let mut tuples = vec![Vec::new()];
-            for (_, field) in fields {
-                let choices = enumerate_type(field, limit)?;
-                let mut next = Vec::new();
-                for tuple in &tuples {
-                    for choice in &choices {
-                        let mut tuple = tuple.clone();
-                        tuple.push(choice.clone());
-                        next.push(tuple);
-                        if next.len() > limit {
-                            return Some(vec![Witness::Tuple(
-                                fields.iter().map(|_| Witness::Unknown).collect(),
-                            )]);
-                        }
-                    }
-                }
-                tuples = next;
-            }
-            Some(tuples.into_iter().map(Witness::Tuple).collect())
-        }
-        Type::Record(fields) => {
-            let mut shapes = vec![BTreeMap::new()];
-            for (name, field) in fields {
-                let choices = enumerate_type(field, limit)?;
-                let mut next = Vec::new();
-                for shape in &shapes {
-                    for choice in &choices {
-                        let mut shape = shape.clone();
-                        shape.insert(name.clone(), choice.clone());
-                        next.push(shape);
-                        if next.len() > limit {
-                            return Some(vec![Witness::Shape(
-                                fields
-                                    .iter()
-                                    .map(|(name, _)| (name.clone(), Witness::Unknown))
-                                    .collect(),
-                            )]);
-                        }
-                    }
-                }
-                shapes = next;
-            }
-            Some(shapes.into_iter().map(Witness::Shape).collect())
-        }
-        _ => Some(vec![Witness::Unknown]),
+        } if low == high => coverage_text_values(rows, rest, std::slice::from_ref(low)),
+        Type::Variant { cases, open } => coverage_variant(rows, rest, cases, *open),
+        Type::Record(fields) => coverage_record(rows, rest, fields),
+        Type::Union(members) => coverage_union(rows, rest, members),
+        Type::Variable(_)
+        | Type::Rigid(_)
+        | Type::Forall { .. }
+        | Type::Range { .. }
+        | Type::Function { .. }
+        | Type::RecordUpdate { .. }
+        | Type::Array(_)
+        | Type::Region(_)
+        | Type::Scratch(_)
+        | Type::Effects(_)
+        | Type::OpenEffects { .. }
+        | Type::Opaque(_)
+        | Type::Top => coverage_matrix(&default_rows(rows), rest),
     }
 }
 
-fn pattern_covers(module: &Module, pattern: PatternId, witness: &Witness) -> bool {
-    match (&module.arena.patterns[pattern.0 as usize], witness) {
-        (Pattern::Wildcard { .. } | Pattern::Name { .. }, _) => true,
-        (Pattern::Unit { .. }, Witness::Unit) => true,
-        (Pattern::Int { value, .. }, Witness::Int(found)) => value == found,
-        (Pattern::Text { value, .. }, Witness::Text(found)) => value == found,
-        (
-            Pattern::Constructor { name, payload, .. },
-            Witness::Constructor(found, found_payload),
-        ) if name == found => match (payload, found_payload) {
-            (None, None) => true,
-            (None, Some(payload)) => matches!(payload.as_ref(), Witness::Unit),
-            (Some(pattern), Some(value)) => pattern_covers(module, *pattern, value),
-            _ => false,
-        },
-        (Pattern::Tuple { elements, .. }, Witness::Tuple(values)) => {
-            elements.len() == values.len()
-                && elements
-                    .iter()
-                    .zip(values)
-                    .all(|(pattern, value)| pattern_covers(module, *pattern, value))
+fn row_tail(row: &CoverageRow) -> CoverageRow {
+    row[1..].to_vec()
+}
+
+fn default_rows(rows: &[CoverageRow]) -> Vec<CoverageRow> {
+    rows.iter()
+        .filter(|row| {
+            row.first()
+                .is_some_and(|pattern| matches!(pattern.as_ref(), CoveragePattern::Any))
+        })
+        .map(row_tail)
+        .collect()
+}
+
+fn specialize_unit(rows: &[CoverageRow]) -> Vec<CoverageRow> {
+    rows.iter()
+        .filter_map(|row| match row.first()?.as_ref() {
+            CoveragePattern::Any | CoveragePattern::Unit => Some(row_tail(row)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn coverage_integer_range(
+    rows: &[CoverageRow],
+    rest: &[Type],
+    low: &Option<Scalar>,
+    high: &Option<Scalar>,
+) -> bool {
+    let defaults = default_rows(rows);
+    let mut literals = BTreeMap::<BigInt, Vec<CoverageRow>>::new();
+    for row in rows {
+        if let Some(CoveragePattern::Int(value)) = row.first().map(Rc::as_ref) {
+            literals
+                .entry(value.clone())
+                .or_default()
+                .push(row_tail(row));
         }
-        (Pattern::Shape { fields, .. }, Witness::Shape(values)) => fields.iter().all(|field| {
-            values
-                .get(&field.name)
-                .is_some_and(|value| pattern_covers(module, field.pattern, value))
-        }),
-        _ => false,
     }
+    let (Some(Scalar::Int(low)), Some(Scalar::Int(high))) = (low, high) else {
+        return coverage_matrix(&defaults, rest);
+    };
+    if low > high {
+        return true;
+    }
+    let mut named = 0_usize;
+    for (value, specific) in literals {
+        if value < *low || value > *high {
+            continue;
+        }
+        named += 1;
+        if !coverage_matrix(&rows_with_defaults(&defaults, specific), rest) {
+            return false;
+        }
+    }
+    let width = high - low + 1;
+    width == BigInt::from(named) || coverage_matrix(&defaults, rest)
+}
+
+fn coverage_text_values(rows: &[CoverageRow], rest: &[Type], values: &[String]) -> bool {
+    let defaults = default_rows(rows);
+    let mut literals = BTreeMap::<&str, Vec<CoverageRow>>::new();
+    for row in rows {
+        if let Some(CoveragePattern::Text(value)) = row.first().map(Rc::as_ref) {
+            literals.entry(value).or_default().push(row_tail(row));
+        }
+    }
+    values.iter().all(|value| {
+        let specific = literals.remove(value.as_str()).unwrap_or_default();
+        coverage_matrix(&rows_with_defaults(&defaults, specific), rest)
+    })
+}
+
+fn rows_with_defaults(defaults: &[CoverageRow], specific: Vec<CoverageRow>) -> Vec<CoverageRow> {
+    let mut rows = Vec::with_capacity(defaults.len() + specific.len());
+    rows.extend_from_slice(defaults);
+    rows.extend(specific);
+    rows
+}
+
+fn coverage_variant(
+    rows: &[CoverageRow],
+    rest: &[Type],
+    cases: &[(String, Type)],
+    open: bool,
+) -> bool {
+    let defaults = default_rows(rows);
+    if open && !coverage_matrix(&defaults, rest) {
+        return false;
+    }
+    let mut constructors = BTreeMap::<&str, Vec<(Option<Rc<CoveragePattern>>, CoverageRow)>>::new();
+    for row in rows {
+        let Some(CoveragePattern::Constructor(name, payload)) = row.first().map(Rc::as_ref) else {
+            continue;
+        };
+        constructors
+            .entry(name)
+            .or_default()
+            .push((payload.clone(), row_tail(row)));
+    }
+    for (name, payload_type) in cases {
+        let mut specialized = Vec::new();
+        for row in &defaults {
+            let mut row = row.clone();
+            row.insert(0, Rc::new(CoveragePattern::Any));
+            specialized.push(row);
+        }
+        if let Some(specific) = constructors.get(name.as_str()) {
+            for (payload, tail) in specific {
+                let mut row = tail.clone();
+                row.insert(
+                    0,
+                    payload
+                        .clone()
+                        .unwrap_or_else(|| Rc::new(CoveragePattern::Unit)),
+                );
+                specialized.push(row);
+            }
+        }
+        let mut specialized_types = Vec::with_capacity(rest.len() + 1);
+        specialized_types.push(payload_type.clone());
+        specialized_types.extend_from_slice(rest);
+        if !coverage_matrix(&specialized, &specialized_types) {
+            return false;
+        }
+    }
+    true
+}
+
+fn coverage_record(rows: &[CoverageRow], rest: &[Type], fields: &[(String, Type)]) -> bool {
+    let tuple = fields
+        .iter()
+        .enumerate()
+        .all(|(index, (name, _))| name == &index.to_string());
+    let mut specialized = Vec::new();
+    for row in rows {
+        let Some(pattern) = row.first() else {
+            continue;
+        };
+        let elements = match pattern.as_ref() {
+            CoveragePattern::Any => {
+                let wildcard = Rc::new(CoveragePattern::Any);
+                vec![wildcard; fields.len()]
+            }
+            CoveragePattern::Tuple(elements) if tuple && elements.len() == fields.len() => {
+                elements.to_vec()
+            }
+            CoveragePattern::Shape(pattern_fields) => fields
+                .iter()
+                .map(|(name, _)| {
+                    pattern_fields
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| Rc::new(CoveragePattern::Any))
+                })
+                .collect(),
+            _ => continue,
+        };
+        let mut specialized_row = elements;
+        specialized_row.extend(row_tail(row));
+        specialized.push(specialized_row);
+    }
+    let mut specialized_types = Vec::with_capacity(fields.len() + rest.len());
+    specialized_types.extend(fields.iter().map(|(_, field)| field.clone()));
+    specialized_types.extend_from_slice(rest);
+    coverage_matrix(&specialized, &specialized_types)
+}
+
+fn coverage_union(rows: &[CoverageRow], rest: &[Type], members: &[Type]) -> bool {
+    let integers = members
+        .iter()
+        .map(|member| match member {
+            Type::Range {
+                domain: Domain::Int,
+                low: Some(Scalar::Int(low)),
+                high: Some(Scalar::Int(high)),
+            } if low == high => Some(low.clone()),
+            _ => None,
+        })
+        .collect::<Option<BTreeSet<_>>>();
+    if let Some(integers) = integers {
+        let defaults = default_rows(rows);
+        let mut literals = BTreeMap::<BigInt, Vec<CoverageRow>>::new();
+        for row in rows {
+            if let Some(CoveragePattern::Int(value)) = row.first().map(Rc::as_ref) {
+                literals
+                    .entry(value.clone())
+                    .or_default()
+                    .push(row_tail(row));
+            }
+        }
+        return integers.iter().all(|value| {
+            let specific = literals.remove(value).unwrap_or_default();
+            coverage_matrix(&rows_with_defaults(&defaults, specific), rest)
+        });
+    }
+    let texts = members
+        .iter()
+        .map(|member| match member {
+            Type::Range {
+                domain: Domain::Text,
+                low: Some(Scalar::Text(low)),
+                high: Some(Scalar::Text(high)),
+            } if low == high => Some(low.clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(texts) = texts {
+        return coverage_text_values(rows, rest, &texts);
+    }
+    members.iter().all(|member| {
+        let mut member_types = Vec::with_capacity(rest.len() + 1);
+        member_types.push(member.clone());
+        member_types.extend_from_slice(rest);
+        coverage_matrix(rows, &member_types)
+    })
 }
 
 fn structural_pattern(module: &Module, pattern: PatternId) -> bool {

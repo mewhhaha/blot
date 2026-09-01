@@ -130,7 +130,9 @@ and indexed traversal is `O(n)`. Growth at the heap cursor extends in place;
 otherwise it moves and copies the initialized prefix only when capacity is
 exhausted. A persistent append still allocates and copies its `O(n)` prefix
 because an earlier Store version remains observable, so repeated persistent
-growth remains `O(n^2)`.
+growth remains `O(n^2)`. The lowering audit follows direct calls transitively
+from compiler-generated loop functions; moving a persistent append into a source
+helper does not remove it from this check.
 
 A closed scalar `store.literal` contributes `O(n)` static bytes and no runtime
 construction steps. A non-scalar literal performs one `O(n)` allocation and `n`
@@ -185,10 +187,12 @@ worklist items. These counters are process observations for the current semantic
 request, not accumulated history, certificates, or ABI facts. A request that
 reuses a checked revision reports no work record. The scaling gate counts
 semantic decisions—constraints, boundary materializations, and capture
-selection—separately from recursive graph visits. The latter remain visible in
-the report because a shared constant-time visit may still reveal a
-representation target even when it no longer dominates wall time. Timing and
-both counter classes must be reported; one must not be relabeled as the other.
+selection—separately from type-graph work. The wrapper and measure lanes also
+gate the sum of unique type nodes, recursive intern attempts, and freshening
+visits. Other recursive graph visits remain visible because a shared
+constant-time visit may still reveal a representation target even when it no
+longer dominates wall time. Timing and all counter classes must be reported; one
+must not be relabeled as another.
 
 Progressive Runtime-HIR construction visits each settled Core node once and
 stores `O(H_s)` compact builder state. Preparation subsequently visits the `H_p`
@@ -278,7 +282,11 @@ conditionals.
 Runtime-HIR normalization scans operations and table references to a fixed
 point. Exact type, signature, and function-body interning adds work proportional
 to their closed structural size plus call-graph partition refinement and
-publishes only compacted identifiers. WebAssembly local allocation performs
+publishes only compacted identifiers. A function body is alpha-normalized and
+serialized once. Ordered call positions form deterministic transition labels;
+inverse-edge partition splitting queues the smaller new class, bounding
+refinement by the call edges that can distinguish a class rather than by
+body-size times recursive color rounds. WebAssembly local allocation performs
 block liveness, constructs one conservative interval per SSA definition, and
 linear-scans intervals within equal physical representations. It stores
 `O(V + H)` range and queue state beyond the block-liveness facts rather than an

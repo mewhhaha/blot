@@ -109,7 +109,7 @@ const render_voxels = fn &voxels => do:
   else:
     use render_voxels_with_simd (&voxels)
 
-const push_voxel = fn (voxels, position, color) => do:
+const push_voxel = fn (?voxels, position, color) => do:
   let id = Array.length (&voxels)
   return @array.push voxels {
     .id = id;
@@ -128,8 +128,8 @@ const start_voxels = fn () => do:
 
   return voxels
 
-const push_voxel_if = fn (voxels, visible, position, color) => case visible of
-  #True => push_voxel (voxels, position, color)
+const push_voxel_if = fn (?voxels, visible, position, color) => case visible of
+  #True => push_voxel (?voxels, position, color)
   #False => voxels
 
 const stream_batch = fn (uploaded, &voxels, batch, batches, batch_size) => do:
@@ -142,7 +142,7 @@ const stream_batch = fn (uploaded, &voxels, batch, batches, batch_size) => do:
   return uploaded
 
 const generate_oak_batch = fn (
-  voxels, start, volume, origin, seed, batch_size
+  ?voxels, start, volume, origin, seed, batch_size
 ) => do:
   let radius = 6 * DETAIL
   let trunk_height = oak.trunk_height * DETAIL
@@ -181,7 +181,7 @@ const generate_oak_batch = fn (
       #False, #False, #False => oak.leaf_green
     let next =
       push_voxel_if (
-        voxels,
+        ?voxels,
         visible,
         point (origin.x + x, origin.y + y, origin.z + z),
         color
@@ -190,7 +190,7 @@ const generate_oak_batch = fn (
 
   return voxels
 
-const generate_oak = fn (voxels, origin, seed, batch_size) => do:
+const generate_oak = fn (?voxels, origin, seed, batch_size) => do:
   let radius = 6 * DETAIL
   let width = radius * 2 + 1
   let height = oak.trunk_height * DETAIL + 5 * DETAIL
@@ -200,7 +200,7 @@ const generate_oak = fn (voxels, origin, seed, batch_size) => do:
   for batch in Iter.range (0, batches):
     let next =
       generate_oak_batch (
-        voxels, batch * batch_size, volume, origin, seed, batch_size
+        ?voxels, batch * batch_size, volume, origin, seed, batch_size
       )
     voxels := next
     use next_uploaded <- stream_batch (
@@ -211,7 +211,7 @@ const generate_oak = fn (voxels, origin, seed, batch_size) => do:
   return voxels
 
 const generate_fir_batch = fn (
-  voxels, start, volume, origin, seed, batch_size
+  ?voxels, start, volume, origin, seed, batch_size
 ) => do:
   let radius = 6 * DETAIL
   let height = fir.height * DETAIL
@@ -238,7 +238,7 @@ const generate_fir_batch = fn (
 
     let next =
       push_voxel_if (
-        voxels,
+        ?voxels,
         visible,
         point (origin.x + x, origin.y + y, origin.z + z),
         color
@@ -247,7 +247,7 @@ const generate_fir_batch = fn (
 
   return voxels
 
-const generate_fir = fn (voxels, origin, seed, batch_size) => do:
+const generate_fir = fn (?voxels, origin, seed, batch_size) => do:
   let radius = 6 * DETAIL
   let width = radius * 2 + 1
   let height = fir.height * DETAIL
@@ -257,7 +257,7 @@ const generate_fir = fn (voxels, origin, seed, batch_size) => do:
   for batch in Iter.range (0, batches):
     let next =
       generate_fir_batch (
-        voxels, batch * batch_size, volume, origin, seed, batch_size
+        ?voxels, batch * batch_size, volume, origin, seed, batch_size
       )
     voxels := next
     use next_uploaded <- stream_batch (
@@ -268,7 +268,7 @@ const generate_fir = fn (voxels, origin, seed, batch_size) => do:
   return voxels
 
 const generate_flower_batch = fn (
-  voxels, start, volume, origin, batch_size
+  ?voxels, start, volume, origin, batch_size
 ) => do:
   let radius = 2 * DETAIL
   let width = radius * 2 + 1
@@ -292,7 +292,7 @@ const generate_flower_batch = fn (
       #False, _, _ => flower.petals
     let next =
       push_voxel_if (
-        voxels,
+        ?voxels,
         visible,
         point (
           origin.x + flower.x * DETAIL + x,
@@ -305,7 +305,7 @@ const generate_flower_batch = fn (
 
   return voxels
 
-const generate_flowers = fn (voxels, origin, batch_size) => do:
+const generate_flowers = fn (?voxels, origin, batch_size) => do:
   let radius = 2 * DETAIL
   let width = radius * 2 + 1
   let volume =
@@ -315,7 +315,7 @@ const generate_flowers = fn (voxels, origin, batch_size) => do:
   for batch in Iter.range (0, batches):
     let next =
       generate_flower_batch (
-        voxels, batch * batch_size, volume, origin, batch_size
+        ?voxels, batch * batch_size, volume, origin, batch_size
       )
     voxels := next
     use next_uploaded <- stream_batch (
@@ -326,7 +326,7 @@ const generate_flowers = fn (voxels, origin, batch_size) => do:
   return voxels
 
 const generate_rock_batch = fn (
-  voxels, start, volume, max_volume, origin, batch_size
+  ?voxels, start, volume, max_volume, origin, batch_size
 ) => do:
   for offset in Iter.range (0, batch_size):
     let index = start + offset
@@ -351,7 +351,7 @@ const generate_rock_batch = fn (
     let visible = index < volume && local < rock_volume && inside
     let next =
       push_voxel_if (
-        voxels,
+        ?voxels,
         visible,
         point (
           origin.x + rock.centre.x * DETAIL + x,
@@ -364,7 +364,7 @@ const generate_rock_batch = fn (
 
   return voxels
 
-const generate_rocks = fn (voxels, origin, batch_size) => do:
+const generate_rocks = fn (?voxels, origin, batch_size) => do:
   let max_volume = 0
   for rock in Iter.items rocks:
     let radius_x = rock.radii.x * DETAIL
@@ -381,7 +381,7 @@ const generate_rocks = fn (voxels, origin, batch_size) => do:
   for batch in Iter.range (0, batches):
     let next =
       generate_rock_batch (
-        voxels, batch * batch_size, volume, max_volume, origin, batch_size
+        ?voxels, batch * batch_size, volume, max_volume, origin, batch_size
       )
     voxels := next
     use next_uploaded <- stream_batch (
@@ -395,19 +395,19 @@ let build_mixed_shrubbery = fn (seed, batch_size) => do:
   use first <- start_voxels ()
   let voxels = first
   use next <- generate_oak (
-    voxels, placement (-5, 0, -2), seed + 1729, batch_size
+    ?voxels, placement (-5, 0, -2), seed + 1729, batch_size
   )
   voxels := next
   use next <- generate_fir (
-    voxels, placement (6, 0, 5), seed + 3571, batch_size
+    ?voxels, placement (6, 0, 5), seed + 3571, batch_size
   )
   voxels := next
   use next <- generate_flowers (
-    voxels, placement (0, 0, 0), batch_size
+    ?voxels, placement (0, 0, 0), batch_size
   )
   voxels := next
   use next <- generate_rocks (
-    voxels, placement (0, 0, 0), batch_size
+    ?voxels, placement (0, 0, 0), batch_size
   )
   voxels := next
   return voxels
@@ -416,7 +416,7 @@ let build_oak = fn (seed, batch_size) => do:
   use first <- start_voxels ()
   let voxels = first
   use next <- generate_oak (
-    voxels, placement (0, 0, 0), seed + 101, batch_size
+    ?voxels, placement (0, 0, 0), seed + 101, batch_size
   )
   voxels := next
   return voxels
@@ -425,7 +425,7 @@ let build_fir = fn (seed, batch_size) => do:
   use first <- start_voxels ()
   let voxels = first
   use next <- generate_fir (
-    voxels, placement (0, 0, 0), seed + 503, batch_size
+    ?voxels, placement (0, 0, 0), seed + 503, batch_size
   )
   voxels := next
   return voxels
@@ -434,7 +434,7 @@ let build_flower_patch = fn batch_size => do:
   use first <- start_voxels ()
   let voxels = first
   use next <- generate_flowers (
-    voxels, placement (0, 0, 0), batch_size
+    ?voxels, placement (0, 0, 0), batch_size
   )
   voxels := next
   return voxels
@@ -443,7 +443,7 @@ let build_rock_cluster = fn batch_size => do:
   use first <- start_voxels ()
   let voxels = first
   use next <- generate_rocks (
-    voxels, placement (0, 0, 0), batch_size
+    ?voxels, placement (0, 0, 0), batch_size
   )
   voxels := next
   return voxels

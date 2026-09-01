@@ -55,6 +55,12 @@ covers only the subset entailed by its proved proposition. An arbitrary boolean
 expression cannot be treated as unconditionally true because examples happen to
 exercise it that way.
 
+The implementation represents that cross-product as a pattern matrix. It
+specializes one type column at a time and carries wildcard rows into every
+specialization. Finite constructors and singleton literals are inspected as
+sets; products add columns. No step materializes the Cartesian product of
+complete witnesses, and no fixed witness count may change the coverage theorem.
+
 Statement control is elaborated before coverage. A failed statement condition
 does not escape an enclosing function unless explicit Core control represents
 that transfer.

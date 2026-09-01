@@ -7668,6 +7668,105 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_case_accepts_more_than_256_constructors() {
+        run_with_compiler_test_stack(|| {
+            const CONSTRUCTOR_COUNT: usize = 512;
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut members = Vec::with_capacity(CONSTRUCTOR_COUNT);
+            let mut arms = Vec::with_capacity(CONSTRUCTOR_COUNT);
+            for index in 0..CONSTRUCTOR_COUNT {
+                members.push(format!("#Event{index} Int"));
+                arms.push(format!("  #Event{index} value => value"));
+            }
+            let text = format!(
+                concat!(
+                    "open import \"blot:prelude\"\n",
+                    "const Event = {}\n",
+                    "let read :: Event -> Int\n",
+                    "let read = fn event => case event of\n",
+                    "{}\n",
+                    "return read (#Event511 512)\n",
+                ),
+                members.join(" | "),
+                arms.join("\n"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(&text))
+                .expect("wide constructor source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("wide constructor source should configure");
+
+            let checked = session.check_module("main.blot");
+
+            assert_eq!(checked["ok"], true, "{checked}");
+        });
+    }
+
+    #[test]
+    fn coverage_proves_a_product_larger_than_256_without_enumerating_it() {
+        run_with_compiler_test_stack(|| {
+            const FIELD_COUNT: usize = 9;
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let type_fields = ["Bool"; FIELD_COUNT].join(", ");
+            let true_row = std::iter::once("#True")
+                .chain(std::iter::repeat_n("_", FIELD_COUNT - 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let false_row = std::iter::once("#False")
+                .chain(std::iter::repeat_n("_", FIELD_COUNT - 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let text = format!(
+                concat!(
+                    "open import \"blot:prelude\"\n",
+                    "let choose :: ({}) -> Int\n",
+                    "let choose = fn values => case values of\n",
+                    "  ({}) => 1\n",
+                    "  ({}) => 0\n",
+                    "return choose ({})\n",
+                ),
+                type_fields,
+                true_row,
+                false_row,
+                ["#True"; FIELD_COUNT].join(", "),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(&text))
+                .expect("large product source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("large product source should configure");
+
+            let checked = session.check_module("main.blot");
+
+            assert_eq!(checked["ok"], true, "{checked}");
+        });
+    }
+
+    #[test]
     fn dynamic_optional_integer_case_binds_the_present_arm() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -8340,6 +8439,66 @@ mod tests {
     }
 
     #[test]
+    fn dense_multi_subject_case_exports_more_than_40_rows() {
+        run_with_compiler_test_stack(|| {
+            const SUBJECT_COUNT: usize = 8;
+            const ROW_COUNT: usize = 41;
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let names = (0..SUBJECT_COUNT)
+                .map(|index| format!("subject{index}"))
+                .collect::<Vec<_>>();
+            let mut text = format!(
+                "open import \"blot:prelude\"\nlet choose = fn ({}) => case {} of\n",
+                names.join(", "),
+                names.join(", ")
+            );
+            for row in 0..ROW_COUNT {
+                let patterns = (0..SUBJECT_COUNT)
+                    .map(|column| {
+                        if row & (1 << column) == 0 {
+                            "#False"
+                        } else {
+                            "#True"
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                text.push_str(&format!("  {} => {row}\n", patterns.join(", ")));
+            }
+            text.push_str(&format!(
+                "  {} => {ROW_COUNT}\n",
+                ["_"; SUBJECT_COUNT].join(", ")
+            ));
+            text.push_str(&format!(
+                "return choose ({})\n",
+                ["#True"; SUBJECT_COUNT].join(", ")
+            ));
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source("main.blot".to_owned(), source(&text))
+                .expect("wide multi-subject source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("wide multi-subject source should configure");
+
+            let ast = session.module_ast("main.blot");
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert!(ast.is_ok(), "{ast:?}");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
     fn long_left_associative_chains_export_check_and_prepare_without_growing_the_stack() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -8390,22 +8549,22 @@ mod tests {
             );
             let mut text = concat!(
                 "open import \"blot:prelude\"\n",
-                "const count0 = fn values => Array.length values\n",
+                "const count0 = fn &values => Array.length (&values)\n",
             )
             .to_owned();
             for index in 1..=WRAPPER_COUNT {
                 text.push_str(&format!(
-                    "const count{index} = fn values => count{} values\n",
+                    "const count{index} = fn &values => count{} (&values)\n",
                     index - 1
                 ));
             }
             text.push_str(&format!(
                 concat!(
                     "let at :: [Int] -> Int -> Int\n",
-                    "let at = fn values => fn index => case index >= 0 && index < count{} values of\n",
+                    "let at = fn &values => fn index => case index >= 0 && index < count{} (&values) of\n",
                     "  #True => @array.get values index\n",
                     "  #False => 0\n",
-                    "return at [1, 2, 3, 4] 3\n",
+                    "return at (&[1, 2, 3, 4]) 3\n",
                 ),
                 WRAPPER_COUNT
             ));
@@ -8424,9 +8583,23 @@ mod tests {
                 )
                 .expect("measure-wrapper source should configure");
 
-            let checked = session.check_module("main.blot");
+            let analysis = session.analyze_module("main.blot");
 
-            assert_eq!(checked["ok"], true, "{checked}");
+            assert_eq!(analysis["ok"], true, "{analysis}");
+            let type_nodes = analysis["work"]["typeNodes"]
+                .as_u64()
+                .expect("measure-wrapper type-node work should be reported");
+            let freshen_visits = analysis["work"]["freshenVisits"]
+                .as_u64()
+                .expect("measure-wrapper freshening work should be reported");
+            assert!(
+                type_nodes <= (WRAPPER_COUNT * 16) as u64,
+                "{WRAPPER_COUNT} wrappers interned {type_nodes} type nodes"
+            );
+            assert!(
+                freshen_visits <= (WRAPPER_COUNT * 16) as u64,
+                "{WRAPPER_COUNT} wrappers visited {freshen_visits} scheme nodes"
+            );
         });
     }
 

@@ -722,15 +722,15 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 14328
+      "lines": 14731
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 12975
+      "lines": 12977
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 8951
+      "lines": 9124
     },
     {
       "path": "compiler/src/backend.rs",
@@ -746,7 +746,7 @@
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3789
+      "lines": 3883
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -757,12 +757,12 @@
       "lines": 3373
     },
     {
-      "path": "src/prelude/prelude.blot",
-      "lines": 3210
+      "path": "src/syntax/lower.ts",
+      "lines": 3219
     },
     {
-      "path": "src/syntax/lower.ts",
-      "lines": 3131
+      "path": "src/prelude/prelude.blot",
+      "lines": 3210
     },
     {
       "path": "compiler/src/qcore.rs",

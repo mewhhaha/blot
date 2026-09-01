@@ -168,6 +168,7 @@ try {
       wasm_bytes: item.wasmBytes,
       work: item.work,
       semantic_decisions: semanticDecisions(item.work),
+      type_graph_work: typeGraphWork(item.work),
       median_ms: {
         frontend: median(measured.frontend),
         check: median(measured.check),
@@ -237,9 +238,9 @@ try {
   ));
   if (failedWorkGate !== undefined) {
     throw new Error(
-      `${failedWorkGate.family} semantic decision work grew ${
-        failedWorkGate.last_doubling.toFixed(3)
-      }x; expected at most ${failedWorkGate.maximum_doubling}x`,
+      `${failedWorkGate.family} work exceeded its scaling gate: ${
+        JSON.stringify(failedWorkGate)
+      }`,
     );
   }
 } finally {
@@ -337,22 +338,22 @@ function wrapperSource(size: number): string {
 
 function measureSource(size: number): string {
   const declarations = [
-    "const count0 = fn values => Array.length values",
+    "const count0 = fn &values => Array.length (&values)",
   ];
   for (let index = 1; index <= size; index += 1) {
     declarations.push(
-      `const count${index} = fn values => count${index - 1} values`,
+      `const count${index} = fn &values => count${index - 1} (&values)`,
     );
   }
   declarations.push(
     "let at :: [Int] -> Int -> Int",
-    `let at = fn values => fn index => case index >= 0 && index < count${size} values of\n` +
+    `let at = fn &values => fn index => case index >= 0 && index < count${size} (&values) of\n` +
       "  #True => @array.get values index\n" +
       "  #False => 0",
   );
   return moduleSource(
     declarations,
-    `at [1, 2, 3, 4] 3 + ${size - 4}`,
+    `at (&[1, 2, 3, 4]) 3 + ${size - 4}`,
   );
 }
 
@@ -474,29 +475,37 @@ function semanticDecisions(work: Case["work"]): number | null {
     work.captureCandidates + work.capturesBridged;
 }
 
+function typeGraphWork(work: Case["work"]): number | null {
+  if (work === null) return null;
+  return work.typeNodes + work.typeInterns + work.freshenVisits;
+}
+
 function scalingGate(
   rows: readonly {
     readonly family: Family;
     readonly size: number;
     readonly semantic_decisions: number | null;
+    readonly type_graph_work: number | null;
   }[],
 ): readonly {
   readonly family: Family;
-  readonly last_doubling: number;
-  readonly maximum_doubling: number;
+  readonly semantic_last_doubling: number;
+  readonly maximum_semantic_doubling: number;
+  readonly type_graph_last_doubling: number | null;
+  readonly maximum_type_graph_doubling: number | null;
   readonly passed: boolean;
 }[] {
   const gates = [];
   for (
-    const [family, maximumDoubling] of [
-      ["wrapper", 2.25],
-      ["measure", 2.25],
-      ["evidence", 2.25],
-      ["dense_case", 3.5],
-      ["operator_chain", 2.25],
-      ["literal_union", 2.25],
-      ["projection", 2.25],
-      ["ownership", 2.25],
+    const [family, maximumSemanticDoubling, maximumTypeGraphDoubling] of [
+      ["wrapper", 2.25, 2.25],
+      ["measure", 2.25, 2.25],
+      ["evidence", 2.25, null],
+      ["dense_case", 3.5, null],
+      ["operator_chain", 2.25, null],
+      ["literal_union", 2.25, null],
+      ["projection", 2.25, null],
+      ["ownership", 2.25, null],
     ] as const
   ) {
     const familyRows = rows.filter((row) => row.family === family);
@@ -509,12 +518,33 @@ function scalingGate(
     ) {
       throw new Error(`${family} has no resident compiler-work counters`);
     }
-    const lastDoubling = last / previous;
+    const semanticLastDoubling = last / previous;
+    let typeGraphLastDoubling = null;
+    if (maximumTypeGraphDoubling !== null) {
+      const previousTypeGraph = familyRows.at(-2)?.type_graph_work;
+      const lastTypeGraph = familyRows.at(-1)?.type_graph_work;
+      if (
+        previousTypeGraph === null || previousTypeGraph === undefined ||
+        lastTypeGraph === null || lastTypeGraph === undefined
+      ) {
+        throw new Error(`${family} has no resident type-graph counters`);
+      }
+      typeGraphLastDoubling = lastTypeGraph / previousTypeGraph;
+    }
+    let passed = semanticLastDoubling <= maximumSemanticDoubling;
+    if (
+      typeGraphLastDoubling !== null && maximumTypeGraphDoubling !== null &&
+      typeGraphLastDoubling > maximumTypeGraphDoubling
+    ) {
+      passed = false;
+    }
     gates.push({
       family,
-      last_doubling: lastDoubling,
-      maximum_doubling: maximumDoubling,
-      passed: lastDoubling <= maximumDoubling,
+      semantic_last_doubling: semanticLastDoubling,
+      maximum_semantic_doubling: maximumSemanticDoubling,
+      type_graph_last_doubling: typeGraphLastDoubling,
+      maximum_type_graph_doubling: maximumTypeGraphDoubling,
+      passed,
     });
   }
   return gates;

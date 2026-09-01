@@ -8877,164 +8877,34 @@ fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagn
         .enumerate()
         .map(|(index, function)| (function.id, index))
         .collect::<HashMap<_, _>>();
-    let mut calls = vec![Vec::new(); module.functions.len()];
-    let mut callers = vec![Vec::new(); module.functions.len()];
-    for (caller, function) in module.functions.iter().enumerate() {
-        for target in function
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .filter_map(|operation| operation.function)
-        {
-            let target = *function_indices.get(&target).ok_or_else(|| {
-                hir_error("A direct call references an unknown residual function.")
-            })?;
-            calls[caller].push(target);
-            callers[target].push(caller);
+    let mut body_classes = HashMap::<Vec<u8>, usize>::new();
+    let mut canonical_calls = Vec::with_capacity(module.functions.len());
+    let mut classes = Vec::with_capacity(module.functions.len());
+    let mut partitions = Vec::<Vec<usize>>::new();
+    for (function_index, function) in module.functions.iter().enumerate() {
+        let (body, calls) = canonical_runtime_function_shape(function, &function_indices)?;
+        let next_class = body_classes.len();
+        let class = *body_classes.entry(body).or_insert(next_class);
+        if class == partitions.len() {
+            partitions.push(Vec::new());
+        }
+        partitions[class].push(function_index);
+        classes.push(class);
+        canonical_calls.push(calls);
+    }
+    let mut predecessors = vec![Vec::<(usize, usize)>::new(); module.functions.len()];
+    for (caller, targets) in canonical_calls.iter().enumerate() {
+        for (position, target) in targets.iter().copied().enumerate() {
+            predecessors[target].push((caller, position));
         }
     }
-
-    let mut visited = vec![false; module.functions.len()];
-    let mut finish_order = Vec::with_capacity(module.functions.len());
-    for start in 0..module.functions.len() {
-        if visited[start] {
-            continue;
-        }
-        visited[start] = true;
-        let mut pending = vec![(start, 0_usize)];
-        while let Some((function, next_call)) = pending.last_mut() {
-            if let Some(target) = calls[*function].get(*next_call).copied() {
-                *next_call += 1;
-                if !visited[target] {
-                    visited[target] = true;
-                    pending.push((target, 0));
-                }
-                continue;
-            }
-            finish_order.push(*function);
-            pending.pop();
-        }
-    }
-
-    let mut component_of = vec![usize::MAX; module.functions.len()];
-    let mut components = Vec::<Vec<usize>>::new();
-    for start in finish_order.into_iter().rev() {
-        if component_of[start] != usize::MAX {
-            continue;
-        }
-        let component = components.len();
-        component_of[start] = component;
-        let mut members = Vec::new();
-        let mut pending = vec![start];
-        while let Some(function) = pending.pop() {
-            members.push(function);
-            for caller in &callers[function] {
-                if component_of[*caller] == usize::MAX {
-                    component_of[*caller] = component;
-                    pending.push(*caller);
-                }
-            }
-        }
-        members.sort_unstable();
-        components.push(members);
-    }
-
-    let mut dependencies = vec![BTreeSet::new(); components.len()];
-    let mut dependents = vec![BTreeSet::new(); components.len()];
-    for (caller, targets) in calls.iter().enumerate() {
-        let caller_component = component_of[caller];
-        for target in targets {
-            let target_component = component_of[*target];
-            if caller_component != target_component
-                && dependencies[caller_component].insert(target_component)
-            {
-                dependents[target_component].insert(caller_component);
-            }
-        }
-    }
-    let mut remaining_dependencies = dependencies.iter().map(BTreeSet::len).collect::<Vec<_>>();
-    let mut ready = remaining_dependencies
-        .iter()
-        .enumerate()
-        .filter_map(|(component, remaining)| (*remaining == 0).then_some(component))
-        .collect::<BTreeSet<_>>();
-    let mut classes = HashMap::with_capacity(module.functions.len());
-    let mut key_classes = HashMap::<Vec<u8>, usize>::new();
-    let mut processed_components = 0;
-    while let Some(component) = ready.iter().next().copied() {
-        ready.remove(&component);
-        let members = &components[component];
-        let recursive = members.len() > 1 || calls[members[0]].contains(&members[0]);
-        if recursive {
-            for function in members {
-                classes.insert(module.functions[*function].id, usize::MAX);
-            }
-            loop {
-                let mut keys = Vec::with_capacity(members.len());
-                for function in members {
-                    keys.push(canonical_runtime_function_key(
-                        &module.functions[*function],
-                        &classes,
-                    )?);
-                }
-                let mut class_keys = HashMap::<usize, &Vec<u8>>::new();
-                let refined = members.iter().zip(&keys).any(|(function, key)| {
-                    let class = classes[&module.functions[*function].id];
-                    class_keys
-                        .insert(class, key)
-                        .is_some_and(|existing| existing != key)
-                });
-                if !refined {
-                    break;
-                }
-                let refinements = members
-                    .iter()
-                    .zip(&keys)
-                    .map(|(function, key)| (classes[&module.functions[*function].id], key.clone()))
-                    .collect::<Vec<_>>();
-                let mut ordered_refinements = refinements.clone();
-                ordered_refinements.sort();
-                ordered_refinements.dedup();
-                for (function, refinement) in members.iter().zip(refinements) {
-                    let class = usize::MAX
-                        - ordered_refinements
-                            .binary_search(&refinement)
-                            .expect("a recursive refinement came from the ordered set");
-                    classes.insert(module.functions[*function].id, class);
-                }
-            }
-        }
-        let mut keys = Vec::with_capacity(members.len());
-        for function in members {
-            keys.push(canonical_runtime_function_key(
-                &module.functions[*function],
-                &classes,
-            )?);
-        }
-        for (function, key) in members.iter().zip(keys) {
-            let next_class = key_classes.len();
-            let class = *key_classes.entry(key).or_insert(next_class);
-            classes.insert(module.functions[*function].id, class);
-        }
-        processed_components += 1;
-        for dependent in &dependents[component] {
-            remaining_dependencies[*dependent] -= 1;
-            if remaining_dependencies[*dependent] == 0 {
-                ready.insert(*dependent);
-            }
-        }
-    }
-    if processed_components != components.len() {
-        return Err(hir_error(
-            "The residual function component graph contains a cycle.",
-        ));
-    }
+    refine_runtime_function_partitions(&mut partitions, &mut classes, &predecessors);
 
     let mut class_ids = HashMap::new();
     let mut function_ids = HashMap::new();
     let mut functions = Vec::new();
-    for function in &module.functions {
-        let class = classes[&function.id];
+    for (function_index, function) in module.functions.iter().enumerate() {
+        let class = classes[function_index];
         let function_id = if let Some(function_id) = class_ids.get(&class) {
             *function_id
         } else {
@@ -9070,10 +8940,65 @@ fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagn
     Ok(())
 }
 
-fn canonical_runtime_function_key(
+fn refine_runtime_function_partitions(
+    partitions: &mut Vec<Vec<usize>>,
+    classes: &mut [usize],
+    predecessors: &[Vec<(usize, usize)>],
+) {
+    let mut queued = vec![true; partitions.len()];
+    let mut pending = (0..partitions.len()).collect::<VecDeque<_>>();
+    while let Some(splitter) = pending.pop_front() {
+        queued[splitter] = false;
+        let splitter_members = partitions[splitter].clone();
+        let mut by_position = HashMap::<usize, Vec<usize>>::new();
+        for target in splitter_members {
+            for (caller, position) in &predecessors[target] {
+                #[cfg(test)]
+                RUNTIME_FUNCTION_REFINEMENT_EDGES.with(|visits| visits.set(visits.get() + 1));
+                by_position.entry(*position).or_default().push(*caller);
+            }
+        }
+        for callers in by_position.into_values() {
+            let mut by_partition = HashMap::<usize, Vec<usize>>::new();
+            for caller in callers {
+                by_partition
+                    .entry(classes[caller])
+                    .or_default()
+                    .push(caller);
+            }
+            for (partition, mut selected) in by_partition {
+                selected.sort_unstable();
+                selected.dedup();
+                if selected.len() == partitions[partition].len() {
+                    continue;
+                }
+                let selected = selected.into_iter().collect::<HashSet<_>>();
+                let (inside, outside): (Vec<_>, Vec<_>) = partitions[partition]
+                    .iter()
+                    .copied()
+                    .partition(|function| selected.contains(function));
+                let (retained, moved) = if queued[partition] || outside.len() >= inside.len() {
+                    (outside, inside)
+                } else {
+                    (inside, outside)
+                };
+                partitions[partition] = retained;
+                let new_partition = partitions.len();
+                for function in &moved {
+                    classes[*function] = new_partition;
+                }
+                partitions.push(moved);
+                queued.push(true);
+                pending.push_back(new_partition);
+            }
+        }
+    }
+}
+
+fn canonical_runtime_function_shape(
     function: &RuntimeFunction,
-    function_classes: &HashMap<usize, usize>,
-) -> Result<Vec<u8>, Diagnostic> {
+    function_indices: &HashMap<usize, usize>,
+) -> Result<(Vec<u8>, Vec<usize>), Diagnostic> {
     #[cfg(test)]
     RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(visits.get() + 1));
     let blocks = function
@@ -9151,6 +9076,7 @@ fn canonical_runtime_function_key(
             .copied()
             .ok_or_else(|| hir_error("A residual function uses an undefined value."))
     };
+    let mut calls = Vec::new();
     for block in &mut canonical.blocks {
         block.id = block_ids[&block.id];
         for parameter in &mut block.parameters {
@@ -9167,9 +9093,10 @@ fn canonical_runtime_function_key(
                 *operand = remap_value(*operand)?;
             }
             if let Some(target) = &mut operation.function {
-                *target = *function_classes.get(target).ok_or_else(|| {
+                calls.push(*function_indices.get(target).ok_or_else(|| {
                     hir_error("A direct call references an unknown residual function.")
-                })?;
+                })?);
+                *target = 0;
             }
             operation.span = RuntimeSpan {
                 file: String::new(),
@@ -9250,16 +9177,20 @@ fn canonical_runtime_function_key(
             }
         }
     }
-    rmp_serde::to_vec(&canonical).map_err(|error| {
+    let body = rmp_serde::to_vec(&canonical).map_err(|error| {
         hir_error(&format!(
             "A residual function could not be interned: {error}"
         ))
-    })
+    })?;
+    Ok((body, calls))
 }
 
 #[cfg(test)]
 thread_local! {
     static RUNTIME_FUNCTION_KEY_VISITS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static RUNTIME_FUNCTION_REFINEMENT_EDGES: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
@@ -12260,6 +12191,77 @@ mod tests {
         let visits = RUNTIME_FUNCTION_KEY_VISITS.with(std::cell::Cell::get);
         assert_eq!(visits, function_count);
         assert_eq!(module.functions.len(), function_count);
+    }
+
+    #[test]
+    fn recursive_function_interning_refines_a_marked_cycle_linearly() {
+        const FUNCTION_COUNT: usize = 256;
+        let functions = (0..FUNCTION_COUNT)
+            .map(|id| {
+                let parameter_value = id * 2;
+                let result = parameter_value + 1;
+                let terminator = if id == 0 {
+                    RuntimeTerminator::Trap {
+                        message: "marked cycle function".to_owned(),
+                        span: span(),
+                    }
+                } else {
+                    RuntimeTerminator::Return {
+                        value: result,
+                        span: span(),
+                    }
+                };
+                RuntimeFunction {
+                    id,
+                    name: format!("recursive-cycle-{id}"),
+                    signature: 0,
+                    reuse: None,
+                    entry_block: 0,
+                    blocks: vec![RuntimeBlock {
+                        id: 0,
+                        parameters: vec![parameter(parameter_value)],
+                        operations: vec![operation(
+                            "call.direct",
+                            result,
+                            vec![parameter_value],
+                            Some((id + 1) % FUNCTION_COUNT),
+                            None,
+                        )],
+                        terminator,
+                    }],
+                    span: span(),
+                }
+            })
+            .collect();
+        let mut module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: RUNTIME_HIR_SCHEMA,
+            source: "recursive-function-scaling-test.blot".to_owned(),
+            types: vec![RuntimeType::Unit],
+            signatures: vec![RuntimeSignature {
+                parameters: vec![0],
+                result: 0,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions,
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+        RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(0));
+        RUNTIME_FUNCTION_REFINEMENT_EDGES.with(|visits| visits.set(0));
+
+        deduplicate_runtime_functions(&mut module).expect("recursive cycle should intern");
+
+        let key_visits = RUNTIME_FUNCTION_KEY_VISITS.with(std::cell::Cell::get);
+        let refinement_edges = RUNTIME_FUNCTION_REFINEMENT_EDGES.with(std::cell::Cell::get);
+        assert_eq!(key_visits, FUNCTION_COUNT);
+        assert!(
+            refinement_edges <= FUNCTION_COUNT * 3,
+            "marked cycle examined {refinement_edges} call edges"
+        );
+        assert_eq!(module.functions.len(), FUNCTION_COUNT);
     }
 
     #[test]

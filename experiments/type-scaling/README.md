@@ -46,75 +46,57 @@ slope. A slope is a locator for profiling, not a proof of asymptotic complexity.
 Passing family names after `--` runs a focused subset, for example
 `pnpm benchmark:type-scaling -- wrapper measure --samples=9`.
 
-The `measure` family always calls the deepest wrapper with the same four-element
-array. Its source size and wrapper depth grow, but the measured length does not.
-The `evidence` family builds `N` independent checked packages; it does not
-assume that reconstructing a record through arbitrary wrappers grants a new
-transitive proof rule.
+The `measure` family always calls the deepest wrapper with the same borrowed
+four-element array. Its source size and wrapper depth grow, but the measured
+length does not and no wrapper claims ownership of the array. The `evidence`
+family builds `N` independent checked packages; it does not assume that
+reconstructing a record through arbitrary wrappers grants a new transitive proof
+rule.
 
 Each row also includes resident Rust checker work schema 3: unique type nodes,
 recursive intern attempts, constraints, settle/freshen/union visits, boundary
 materializations, closure free-name candidates, captures actually bridged,
 opened interface fields actually demanded, and peak pending solver worklist
 items. The executable scaling gate uses constraints, boundary materializations,
-and capture selection. The wrapper, measure, evidence, operator-chain,
-literal-union, projection, and ownership families require the final doubling to
-stay at or below 2.25. Dense multi-subject cases use a 3.5 ceiling: their
-generated AST is linear, while relationships between ordered row fallbacks still
-produce superlinear solver work; keeping the ceiling below a quadratic doubling
-catches a return to copied fallback trees. Recursive graph visits remain visible
-separately; timing is never replaced by the gate.
+and capture selection as semantic decisions. It also gates the wrapper and
+measure families on the sum of unique type nodes, intern attempts, and freshen
+visits, so cheap timings cannot hide a superlinear semantic graph. The wrapper,
+measure, evidence, operator-chain, literal-union, projection, and ownership
+families require the final doubling to stay at or below 2.25. Dense
+multi-subject cases use a 3.5 ceiling: their generated AST is linear, while
+relationships between ordered row fallbacks still produce superlinear solver
+work; keeping the ceiling below a quadratic doubling catches a return to copied
+fallback trees. Recursive graph visits remain visible separately; timing is
+never replaced by the gate.
 
 ## Current results
 
-Measured 2026-08-23 with Node v26.7.0 and compiler SHA-256
-`f8a0f6352cf9ab9058a6c1e18c87fd2760d704061f9d0db3e85c623715fdeb2e`. Times are
-nine-sample medians in milliseconds. The last-doubling column is the complete
-compile-time ratio from `N=128` to `N=256`; it still includes the fixed
-per-module floor.
+Measured 2026-09-01 with Node v24.12.0 and compiler SHA-256
+`4e14bedd8546eccb2f0442b7973b4deca1bbb11e3ae0912768a79b73fb4b7552`. Times are
+three-sample medians in milliseconds. The focused run extends the two deepest
+type-graph families through 512 declarations:
 
-| family      | compile N=8 | compile N=256 | last doubling | frontend N=256 |
-| ----------- | ----------: | ------------: | ------------: | -------------: |
-| ordinary    |       196.9 |         199.6 |          1.10 |           95.9 |
-| structural  |       177.4 |         188.9 |          1.01 |           96.6 |
-| union       |       181.2 |         247.2 |          1.23 |          101.5 |
-| polymorphic |       182.4 |         203.1 |          1.07 |          100.6 |
-| refinement  |       185.0 |         372.9 |          1.35 |          143.1 |
-| wrapper     |       180.1 |         603.8 |          2.05 |          101.7 |
-| measure     |       185.1 |         731.2 |          2.10 |          100.8 |
-| evidence    |       272.7 |         585.0 |          1.46 |          195.2 |
+| family  | compile N=64 | compile N=256 | compile N=512 | semantic doubling | graph doubling |
+| ------- | -----------: | ------------: | ------------: | ----------------: | -------------: |
+| wrapper |         17.6 |          68.8 |         141.3 |             1.997 |          1.997 |
+| measure |         25.0 |          85.6 |         206.5 |             1.928 |          1.932 |
 
-The deterministic last-doubling ratios are 1.990 for `wrapper`, 1.887 for
-`measure`, and 1.996 for `evidence`; all pass the 2.25 gate. Ordinary,
-structural-row, closed-union, and polymorphic lanes remain close to the fixed
-uncached-module floor through 256 elements. Predicate refinements add visible
-but controlled semantic work: 256 independently normalized predicates compile in
-373 ms.
+The doubling columns compare deterministic work from `N=256` to `N=512`, not
+wall-clock time. The complete thirteen-family run at the default sizes also
+passes every gate. Its `N=128` to `N=256` semantic/graph ratios are 1.993/1.994
+for `wrapper` and 1.865/1.872 for `measure`; the remaining gated semantic ratios
+range from 1.956 to 2.007.
 
-With compiler artifact
-`8b754748559bfe117c7302764f828daab36cdf33c7ef596b723f068994b6c81b`, the
-deterministic 128-to-256 work ratios for the focused lanes are 1.927 for
-`dense_case`, 2.007 for `operator_chain`, 2.000 for `literal_union`, 2.006 for
-`projection`, and 1.989 for `ownership`; all pass their family gates.
-
-The profile identified recursive `Type` clone/drop/allocation and repeated
-materialization as the expensive representation work. Immutable recursive type
-edges and member lists now share their graph, closed unions use canonical
-alpha-aware structural keys rather than pairwise comparison or display strings,
-settle/residual variable readings are cached conservatively, and evaluated
-closures bridge only names that are actually free in their body. A chain of 256
-identity wrappers compiles in 604 ms, while the corrected fixed-input length
-chain compiles in 731 ms. Their frontends remain about 101 ms, locating the
-remaining growth in semantic checking rather than parsing or emission.
-
-The raw settle, freshen, intern, and union visit counters still approach a 4x
-doubling in the deepest wrapper families. Sharing makes those visits much
-cheaper but does not make them disappear. A tested attempt to replace the live
-scheme with its closed residual form made the curve linear but lost directional
-information needed by region inference; a dependency-version settle cache was
-correct but slower to validate than recomputation. Neither experiment is in the
-implementation. A future graph-ID carrier must preserve the live bound
-orientation and prove the same principal type before it can remove those walks.
+The profile identified retained private constraint chains and repeated recursive
+scheme materialization as the expensive representation work. A nonrecursive
+generalized binding now publishes a compact lexical scheme: variables exposed by
+its public body remain distinct, while private variable-only paths project to
+their directional endpoints. This carrier is separate from the checked closure
+graph, so ownership and recursive representation facts retain the original live
+constraints. Instantiation freshens the compact flat graph by constraint ID and
+expands only its result. At 512 declarations, `wrapper` contains 11,793 unique
+type nodes and 2,563 freshen visits; `measure` contains 6,910 nodes and 4,109
+freshen visits. Both grow linearly under the graph gate.
 
 ## Typical-code pain points
 
@@ -142,7 +124,7 @@ rather than feature demonstrations. They expose five concrete friction points:
    interpreter is the shortest new example and needed neither an interface nor
    an ownership annotation. That shape should remain the ergonomic baseline.
 
-The priority order suggested by the combined evidence is: preserve live bound
-orientation in a future graph-ID scheme carrier, improve expected-type
-propagation through collection folds, add ordinary `Map.update` and text-library
-coverage, then design a preserving record update separately from general spread.
+The remaining priority order suggested by the typical-code examples is: improve
+expected-type propagation through collection folds, add ordinary `Map.update`
+and text-library coverage, then design a preserving record update separately
+from general spread.

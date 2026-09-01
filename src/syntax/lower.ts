@@ -2572,6 +2572,8 @@ interface MultiCaseArm {
   readonly body: Expr;
 }
 
+const multiCaseRowsPerChunk = 16;
+
 function lowerCaseGuard(rule: Rule, context: Context): Expr | null {
   const guard = field(rule, "guard");
   if (guard === null) return null;
@@ -2635,9 +2637,7 @@ function lowerCaseTargets(
   let result = lowerMultiCaseRows(
     arms,
     subjectNames,
-    targets.map(() => null),
     span,
-    0,
   );
   const coverageTargets = targets;
   for (let index = targets.length - 1; index >= 0; index -= 1) {
@@ -2685,12 +2685,100 @@ function lowerCaseTargets(
 function lowerMultiCaseRows(
   rows: readonly MultiCaseArm[],
   subjectNames: readonly string[],
+  span: Span,
+): Expr {
+  const cached = subjectNames.map(() => null);
+  if (rows.length <= multiCaseRowsPerChunk) {
+    return lowerMultiCaseRowChain(
+      rows,
+      subjectNames,
+      cached,
+      null,
+      span,
+      0,
+    );
+  }
+
+  const chunks: { readonly parameter: Pattern; readonly argument: Expr }[] = [];
+  let nextChunk: string | null = null;
+  let chunkStart = Math.ceil(rows.length / multiCaseRowsPerChunk) *
+    multiCaseRowsPerChunk;
+  while (chunkStart > 0) {
+    chunkStart = Math.max(0, chunkStart - multiCaseRowsPerChunk);
+    if (chunkStart >= rows.length) continue;
+    const chunkEnd = Math.min(
+      chunkStart + multiCaseRowsPerChunk,
+      rows.length,
+    );
+    const chunkName = `case_fallback$${span.start}$${span.end}`;
+    const chunkSubjects = subjectNames.map((_, column) =>
+      `case_fallback_subject$${span.start}$${span.end}$${column}`
+    );
+    chunks.push({
+      parameter: { tag: "name", name: chunkName, qualifier: "none", span },
+      argument: {
+        tag: "lambda",
+        parameter: {
+          tag: "tuple",
+          elements: chunkSubjects.map((name) => ({
+            tag: "name",
+            name,
+            qualifier: "none",
+            span,
+          })),
+          span,
+        },
+        body: lowerMultiCaseRowChain(
+          rows.slice(chunkStart, chunkEnd),
+          chunkSubjects,
+          chunkSubjects.map(() => null),
+          nextChunk,
+          span,
+          chunkStart,
+        ),
+        span,
+      },
+    });
+    nextChunk = chunkName;
+  }
+  expect(nextChunk !== null, "multi-subject case has no rows");
+  let result = lowerMultiCaseFallbackCall(
+    nextChunk,
+    subjectNames,
+    cached,
+    span,
+  );
+  for (let index = chunks.length - 1; index >= 0; index -= 1) {
+    const chunk = chunks[index];
+    expect(chunk !== undefined, `multi-subject case lost chunk ${index}`);
+    result = {
+      tag: "apply",
+      fn: { tag: "lambda", parameter: chunk.parameter, body: result, span },
+      arg: chunk.argument,
+      span,
+    };
+  }
+  return result;
+}
+
+function lowerMultiCaseRowChain(
+  rows: readonly MultiCaseArm[],
+  subjectNames: readonly string[],
   cached: readonly (string | null)[],
+  terminal: string | null,
   span: Span,
   depth: number,
 ): Expr {
   const row = rows[0];
   if (row === undefined) {
+    if (terminal !== null) {
+      return lowerMultiCaseFallbackCall(
+        terminal,
+        subjectNames,
+        cached,
+        span,
+      );
+    }
     return compilerPanic(
       "complete multi-subject case reached its failure path",
       span,
@@ -2699,13 +2787,6 @@ function lowerMultiCaseRows(
   const fallbackName = `case_fallback$${span.start}$${span.end}`;
   const fallbackSubjects = subjectNames.map((_, column) =>
     `case_fallback_subject$${span.start}$${span.end}$${column}`
-  );
-  const fallbackBody = lowerMultiCaseRows(
-    rows.slice(1),
-    fallbackSubjects,
-    fallbackSubjects.map(() => null),
-    span,
-    depth + 1,
   );
   const fallback: Expr = {
     tag: "lambda",
@@ -2719,7 +2800,14 @@ function lowerMultiCaseRows(
       })),
       span,
     },
-    body: fallbackBody,
+    body: lowerMultiCaseRowChain(
+      rows.slice(1),
+      fallbackSubjects,
+      fallbackSubjects.map(() => null),
+      terminal,
+      span,
+      depth + 1,
+    ),
     span,
   };
   return {

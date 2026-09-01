@@ -1361,7 +1361,10 @@ requirement read on the two kinds of set a type can be. A constructor set is
 covered by subtyping: the arms name a variant, and the target must flow into it.
 A literal set is covered by membership instead, because the arms are literals
 rather than a type the target could be constrained to — so the members the arms
-do not name are reported, and the target's own type is left alone.
+do not name are reported, and the target's own type is left alone. Coverage is
+symbolic over these finite sets. Its meaning does not change when a constructor
+set, literal union, or product has more members than a compiler could reasonably
+enumerate as complete runtime values.
 
 ```blot
 let rank :: 1 | 2 | 3 -> Int
@@ -1472,9 +1475,11 @@ tree contains only ordinary `case`, `if`, lambda, application, tuple, and block
 nodes. The checker also sees a non-executed tuple case made from the unguarded
 rows, so exhaustiveness is proved without making the executable path eager. No
 multi-subject case node reaches inference, ownership, evaluation, Runtime HIR,
-or a backend. The editor linter offers this form when nested single-subject
-cases form the same decision matrix without depending on an outer arm's
-bindings.
+or a backend. Large matrices are divided into bounded nested fallback scopes;
+those scopes retain the same shadowed compiler-local continuation identity, row
+order, demand behavior, and monomorphic result relation as the unchunked form.
+The editor linter offers this form when nested single-subject cases form the
+same decision matrix without depending on an outer arm's bindings.
 
 Coverage reads the columns. The arms taken together must cover the
 cross-product: a combination of columns no arm accepts is
@@ -1986,7 +1991,13 @@ Inference starts with unknowns, not guessed concrete types. An unannotated
 function initially has the schematic shape `'a -> 'b`; using its parameter or
 return value adds constraints to those variables. A call freshens quantified
 variables, relates arguments to parameters, relates the result to its use site,
-and only then settles enough of the graph to choose a representation.
+and only then settles enough of the graph to choose a representation. Before a
+non-recursive `let` scheme is published, inference variables absent from its
+exposed type are existentially projected out: their lower paths become lower
+bounds and their upper paths become upper bounds on the exposed variables. This
+preserves directional subtype, effect, region, and refinement relations while
+preventing a chain of wrappers from retaining every prior wrapper's private
+variables. Recursive schemes retain their live fixed-point graph.
 
 ```blot
 // Before its body is checked: 'a -> 'b

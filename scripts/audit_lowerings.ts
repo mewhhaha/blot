@@ -393,12 +393,44 @@ function inspectLoopGrowth(
   runtime: BlotRuntimeModule,
   failures: string[],
 ): void {
-  for (const runtimeFunction of runtime.functions) {
-    if (!runtimeFunction.name.endsWith("$go$")) continue;
+  const functions = new Map(
+    runtime.functions.map((runtimeFunction) =>
+      [
+        runtimeFunction.id,
+        runtimeFunction,
+      ] as const
+    ),
+  );
+  const reachable = new Set(
+    runtime.functions
+      .filter((runtimeFunction) => runtimeFunction.name.endsWith("$go$"))
+      .map((runtimeFunction) => runtimeFunction.id),
+  );
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const functionId = pending.pop();
+    if (functionId === undefined) break;
+    const runtimeFunction = functions.get(functionId);
+    if (runtimeFunction === undefined) {
+      failures.push(
+        `${runtime.source}: loop call graph references absent function ${functionId}`,
+      );
+      continue;
+    }
+    for (const operation of functionOperations(runtimeFunction)) {
+      if (operation.kind !== "call.direct") continue;
+      if (reachable.has(operation.function)) continue;
+      reachable.add(operation.function);
+      pending.push(operation.function);
+    }
+  }
+  for (const functionId of reachable) {
+    const runtimeFunction = functions.get(functionId);
+    if (runtimeFunction === undefined) continue;
     for (const operation of functionOperations(runtimeFunction)) {
       if (isStoreGrowth(operation) && operation.update === "persistent") {
         failures.push(
-          `${operation.span.file}:${operation.span.start}: ${runtimeFunction.name} uses persistent Store growth`,
+          `${operation.span.file}:${operation.span.start}: loop-reachable ${runtimeFunction.name} uses persistent Store growth`,
         );
       }
     }

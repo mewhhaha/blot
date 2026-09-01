@@ -210,11 +210,15 @@ one tuple of subject thunks. Every row in one matrix uses the same
 compiler-local continuation identity, so inference shares one monomorphic
 result/effect fact per matrix instead of retaining an isomorphic type graph for
 every row. Tuple passing keeps continuation type depth constant as subject count
-grows. Lowering records non-serialized provenance for the administrative
-closures that must remain static and for the subject-force and
-saturated-fallback applications that may survive staging. Only the latter
-applications publish backend type facts; omitting another generated application
-from editor facts does not permit omitting a fact that Runtime HIR can observe.
+grows. When a matrix exceeds the direct fallback-depth budget, lowering places
+bounded row chains in nested immediate applications. Every chunk deliberately
+shadows the same fallback and subject identities, so the applications remain
+monomorphic and portable AST depth grows by chunks rather than by rows. Lowering
+records non-serialized provenance for the administrative closures that must
+remain static and for the subject-force and saturated-fallback applications that
+may survive staging. Only the latter applications publish backend type facts;
+omitting another generated application from editor facts does not permit
+omitting a fact that Runtime HIR can observe.
 
 A uniform left-associative operator chain longer than the compiler's direct-tree
 limit elaborates to ordinary sequential local bindings. Each binding contains
@@ -321,7 +325,10 @@ emitted artifact.
 Coverage produces an exhaustiveness result for every closed match, with complete
 pattern-column and guard evidence. An accepted match is exhaustive or has an
 irrefutable arm. A missing arm is a source diagnostic; it is never deferred to a
-Runtime-HIR stuck state.
+Runtime-HIR stuck state. The checker specializes a symbolic pattern matrix by
+the current type constructor, literal, or record column. Defaults represent the
+unlisted remainder of an open or scalar domain. It does not enumerate complete
+witness values or impose a finite-cardinality acceptance cap.
 
 ### 7.2 Relationships
 
@@ -479,18 +486,18 @@ removes unused total operations to a fixed point, and removes non-entry block
 parameters together with the corresponding arguments on every incoming edge.
 Entry parameters stay aligned with the closed function signature. It then
 interns structurally equal closed types, signatures, and alpha-normalized
-function bodies. Function equivalence is refined through direct-call equivalence
-classes; calls and exports are rewritten to the first canonical body. Source
-names and spans select that representative but do not prevent body sharing. The
-direct-call graph is condensed into strongly connected components and processed
-callee-first. An acyclic body is canonicalized once; only a recursive component
-iterates local call classes. Canonical local recursion labels are independent of
-source function identifiers, so equivalent recursive components still share one
-body. Outside the proved representation cancellations above, normalization does
-not remove calls, host operations, allocation, mutation, reads, or arithmetic
-whose checked operation may trap. Every rewritten reference is validated against
-the compacted tables; the backend consumes those facts and does not repeat type
-or effect inference.
+function bodies. Each body is alpha-normalized and serialized once with function
+targets replaced by ordered call positions. A global inverse-edge partition
+refinement starts from those body shapes and splits classes only when an equally
+positioned callee enters a different class. This single judgment covers acyclic
+and recursive functions, including equivalent functions in separate recursive
+components. Calls and exports are rewritten to the first canonical body; source
+names and spans select that representative but do not prevent body sharing.
+Outside the proved representation cancellations above, normalization does not
+remove calls, host operations, allocation, mutation, reads, or arithmetic whose
+checked operation may trap. Every rewritten reference is validated against the
+compacted tables; the backend consumes those facts and does not repeat type or
+effect inference.
 
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked

@@ -203,6 +203,19 @@ escaping its scope while avoiding a free-variable scan during generalisation. A
 `let` use freshens every variable created below the binding's saved level;
 different uses receive different copies.
 
+Before a non-recursive scheme enters the lexical environment, the checker copies
+its exposed generalized variables into a distinct compact carrier. For every
+copied variable, a lower path through only private variables is replaced by its
+first exposed or structural lower endpoints; upper paths are projected
+symmetrically. The two directions are never merged: `L <= private <= exposed`
+becomes `L <= exposed`, while `exposed <= private <= U` becomes `exposed <= U`.
+A private cycle without an exposed or structural endpoint contributes no
+boundary constraint. Projection occurs only after the original constraint
+judgment succeeds and never mutates that checked graph. It preserves the
+principal boundary relation while bounding wrapper schemes by their exposed
+graph rather than lexical history. Recursive schemes retain the live graph used
+by their representation and ownership fixed points.
+
 ### Rank-N boundaries
 
 On the left, `forall rho. A <= B` instantiates each bound rigid variable with a
@@ -1403,8 +1416,11 @@ values and target indices between the evaluator and checker, so opening a large
 module does not clone every recursive value and type merely to establish
 aliases. Scheme instantiation memoises generalized variable replacements within
 one freshening while allocating distinct replacements for separate
-instantiations. Neither change alters the lattice or lets mutable inference
-state cross a module boundary.
+instantiations. It walks the authoritative flat constraint identities directly,
+copies lower and upper adjacency separately, and expands only the resulting root
+view. It does not expand a bound into a recursive `Type` tree merely to
+re-intern the same edges. Neither change alters the lattice or lets mutable
+inference state cross a module boundary.
 
 The Rust resident boundary implements flat `TypeId` transport and in-process
 module reuse. Closed settled trees are encoded into flat arenas, and every cache

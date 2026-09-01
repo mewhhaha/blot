@@ -103,18 +103,19 @@ Deno.test("a multi-subject structural probe binds its payload once", async () =>
 
 Deno.test("dense multi-subject cases lower to a linear-size AST", async () => {
   const width = 8;
+  const rowCount = 41;
   const subjects = Array.from(
     { length: width },
     (_, index) => `subject${index}`,
   );
-  const arms = Array.from({ length: width }, (_, row) => {
+  const arms = Array.from({ length: rowCount }, (_, row) => {
     const patterns = subjects.map((_, column) => {
-      if ((row + column) % 2 === 0) return "#True";
-      return "#False";
+      if ((row & (1 << column)) === 0) return "#False";
+      return "#True";
     });
-    return `  ${patterns.join(", ")} => 64`;
+    return `  ${patterns.join(", ")} => ${row}`;
   });
-  arms.push(`  ${subjects.map(() => "_").join(", ")} => 64`);
+  arms.push(`  ${subjects.map(() => "_").join(", ")} => ${rowCount}`);
   const parsed = await parse(
     `let choose = fn (${subjects.join(", ")}) => case ${subjects.join(", ")} of
 ${arms.join("\n")}
@@ -125,7 +126,7 @@ return choose (${subjects.map(() => "#True").join(", ")})
   if (!parsed.ok) return;
   const expressions = encodePortableModule(parsed.module).arena.expressions;
   assert(
-    expressions.length < width * width * 32,
+    expressions.length < rowCount * width * 32,
     `dense case lowered to ${expressions.length} expressions`,
   );
 });

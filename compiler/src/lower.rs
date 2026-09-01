@@ -3085,6 +3085,8 @@ struct MultiCaseSubject {
     name: String,
 }
 
+const MULTI_CASE_ROWS_PER_CHUNK: usize = 16;
+
 fn lower_case_targets(
     targets: Vec<ExpressionId>,
     arms: &[MultiCaseArm],
@@ -3135,8 +3137,7 @@ fn lower_case_targets(
         .iter()
         .map(|name| MultiCaseSubject { name: name.clone() })
         .collect::<Vec<_>>();
-    let cached = vec![None; subjects.len()];
-    let mut result = lower_multi_case_rows(arms, &subjects, &cached, span, 0, arena)?;
+    let mut result = lower_multi_case_rows(arms, &subjects, span, arena)?;
     let coverage_targets = targets.clone();
     for (target, name) in targets.into_iter().zip(subject_names).rev() {
         let thunk_parameter = arena.pattern(Pattern::Unit { span });
@@ -3195,17 +3196,109 @@ fn lower_case_targets(
 fn lower_multi_case_rows(
     rows: &[MultiCaseArm],
     subjects: &[MultiCaseSubject],
+    span: Span,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let cached = vec![None; subjects.len()];
+    if rows.len() <= MULTI_CASE_ROWS_PER_CHUNK {
+        return lower_multi_case_row_chain(rows, subjects, &cached, None, span, 0, arena);
+    }
+
+    let mut chunks = Vec::new();
+    let mut next_chunk = None;
+    let mut chunk_start =
+        rows.len().div_ceil(MULTI_CASE_ROWS_PER_CHUNK) * MULTI_CASE_ROWS_PER_CHUNK;
+    while chunk_start > 0 {
+        chunk_start = chunk_start.saturating_sub(MULTI_CASE_ROWS_PER_CHUNK);
+        if chunk_start >= rows.len() {
+            continue;
+        }
+        let chunk_end = (chunk_start + MULTI_CASE_ROWS_PER_CHUNK).min(rows.len());
+        let chunk_name = format!("case_fallback${}${}", span.start, span.end);
+        let chunk_subjects = subjects
+            .iter()
+            .enumerate()
+            .map(|(column, _)| MultiCaseSubject {
+                name: format!("case_fallback_subject${}${}${column}", span.start, span.end),
+            })
+            .collect::<Vec<_>>();
+        let chunk_cached = vec![None; chunk_subjects.len()];
+        let body = lower_multi_case_row_chain(
+            &rows[chunk_start..chunk_end],
+            &chunk_subjects,
+            &chunk_cached,
+            next_chunk.as_deref(),
+            span,
+            chunk_start,
+            arena,
+        )?;
+        arena.synthetic_static_closure_bodies.insert(body);
+        let parameters = chunk_subjects
+            .into_iter()
+            .map(|subject| {
+                arena.pattern(Pattern::Name {
+                    name: subject.name,
+                    qualifier: Qualifier::None,
+                    span,
+                })
+            })
+            .collect();
+        let parameter = arena.pattern(Pattern::Tuple {
+            elements: parameters,
+            span,
+        });
+        let function = arena.expression(Expression::Lambda {
+            parameter,
+            body,
+            deferred: false,
+            span,
+        });
+        let binding = arena.pattern(Pattern::Name {
+            name: chunk_name.clone(),
+            qualifier: Qualifier::None,
+            span,
+        });
+        chunks.push((binding, function));
+        next_chunk = Some(chunk_name);
+    }
+    let first_chunk = next_chunk.ok_or_else(|| "multi-subject case has no rows".to_owned())?;
+    let mut result = lower_multi_case_fallback_call(&first_chunk, subjects, &cached, span, arena);
+    for (parameter, argument) in chunks.into_iter().rev() {
+        let function = arena.expression(Expression::Lambda {
+            parameter,
+            body: result,
+            deferred: false,
+            span,
+        });
+        result = arena.expression(Expression::Apply {
+            function,
+            argument,
+            span,
+        });
+    }
+    Ok(result)
+}
+
+fn lower_multi_case_row_chain(
+    rows: &[MultiCaseArm],
+    subjects: &[MultiCaseSubject],
     cached: &[Option<String>],
+    terminal: Option<&str>,
     span: Span,
     depth: usize,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let Some(row) = rows.first() else {
-        return Ok(compiler_panic(
-            "complete multi-subject case reached its failure path",
-            span,
-            arena,
-        ));
+        return Ok(match terminal {
+            Some(terminal) => {
+                lower_multi_case_fallback_call(terminal, subjects, cached, span, arena)
+            }
+            None => compiler_panic(
+                "complete multi-subject case reached its failure path",
+                span,
+                arena,
+            ),
+        });
     };
     let fallback_name = format!("case_fallback${}${}", span.start, span.end);
     let fallback_subjects = subjects
@@ -3216,10 +3309,11 @@ fn lower_multi_case_rows(
         })
         .collect::<Vec<_>>();
     let fallback_cached = vec![None; fallback_subjects.len()];
-    let mut fallback = lower_multi_case_rows(
+    let mut fallback = lower_multi_case_row_chain(
         &rows[1..],
         &fallback_subjects,
         &fallback_cached,
+        terminal,
         span,
         depth + 1,
         arena,
