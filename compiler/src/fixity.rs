@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     AstArena, Declaration, DeclarationKind, Expression, ExpressionId, FIXITY_INTERMEDIATE_PREFIX,
@@ -8,7 +8,7 @@ use crate::ast::{
 const MAX_DIRECT_OPERATOR_CHAIN: usize = 64;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Associativity {
+pub(crate) enum Associativity {
     Left,
     Right,
     None,
@@ -34,10 +34,11 @@ include!("fixities_generated.rs");
 
 #[derive(Clone)]
 pub(crate) struct Fixity {
-    operator: String,
-    associativity: Associativity,
-    precedence: u32,
-    target: Vec<String>,
+    pub(crate) operator: String,
+    pub(crate) associativity: Associativity,
+    pub(crate) precedence: u32,
+    pub(crate) target: Vec<String>,
+    pub(crate) span: Span,
 }
 
 pub struct FixityTable {
@@ -52,17 +53,35 @@ pub struct ChainStep {
 }
 
 impl FixityTable {
-    pub fn new() -> Self {
+    pub fn new(declared: &[Fixity]) -> Result<Self, String> {
+        let mut declared_keys = HashSet::new();
+        for fixity in declared {
+            let form = if fixity.associativity == Associativity::Prefix {
+                "prefix"
+            } else {
+                "infix"
+            };
+            if !declared_keys.insert((form, fixity.operator.as_str())) {
+                return Err(format!(
+                    "BLOT_DUPLICATE_FIXITY: the {form} operator `{}` is declared more than once at {}..{}",
+                    fixity.operator, fixity.span.start, fixity.span.end
+                ));
+            }
+        }
+
         let mut infix = HashMap::new();
         let mut prefix = HashMap::new();
-        for fixity in defaults() {
+        for fixity in standard_source_fixities()
+            .into_iter()
+            .chain(declared.iter().cloned())
+        {
             if fixity.associativity == Associativity::Prefix {
                 prefix.insert(fixity.operator.clone(), fixity);
             } else {
                 infix.insert(fixity.operator.clone(), fixity);
             }
         }
-        Self { infix, prefix }
+        Ok(Self { infix, prefix })
     }
 
     pub fn prefix(&self, operator: &str) -> Option<&Fixity> {
@@ -246,7 +265,7 @@ pub fn target_expression(
     Ok(result)
 }
 
-fn defaults() -> Vec<Fixity> {
+fn standard_source_fixities() -> Vec<Fixity> {
     GENERATED_FIXITIES
         .iter()
         .map(|generated| Fixity {
@@ -263,6 +282,7 @@ fn defaults() -> Vec<Fixity> {
             } else {
                 generated.target.split('.').map(str::to_owned).collect()
             },
+            span: Span { start: 0, end: 0 },
         })
         .collect()
 }

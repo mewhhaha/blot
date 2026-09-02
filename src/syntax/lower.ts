@@ -26,6 +26,7 @@ import { patternNames } from "./ast.ts";
 import {
   buildFixityTable,
   type ChainStep,
+  declaredFixities,
   foldChain,
   targetExpr,
 } from "./fixity.ts";
@@ -54,16 +55,7 @@ export function lowerModule(root: Rule, source: string): Module {
     ),
   );
 
-  const operators = field(root, "operators");
-  if (operators !== null) {
-    fail(
-      "BLOT_REMOVED_OPERATOR_SECTION",
-      "Operator precedence and targets are fixed; use a named function for another operation.",
-      operators.span,
-    );
-  }
-
-  const table = buildFixityTable();
+  const table = buildFixityTable(declaredFixities(root));
   const context: Context = {
     source,
     table,

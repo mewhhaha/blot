@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseConcrete } from "../syntax/parse.ts";
-import { DEFAULT_FIXITIES } from "../syntax/fixity.ts";
+import { STANDARD_FIXITIES } from "../syntax/fixity.ts";
 import type { Expr, Module } from "../syntax/ast.ts";
 import type { Rule } from "../syntax/cursor.ts";
 import type {
@@ -1974,8 +1974,8 @@ return value
   );
 });
 
-Deno.test("every default operator target has a spelling action", async () => {
-  for (const fixity of DEFAULT_FIXITIES) {
+Deno.test("every standard source operator target has a spelling action", async () => {
+  for (const fixity of STANDARD_FIXITIES) {
     const target = fixity.target.join(".");
     const source = fixity.associativity === "prefix"
       ? `return ${target} operand\n`
@@ -1997,6 +1997,20 @@ Deno.test("every default operator target has a spelling action", async () => {
       `${target} produced invalid operator syntax: ${replacement}`,
     );
   }
+});
+
+Deno.test("operator spelling respects a source override", async () => {
+  const source = `infixl 60 (+) = Custom.add
+return Int.add left right
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) throw new Error("operator override fixture did not parse");
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_OPERATOR_SPELLING"
+    ),
+    [],
+  );
 });
 
 Deno.test("a terminal Option match offers a guard action", async () => {

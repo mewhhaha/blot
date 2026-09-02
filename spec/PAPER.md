@@ -41,12 +41,13 @@ The design separates questions that are often conflated:
 
 Types, effect descriptors, layouts, and reflection descriptors are ordinary
 compile-time values interpreted through checked bridges. Operator spelling and
-fixity instead come from one generated language plan. Every application is a
-Core computation, even when its effect row is empty. Effects are generative
-capabilities; seals are applicative nominal identities. Ownership is a separate
-mode-indexed use judgment. Staging erases compile-time-only values,
-specialization closes every residual representation, and validated Runtime HIR
-lowers to WebAssembly under a progress-sensitive observational theorem.
+fixity instead come from a bounded source header whose standard entries live in
+the prelude source. Every application is a Core computation, even when its
+effect row is empty. Effects are generative capabilities; seals are applicative
+nominal identities. Ownership is a separate mode-indexed use judgment. Staging
+erases compile-time-only values, specialization closes every residual
+representation, and validated Runtime HIR lowers to WebAssembly under a
+progress-sensitive observational theorem.
 
 ## 1. Semantic commitments
 
@@ -288,8 +289,9 @@ Source and host effects are unavailable during compile-time evaluation. Resolved
 imports and included bytes are explicit compiler inputs recorded in the revision
 identity; they are not ambient run-time authority.
 
-Operator spelling and grouping are not compile-time values. They come from the
-generated language plan and are fixed before source elaboration.
+Operator spelling and grouping are not compile-time values. They are collected
+from the source syntax prelude and the current module header, then fixed before
+expression elaboration.
 
 ### 5.2 Checked bridges
 

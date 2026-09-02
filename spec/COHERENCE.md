@@ -27,17 +27,17 @@ corresponding correction here; it must not add another silent override.
 
 ## 1. Surface language corrections
 
-### 1.1 Fixed operators
+### 1.1 Source-defined operators
 
-Blot has one generated operator plan. Source modules cannot declare punctuation,
-precedence, or associativity. The removed `operators` header is accepted only
-far enough to produce `BLOT_REMOVED_OPERATOR_SECTION`.
+Blot has a bounded source fixity header. The standard entries are authored at
+the top of `src/prelude/prelude.blot`; a module may add or override entries
+after its optional module header and before ordinary declarations.
 
-The plan maps a spelling to precedence, associativity, and an ordinary qualified
-binding path. Lexical resolution may change the value reached by that path, but
-it cannot change grouping. Therefore references in older documents to a
-source-provided "fixity environment", an "ordinary fixity entry", or fixities in
-a module prefix are superseded by the generated language-plan revision.
+Each entry maps a spelling to precedence, associativity, and an ordinary
+qualified binding path. Prefix and infix entries are separate. Duplicate entries
+of the same form are rejected, and the complete overlay is fixed before any flat
+expression chain is folded. Generated bootstrap tables are derived artifacts,
+not an independent language authority.
 
 ### 1.2 Explicit statement values
 
@@ -290,7 +290,7 @@ material:
 
 | Stale wording                                           | Correct reading                                                                   |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| source fixity environment                               | generated fixed operator plan                                                     |
+| generated fixed operator plan                           | source-authored standard header plus module overlay                               |
 | indentation opens a value block                         | only `do:` opens a statement value                                                |
 | element lowering or implicit children                   | ordinary functions, records, arrays, and nullary closures                         |
 | empty-row application is pure Core                      | every application is a computation; the row may be empty                          |

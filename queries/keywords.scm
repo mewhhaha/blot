@@ -14,9 +14,6 @@
   "module" @keyword.control.import
   "with" @keyword.control.import)
 
-(operator_section
-  "operators" @keyword)
-
 (fixity_declaration
   associativity: _ @keyword.storage.modifier)
 

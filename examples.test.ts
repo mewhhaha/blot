@@ -251,8 +251,8 @@ const REJECTIONS: Record<
     code: "BLOT_REFUTABLE_FOR_PATTERN",
     stage: "check",
   },
-  "removed_operator_section": {
-    code: "BLOT_REMOVED_OPERATOR_SECTION",
+  "duplicate_fixity": {
+    code: "BLOT_DUPLICATE_FIXITY",
     stage: "check",
   },
   "rebinding_pattern": {

@@ -11,6 +11,40 @@
 //   * every other multi-argument function takes one shape, because naming beats
 //     position and a tuple is still one parameter.
 
+// --- operators --------------------------------------------------------------
+//
+// The standard syntax environment is source too. Build generation asks Baba
+// to parse this bounded header and derives the bootstrap tables used before imports can be
+// elaborated. A module may override any entry with its own header declaration.
+
+infixr 10 ($) = Fn.apply
+infixl 20 (|>) = Fn.pipe
+infixl 21 (~) = @type.performs
+infixr 22 (||) = Logic.or
+infixr 24 (&&) = Logic.and
+infixr 25 (->) = @type.arrow
+infixr 25 (~>) = @type.deferred_arrow
+infix 30 (==) = Int.eq
+infix 30 (!=) = Int.ne
+infix 30 (<) = Int.lt
+infix 30 (<=) = Int.le
+infix 30 (>) = Int.gt
+infix 30 (>=) = Int.ge
+infixl 40 (|) = Type.union
+infixl 40 (\) = Type.diff
+infixl 45 (&) = Type.intersect
+infixl 50 (<+) = attach
+infixr 55 (<>) = Text.append
+infixl 60 (+) = Int.add
+infixl 60 (-) = Int.sub
+infixl 70 (*) = Int.mul
+infixl 70 (/) = Int.div
+infixl 70 (%) = Int.rem
+prefix 90 (-) = Int.negate
+prefix 90 (!) = @linear.own
+prefix 90 (?) = @linear.maybe
+prefix 90 (&) = @linear.borrow
+
 // --- types ------------------------------------------------------------------
 //
 // `|` names `Type.union` exactly the way `+` names `Int.add`: the operator
@@ -193,7 +227,7 @@ const IntArithmetic =
     .pred = fn value => @int.sub value 1;
   }
 
-// The fixed operator table resolves against this early namespace. The complete
+// The source fixity header resolves against this early namespace. The complete
 // type value is attached later, after the ordinary `attach` helper exists.
 const Int = { ...IntOrder; ...IntArithmetic; }
 

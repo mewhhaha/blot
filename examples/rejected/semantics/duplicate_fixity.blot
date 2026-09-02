@@ -1,0 +1,6 @@
+// Prefix and infix forms may share punctuation, but one module cannot give the
+// same infix spelling two associativities.
+infixl 65 (<++>) = Text.append
+infixr 65 (<++>) = Text.append
+
+return ()

@@ -4,25 +4,21 @@
 // so that the contracted grammar has no residual recursion — precedence is a
 // semantic recipe, not a grammar shape. This is where the chain becomes a tree.
 //
-// The table is needed only here, never by the parser, so a built-in default set
-// costs nothing structurally. Without it every file would have to restate the
-// fixity of `+` before it could use it. The table is fixed language data.
+// The table is needed only here, never by the parser. Standard entries are
+// generated from the source declarations at the top of the prelude; declarations
+// in the current module override them before any expression is folded.
 
 import type { Expr, Span } from "./ast.ts";
 import { fail } from "../diagnostic.ts";
 import { generatedFixities } from "./fixities.generated.ts";
+import { type Associativity, type Fixity } from "./source_fixity.ts";
+export {
+  type Associativity,
+  declaredFixities,
+  type Fixity,
+} from "./source_fixity.ts";
 
 const NOWHERE: Span = { start: 0, end: 0 };
-
-export type Associativity = "left" | "right" | "none" | "prefix";
-
-export interface Fixity {
-  readonly operator: string;
-  readonly associativity: Associativity;
-  readonly precedence: number;
-  readonly target: readonly string[];
-  readonly span: Span;
-}
 
 function entry(
   operator: string,
@@ -31,7 +27,8 @@ function entry(
   target: string,
 ): Fixity {
   // An intrinsic is one token, dots included; only a qualified name splits.
-  const path = target.startsWith("@") ? [target] : target.split(".");
+  let path = [target];
+  if (!target.startsWith("@")) path = target.split(".");
   return {
     operator,
     associativity,
@@ -41,11 +38,8 @@ function entry(
   };
 }
 
-/**
- * Everything here is an ordinary blot declaration in `src/prelude`. None of it
- * is built into the compiler; only the precedence is.
- */
-export const DEFAULT_FIXITIES: readonly Fixity[] = [
+/** Derived from the source fixity header in `src/prelude/prelude.blot`. */
+export const STANDARD_FIXITIES: readonly Fixity[] = [
   ...generatedFixities.map((fixity) => {
     return entry(
       fixity.operator,
@@ -56,16 +50,48 @@ export const DEFAULT_FIXITIES: readonly Fixity[] = [
   }),
 ];
 
+function fixityForm(fixity: Fixity): "prefix" | "infix" {
+  if (fixity.associativity === "prefix") return "prefix";
+  return "infix";
+}
+
 export interface FixityTable {
   infix(operator: string): Fixity | undefined;
   prefix(operator: string): Fixity | undefined;
 }
 
-export function buildFixityTable(): FixityTable {
+export function resolveFixities(
+  declared: readonly Fixity[] = [],
+): readonly Fixity[] {
+  const declaredKeys = new Set<string>();
+  for (const fixity of declared) {
+    const form = fixityForm(fixity);
+    const key = `${form}:${fixity.operator}`;
+    if (declaredKeys.has(key)) {
+      fail(
+        "BLOT_DUPLICATE_FIXITY",
+        `The ${form} operator \`${fixity.operator}\` is declared more than once.`,
+        fixity.span,
+      );
+    }
+    declaredKeys.add(key);
+  }
+
+  const active = new Map<string, Fixity>();
+  for (const fixity of [...STANDARD_FIXITIES, ...declared]) {
+    const form = fixityForm(fixity);
+    active.set(`${form}:${fixity.operator}`, fixity);
+  }
+  return [...active.values()];
+}
+
+export function buildFixityTable(
+  declared: readonly Fixity[] = [],
+): FixityTable {
   const infix = new Map<string, Fixity>();
   const prefix = new Map<string, Fixity>();
 
-  for (const fixity of DEFAULT_FIXITIES) {
+  for (const fixity of resolveFixities(declared)) {
     if (fixity.associativity === "prefix") {
       prefix.set(fixity.operator, fixity);
     } else {
@@ -117,7 +143,7 @@ export function foldChain(
     if (fixity === undefined) {
       fail(
         "BLOT_UNKNOWN_OPERATOR",
-        `\`${step.operator}\` is not in Blot's fixed operator vocabulary. Use a named function call.`,
+        `No source fixity is declared for the infix operator \`${step.operator}\`.`,
         step.span,
       );
     }

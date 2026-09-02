@@ -126,9 +126,6 @@ export type AnyNamedTokenKind = NamedTokenKind extends never
 export type LiteralKind =
   | "module"
   | "with"
-  | "operators"
-  | "{"
-  | "}"
   | "infixl"
   | "infixr"
   | "infix"
@@ -156,6 +153,8 @@ export type LiteralKind =
   | "return"
   | ","
   | "#"
+  | "{"
+  | "}"
   | "."
   | "import"
   | "if"
@@ -227,7 +226,6 @@ export type RuleName =
   | "operator_token"
   | "program"
   | "module_header"
-  | "operator_section"
   | "fixity_declaration"
   | "declaration"
   | "statement"
@@ -333,19 +331,13 @@ export interface OperatorTokenCursor extends RuleCursorBase<"operator_token"> {
 export interface ProgramCursor extends RuleCursorBase<"program"> {
   field(name: "declarations"): ReadonlyArray<DeclarationCursor>;
   field(name: "header"): ModuleHeaderCursor | null;
-  field(name: "operators"): OperatorSectionCursor | null;
+  field(name: "operators"): ReadonlyArray<FixityDeclarationCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
 
 export interface ModuleHeaderCursor extends RuleCursorBase<"module_header"> {
   field(name: "parameter"): BindingPatternCursor;
-  field(name: string): CursorFieldValue | undefined;
-  fieldArray(name: string): readonly CursorFieldValue[];
-}
-
-export interface OperatorSectionCursor extends RuleCursorBase<"operator_section"> {
-  field(name: "declarations"): ReadonlyArray<FixityDeclarationCursor>;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -766,7 +758,6 @@ export type AnyRuleCursor =
   | OperatorTokenCursor
   | ProgramCursor
   | ModuleHeaderCursor
-  | OperatorSectionCursor
   | FixityDeclarationCursor
   | DeclarationCursor
   | StatementCursor

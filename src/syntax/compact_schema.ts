@@ -258,6 +258,7 @@ export const compactRepeatedFields = [
   "lambda.parameters",
   "operand.prefixes",
   "operator_section.declarations",
+  "program.operators",
   "parenthesized_or_tuple.rest",
   "postfix_expression.arguments",
   "postfix_expression.suffixes",
