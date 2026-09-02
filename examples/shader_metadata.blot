@@ -6,15 +6,13 @@
 
 open import "blot:prelude"
 
-const required_slice = fn (text, start, end) =>
-  case Text.slice (text, start, end) of
-    #Some value => value
-    #None => @panic "shader metadata parser used invalid text bounds"
+const required_slice = fn (text, start, end) => case Text.slice (text, start, end) of
+  #Some value => value
+  #None => @panic "shader metadata parser used invalid text bounds"
 
-const required_find = fn (text, needle) =>
-  case Text.find (text, needle) of
-    #Some index => index
-    #None => @panic "shader metadata parser could not find a delimiter"
+const required_find = fn (text, needle) => case Text.find (text, needle) of
+  #Some index => index
+  #None => @panic "shader metadata parser could not find a delimiter"
 
 const parse_field = fn field => do:
   let colon = required_find (field, ":")

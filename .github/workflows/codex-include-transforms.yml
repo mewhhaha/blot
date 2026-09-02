@@ -29,6 +29,6 @@ jobs:
       - name: Build the compiler artifact used by the source tests
         run: pnpm compiler:build
       - name: Run the changed executable examples
-        run: deno test --allow-read --filter='including|shader_metadata' examples.test.ts
+        run: deno test --allow-read --filter='/including|shader_metadata/' examples.test.ts
       - name: Run the emitted-Wasm regression
         run: pnpm exec tsx --test src/compiler/include_projection.test.ts
