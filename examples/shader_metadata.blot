@@ -59,4 +59,5 @@ const shader_metadata = fn source => do:
     .structs = map (declarations, parse_struct);
     }
 
-return @include "./assets/material.wgsl" shader_metadata
+const metadata = @include "./assets/material.wgsl" shader_metadata
+return metadata
