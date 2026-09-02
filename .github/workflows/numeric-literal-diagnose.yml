@@ -1,0 +1,19 @@
+name: Numeric literal diagnostic locator
+
+on:
+  push:
+    branches:
+      - codex/numeric-literal-inference
+
+jobs:
+  locate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Locate export mismatch diagnostic
+        shell: bash
+        run: |
+          grep -R -n -C 8 "function export result" compiler/src || true
+          grep -R -n -C 8 "does not match its checked type" compiler/src || true
+          grep -R -n -C 8 "BLOT_UNSUPPORTED_LOWERING" compiler/src | head -400
