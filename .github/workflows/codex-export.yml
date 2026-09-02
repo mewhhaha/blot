@@ -23,13 +23,32 @@ jobs:
           node-version: 24.19.0
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
+      - name: Capture Rust test output
+        shell: bash
+        run: |
+          set +e
+          RUST_BACKTRACE=1 cargo test --manifest-path compiler/Cargo.toml -- --nocapture 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+          status=${PIPESTATUS[0]}
+          printf '\nexit_status=%s\n' "$status" | tee -a "$RUNNER_TEMP/cargo-test.log"
+          exit 0
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-source-defined-operators-cargo-test
+          path: ${{ runner.temp }}/cargo-test.log
+          if-no-files-found: error
+          retention-days: 1
       - name: Pack workspace
         shell: bash
         run: |
           set -euo pipefail
           tar --exclude=.git -czf "$RUNNER_TEMP/blot-workspace.tar.gz" .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-source-defined-operators-workspace
           path: ${{ runner.temp }}/blot-workspace.tar.gz
