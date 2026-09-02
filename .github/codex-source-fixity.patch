@@ -1,0 +1,93 @@
+diff --git a/compiler/src/lower.rs b/compiler/src/lower.rs
+index 751d3f1..7bc3926 100644
+--- a/compiler/src/lower.rs
++++ b/compiler/src/lower.rs
+@@ -68,9 +68,10 @@ impl<'a> LoweringContext<'a> {
+ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
+     let root = as_rule(cst.root())?;
+     require_rule(cst, root, "program")?;
+-    let span = cst.span(Cursor::Rule(root))?;
++    let root_span = cst.span(Cursor::Rule(root))?;
+     let mut arena = AstArena::default();
+-    let parameter = match cst.field(root, "header")? {
++    let header = cst.field(root, "header")?;
++    let parameter = match header {
+         Some(header) => {
+             let header = as_rule(header)?;
+             Some(lower_pattern(
+@@ -89,6 +90,16 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
+     let table = FixityTable::new(&fixities)?;
+     let context = LoweringContext::root(&table);
+     let mut statements = cst.field_list(root, "declarations")?;
++    // Fixity declarations are syntax metadata. Keep them out of the semantic
++    // module extent so adding or editing a header cannot perturb backend IDs.
++    let span = Span {
++        start: match (header, statements.first().copied()) {
++            (Some(header), _) => cst.span(header)?.start,
++            (None, Some(first)) => cst.span(first)?.start,
++            (None, None) => root_span.end,
++        },
++        end: root_span.end,
++    };
+     let mut result = arena.expression(Expression::Unit { span });
+     let mut result_effects = ResultEffects::Pure;
+     if let Some(last) = statements.last().copied()
+diff --git a/src/syntax/lower.ts b/src/syntax/lower.ts
+index 1540500..8de8fc3 100644
+--- a/src/syntax/lower.ts
++++ b/src/syntax/lower.ts
+@@ -67,7 +67,13 @@ export function lowerModule(root: Rule, source: string): Module {
+ 
+   let statements = fieldList(root, "declarations")
+     .map((cursor) => unwrap(cursor));
+-  let result: Expr = { tag: "unit", span: root.span };
++  // Fixity declarations are syntax metadata. Keep them out of the semantic
++  // module extent so adding or editing a header cannot perturb backend IDs.
++  const span: Span = {
++    start: headerCursor?.span.start ?? statements[0]?.span.start ?? root.span.end,
++    end: root.span.end,
++  };
++  let result: Expr = { tag: "unit", span };
+   let resultEffects: Module["resultEffects"] = "pure";
+   const last = statements.at(-1);
+   if (last !== undefined) {
+@@ -87,7 +93,7 @@ export function lowerModule(root: Rule, source: string): Module {
+       resultEffects,
+       span: result.span,
+     };
+-    result = resolveControlSequence(statements, result, context, root.span);
++    result = resolveControlSequence(statements, result, context, span);
+     resultEffects = "ambient";
+     loweredDeclarations = [];
+   } else {
+@@ -100,7 +106,7 @@ export function lowerModule(root: Rule, source: string): Module {
+     declarations: loweredDeclarations,
+     result,
+     resultEffects,
+-    span: root.span,
++    span,
+   };
+ }
+ 
+diff --git a/src/syntax/module.test.ts b/src/syntax/module.test.ts
+index 7fa6195..67c87b9 100644
+--- a/src/syntax/module.test.ts
++++ b/src/syntax/module.test.ts
+@@ -66,6 +66,17 @@ return !!(1 <++> 2 <++> 3)
+   assertEquals(nested.right.tag, "int");
+ });
+ 
++Deno.test("fixity headers do not change the semantic module extent", async () => {
++  const source = `infixl 60 (<++>) = combine
++return 1 <++> 2
++`;
++  const parsed = await parse(source);
++  assert(parsed.ok);
++  if (!parsed.ok) return;
++  assertEquals(parsed.module.span.start, source.indexOf("return"));
++  assertEquals(parsed.module.result.span.start, source.indexOf("return 1") + 7);
++});
++
+ Deno.test("a source fixity overrides the standard source prelude", async () => {
+   const parsed = await parse(`infixl 60 (+) = Custom.add
+ return 20 + 22

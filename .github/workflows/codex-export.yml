@@ -1,4 +1,4 @@
-name: Export source-defined operators workspace
+name: Validate source-defined operator fix
 
 on:
   pull_request:
@@ -9,58 +9,22 @@ permissions:
   contents: write
 
 jobs:
-  export:
+  validate:
     if: github.head_ref == 'codex/source-defined-operators'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
         with:
           ref: codex/source-defined-operators
           fetch-depth: 0
-      - name: Preserve prelude semantic source offsets
+      - name: Apply semantic-span fix
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import subprocess
-
-          path = Path("src/prelude/prelude.blot")
-          source = path.read_text()
-          baseline = subprocess.check_output(
-              ["git", "show", "origin/main:src/prelude/prelude.blot"],
-              text=True,
-          )
-          target = baseline.index("const Type =")
-          first = source.index("infixr 10 ($) = Fn.apply")
-          last_text = "prefix 90 (&) = @linear.borrow"
-          last = source.index(last_text, first) + len(last_text)
-          declarations = source[first:last] + "\n"
-          intro = (
-              "// The prelude.\n"
-              "//\n"
-              "// Conventional operators are ordinary source metadata. This bounded header is\n"
-              "// the single bootstrap source and modules may override it. Targets are ordinary\n"
-              "// bindings, so polymorphic source functions work without compiler dispatch.\n\n"
-          )
-          prefix = intro + declarations + "\n"
-          padding_width = target - len(prefix)
-          if padding_width < 4:
-              raise SystemExit("prelude fixity header no longer fits the stable prefix")
-          padding = "// " + "-" * (padding_width - 4) + "\n"
-          result = prefix + padding + source[source.index("const Type ="):]
-          if result.index("const Type =") != target:
-              raise SystemExit("failed to preserve the first semantic source offset")
-          path.write_text(result)
-          PY
+          git apply .github/codex-source-fixity.patch
+          rm .github/codex-source-fixity.patch
           git diff --check
-          if ! git diff --quiet -- src/prelude/prelude.blot; then
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add src/prelude/prelude.blot
-            git commit -m "Preserve prelude declaration offsets"
-            git push origin HEAD:codex/source-defined-operators
-          fi
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -84,28 +48,41 @@ jobs:
           --allow-run=cargo,git,rustc
           --allow-env
           scripts/build_compiler.ts
-      - name: Capture Rust test output
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Test Rust compiler
         shell: bash
         run: |
-          set +e
-          RUST_BACKTRACE=1 cargo test --manifest-path compiler/Cargo.toml -- --nocapture 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
-          status=${PIPESTATUS[0]}
-          printf '\nexit_status=%s\n' "$status" | tee -a "$RUNNER_TEMP/cargo-test.log"
-          exit 0
-      - uses: actions/upload-artifact@v7
-        with:
-          name: codex-source-defined-operators-cargo-test
-          path: ${{ runner.temp }}/cargo-test.log
-          if-no-files-found: error
-          retention-days: 1
-      - name: Pack workspace
+          set -o pipefail
+          cargo test --manifest-path compiler/Cargo.toml -- --nocapture 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+      - name: Check TypeScript
+        run: deno check .
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Verify generated frontend artifacts
+        run: deno task check:generated
+      - name: Commit validated source and snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Stabilize source fixity module spans"
+          git push origin HEAD:codex/source-defined-operators
+      - name: Pack validated workspace
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
           tar --exclude=.git -czf "$RUNNER_TEMP/blot-workspace.tar.gz" .
-      - uses: actions/upload-artifact@v7
+      - name: Upload validation output
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: codex-source-defined-operators-workspace
-          path: ${{ runner.temp }}/blot-workspace.tar.gz
-          if-no-files-found: error
+          name: codex-source-defined-operators-validation
+          path: |
+            ${{ runner.temp }}/cargo-test.log
+            ${{ runner.temp }}/blot-workspace.tar.gz
+          if-no-files-found: warn
           retention-days: 1
