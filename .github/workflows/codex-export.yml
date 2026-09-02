@@ -17,6 +17,13 @@ jobs:
         with:
           ref: codex/source-defined-operators
           fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       - name: Pack workspace
         shell: bash
         run: |
