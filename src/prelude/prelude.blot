@@ -1,21 +1,8 @@
 // The prelude.
 //
-// Nothing here is built into the compiler. `Bool`, `Int`, `+`, `struct`, and
-// `fold` are ordinary blot declarations over the `@` primitives, which is what
-// "few primitives" has to mean if it means anything.
-//
-// Two calling conventions, and the line between them is deliberate:
-//
-//   * anything an operator dispatches to is curried, because sections are the
-//     point of an operator — `Int.add 2` is what makes `20 |> Int.add 2` work;
-//   * every other multi-argument function takes one shape, because naming beats
-//     position and a tuple is still one parameter.
-
-// --- operators --------------------------------------------------------------
-//
-// The standard syntax environment is source too. Build generation asks Baba
-// to parse this bounded header and derives the bootstrap tables used before imports can be
-// elaborated. A module may override any entry with its own header declaration.
+// Conventional operators are ordinary source metadata. This bounded header is
+// the single bootstrap source and modules may override it. Targets are ordinary
+// bindings, so polymorphic source functions work without compiler dispatch.
 
 infixr 10 ($) = Fn.apply
 infixl 20 (|>) = Fn.pipe
@@ -45,15 +32,7 @@ prefix 90 (!) = @linear.own
 prefix 90 (?) = @linear.maybe
 prefix 90 (&) = @linear.borrow
 
-// --- types ------------------------------------------------------------------
-//
-// `|` names `Type.union` exactly the way `+` names `Int.add`: the operator
-// points at prelude source, and the prelude decides which primitive answers.
-// Nothing about `|` is privileged. This initial namespace has to precede the
-// declarations that use it; the complete namespace is assembled after its
-// remaining operations have been defined.
-
-
+// --------------------------------------------------------------
 const Type =
   {
     .union = @type.union;
