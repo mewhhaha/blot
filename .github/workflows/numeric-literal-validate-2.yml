@@ -1,0 +1,79 @@
+name: Numeric literal inference validation 2
+
+on:
+  push:
+    branches:
+      - codex/numeric-literal-inference
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Apply implementation and fixes
+        run: |
+          python3 .github/scripts/numeric_literal_patch.py
+          python3 .github/scripts/numeric_literal_fix.py
+      - name: Format changed files
+        run: |
+          cargo fmt --manifest-path compiler/Cargo.toml
+          deno fmt LANGUAGE.md spec/TYPECHECKING.md src/compiler/numeric_literals.test.ts
+      - name: Test Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml
+      - name: Rebuild Rust compiler Wasm
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
+      - name: Check Rust lint
+        run: >-
+          cargo clippy
+          --manifest-path compiler/Cargo.toml
+          --target wasm32-unknown-unknown
+          -- -D warnings
+      - name: Test numeric literal inference
+        run: >-
+          node
+          --import ./src/node/deno_test_compat.mjs
+          --import tsx
+          --test
+          src/compiler/numeric_literals.test.ts
+      - name: Check patch
+        run: git diff --check
+      - name: Commit validated change
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            compiler/src/typecheck.rs \
+            compiler/src/eval.rs \
+            LANGUAGE.md \
+            spec/TYPECHECKING.md \
+            examples/floats.blot \
+            src/compiler/numeric_literals.test.ts
+          git commit -m "Infer numeric literals from context"
+          git push
