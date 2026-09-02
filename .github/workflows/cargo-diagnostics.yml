@@ -11,13 +11,14 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - name: Instrument export type mismatch
+          components: clippy, rustfmt
+      - name: Apply candidate residual-sum fix
         shell: bash
         run: |
           python - <<'PY'
@@ -25,35 +26,93 @@ jobs:
 
           path = Path("compiler/src/hir.rs")
           source = path.read_text()
-          old = (
-              '            return Err(hir_error(\n'
-              '                "A function export result does not match its checked type.",\n'
-              '            ));'
-          )
-          new = (
-              '            let message = format!(\n'
-              '                "A function export `{name}` result does not match its checked type: actual {} {:?}; expected {} {:?}.",\n'
-              '                result.type_id,\n'
-              '                self.types[result.type_id],\n'
-              '                expected,\n'
-              '                self.types[expected],\n'
-              '            );\n'
-              '            return Err(hir_error(&message));'
-          )
-          if old not in source:
-              raise SystemExit("export mismatch diagnostic anchor not found")
-          path.write_text(source.replace(old, new, 1))
+          start = source.index("    fn sum_type(")
+          end = source.index("\n    fn region_integer_type", start)
+          replacement = '''    fn sum_type(&mut self, cases: &[String], payload_types: &[usize]) -> usize {
+              debug_assert_eq!(cases.len(), payload_types.len());
+              let mut members = cases
+                  .iter()
+                  .cloned()
+                  .zip(payload_types.iter().copied())
+                  .collect::<Vec<_>>();
+              members.sort_by_key(|(name, _)| name.clone());
+              let key = format!(
+                  "residual-sum:{}:{}",
+                  members
+                      .iter()
+                      .map(|(name, _)| name.as_str())
+                      .collect::<Vec<_>>()
+                      .join("|"),
+                  members
+                      .iter()
+                      .map(|(_, payload_type)| payload_type.to_string())
+                      .collect::<Vec<_>>()
+                      .join("|")
+              );
+              self.insert_type(
+                  &key,
+                  RuntimeType::Sum {
+                      name: format!("residual${}", self.types.len()),
+                      cases: members
+                          .into_iter()
+                          .map(|(name, payload_type)| RuntimeCase { name, payload_type })
+                          .collect(),
+                  },
+              )
+          }
+          '''
+          source = source[:start] + replacement + source[end:]
+
+          marker = '''    #[test]
+              fn online_aggregate_representations_distinguish_runtime_leaf_types() {'''
+          test = '''    #[test]
+              fn residual_sum_types_are_canonical_by_constructor_name() {
+                  let mut trace = ResidualTrace::new("sum-order-test.blot");
+                  let some_then_none = trace.sum_type(
+                      &["Some".to_owned(), "None".to_owned()],
+                      &[4, 0],
+                  );
+                  let none_then_some = trace.sum_type(
+                      &["None".to_owned(), "Some".to_owned()],
+                      &[0, 4],
+                  );
+
+                  assert_eq!(some_then_none, none_then_some);
+                  let RuntimeType::Sum { cases, .. } = &trace.types[some_then_none] else {
+                      panic!("residual sum should use a sum representation");
+                  };
+                  assert_eq!(cases[0].name, "None");
+                  assert_eq!(cases[0].payload_type, 0);
+                  assert_eq!(cases[1].name, "Some");
+                  assert_eq!(cases[1].payload_type, 4);
+              }
+
+          '''
+          if marker not in source:
+              raise SystemExit("sum-order test insertion anchor not found")
+          source = source.replace(marker, test + marker, 1)
+          path.write_text(source)
           PY
-      - name: Capture failing compiler test
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Capture candidate validation
         shell: bash
         run: |
           set +e
-          RUST_BACKTRACE=1 cargo test \
+          cargo test \
             --manifest-path compiler/Cargo.toml \
             session::tests::runtime_memory_lowering_fixture_prepares_and_emits_all_builders \
             -- --exact --nocapture \
             2>&1 | tee cargo-test.log
-          echo "${PIPESTATUS[0]}" > cargo-test.status
+          exact_status=${PIPESTATUS[0]}
+          cargo test --manifest-path compiler/Cargo.toml --no-fail-fast \
+            2>&1 | tee -a cargo-test.log
+          full_status=${PIPESTATUS[0]}
+          cargo clippy --manifest-path compiler/Cargo.toml -- -D warnings \
+            2>&1 | tee -a cargo-test.log
+          clippy_status=${PIPESTATUS[0]}
+          printf 'exact=%s\nfull=%s\nclippy=%s\n' \
+            "$exact_status" "$full_status" "$clippy_status" \
+            > cargo-test.status
           exit 0
       - uses: actions/upload-artifact@v4
         if: always()
