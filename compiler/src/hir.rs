@@ -6713,12 +6713,23 @@ impl ResidualTrace {
     }
 
     fn sum_type(&mut self, cases: &[String], payload_types: &[usize]) -> usize {
+        debug_assert_eq!(cases.len(), payload_types.len());
+        let mut members = cases
+            .iter()
+            .cloned()
+            .zip(payload_types.iter().copied())
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(name, _)| name.clone());
         let key = format!(
             "residual-sum:{}:{}",
-            cases.join("|"),
-            payload_types
+            members
                 .iter()
-                .map(usize::to_string)
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join("|"),
+            members
+                .iter()
+                .map(|(_, payload_type)| payload_type.to_string())
                 .collect::<Vec<_>>()
                 .join("|")
         );
@@ -6726,13 +6737,9 @@ impl ResidualTrace {
             &key,
             RuntimeType::Sum {
                 name: format!("residual${}", self.types.len()),
-                cases: cases
-                    .iter()
-                    .zip(payload_types)
-                    .map(|(name, payload_type)| RuntimeCase {
-                        name: name.clone(),
-                        payload_type: *payload_type,
-                    })
+                cases: members
+                    .into_iter()
+                    .map(|(name, payload_type)| RuntimeCase { name, payload_type })
                     .collect(),
             },
         )
@@ -12560,6 +12567,22 @@ mod tests {
 
         assert_eq!(tag.type_id, 2);
         assert_eq!(trace.blocks[0].operations[0].kind, "sum.tag");
+    }
+
+    #[test]
+    fn residual_sum_types_are_canonical_by_constructor_name() {
+        let mut trace = ResidualTrace::new("sum-order-test.blot");
+        let some_then_none = trace.sum_type(&["Some".to_owned(), "None".to_owned()], &[4, 0]);
+        let none_then_some = trace.sum_type(&["None".to_owned(), "Some".to_owned()], &[0, 4]);
+
+        assert_eq!(some_then_none, none_then_some);
+        let RuntimeType::Sum { cases, .. } = &trace.types[some_then_none] else {
+            panic!("residual sum should use a sum representation");
+        };
+        assert_eq!(cases[0].name, "None");
+        assert_eq!(cases[0].payload_type, 0);
+        assert_eq!(cases[1].name, "Some");
+        assert_eq!(cases[1].payload_type, 4);
     }
 
     #[test]
