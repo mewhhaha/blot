@@ -1,0 +1,30 @@
+name: Numeric literal runtime layout diagnosis
+
+on:
+  push:
+    branches:
+      - codex/numeric-literal-inference
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Apply implementation and diagnostics
+        run: |
+          python3 .github/scripts/numeric_literal_patch.py
+          python3 .github/scripts/numeric_literal_fix.py
+          python3 .github/scripts/numeric_literal_fix2.py
+          python3 .github/scripts/numeric_literal_diagnose2.py
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Run failing fixture
+        run: >-
+          cargo test
+          --manifest-path compiler/Cargo.toml
+          runtime_memory_lowering_fixture_prepares_and_emits_all_builders
+          -- --nocapture
