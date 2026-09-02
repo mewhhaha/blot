@@ -107,6 +107,16 @@ reached it stops retaining new facts. A later proof-required operation reports
 helper or shorten the set of simultaneously live affine facts; truncated facts
 are never interpreted as proof.
 
+Entailment treats an edge `right -> left` with weight `bound` as the difference
+fact `left - right <= bound`. One proof query runs shortest-path relaxation only
+from the distinct `right` nodes named by its required inequalities; it does not
+construct all-pairs closure. When shadowing removes the final reference to an
+identity, existential projection retains nonincident edges and composes every
+minimum predecessor edge into that identity with every minimum successor edge
+out of it. This local min-plus elimination preserves every live difference fact
+without materializing paths among unrelated nodes. The ordinary term and edge
+budgets still bound the resulting context.
+
 ## 4. Total and proof-required operations
 
 A total array access performs the source bounds decision and returns the

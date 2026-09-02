@@ -109,6 +109,7 @@ export type BlotRuntimeOperation =
     | {
       readonly kind:
         | "text.append"
+        | "text.join"
         | "text.length"
         | "text.scalar-at"
         | "text.slice"
@@ -211,6 +212,10 @@ export type BlotRuntimeOperation =
     }
     | {
       readonly kind: "store.read";
+    }
+    | {
+      readonly kind: "store.read.field";
+      readonly field: number;
     }
     | {
       readonly kind: "store.write" | "store.grow";
@@ -1107,6 +1112,48 @@ function validateOperation(
   }
   if (operation.kind.startsWith("scratch.")) {
     validateScratchOperation(module, function_, operation, values);
+  }
+  if (operation.kind === "store.read.field") {
+    const source = values.get(operation.operands[0]);
+    const index = values.get(operation.operands[1]);
+    let sourceType: BlotRuntimeType | undefined;
+    if (source !== undefined) {
+      sourceType = module.types[source.type];
+    }
+    let fieldType: number | undefined;
+    if (sourceType?.kind === "store") {
+      const elementType = module.types[sourceType.elementType];
+      if (elementType.kind === "product") {
+        fieldType = elementType.fields[operation.field]?.type;
+      }
+    }
+    if (
+      operation.operands.length !== 2 ||
+      index === undefined ||
+      module.types[index.type].kind !== "signed-integer-64" ||
+      fieldType === undefined || fieldType !== operation.type
+    ) {
+      throw new TypeError(
+        `${module.source}: store.read.field ${function_.name}:${operation.result} requires (Store Product, Int) -> selected field`,
+      );
+    }
+  }
+  if (operation.kind === "text.join") {
+    const resultType = module.types[operation.type];
+    const source = values.get(operation.operands[0]);
+    let sourceType: BlotRuntimeType | undefined;
+    if (source !== undefined) {
+      sourceType = module.types[source.type];
+    }
+    if (
+      operation.operands.length !== 1 || resultType.kind !== "text" ||
+      sourceType?.kind !== "store" ||
+      module.types[sourceType.elementType].kind !== "text"
+    ) {
+      throw new TypeError(
+        `${module.source}: text.join ${function_.name}:${operation.result} requires Store Text -> Text`,
+      );
+    }
   }
   if (operation.kind === "vector" && operation.operator === "shuffle") {
     if (operation.operands.length !== 6) {

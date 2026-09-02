@@ -903,6 +903,21 @@ pub(crate) struct ResidualSwitch {
     join: usize,
 }
 
+#[derive(Clone, Copy)]
+enum StoreRangeDestination {
+    Fresh,
+    Shared,
+}
+
+impl StoreRangeDestination {
+    fn update(self) -> &'static str {
+        match self {
+            Self::Fresh => "owned-reuse",
+            Self::Shared => "persistent",
+        }
+    }
+}
+
 impl ResidualTrace {
     pub(crate) fn crosses_development_boundary(&self, caller: &str, callee: &str) -> bool {
         caller != callee
@@ -1342,9 +1357,16 @@ impl ResidualTrace {
                 )
             }
             "@scratch.push" => {
-                if let Value::DeferredScratch { capacity } = &arguments[0] {
+                let empty_capacity = match &arguments[0] {
+                    Value::DeferredScratch { capacity } => Some(capacity.as_ref().clone()),
+                    Value::Scratch { values, capacity } if values.is_empty() => {
+                        Some(Value::Int((*capacity).into()))
+                    }
+                    _ => None,
+                };
+                if let Some(capacity) = empty_capacity {
                     let element_type = self.value_type(&arguments[1])?;
-                    let capacity = self.lower_as(Some(capacity), "signed-integer-64", span)?;
+                    let capacity = self.lower_as(Some(&capacity), "signed-integer-64", span)?;
                     let scratch_type = self.insert_type(
                         &format!("scratch:{element_type}"),
                         RuntimeType::Scratch { element_type },
@@ -1379,7 +1401,14 @@ impl ResidualTrace {
                 )
             }
             "@scratch.finish" => {
-                if let Value::DeferredScratch { capacity } = &arguments[0] {
+                let empty_capacity = match &arguments[0] {
+                    Value::DeferredScratch { capacity } => Some(capacity.as_ref().clone()),
+                    Value::Scratch { values, capacity } if values.is_empty() => {
+                        Some(Value::Int((*capacity).into()))
+                    }
+                    _ => None,
+                };
+                if let Some(capacity) = empty_capacity {
                     let Some(expected_result) = expected_result else {
                         return Err(hir_error(
                             "An empty residual Scratch needs a specialized Array result.",
@@ -1399,7 +1428,7 @@ impl ResidualTrace {
                         hir_error("A specialized Array result omitted its element type.")
                     })?;
                     let element_type = self.type_from_type_value(element)?;
-                    let capacity = self.lower_as(Some(capacity), "signed-integer-64", span)?;
+                    let capacity = self.lower_as(Some(&capacity), "signed-integer-64", span)?;
                     let scratch_type = self.insert_type(
                         &format!("scratch:{element_type}"),
                         RuntimeType::Scratch { element_type },
@@ -1554,6 +1583,18 @@ impl ResidualTrace {
                 let left = self.lower_as(arguments.first(), "text", span)?;
                 let right = self.lower_as(arguments.get(1), "text", span)?;
                 self.operation("text.append", 3, vec![left.id, right.id], span, None)
+            }
+            "@text.join" => {
+                let texts = self.lower_value(&arguments[0], span)?;
+                let RuntimeType::Store { element_type } = self.types[texts.type_id] else {
+                    return Err(hir_error("Text.join received a non-Array value."));
+                };
+                if element_type != 3 {
+                    return Err(hir_error(&format!(
+                        "Text.join received Store elements of runtime type {element_type}, expected Text type 3."
+                    )));
+                }
+                self.operation("text.join", 3, vec![texts.id], span, None)
             }
             "@text.len" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
@@ -1857,9 +1898,7 @@ impl ResidualTrace {
                     span,
                     Some(update),
                 );
-                if update == "owned-reuse" {
-                    result.meaning = RuntimeMeaning::ReusableStore;
-                }
+                result.meaning = RuntimeMeaning::ReusableStore;
                 result
             }
             "@array.push" => {
@@ -1890,9 +1929,7 @@ impl ResidualTrace {
                     span,
                     Some(update),
                 );
-                if update == "owned-reuse" {
-                    result.meaning = RuntimeMeaning::ReusableStore;
-                }
+                result.meaning = RuntimeMeaning::ReusableStore;
                 result
             }
             _ => {
@@ -2432,9 +2469,10 @@ impl ResidualTrace {
 
     pub(crate) fn join_switch(
         &mut self,
-        _context: &Rc<Context>,
+        context: &Rc<Context>,
         switch: ResidualSwitch,
         branches: Vec<(usize, Option<Value>)>,
+        checked_result: Option<&Value>,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
         let mut survivors = branches
@@ -2463,11 +2501,7 @@ impl ResidualTrace {
             return Ok(first.clone());
         }
         if survivors.iter().any(|(_, value)| is_function_value(value)) {
-            return Err(Diagnostic::new(
-                "BLOT_UNSUPPORTED_LOWERING",
-                "A multi-way runtime case returning functions has no settled finite choice representation.",
-                span,
-            ));
+            return self.join_function_switch(context, switch, survivors, span);
         }
         let result_reuse = survivors
             .iter()
@@ -2480,6 +2514,8 @@ impl ResidualTrace {
         let all_tags = survivors
             .iter()
             .all(|(_, value)| matches!(value, Value::Tag { .. }));
+        let checked_result_type = checked_result
+            .and_then(|checked_result| self.type_from_type_value(checked_result).ok());
         let mut required_cases = BTreeSet::new();
         let mut required_payloads = BTreeMap::new();
         let mut candidate_sums = Vec::new();
@@ -2534,13 +2570,17 @@ impl ResidualTrace {
                 _ => {}
             }
         }
-        let expected_sum = candidate_sums.iter().copied().find(|type_id| {
-            self.sum_representation(*type_id).is_some_and(|(_, cases)| {
-                required_cases
-                    .iter()
-                    .all(|required| cases.iter().any(|case_| case_.name == *required))
-            })
-        });
+        let expected_sum = checked_result_type
+            .filter(|type_id| self.sum_representation(*type_id).is_some())
+            .or_else(|| {
+                candidate_sums.iter().copied().find(|type_id| {
+                    self.sum_representation(*type_id).is_some_and(|(_, cases)| {
+                        required_cases
+                            .iter()
+                            .all(|required| cases.iter().any(|case_| case_.name == *required))
+                    })
+                })
+            });
         let expected_sum = match (expected_sum, candidate_sums.is_empty()) {
             (Some(type_id), _) => Some(type_id),
             (None, true) => None,
@@ -2612,9 +2652,21 @@ impl ResidualTrace {
                 lowered.push((end, self.lower_sum_member(&value, sum_type, span)?));
             }
         } else {
+            let mut represented_types = BTreeSet::new();
+            for (_, value) in &survivors {
+                if let Ok(type_id) = self.value_type(value) {
+                    represented_types.insert(type_id);
+                }
+            }
+            let expected_type = checked_result_type
+                .or_else(|| self.join_runtime_types(represented_types.iter().copied().collect()));
             for (end, value) in survivors.drain(..) {
                 self.current_block = end;
-                lowered.push((end, self.lower_value(&value, span)?));
+                let value = match expected_type {
+                    Some(expected_type) => self.lower_value_as(&value, expected_type, span)?,
+                    None => self.lower_value(&value, span)?,
+                };
+                lowered.push((end, value));
             }
         }
         if let Some(indirect_type) = lowered
@@ -2631,19 +2683,13 @@ impl ResidualTrace {
                 let concrete_type = *concrete_types
                     .first()
                     .expect("guarded recursive join representation");
-                if self.settle_recursive_type(indirect_type, concrete_type)? {
+                if self.settle_recursive_type(indirect_type, concrete_type, span)? {
                     for (end, value) in &mut lowered {
                         if value.type_id == indirect_type {
                             continue;
                         }
                         self.current_block = *end;
-                        *value = self.operation(
-                            "indirect.make",
-                            indirect_type,
-                            vec![value.id],
-                            span,
-                            None,
-                        );
+                        *value = self.box_recursive_result(value.clone(), indirect_type, span)?;
                     }
                 }
             }
@@ -2656,11 +2702,15 @@ impl ResidualTrace {
             return Err(Diagnostic::new(
                 "BLOT_RUST_INVARIANT",
                 format!(
-                    "A checked multi-way case produced incompatible runtime representations {} and {}.",
+                    "A checked multi-way case produced incompatible runtime representations {} and {}; contextual result {} resolved to {:?}.",
                     serde_json::to_string(&self.types[expected_type])
                         .unwrap_or_else(|_| format!("type {expected_type}")),
                     serde_json::to_string(&self.types[incompatible.type_id])
-                        .unwrap_or_else(|_| format!("type {}", incompatible.type_id))
+                        .unwrap_or_else(|_| format!("type {}", incompatible.type_id)),
+                    checked_result
+                        .map(crate::value::show)
+                        .unwrap_or_else(|| "<none>".to_owned()),
+                    checked_result_type,
                 ),
                 span,
             ));
@@ -2697,6 +2747,217 @@ impl ResidualTrace {
             span,
         )?;
         Ok(apply_store_reuse_witness(&result_reuse, value, &self.types))
+    }
+
+    fn join_runtime_types(&mut self, types: Vec<usize>) -> Option<usize> {
+        let mut types = types.into_iter();
+        let mut joined = types.next()?;
+        for type_id in types {
+            joined = self.join_runtime_type_pair(joined, type_id, &mut HashSet::new())?;
+        }
+        Some(joined)
+    }
+
+    fn join_runtime_type_pair(
+        &mut self,
+        left: usize,
+        right: usize,
+        active: &mut HashSet<(usize, usize)>,
+    ) -> Option<usize> {
+        if left == right {
+            return Some(left);
+        }
+        let pair = if left < right {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        if !active.insert(pair) {
+            return None;
+        }
+        let left_type = self.types.get(left)?.clone();
+        let right_type = self.types.get(right)?.clone();
+        let joined = match (left_type, right_type) {
+            (
+                RuntimeType::Product {
+                    fields: left_fields,
+                    ..
+                },
+                RuntimeType::Product {
+                    fields: right_fields,
+                    ..
+                },
+            ) if left_fields.len() == right_fields.len() => {
+                let mut fields = Vec::with_capacity(left_fields.len());
+                for (left_field, right_field) in left_fields.iter().zip(right_fields) {
+                    if left_field.name != right_field.name {
+                        active.remove(&pair);
+                        return None;
+                    }
+                    fields.push(RuntimeField {
+                        name: left_field.name.clone(),
+                        type_id: self.join_runtime_type_pair(
+                            left_field.type_id,
+                            right_field.type_id,
+                            active,
+                        )?,
+                    });
+                }
+                Some(self.insert_product_type(fields))
+            }
+            (
+                RuntimeType::Sum {
+                    cases: left_cases, ..
+                },
+                RuntimeType::Sum {
+                    cases: right_cases, ..
+                },
+            ) => {
+                let mut payloads = BTreeMap::new();
+                for case_ in left_cases.into_iter().chain(right_cases) {
+                    let payload_type = match payloads.get(&case_.name).copied() {
+                        Some(known) => {
+                            self.join_runtime_type_pair(known, case_.payload_type, active)?
+                        }
+                        None => case_.payload_type,
+                    };
+                    payloads.insert(case_.name, payload_type);
+                }
+                let cases = payloads.keys().cloned().collect::<Vec<_>>();
+                let payload_types = payloads.values().copied().collect::<Vec<_>>();
+                Some(self.sum_type(&cases, &payload_types))
+            }
+            (
+                RuntimeType::Store {
+                    element_type: left_element,
+                },
+                RuntimeType::Store {
+                    element_type: right_element,
+                },
+            ) => {
+                let element_type =
+                    self.join_runtime_type_pair(left_element, right_element, active)?;
+                Some(self.insert_type(
+                    &format!("store:{element_type}"),
+                    RuntimeType::Store { element_type },
+                ))
+            }
+            (
+                RuntimeType::Scratch {
+                    element_type: left_element,
+                },
+                RuntimeType::Scratch {
+                    element_type: right_element,
+                },
+            ) => {
+                let element_type =
+                    self.join_runtime_type_pair(left_element, right_element, active)?;
+                Some(self.insert_type(
+                    &format!("scratch:{element_type}"),
+                    RuntimeType::Scratch { element_type },
+                ))
+            }
+            (
+                RuntimeType::Sealed {
+                    name: left_name,
+                    representation_type: left_representation,
+                },
+                RuntimeType::Sealed {
+                    name: right_name,
+                    representation_type: right_representation,
+                },
+            ) if left_name == right_name => {
+                let representation_type =
+                    self.join_runtime_type_pair(left_representation, right_representation, active)?;
+                Some(self.insert_type(
+                    &format!("sealed:{left_name}:{representation_type}"),
+                    RuntimeType::Sealed {
+                        name: left_name,
+                        representation_type,
+                    },
+                ))
+            }
+            _ => None,
+        };
+        active.remove(&pair);
+        joined
+    }
+
+    fn join_function_switch(
+        &mut self,
+        context: &Rc<Context>,
+        switch: ResidualSwitch,
+        survivors: Vec<(usize, Value)>,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let signature = survivors
+            .iter()
+            .find_map(|(_, value)| joined_signature(value));
+        let mut alternatives = Vec::<ClosureAlternative>::new();
+        let mut branches = Vec::with_capacity(survivors.len());
+        for (end, value) in survivors {
+            let branch_alternatives =
+                self.branch_alternatives(context, &value, signature.as_ref(), span)?;
+            let mut cases = Vec::with_capacity(branch_alternatives.len());
+            for alternative in &branch_alternatives {
+                let case = alternatives
+                    .iter()
+                    .position(|candidate| candidate.same_source(alternative))
+                    .unwrap_or_else(|| {
+                        alternatives.push(alternative.clone());
+                        alternatives.len() - 1
+                    });
+                cases.push(case);
+            }
+            branches.push((end, value, branch_alternatives, cases));
+        }
+        self.settle_payload_types(&mut alternatives);
+        let case_names = alternatives
+            .iter()
+            .enumerate()
+            .map(|(case, alternative)| format!("choice${case}${}", alternative.source_name()))
+            .collect::<Vec<_>>();
+        let payload_types = alternatives
+            .iter()
+            .map(|alternative| alternative.payload_type)
+            .collect::<Vec<_>>();
+        let sum_type = self.sum_type(&case_names, &payload_types);
+        for (end, value, branch_alternatives, cases) in branches {
+            let (selector, end) = self.encode_choice(
+                end,
+                &value,
+                &branch_alternatives,
+                &cases,
+                &alternatives,
+                sum_type,
+                span,
+            )?;
+            self.blocks[end].terminator = Some(RuntimeTerminator::Branch {
+                target: switch.join,
+                arguments: vec![selector.id],
+                span: self.span(span),
+            });
+        }
+        let selector = self.next_value();
+        let ownership = self.ownership(sum_type);
+        let runtime_span = self.span(span);
+        self.blocks[switch.join]
+            .parameters
+            .push(RuntimeBlockParameter {
+                value: selector,
+                type_id: sum_type,
+                ownership,
+                span: runtime_span,
+            });
+        self.current_block = switch.join;
+        Ok(Value::ClosureChoice {
+            selector: RuntimeValue {
+                id: selector,
+                type_id: sum_type,
+                meaning: RuntimeMeaning::Sum { cases: case_names },
+            },
+            alternatives: Rc::new(alternatives),
+        })
     }
 
     pub(crate) fn select_block(&mut self, block: usize) {
@@ -3090,26 +3351,46 @@ impl ResidualTrace {
         &mut self,
         indirect_type: usize,
         concrete_type: usize,
+        _span: crate::ast::Span,
     ) -> Result<bool, Diagnostic> {
         if !self.pending_recursive_types.contains(&indirect_type) {
             return Ok(false);
         }
-        let RuntimeType::Indirect { target_type } = &mut self.types[indirect_type] else {
+        let RuntimeType::Indirect { target_type } = self.types[indirect_type] else {
             return Err(hir_error(
                 "A pending recursive result lost its indirect representation.",
             ));
         };
         if self.settled_recursive_types.contains(&indirect_type) {
-            if *target_type != concrete_type {
-                return Err(hir_error(
-                    "A recursive result received incompatible finite representations.",
-                ));
+            if target_type != concrete_type {
+                return Err(hir_error(&format!(
+                    "A recursive result first settled to runtime type {} {:?}, then produced incompatible runtime type {} {:?}.",
+                    target_type, self.types[target_type], concrete_type, self.types[concrete_type],
+                )));
             }
             return Ok(true);
         }
-        *target_type = concrete_type;
+        self.types[indirect_type] = RuntimeType::Indirect {
+            target_type: concrete_type,
+        };
         self.settled_recursive_types.insert(indirect_type);
         Ok(true)
+    }
+
+    fn box_recursive_result(
+        &mut self,
+        value: RuntimeValue,
+        indirect_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        self.settle_recursive_type(indirect_type, value.type_id, span)?;
+        let RuntimeType::Indirect { target_type } = self.types[indirect_type] else {
+            return Err(hir_error(
+                "A pending recursive result lost its indirect representation.",
+            ));
+        };
+        let value = self.coerce_runtime_value(&value, target_type, span)?;
+        Ok(self.operation("indirect.make", indirect_type, vec![value.id], span, None))
     }
 
     /// Move a capture product between the direct and indirect payload forms.
@@ -3760,6 +4041,7 @@ impl ResidualTrace {
                 body,
                 closure_parameter,
                 argument,
+                caller_argument.type_id,
             )?
         } else {
             None
@@ -3948,6 +4230,7 @@ impl ResidualTrace {
         body: crate::ast::ExpressionId,
         parameter: crate::ast::PatternId,
         argument: &Value,
+        argument_type: usize,
     ) -> Result<Option<(usize, StoreReuseWitness)>, Diagnostic> {
         let contract = context
             .ownership_contracts
@@ -3962,13 +4245,14 @@ impl ResidualTrace {
         else {
             return Ok(None);
         };
-        let source = match result {
-            Produced::Parameter { source, .. } | Produced::StoreParameter { source, .. } => source,
+        let (source, path) = match result {
+            Produced::Parameter { source, .. } => (source, Vec::new()),
+            Produced::StoreParameter { source, path, .. } => (source, path),
             Produced::Region {
                 root: Some(source),
                 splits,
                 ..
-            } if splits.is_empty() => source,
+            } if splits.is_empty() => (source, Vec::new()),
             _ => return Ok(None),
         };
         if contract_parameter != parameter {
@@ -3985,7 +4269,16 @@ impl ResidualTrace {
         let value = value_at_pattern(&loaded, parameter, source, argument).ok_or_else(|| {
             hir_error("A residual closure ownership result is absent from its argument pattern.")
         })?;
-        let type_id = self.value_type(&value)?;
+        let source_type =
+            runtime_type_at_pattern(&loaded, parameter, source, argument_type, &self.types)
+                .ok_or_else(|| {
+                    hir_error(
+                        "A residual closure ownership result is absent from its runtime argument.",
+                    )
+                })?;
+        let type_id = runtime_type_at_path(source_type, &path, &self.types).ok_or_else(|| {
+            hir_error("A residual closure ownership result path is absent from its runtime type.")
+        })?;
         let witness = runtime_store_reuse_witness(&value, &self.types);
         Ok(Some((type_id, witness)))
     }
@@ -3996,7 +4289,19 @@ impl ResidualTrace {
         value: Value,
     ) -> Result<Value, Diagnostic> {
         let observed_result_reuse = runtime_store_reuse_witness(&value, &self.types);
-        let mut result = self.lower_value(&value, compilation.span)?;
+        let mut result = self
+            .lower_value(&value, compilation.span)
+            .map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "{} Residual function {} ({}) returned {} for runtime type {}.",
+                    diagnostic.message,
+                    compilation.name,
+                    compilation.function,
+                    crate::value::show(&value),
+                    compilation.result_type,
+                );
+                diagnostic
+            })?;
         if self
             .pending_recursive_types
             .contains(&compilation.result_type)
@@ -4016,14 +4321,8 @@ impl ResidualTrace {
                     ));
                 }
             } else {
-                self.settle_recursive_type(compilation.result_type, result.type_id)?;
-                result = self.operation(
-                    "indirect.make",
-                    compilation.result_type,
-                    vec![result.id],
-                    compilation.span,
-                    None,
-                );
+                result =
+                    self.box_recursive_result(result, compilation.result_type, compilation.span)?;
             }
             self.pending_recursive_types
                 .remove(&compilation.result_type);
@@ -4389,6 +4688,20 @@ impl ResidualTrace {
                 },
             ));
         }
+        if let Value::Runtime(consequent_runtime) = &consequent
+            && !matches!(alternate, Value::Runtime(_))
+        {
+            self.current_block = alternate_block;
+            let alternate = self.lower_value_as(&alternate, consequent_runtime.type_id, span)?;
+            return Ok((consequent_runtime.clone(), alternate));
+        }
+        if let Value::Runtime(alternate_runtime) = &alternate
+            && !matches!(consequent, Value::Runtime(_))
+        {
+            self.current_block = consequent_block;
+            let consequent = self.lower_value_as(&consequent, alternate_runtime.type_id, span)?;
+            return Ok((consequent, alternate_runtime.clone()));
+        }
         self.current_block = consequent_block;
         let mut consequent = self.lower_value(&consequent, span)?;
         self.current_block = alternate_block;
@@ -4407,30 +4720,24 @@ impl ResidualTrace {
             let alternate_unsettled = self.pending_recursive_types.contains(&alternate.type_id)
                 && !self.settled_recursive_types.contains(&alternate.type_id);
             if consequent_target == Some(alternate.type_id) || consequent_unsettled {
-                if self.pending_recursive_types.contains(&consequent.type_id) {
-                    self.settle_recursive_type(consequent.type_id, alternate.type_id)?;
-                }
                 self.current_block = alternate_block;
-                alternate = self.operation(
-                    "indirect.make",
-                    consequent.type_id,
-                    vec![alternate.id],
-                    span,
-                    None,
-                );
+                alternate = self.box_recursive_result(alternate, consequent.type_id, span)?;
             } else if alternate_target == Some(consequent.type_id) || alternate_unsettled {
-                if self.pending_recursive_types.contains(&alternate.type_id) {
-                    self.settle_recursive_type(alternate.type_id, consequent.type_id)?;
-                }
                 self.current_block = consequent_block;
-                consequent = self.operation(
-                    "indirect.make",
-                    alternate.type_id,
-                    vec![consequent.id],
-                    span,
-                    None,
-                );
+                consequent = self.box_recursive_result(consequent, alternate.type_id, span)?;
             }
+        }
+        if consequent.type_id != alternate.type_id
+            && let Some(joined_type) = self.join_runtime_type_pair(
+                consequent.type_id,
+                alternate.type_id,
+                &mut HashSet::new(),
+            )
+        {
+            self.current_block = consequent_block;
+            consequent = self.coerce_runtime_value(&consequent, joined_type, span)?;
+            self.current_block = alternate_block;
+            alternate = self.coerce_runtime_value(&alternate, joined_type, span)?;
         }
         Ok((consequent, alternate))
     }
@@ -4656,8 +4963,20 @@ impl ResidualTrace {
         expected_type: usize,
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
+        let unsettled_recursive_type = self.pending_recursive_types.contains(&expected_type)
+            && !self.settled_recursive_types.contains(&expected_type);
+        if unsettled_recursive_type {
+            let lowered = self.lower_value(value, span)?;
+            if lowered.type_id == expected_type {
+                return Ok(lowered);
+            }
+            return self.box_recursive_result(lowered, expected_type, span);
+        }
         if matches!(value, Value::Tag { .. }) && self.sum_representation(expected_type).is_some() {
             return self.lower_sum_member(value, expected_type, span);
+        }
+        if let Value::Runtime(runtime) = value {
+            return self.coerce_runtime_value(runtime, expected_type, span);
         }
         match (value, self.types[expected_type].clone()) {
             (Value::Shape(fields), RuntimeType::Product { fields: layout, .. }) => {
@@ -4717,14 +5036,119 @@ impl ResidualTrace {
                     return Err(Diagnostic::new(
                         "BLOT_RUST_INVARIANT",
                         format!(
-                            "A residual argument has runtime type {}, but checking requires runtime type {}.",
-                            lowered.type_id, expected_type
+                            "A residual argument has runtime type {} {:?}, but checking requires runtime type {} {:?}.",
+                            lowered.type_id,
+                            self.types[lowered.type_id],
+                            expected_type,
+                            self.types[expected_type],
                         ),
                         span,
                     ));
                 }
                 Ok(lowered)
             }
+        }
+    }
+
+    fn coerce_runtime_value(
+        &mut self,
+        value: &RuntimeValue,
+        expected_type: usize,
+        span: crate::ast::Span,
+    ) -> Result<RuntimeValue, Diagnostic> {
+        if value.type_id == expected_type {
+            return Ok(value.clone());
+        }
+        match (
+            self.types[value.type_id].clone(),
+            self.types[expected_type].clone(),
+        ) {
+            (_, RuntimeType::Indirect { target_type }) => {
+                let value = self.coerce_runtime_value(value, target_type, span)?;
+                Ok(self.operation("indirect.make", expected_type, vec![value.id], span, None))
+            }
+            (
+                RuntimeType::Product {
+                    fields: source_fields,
+                    ..
+                },
+                RuntimeType::Product {
+                    fields: expected_fields,
+                    ..
+                },
+            ) if source_fields.len() == expected_fields.len() => {
+                let mut operands = Vec::with_capacity(expected_fields.len());
+                for expected_field in expected_fields {
+                    let (source_index, source_field) = source_fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, field)| field.name == expected_field.name)
+                        .ok_or_else(|| {
+                            hir_error(&format!(
+                                "A checked record representation omitted field `{}`.",
+                                expected_field.name
+                            ))
+                        })?;
+                    let projected =
+                        self.project_field(value, source_index, source_field.type_id, span);
+                    let coerced =
+                        self.coerce_runtime_value(&projected, expected_field.type_id, span)?;
+                    operands.push(coerced.id);
+                }
+                Ok(self.operation("product.make", expected_type, operands, span, None))
+            }
+            (RuntimeType::Sum { cases, .. }, _) if cases.len() == 1 => {
+                let (expected_sum, expected_cases) = self
+                    .sum_representation(expected_type)
+                    .map(|(type_id, cases)| (type_id, cases.to_vec()))
+                    .ok_or_else(|| {
+                        hir_error("A checked sum representation was joined with a non-sum type.")
+                    })?;
+                let source_case = &cases[0];
+                let expected_case = expected_cases
+                    .iter()
+                    .position(|case_| case_.name == source_case.name)
+                    .ok_or_else(|| {
+                        hir_error(&format!(
+                            "Constructor `#{}` is absent from its joined runtime type.",
+                            source_case.name
+                        ))
+                    })?;
+                let payload = self.sum_payload(value, 0, span)?;
+                let payload = self.lower_value_as(
+                    &payload,
+                    expected_cases[expected_case].payload_type,
+                    span,
+                )?;
+                let mut widened = self.operation_with_case(
+                    "sum.make",
+                    expected_sum,
+                    vec![payload.id],
+                    span,
+                    expected_case,
+                );
+                if expected_sum != expected_type {
+                    widened = self.operation(
+                        "indirect.make",
+                        expected_type,
+                        vec![widened.id],
+                        span,
+                        None,
+                    );
+                }
+                Ok(widened)
+            }
+            _ => Err(Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                format!(
+                    "A residual argument has runtime type {} {:?}, but checking requires runtime type {} {:?}.",
+                    value.type_id,
+                    self.types[value.type_id],
+                    expected_type,
+                    self.types[expected_type],
+                ),
+                span,
+            )),
         }
     }
 
@@ -4918,7 +5342,14 @@ impl ResidualTrace {
                 if let Some(expected_type) = self.checked_aggregate_representations.get(value) {
                     return self.lower_value_as(value, expected_type, span);
                 }
-                let type_id = self.product_type(fields)?;
+                let type_id = self.product_type(fields).map_err(|mut diagnostic| {
+                    diagnostic.message = format!(
+                        "{} Residual shape {} has no settled aggregate representation.",
+                        diagnostic.message,
+                        crate::value::show(value),
+                    );
+                    diagnostic
+                })?;
                 let mut operands = Vec::new();
                 let RuntimeType::Product {
                     fields: runtime_fields,
@@ -5225,7 +5656,14 @@ impl ResidualTrace {
         let integer = self.region_integer_type();
         let start = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
         let end = self.operation("store.length", integer, vec![source.id], span, None);
-        output = self.append_store_range(&source, &start, &end, &output, span)?;
+        output = self.append_store_range(
+            &source,
+            &start,
+            &end,
+            &output,
+            StoreRangeDestination::Shared,
+            span,
+        )?;
         Ok(Value::Runtime(output))
     }
 
@@ -5368,10 +5806,16 @@ impl ResidualTrace {
                     RuntimeType::Scratch { element_type },
                 ))
             }
-            _ => Err(hir_error(&format!(
-                "{} has no first-order runtime type.",
-                crate::value::show(value)
-            ))),
+            _ => {
+                let operation = self
+                    .active_primitive
+                    .as_deref()
+                    .unwrap_or("a residual value");
+                Err(hir_error(&format!(
+                    "{} has no first-order runtime type while lowering {operation}.",
+                    crate::value::show(value)
+                )))
+            }
         }
     }
 
@@ -6352,6 +6796,7 @@ impl ResidualTrace {
         start: &RuntimeValue,
         end: &RuntimeValue,
         initial: &RuntimeValue,
+        destination: StoreRangeDestination,
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         let RuntimeType::Store { element_type } = self.types[source_store.type_id] else {
@@ -6409,7 +6854,7 @@ impl ResidualTrace {
             source_store.type_id,
             vec![output, element.id],
             span,
-            Some("persistent"),
+            Some(destination.update()),
         );
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
         let next = self.operation("scalar", integer, vec![cursor, one.id], span, Some("add"));
@@ -6463,12 +6908,26 @@ impl ResidualTrace {
         let integer = self.region_integer_type();
         let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
         let empty = self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
-        let before = self.append_store_range(&store, &zero, &index, &empty, span)?;
+        let before = self.append_store_range(
+            &store,
+            &zero,
+            &index,
+            &empty,
+            StoreRangeDestination::Fresh,
+            span,
+        )?;
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
         let after_start =
             self.operation("scalar", integer, vec![index.id, one.id], span, Some("add"));
         let length = self.operation("store.length", integer, vec![store.id], span, None);
-        let remainder = self.append_store_range(&store, &after_start, &length, &before, span)?;
+        let remainder = self.append_store_range(
+            &store,
+            &after_start,
+            &length,
+            &before,
+            StoreRangeDestination::Fresh,
+            span,
+        )?;
         Ok(self.operation(
             "product.make",
             pair_type,
@@ -6512,14 +6971,28 @@ impl ResidualTrace {
         let zero = self.constant(WireConstant::SignedInteger64("0".to_owned()), integer, span);
         let before_empty =
             self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
-        let before = self.append_store_range(&store, &zero, &index, &before_empty, span)?;
+        let before = self.append_store_range(
+            &store,
+            &zero,
+            &index,
+            &before_empty,
+            StoreRangeDestination::Fresh,
+            span,
+        )?;
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
         let after_start =
             self.operation("scalar", integer, vec![index.id, one.id], span, Some("add"));
         let length = self.operation("store.length", integer, vec![store.id], span, None);
         let after_empty =
             self.array_operation("store.empty", store.type_id, Vec::new(), span, None);
-        let after = self.append_store_range(&store, &after_start, &length, &after_empty, span)?;
+        let after = self.append_store_range(
+            &store,
+            &after_start,
+            &length,
+            &after_empty,
+            StoreRangeDestination::Fresh,
+            span,
+        )?;
         Ok(self.operation(
             "product.make",
             payload_type,
@@ -7926,7 +8399,12 @@ fn collect_value(
                 collect_value(context, element, visited, captured, requires_staging)?;
             }
         }
-        Value::IndexedStep { elements } | Value::Union(elements) => {
+        Value::IndexedStep { elements } => {
+            for element in elements {
+                collect_value(context, element, visited, captured, requires_staging)?;
+            }
+        }
+        Value::Union(elements) => {
             for element in elements {
                 collect_value(context, element, visited, captured, requires_staging)?;
             }
@@ -8216,7 +8694,12 @@ fn replace_value(
                 *element = replace_value(context, element, replacements, replaced)?;
             }
         }
-        Value::IndexedStep { elements } | Value::Union(elements) => {
+        Value::IndexedStep { elements } => {
+            for element in elements {
+                *element = replace_value(context, element, replacements, replaced)?;
+            }
+        }
+        Value::Union(elements) => {
             for element in elements {
                 *element = replace_value(context, element, replacements, replaced)?;
             }
@@ -8403,10 +8886,14 @@ enum StaticWireKey {
     Boolean(bool),
 }
 
-fn optimize_runtime_module(module: &mut RuntimeModule) -> Result<(), Diagnostic> {
+fn optimize_runtime_module(
+    module: &mut RuntimeModule,
+    development_units: Option<&HashSet<String>>,
+) -> Result<(), Diagnostic> {
     compact_static_stores(module)?;
     for function in &mut module.functions {
         fold_representation_roundtrips(function);
+        fold_store_field_reads(function);
         eliminate_dead_pure_operations(function);
     }
     module.functions = std::mem::take(&mut module.functions)
@@ -8414,12 +8901,47 @@ fn optimize_runtime_module(module: &mut RuntimeModule) -> Result<(), Diagnostic>
         .map(simplify_runtime_function)
         .collect();
     for function in &mut module.functions {
+        fold_representation_roundtrips(function);
         eliminate_dead_pure_operations(function);
     }
     deduplicate_runtime_types(module);
+    for function in &mut module.functions {
+        fold_representation_roundtrips(function);
+        eliminate_dead_pure_operations(function);
+    }
     deduplicate_runtime_signatures(module);
-    deduplicate_runtime_functions(module)?;
+    deduplicate_runtime_functions(module, development_units)?;
     validate_runtime_layouts(&module.types)
+}
+
+fn fold_store_field_reads(function: &mut RuntimeFunction) {
+    let definitions = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .map(|operation| (operation.result, operation.clone()))
+        .collect::<HashMap<_, _>>();
+    for operation in function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.operations)
+    {
+        if operation.kind != "product.project" {
+            continue;
+        }
+        let Some(source) = operation
+            .operands
+            .first()
+            .and_then(|operand| definitions.get(operand))
+        else {
+            continue;
+        };
+        if source.kind != "store.read" {
+            continue;
+        }
+        operation.kind = "store.read.field";
+        operation.operands.clone_from(&source.operands);
+    }
 }
 
 fn compact_static_stores(module: &mut RuntimeModule) -> Result<(), Diagnostic> {
@@ -8520,32 +9042,60 @@ fn static_wire_key(value: &WireConstant) -> Option<StaticWireKey> {
 }
 
 fn eliminate_dead_pure_operations(function: &mut RuntimeFunction) {
-    loop {
-        let mut used = HashSet::new();
-        for block in &function.blocks {
-            for operation in &block.operations {
-                used.extend(operation.operands.iter().copied());
+    let definitions = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .map(|operation| (operation.result, operation))
+        .collect::<HashMap<_, _>>();
+    let mut uses = HashMap::<usize, usize>::new();
+    for block in &function.blocks {
+        for operation in &block.operations {
+            for operand in &operation.operands {
+                *uses.entry(*operand).or_default() += 1;
             }
-            used.extend(terminator_runtime_values(&block.terminator));
         }
-        let before = function
-            .blocks
-            .iter()
-            .map(|block| block.operations.len())
-            .sum::<usize>();
-        for block in &mut function.blocks {
-            block.operations.retain(|operation| {
-                used.contains(&operation.result) || !discardable_runtime_operation(operation)
-            });
+        for value in terminator_runtime_values(&block.terminator) {
+            *uses.entry(value).or_default() += 1;
         }
-        let after = function
-            .blocks
-            .iter()
-            .map(|block| block.operations.len())
-            .sum::<usize>();
-        if before == after {
-            return;
+    }
+    let mut pending = definitions
+        .values()
+        .filter(|operation| {
+            uses.get(&operation.result).copied().unwrap_or(0) == 0
+                && discardable_runtime_operation(operation)
+        })
+        .map(|operation| operation.result)
+        .collect::<VecDeque<_>>();
+    let mut dead = HashSet::new();
+    while let Some(value) = pending.pop_front() {
+        if !dead.insert(value) {
+            continue;
         }
+        #[cfg(test)]
+        RUNTIME_DEAD_OPERATION_VISITS.with(|visits| visits.set(visits.get() + 1));
+        let operation = definitions[&value];
+        for operand in &operation.operands {
+            let count = uses
+                .get_mut(operand)
+                .expect("a runtime operand has a use count");
+            *count -= 1;
+            if *count == 0
+                && definitions
+                    .get(operand)
+                    .is_some_and(|definition| discardable_runtime_operation(definition))
+            {
+                pending.push_back(*operand);
+            }
+        }
+    }
+    if dead.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        block
+            .operations
+            .retain(|operation| !dead.contains(&operation.result));
     }
 }
 
@@ -8567,77 +9117,87 @@ fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
             .values()
             .map(|operation| (operation.result, operation.type_id)),
     );
+    let mut consumers = HashMap::<usize, Vec<usize>>::new();
+    for operation in definitions.values() {
+        for operand in &operation.operands {
+            consumers
+                .entry(*operand)
+                .or_default()
+                .push(operation.result);
+        }
+    }
     let mut aliases = HashMap::new();
     let mut roundtrip_allocations = HashSet::new();
-    loop {
-        let mut changed = false;
-        for operation in definitions.values() {
-            if aliases.contains_key(&operation.result) {
-                continue;
-            }
-            let candidate = match operation.kind {
-                "indirect.load" | "indirect.make" => operation
-                    .operands
-                    .first()
-                    .map(|operand| resolve_runtime_alias(*operand, &mut aliases))
-                    .and_then(|operand| {
-                        let source = definitions.get(&operand)?;
-                        let inverse = matches!(
-                            (operation.kind, source.kind),
-                            ("indirect.load", "indirect.make") | ("indirect.make", "indirect.load")
-                        );
-                        if !inverse {
-                            return None;
-                        }
-                        if operation.kind == "indirect.load" && source.kind == "indirect.make" {
-                            roundtrip_allocations.insert(source.result);
-                        }
-                        Some(resolve_runtime_alias(source.operands[0], &mut aliases))
-                    }),
-                "product.project" => operation
-                    .operands
-                    .first()
-                    .map(|operand| resolve_runtime_alias(*operand, &mut aliases))
-                    .and_then(|operand| definitions.get(&operand))
-                    .filter(|source| source.kind == "product.make")
-                    .and_then(|source| operation.field.and_then(|field| source.operands.get(field)))
-                    .map(|value| resolve_runtime_alias(*value, &mut aliases)),
-                "product.make" if !operation.operands.is_empty() => {
-                    let mut source = None;
-                    let mut complete = true;
-                    for (field, operand) in operation.operands.iter().enumerate() {
-                        let Some(projection) = definitions.get(operand) else {
-                            complete = false;
-                            break;
-                        };
-                        if projection.kind != "product.project" || projection.field != Some(field) {
-                            complete = false;
-                            break;
-                        }
-                        let projected = resolve_runtime_alias(projection.operands[0], &mut aliases);
-                        if source.is_some_and(|source| source != projected) {
-                            complete = false;
-                            break;
-                        }
-                        source = Some(projected);
-                    }
-                    complete.then_some(source).flatten()
-                }
-                _ => None,
-            };
-            let Some(candidate) = candidate else {
-                continue;
-            };
-            if candidate == operation.result
-                || value_types.get(&candidate) != Some(&operation.type_id)
-            {
-                continue;
-            }
-            aliases.insert(operation.result, candidate);
-            changed = true;
+    let mut pending = definitions.keys().copied().collect::<VecDeque<_>>();
+    let mut queued = definitions.keys().copied().collect::<HashSet<_>>();
+    while let Some(result) = pending.pop_front() {
+        queued.remove(&result);
+        if aliases.contains_key(&result) {
+            continue;
         }
-        if !changed {
-            break;
+        let operation = &definitions[&result];
+        let candidate = match operation.kind {
+            "indirect.load" | "indirect.make" => operation
+                .operands
+                .first()
+                .map(|operand| resolve_runtime_alias(*operand, &mut aliases))
+                .and_then(|operand| {
+                    let source = definitions.get(&operand)?;
+                    let inverse = matches!(
+                        (operation.kind, source.kind),
+                        ("indirect.load", "indirect.make") | ("indirect.make", "indirect.load")
+                    );
+                    if !inverse {
+                        return None;
+                    }
+                    if operation.kind == "indirect.load" && source.kind == "indirect.make" {
+                        roundtrip_allocations.insert(source.result);
+                    }
+                    Some(resolve_runtime_alias(source.operands[0], &mut aliases))
+                }),
+            "product.project" => operation
+                .operands
+                .first()
+                .map(|operand| resolve_runtime_alias(*operand, &mut aliases))
+                .and_then(|operand| definitions.get(&operand))
+                .filter(|source| source.kind == "product.make")
+                .and_then(|source| operation.field.and_then(|field| source.operands.get(field)))
+                .map(|value| resolve_runtime_alias(*value, &mut aliases)),
+            "product.make" if !operation.operands.is_empty() => {
+                let mut source = None;
+                let mut complete = true;
+                for (field, operand) in operation.operands.iter().enumerate() {
+                    let Some(projection) = definitions.get(operand) else {
+                        complete = false;
+                        break;
+                    };
+                    if projection.kind != "product.project" || projection.field != Some(field) {
+                        complete = false;
+                        break;
+                    }
+                    let projected = resolve_runtime_alias(projection.operands[0], &mut aliases);
+                    if source.is_some_and(|source| source != projected) {
+                        complete = false;
+                        break;
+                    }
+                    source = Some(projected);
+                }
+                complete.then_some(source).flatten()
+            }
+            _ => None,
+        };
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        if candidate == operation.result || value_types.get(&candidate) != Some(&operation.type_id)
+        {
+            continue;
+        }
+        aliases.insert(operation.result, candidate);
+        for consumer in consumers.get(&operation.result).into_iter().flatten() {
+            if queued.insert(*consumer) {
+                pending.push_back(*consumer);
+            }
         }
     }
     if aliases.is_empty() {
@@ -8693,6 +9253,7 @@ fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
             !roundtrip_allocations.contains(&operation.result) || used.contains(&operation.result)
         });
     }
+    fold_representation_roundtrips(function);
 }
 
 fn terminator_runtime_values(terminator: &RuntimeTerminator) -> Vec<usize> {
@@ -8734,9 +9295,8 @@ fn discardable_runtime_operation(operation: &RuntimeOperation) -> bool {
     match operation.kind {
         "constant" | "scalar.unary" | "vector" | "product.make" | "product.project"
         | "sum.make" | "sum.tag" | "sum.payload" | "indirect.load" | "store.length"
-        | "seal.wrap" | "seal.unwrap" | "resource.move" | "resource.borrow" | "resource.freeze" => {
-            true
-        }
+        | "store.read" | "store.read.field" | "seal.wrap" | "seal.unwrap" | "resource.move"
+        | "resource.borrow" | "resource.freeze" => true,
         "scalar" => !matches!(operation.operator, Some("divide" | "remainder")),
         "convert" => operation.conversion != Some("float-64-to-signed-integer-64"),
         _ => false,
@@ -8744,47 +9304,139 @@ fn discardable_runtime_operation(operation: &RuntimeOperation) -> bool {
 }
 
 fn deduplicate_runtime_types(module: &mut RuntimeModule) {
-    loop {
-        let mut ids = HashMap::new();
-        let mut remap = Vec::with_capacity(module.types.len());
-        let mut types = Vec::new();
-        for type_ in &module.types {
-            let type_id = if let Some(type_id) = ids.get(type_) {
-                *type_id
-            } else {
-                let type_id = types.len();
-                ids.insert(type_.clone(), type_id);
-                types.push(type_.clone());
-                type_id
-            };
-            remap.push(type_id);
+    if module.types.is_empty() {
+        return;
+    }
+    let mut shapes = HashMap::<RuntimeTypeShape, usize>::new();
+    let mut children = Vec::with_capacity(module.types.len());
+    let mut classes = Vec::with_capacity(module.types.len());
+    let mut partitions = Vec::<Vec<usize>>::new();
+    for (type_id, type_) in module.types.iter().enumerate() {
+        let (shape, type_children) = runtime_type_shape(type_);
+        assert!(
+            type_children
+                .iter()
+                .all(|child| *child < module.types.len()),
+            "runtime type {type_id} references an absent child"
+        );
+        let next_class = shapes.len();
+        let class = *shapes.entry(shape).or_insert(next_class);
+        if class == partitions.len() {
+            partitions.push(Vec::new());
         }
-        if types.len() == module.types.len() {
-            return;
+        partitions[class].push(type_id);
+        classes.push(class);
+        children.push(type_children);
+    }
+    let mut predecessors = vec![Vec::<(usize, usize)>::new(); module.types.len()];
+    for (parent, type_children) in children.iter().enumerate() {
+        for (position, child) in type_children.iter().copied().enumerate() {
+            predecessors[child].push((parent, position));
         }
-        for type_ in &mut types {
-            remap_runtime_type(type_, &remap);
+    }
+    refine_indexed_partitions(&mut partitions, &mut classes, &predecessors);
+
+    let mut class_ids = HashMap::new();
+    let mut remap = Vec::with_capacity(module.types.len());
+    let mut types = Vec::new();
+    for (type_id, type_) in module.types.iter().enumerate() {
+        let class = classes[type_id];
+        let compact = if let Some(compact) = class_ids.get(&class) {
+            *compact
+        } else {
+            let compact = types.len();
+            class_ids.insert(class, compact);
+            types.push(type_.clone());
+            compact
+        };
+        remap.push(compact);
+    }
+    if types.len() == module.types.len() {
+        return;
+    }
+    for type_ in &mut types {
+        remap_runtime_type(type_, &remap);
+    }
+    for signature in &mut module.signatures {
+        for parameter in &mut signature.parameters {
+            *parameter = remap[*parameter];
         }
-        for signature in &mut module.signatures {
-            for parameter in &mut signature.parameters {
-                *parameter = remap[*parameter];
+        signature.result = remap[signature.result];
+    }
+    for store in &mut module.static_stores {
+        store.element_type = remap[store.element_type];
+    }
+    for function in &mut module.functions {
+        for block in &mut function.blocks {
+            for parameter in &mut block.parameters {
+                parameter.type_id = remap[parameter.type_id];
             }
-            signature.result = remap[signature.result];
-        }
-        for store in &mut module.static_stores {
-            store.element_type = remap[store.element_type];
-        }
-        for function in &mut module.functions {
-            for block in &mut function.blocks {
-                for parameter in &mut block.parameters {
-                    parameter.type_id = remap[parameter.type_id];
-                }
-                for operation in &mut block.operations {
-                    operation.type_id = remap[operation.type_id];
-                }
+            for operation in &mut block.operations {
+                operation.type_id = remap[operation.type_id];
             }
         }
-        module.types = types;
+    }
+    module.types = types;
+}
+
+#[derive(Eq, Hash, PartialEq)]
+enum RuntimeTypeShape {
+    Unit,
+    Integer32,
+    SignedInteger64,
+    Float32,
+    Float64,
+    Boolean,
+    Text,
+    Vector(&'static str, u8),
+    Mask(&'static str, u8),
+    Store,
+    Scratch,
+    Indirect,
+    Product(String, Vec<String>),
+    Sum(String, Vec<String>),
+    Sealed(String),
+}
+
+fn runtime_type_shape(type_: &RuntimeType) -> (RuntimeTypeShape, Vec<usize>) {
+    match type_ {
+        RuntimeType::Unit => (RuntimeTypeShape::Unit, Vec::new()),
+        RuntimeType::Integer32 => (RuntimeTypeShape::Integer32, Vec::new()),
+        RuntimeType::SignedInteger64 => (RuntimeTypeShape::SignedInteger64, Vec::new()),
+        RuntimeType::Float32 => (RuntimeTypeShape::Float32, Vec::new()),
+        RuntimeType::Float64 => (RuntimeTypeShape::Float64, Vec::new()),
+        RuntimeType::Boolean => (RuntimeTypeShape::Boolean, Vec::new()),
+        RuntimeType::Text => (RuntimeTypeShape::Text, Vec::new()),
+        RuntimeType::Vector { element, lanes } => {
+            (RuntimeTypeShape::Vector(element, *lanes), Vec::new())
+        }
+        RuntimeType::Mask { element, lanes } => {
+            (RuntimeTypeShape::Mask(element, *lanes), Vec::new())
+        }
+        RuntimeType::Store { element_type } => (RuntimeTypeShape::Store, vec![*element_type]),
+        RuntimeType::Scratch { element_type } => (RuntimeTypeShape::Scratch, vec![*element_type]),
+        RuntimeType::Indirect { target_type } => (RuntimeTypeShape::Indirect, vec![*target_type]),
+        RuntimeType::Product { name, fields } => (
+            RuntimeTypeShape::Product(
+                name.clone(),
+                fields.iter().map(|field| field.name.clone()).collect(),
+            ),
+            fields.iter().map(|field| field.type_id).collect(),
+        ),
+        RuntimeType::Sum { name, cases } => (
+            RuntimeTypeShape::Sum(
+                name.clone(),
+                cases.iter().map(|case_| case_.name.clone()).collect(),
+            ),
+            cases.iter().map(|case_| case_.payload_type).collect(),
+        ),
+        RuntimeType::Sealed {
+            name,
+            representation_type,
+        } => (
+            RuntimeTypeShape::Sealed(name.clone()),
+            vec![*representation_type],
+        ),
     }
 }
 
@@ -8867,7 +9519,10 @@ fn deduplicate_runtime_signatures(module: &mut RuntimeModule) {
     module.signatures = signatures;
 }
 
-fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagnostic> {
+fn deduplicate_runtime_functions(
+    module: &mut RuntimeModule,
+    development_units: Option<&HashSet<String>>,
+) -> Result<(), Diagnostic> {
     if module.functions.is_empty() {
         return Ok(());
     }
@@ -8877,14 +9532,19 @@ fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagn
         .enumerate()
         .map(|(index, function)| (function.id, index))
         .collect::<HashMap<_, _>>();
-    let mut body_classes = HashMap::<Vec<u8>, usize>::new();
+    let mut body_classes = HashMap::<(Option<&str>, Vec<u8>), usize>::new();
     let mut canonical_calls = Vec::with_capacity(module.functions.len());
     let mut classes = Vec::with_capacity(module.functions.len());
     let mut partitions = Vec::<Vec<usize>>::new();
     for (function_index, function) in module.functions.iter().enumerate() {
         let (body, calls) = canonical_runtime_function_shape(function, &function_indices)?;
+        let development_unit = development_units
+            .filter(|units| units.contains(&function.span.file))
+            .map(|_| function.span.file.as_str());
         let next_class = body_classes.len();
-        let class = *body_classes.entry(body).or_insert(next_class);
+        let class = *body_classes
+            .entry((development_unit, body))
+            .or_insert(next_class);
         if class == partitions.len() {
             partitions.push(Vec::new());
         }
@@ -8898,7 +9558,7 @@ fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagn
             predecessors[target].push((caller, position));
         }
     }
-    refine_runtime_function_partitions(&mut partitions, &mut classes, &predecessors);
+    refine_indexed_partitions(&mut partitions, &mut classes, &predecessors);
 
     let mut class_ids = HashMap::new();
     let mut function_ids = HashMap::new();
@@ -8940,7 +9600,7 @@ fn deduplicate_runtime_functions(module: &mut RuntimeModule) -> Result<(), Diagn
     Ok(())
 }
 
-fn refine_runtime_function_partitions(
+fn refine_indexed_partitions(
     partitions: &mut Vec<Vec<usize>>,
     classes: &mut [usize],
     predecessors: &[Vec<(usize, usize)>],
@@ -9193,6 +9853,9 @@ thread_local! {
     static RUNTIME_FUNCTION_REFINEMENT_EDGES: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
+    static RUNTIME_DEAD_OPERATION_VISITS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
 fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
@@ -9302,7 +9965,12 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
 
 fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
     let mut live_values = HashSet::new();
-    let mut edges = Vec::new();
+    let mut incoming_arguments = HashMap::<usize, Vec<usize>>::new();
+    let parameters = function
+        .blocks
+        .iter()
+        .map(|block| (block.id, block.parameters.as_slice()))
+        .collect::<HashMap<_, _>>();
     for block in &function.blocks {
         for operation in &block.operations {
             live_values.extend(operation.operands.iter().copied());
@@ -9310,7 +9978,12 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
         match &block.terminator {
             RuntimeTerminator::Branch {
                 target, arguments, ..
-            } => edges.push((*target, arguments.clone())),
+            } => record_block_argument_dependencies(
+                *target,
+                arguments,
+                &parameters,
+                &mut incoming_arguments,
+            ),
             RuntimeTerminator::Conditional {
                 condition,
                 consequent,
@@ -9320,8 +9993,18 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
                 ..
             } => {
                 live_values.insert(*condition);
-                edges.push((*consequent, consequent_arguments.clone()));
-                edges.push((*alternate, alternate_arguments.clone()));
+                record_block_argument_dependencies(
+                    *consequent,
+                    consequent_arguments,
+                    &parameters,
+                    &mut incoming_arguments,
+                );
+                record_block_argument_dependencies(
+                    *alternate,
+                    alternate_arguments,
+                    &parameters,
+                    &mut incoming_arguments,
+                );
             }
             RuntimeTerminator::Switch { selector, .. } => {
                 live_values.insert(*selector);
@@ -9332,29 +10015,12 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
             RuntimeTerminator::Trap { .. } => {}
         }
     }
-    loop {
-        let mut changed = false;
-        for (target, arguments) in &edges {
-            let block = function
-                .blocks
-                .iter()
-                .find(|block| block.id == *target)
-                .unwrap_or_else(|| panic!("residual branch target block {target} is absent"));
-            assert_eq!(
-                block.parameters.len(),
-                arguments.len(),
-                "residual branch to block {target} has {} arguments for {} parameters",
-                arguments.len(),
-                block.parameters.len(),
-            );
-            for (parameter, argument) in block.parameters.iter().zip(arguments) {
-                if live_values.contains(&parameter.value) && live_values.insert(*argument) {
-                    changed = true;
-                }
+    let mut pending = live_values.iter().copied().collect::<VecDeque<_>>();
+    while let Some(value) = pending.pop_front() {
+        for argument in incoming_arguments.get(&value).into_iter().flatten() {
+            if live_values.insert(*argument) {
+                pending.push_back(*argument);
             }
-        }
-        if !changed {
-            break;
         }
     }
     let removed = function
@@ -9429,21 +10095,82 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
     }
 }
 
+fn record_block_argument_dependencies(
+    target: usize,
+    arguments: &[usize],
+    parameters: &HashMap<usize, &[RuntimeBlockParameter]>,
+    incoming_arguments: &mut HashMap<usize, Vec<usize>>,
+) {
+    let parameters = parameters
+        .get(&target)
+        .unwrap_or_else(|| panic!("residual branch target block {target} is absent"));
+    assert_eq!(
+        parameters.len(),
+        arguments.len(),
+        "residual branch to block {target} has {} arguments for {} parameters",
+        arguments.len(),
+        parameters.len(),
+    );
+    for (parameter, argument) in parameters.iter().zip(arguments) {
+        incoming_arguments
+            .entry(parameter.value)
+            .or_default()
+            .push(*argument);
+    }
+}
+
 fn fold_boolean_branch_roundtrips(function: &mut RuntimeFunction) {
-    loop {
-        let replacements = function
-            .blocks
-            .iter()
-            .filter_map(|block| {
-                folded_boolean_terminator(function, block).map(|terminator| (block.id, terminator))
-            })
-            .collect::<Vec<_>>();
-        if replacements.is_empty() {
-            return;
+    let mut predecessors = HashMap::<usize, Vec<usize>>::new();
+    for block in &function.blocks {
+        for target in runtime_terminator_targets(&block.terminator) {
+            predecessors.entry(target).or_default().push(block.id);
         }
-        for (block_id, terminator) in replacements {
+    }
+    let mut pending = function
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<VecDeque<_>>();
+    let mut queued = function
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<HashSet<_>>();
+    while let Some(block_id) = pending.pop_front() {
+        queued.remove(&block_id);
+        let replacement = folded_boolean_terminator(function, &function.blocks[block_id]);
+        if let Some(terminator) = replacement {
+            for target in runtime_terminator_targets(&terminator) {
+                predecessors.entry(target).or_default().push(block_id);
+            }
             function.blocks[block_id].terminator = terminator;
+            for dependent in
+                std::iter::once(&block_id).chain(predecessors.get(&block_id).into_iter().flatten())
+            {
+                if queued.insert(*dependent) {
+                    pending.push_back(*dependent);
+                }
+            }
         }
+    }
+}
+
+fn runtime_terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
+    match terminator {
+        RuntimeTerminator::Branch { target, .. } => vec![*target],
+        RuntimeTerminator::Conditional {
+            consequent,
+            alternate,
+            ..
+        } => vec![*consequent, *alternate],
+        RuntimeTerminator::Switch {
+            cases, fallback, ..
+        } => cases
+            .iter()
+            .map(|case_| case_.target)
+            .chain(std::iter::once(*fallback))
+            .collect(),
+        RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
     }
 }
 
@@ -9552,17 +10279,185 @@ struct SumDispatchPredecessor {
     payload: usize,
 }
 
-fn fold_known_sum_switches(function: &mut RuntimeFunction) {
-    loop {
-        let Some(fold) = function
-            .blocks
-            .iter()
-            .find_map(|join| known_sum_switch_fold(function, join))
-        else {
-            return;
+struct SumFoldFacts {
+    incoming: Vec<usize>,
+    branch_predecessors: Vec<Vec<usize>>,
+    value_uses: HashMap<usize, usize>,
+}
+
+impl SumFoldFacts {
+    fn new(function: &RuntimeFunction) -> Self {
+        let mut facts = Self {
+            incoming: vec![0; function.blocks.len()],
+            branch_predecessors: vec![Vec::new(); function.blocks.len()],
+            value_uses: HashMap::new(),
         };
+        for block in &function.blocks {
+            for operation in &block.operations {
+                facts.add_operation(operation);
+            }
+            facts.add_terminator(block.id, &block.terminator);
+        }
+        facts
+    }
+
+    fn add_operation(&mut self, operation: &RuntimeOperation) {
+        for operand in &operation.operands {
+            *self.value_uses.entry(*operand).or_default() += 1;
+        }
+    }
+
+    fn remove_operation(&mut self, operation: &RuntimeOperation) {
+        for operand in &operation.operands {
+            self.remove_value_use(*operand);
+        }
+    }
+
+    fn add_terminator(&mut self, block: usize, terminator: &RuntimeTerminator) {
+        match terminator {
+            RuntimeTerminator::Branch {
+                target, arguments, ..
+            } => {
+                self.add_incoming(*target);
+                self.branch_predecessors[*target].push(block);
+                for argument in arguments {
+                    *self.value_uses.entry(*argument).or_default() += 1;
+                }
+            }
+            RuntimeTerminator::Conditional {
+                condition,
+                consequent,
+                consequent_arguments,
+                alternate,
+                alternate_arguments,
+                ..
+            } => {
+                *self.value_uses.entry(*condition).or_default() += 1;
+                self.add_incoming(*consequent);
+                self.add_incoming(*alternate);
+                for argument in consequent_arguments.iter().chain(alternate_arguments) {
+                    *self.value_uses.entry(*argument).or_default() += 1;
+                }
+            }
+            RuntimeTerminator::Switch {
+                selector,
+                cases,
+                fallback,
+                ..
+            } => {
+                *self.value_uses.entry(*selector).or_default() += 1;
+                for case in cases {
+                    self.add_incoming(case.target);
+                }
+                self.add_incoming(*fallback);
+            }
+            RuntimeTerminator::Return { value, .. } => {
+                *self.value_uses.entry(*value).or_default() += 1;
+            }
+            RuntimeTerminator::Trap { .. } => {}
+        }
+    }
+
+    fn remove_terminator(&mut self, block: usize, terminator: &RuntimeTerminator) {
+        match terminator {
+            RuntimeTerminator::Branch {
+                target, arguments, ..
+            } => {
+                self.remove_incoming(*target);
+                let predecessors = &mut self.branch_predecessors[*target];
+                let index = predecessors
+                    .iter()
+                    .position(|predecessor| *predecessor == block)
+                    .unwrap_or_else(|| {
+                        panic!("residual branch from block {block} to block {target} is unindexed")
+                    });
+                predecessors.swap_remove(index);
+                for argument in arguments {
+                    self.remove_value_use(*argument);
+                }
+            }
+            RuntimeTerminator::Conditional {
+                condition,
+                consequent,
+                consequent_arguments,
+                alternate,
+                alternate_arguments,
+                ..
+            } => {
+                self.remove_value_use(*condition);
+                self.remove_incoming(*consequent);
+                self.remove_incoming(*alternate);
+                for argument in consequent_arguments.iter().chain(alternate_arguments) {
+                    self.remove_value_use(*argument);
+                }
+            }
+            RuntimeTerminator::Switch {
+                selector,
+                cases,
+                fallback,
+                ..
+            } => {
+                self.remove_value_use(*selector);
+                for case in cases {
+                    self.remove_incoming(case.target);
+                }
+                self.remove_incoming(*fallback);
+            }
+            RuntimeTerminator::Return { value, .. } => self.remove_value_use(*value),
+            RuntimeTerminator::Trap { .. } => {}
+        }
+    }
+
+    fn add_incoming(&mut self, block: usize) {
+        self.incoming[block] += 1;
+    }
+
+    fn remove_incoming(&mut self, block: usize) {
+        self.incoming[block] = self.incoming[block]
+            .checked_sub(1)
+            .unwrap_or_else(|| panic!("residual block {block} has an unindexed incoming edge"));
+    }
+
+    fn remove_value_use(&mut self, value: usize) {
+        let uses = self
+            .value_uses
+            .get_mut(&value)
+            .unwrap_or_else(|| panic!("residual value {value} has an unindexed use"));
+        *uses = uses
+            .checked_sub(1)
+            .unwrap_or_else(|| panic!("residual value {value} has an unindexed use"));
+        if *uses == 0 {
+            self.value_uses.remove(&value);
+        }
+    }
+}
+
+fn fold_known_sum_switches(function: &mut RuntimeFunction) {
+    let mut facts = SumFoldFacts::new(function);
+    let mut pending = function
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<VecDeque<_>>();
+    let mut queued = function
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<HashSet<_>>();
+    while let Some(join) = pending.pop_front() {
+        queued.remove(&join);
+        let Some(fold) = known_sum_switch_fold(function, &function.blocks[join], &facts) else {
+            continue;
+        };
+        let mut affected = fold.targets.clone();
+        affected.extend(
+            fold.predecessors
+                .iter()
+                .map(|predecessor| predecessor.block),
+        );
         for target in fold.targets {
             let payload = function.blocks[target].operations.remove(0);
+            facts.remove_operation(&payload);
             function.blocks[target]
                 .parameters
                 .push(RuntimeBlockParameter {
@@ -9573,15 +10468,28 @@ fn fold_known_sum_switches(function: &mut RuntimeFunction) {
                 });
         }
         for predecessor in fold.predecessors {
-            function.blocks[predecessor.block].operations.pop();
-            let RuntimeTerminator::Branch {
-                target, arguments, ..
-            } = &mut function.blocks[predecessor.block].terminator
-            else {
+            let constructor = function.blocks[predecessor.block]
+                .operations
+                .pop()
+                .expect("known sum predecessor lost its constructor");
+            facts.remove_operation(&constructor);
+            let old_terminator = function.blocks[predecessor.block].terminator.clone();
+            let RuntimeTerminator::Branch { span, .. } = &old_terminator else {
                 unreachable!();
             };
-            *target = predecessor.target;
-            *arguments = vec![predecessor.payload];
+            facts.remove_terminator(predecessor.block, &old_terminator);
+            let new_terminator = RuntimeTerminator::Branch {
+                target: predecessor.target,
+                arguments: vec![predecessor.payload],
+                span: span.clone(),
+            };
+            facts.add_terminator(predecessor.block, &new_terminator);
+            function.blocks[predecessor.block].terminator = new_terminator;
+        }
+        for block in affected {
+            if queued.insert(block) {
+                pending.push_back(block);
+            }
         }
     }
 }
@@ -9589,6 +10497,7 @@ fn fold_known_sum_switches(function: &mut RuntimeFunction) {
 fn known_sum_switch_fold(
     function: &RuntimeFunction,
     join: &RuntimeBlock,
+    facts: &SumFoldFacts,
 ) -> Option<SumDispatchFold> {
     if join.id == function.entry_block {
         return None;
@@ -9651,80 +10560,48 @@ fn known_sum_switch_fold(
             return None;
         }
     }
-    let target_incoming = |target: usize| {
-        function
-            .blocks
-            .iter()
-            .map(|block| match &block.terminator {
-                RuntimeTerminator::Branch {
-                    target: candidate, ..
-                } => usize::from(*candidate == target),
-                RuntimeTerminator::Conditional {
-                    consequent,
-                    alternate,
-                    ..
-                } => usize::from(*consequent == target) + usize::from(*alternate == target),
-                RuntimeTerminator::Switch {
-                    cases, fallback, ..
-                } => {
-                    cases.iter().filter(|case| case.target == target).count()
-                        + usize::from(*fallback == target)
-                }
-                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => 0,
-            })
-            .sum::<usize>()
-    };
     if targets
         .iter()
-        .any(|target| target_incoming(target.block) != 1)
+        .any(|target| facts.incoming[target.block] != 1)
     {
         return None;
     }
     // A defunctionalized function choice can inspect the joined sum again after
     // this dispatch. Remove it only when the tag and arm payloads are its only
     // readers.
-    if value_uses(function, parameter.value) != targets.len() + 1 {
+    if facts.value_uses.get(&parameter.value).copied().unwrap_or(0) != targets.len() + 1 {
         return None;
     }
     let mut predecessors = Vec::new();
-    for block in &function.blocks {
-        match &block.terminator {
-            RuntimeTerminator::Branch {
-                target, arguments, ..
-            } if *target == join.id => {
-                let [sum] = arguments.as_slice() else {
-                    return None;
-                };
-                let operation = block.operations.last()?;
-                let [payload] = operation.operands.as_slice() else {
-                    return None;
-                };
-                if operation.kind != "sum.make" || operation.result != *sum {
-                    return None;
-                }
-                let sum_case = operation.case?;
-                let target = targets
-                    .iter()
-                    .find(|target| target.sum_case == sum_case)?
-                    .block;
-                predecessors.push(SumDispatchPredecessor {
-                    block: block.id,
-                    target,
-                    payload: *payload,
-                });
-            }
-            RuntimeTerminator::Conditional {
-                consequent,
-                alternate,
-                ..
-            } if *consequent == join.id || *alternate == join.id => return None,
-            RuntimeTerminator::Switch {
-                cases, fallback, ..
-            } if cases.iter().any(|case| case.target == join.id) || *fallback == join.id => {
-                return None;
-            }
-            _ => {}
+    let branch_predecessors = &facts.branch_predecessors[join.id];
+    if facts.incoming[join.id] != branch_predecessors.len() {
+        return None;
+    }
+    for block_id in branch_predecessors {
+        let block = &function.blocks[*block_id];
+        let RuntimeTerminator::Branch { arguments, .. } = &block.terminator else {
+            unreachable!();
+        };
+        let [sum] = arguments.as_slice() else {
+            return None;
+        };
+        let operation = block.operations.last()?;
+        let [payload] = operation.operands.as_slice() else {
+            return None;
+        };
+        if operation.kind != "sum.make" || operation.result != *sum {
+            return None;
         }
+        let sum_case = operation.case?;
+        let target = targets
+            .iter()
+            .find(|target| target.sum_case == sum_case)?
+            .block;
+        predecessors.push(SumDispatchPredecessor {
+            block: block.id,
+            target,
+            payload: *payload,
+        });
     }
     if predecessors.is_empty() {
         return None;
@@ -9733,48 +10610,6 @@ fn known_sum_switch_fold(
         targets: targets.into_iter().map(|target| target.block).collect(),
         predecessors,
     })
-}
-
-/// How many times a runtime value is read, counting each operand occurrence and
-/// each terminator that names it.
-fn value_uses(function: &RuntimeFunction, value: usize) -> usize {
-    function
-        .blocks
-        .iter()
-        .map(|block| {
-            let operands = block
-                .operations
-                .iter()
-                .flat_map(|operation| operation.operands.iter())
-                .filter(|operand| **operand == value)
-                .count();
-            let terminator = match &block.terminator {
-                RuntimeTerminator::Branch { arguments, .. } => arguments
-                    .iter()
-                    .filter(|argument| **argument == value)
-                    .count(),
-                RuntimeTerminator::Conditional {
-                    condition,
-                    consequent_arguments,
-                    alternate_arguments,
-                    ..
-                } => {
-                    usize::from(*condition == value)
-                        + consequent_arguments
-                            .iter()
-                            .chain(alternate_arguments)
-                            .filter(|argument| **argument == value)
-                            .count()
-                }
-                RuntimeTerminator::Switch { selector, .. } => usize::from(*selector == value),
-                RuntimeTerminator::Return {
-                    value: returned, ..
-                } => usize::from(*returned == value),
-                RuntimeTerminator::Trap { .. } => 0,
-            };
-            operands + terminator
-        })
-        .sum()
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -10095,6 +10930,83 @@ fn value_at_pattern(
     }
 }
 
+fn runtime_type_at_pattern(
+    module: &crate::ast::Module,
+    pattern: crate::ast::PatternId,
+    target: crate::ast::PatternId,
+    type_id: usize,
+    types: &[RuntimeType],
+) -> Option<usize> {
+    if pattern == target {
+        return Some(type_id);
+    }
+    match &module.arena.patterns[pattern.0 as usize] {
+        crate::ast::Pattern::Tuple { elements, .. } => {
+            let RuntimeType::Product { fields, .. } = types.get(type_id)? else {
+                return None;
+            };
+            elements.iter().enumerate().find_map(|(index, pattern)| {
+                let field = fields
+                    .iter()
+                    .find(|field| field.name == index.to_string())?;
+                runtime_type_at_pattern(module, *pattern, target, field.type_id, types)
+            })
+        }
+        crate::ast::Pattern::Array { elements, .. } => {
+            let RuntimeType::Store { element_type } = types.get(type_id)? else {
+                return None;
+            };
+            elements.iter().find_map(|pattern| {
+                runtime_type_at_pattern(module, *pattern, target, *element_type, types)
+            })
+        }
+        crate::ast::Pattern::Constructor { name, payload, .. } => {
+            let pattern = payload.as_ref()?;
+            let RuntimeType::Sum { cases, .. } = types.get(type_id)? else {
+                return None;
+            };
+            let case = cases.iter().find(|case_| case_.name == *name)?;
+            runtime_type_at_pattern(module, *pattern, target, case.payload_type, types)
+        }
+        crate::ast::Pattern::Shape { fields, .. } => {
+            let RuntimeType::Product {
+                fields: runtime_fields,
+                ..
+            } = types.get(type_id)?
+            else {
+                return None;
+            };
+            fields.iter().find_map(|field| {
+                let runtime_field = runtime_fields
+                    .iter()
+                    .find(|runtime_field| runtime_field.name == field.name)?;
+                runtime_type_at_pattern(module, field.pattern, target, runtime_field.type_id, types)
+            })
+        }
+        crate::ast::Pattern::Name { .. }
+        | crate::ast::Pattern::Wildcard { .. }
+        | crate::ast::Pattern::Pin { .. }
+        | crate::ast::Pattern::Int { .. }
+        | crate::ast::Pattern::Float { .. }
+        | crate::ast::Pattern::Text { .. }
+        | crate::ast::Pattern::Unit { .. } => None,
+    }
+}
+
+fn runtime_type_at_path(
+    mut type_id: usize,
+    path: &[String],
+    types: &[RuntimeType],
+) -> Option<usize> {
+    for name in path {
+        let RuntimeType::Product { fields, .. } = types.get(type_id)? else {
+            return None;
+        };
+        type_id = fields.iter().find(|field| field.name == *name)?.type_id;
+    }
+    Some(type_id)
+}
+
 #[derive(Clone)]
 struct HostCall {
     capability: String,
@@ -10120,7 +11032,7 @@ pub fn elaborate(
     checked: CheckedModule,
 ) -> Result<RuntimeModule, Diagnostic> {
     let mut module = elaborate_common(context, path, checked, None)?;
-    optimize_runtime_module(&mut module)?;
+    optimize_runtime_module(&mut module, None)?;
     Ok(module)
 }
 
@@ -10130,8 +11042,9 @@ pub(crate) fn elaborate_development(
     checked: CheckedModule,
     units: HashSet<String>,
 ) -> Result<RuntimeModule, Diagnostic> {
-    let mut module = elaborate_common(context, path, checked, Some(Rc::new(units)))?;
-    optimize_runtime_module(&mut module)?;
+    let units = Rc::new(units);
+    let mut module = elaborate_common(context, path, checked, Some(units.clone()))?;
+    optimize_runtime_module(&mut module, Some(units.as_ref()))?;
     Ok(module)
 }
 
@@ -10753,20 +11666,11 @@ fn staged_exports(
                         runtime: None,
                     });
                 }
-                let type_ = types
-                    .iter()
-                    .find_map(|(candidate, type_)| {
-                        if candidate == &name {
-                            Some(type_.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| {
-                        hir_error(&format!(
-                            "The inferred module result omitted export `{name}`."
-                        ))
-                    })?;
+                let type_ = types.get(&name).cloned().ok_or_else(|| {
+                    hir_error(&format!(
+                        "The inferred module result omitted export `{name}`."
+                    ))
+                })?;
                 Ok(StagedExport {
                     name,
                     runtime: Some((value, type_)),
@@ -11272,13 +12176,7 @@ impl HirBuilder {
                     .iter()
                     .position(|candidate| &candidate.name == name)
                     .ok_or_else(|| self.mismatch(value, "variant"))?;
-                let inferred_payload = cases.iter().find_map(|(candidate, payload)| {
-                    if candidate == name {
-                        Some(payload.clone())
-                    } else {
-                        None
-                    }
-                });
+                let inferred_payload = cases.get(name).cloned();
                 let unit = Value::Unit;
                 let payload_value = payload.as_deref().unwrap_or(&unit);
                 let payload_type =
@@ -11755,6 +12653,84 @@ mod tests {
     }
 
     #[test]
+    fn dead_pure_operation_chain_is_eliminated_once_per_definition() {
+        const OPERATION_COUNT: usize = 4_096;
+        let operations = (1..=OPERATION_COUNT)
+            .map(|result| {
+                operation(
+                    "scalar.unary",
+                    result,
+                    vec![result.saturating_sub(1)],
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        let mut function = RuntimeFunction {
+            id: 0,
+            name: "dead-operation-chain-test".to_owned(),
+            signature: 0,
+            reuse: None,
+            entry_block: 0,
+            blocks: vec![RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations,
+                terminator: RuntimeTerminator::Return {
+                    value: 0,
+                    span: span(),
+                },
+            }],
+            span: span(),
+        };
+        RUNTIME_DEAD_OPERATION_VISITS.with(|visits| visits.set(0));
+
+        eliminate_dead_pure_operations(&mut function);
+
+        assert!(function.blocks[0].operations.is_empty());
+        assert_eq!(
+            RUNTIME_DEAD_OPERATION_VISITS.with(std::cell::Cell::get),
+            OPERATION_COUNT
+        );
+    }
+
+    #[test]
+    fn duplicate_runtime_type_chains_are_partitioned_in_one_pass() {
+        const DEPTH: usize = 256;
+        let mut types = vec![RuntimeType::Unit, RuntimeType::Unit];
+        let mut left = 0;
+        let mut right = 1;
+        for _ in 0..DEPTH {
+            left = types.len();
+            types.push(RuntimeType::Store {
+                element_type: left - 2,
+            });
+            right = types.len();
+            types.push(RuntimeType::Store {
+                element_type: right - 2,
+            });
+        }
+        let mut module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: RUNTIME_HIR_SCHEMA,
+            source: "runtime-type-chain-test.blot".to_owned(),
+            types,
+            signatures: Vec::new(),
+            static_stores: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        deduplicate_runtime_types(&mut module);
+
+        assert_eq!(module.types.len(), DEPTH + 1);
+        assert_eq!(left, DEPTH * 2);
+        assert_eq!(right, DEPTH * 2 + 1);
+    }
+
+    #[test]
     fn residual_function_store_reuse_requires_caller_provenance() {
         let mut trace = ResidualTrace::new("store-reuse-provenance-test.blot");
         let integer = trace.region_integer_type();
@@ -11808,6 +12784,45 @@ mod tests {
             merge_meaning(&RuntimeMeaning::SharedStore, &RuntimeMeaning::ReusableStore,),
             RuntimeMeaning::SharedStore,
         );
+    }
+
+    #[test]
+    fn persistent_store_growth_produces_a_reusable_store() {
+        let mut trace = ResidualTrace::new("persistent-store-result-test.blot");
+        let integer = trace.region_integer_type();
+        let store_type = trace.insert_type(
+            "persistent-store-result",
+            RuntimeType::Store {
+                element_type: integer,
+            },
+        );
+        let shared = Value::Runtime(RuntimeValue {
+            id: 0,
+            type_id: store_type,
+            meaning: RuntimeMeaning::SharedStore,
+        });
+
+        let result = trace
+            .primitive(
+                "@array.push",
+                &[shared, Value::Int(1.into())],
+                &[None, None],
+                None,
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .expect("persistent Store growth should lower")
+            .expect("persistent Store growth should remain residual");
+
+        let Value::Runtime(result) = result else {
+            panic!("persistent Store growth should produce a runtime Store")
+        };
+        assert_eq!(result.meaning, RuntimeMeaning::ReusableStore);
+        let growth = trace.blocks[0]
+            .operations
+            .last()
+            .expect("persistent Store growth should emit an operation");
+        assert_eq!(growth.kind, "store.grow");
+        assert_eq!(growth.update, Some("persistent"));
     }
 
     #[test]
@@ -11950,6 +12965,14 @@ mod tests {
             !kinds
                 .iter()
                 .any(|kind| kind.contains("take") || kind.contains("split"))
+        );
+        assert!(
+            trace
+                .blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .filter(|operation| operation.kind == "store.grow")
+                .all(|operation| operation.update == Some("owned-reuse"))
         );
     }
 
@@ -12095,7 +13118,7 @@ mod tests {
             }],
         };
 
-        optimize_runtime_module(&mut module).expect("equivalent functions should intern");
+        optimize_runtime_module(&mut module, None).expect("equivalent functions should intern");
 
         assert_eq!(module.functions.len(), 2);
         assert_eq!(module.functions[0].id, 0);
@@ -12186,7 +13209,7 @@ mod tests {
         };
         RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(0));
 
-        deduplicate_runtime_functions(&mut module).expect("acyclic functions should intern");
+        deduplicate_runtime_functions(&mut module, None).expect("acyclic functions should intern");
 
         let visits = RUNTIME_FUNCTION_KEY_VISITS.with(std::cell::Cell::get);
         assert_eq!(visits, function_count);
@@ -12252,7 +13275,7 @@ mod tests {
         RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(0));
         RUNTIME_FUNCTION_REFINEMENT_EDGES.with(|visits| visits.set(0));
 
-        deduplicate_runtime_functions(&mut module).expect("recursive cycle should intern");
+        deduplicate_runtime_functions(&mut module, None).expect("recursive cycle should intern");
 
         let key_visits = RUNTIME_FUNCTION_KEY_VISITS.with(std::cell::Cell::get);
         let refinement_edges = RUNTIME_FUNCTION_REFINEMENT_EDGES.with(std::cell::Cell::get);
@@ -12306,7 +13329,8 @@ mod tests {
             exports: Vec::new(),
         };
 
-        deduplicate_runtime_functions(&mut module).expect("recursive functions should intern");
+        deduplicate_runtime_functions(&mut module, None)
+            .expect("recursive functions should intern");
 
         assert_eq!(module.functions.len(), 1);
         assert_eq!(
@@ -12351,7 +13375,7 @@ mod tests {
             exports: Vec::new(),
         };
 
-        optimize_runtime_module(&mut module).expect("distinct traps should normalize");
+        optimize_runtime_module(&mut module, None).expect("distinct traps should normalize");
 
         assert_eq!(module.functions.len(), 2);
     }
@@ -12398,7 +13422,7 @@ mod tests {
             exports: Vec::new(),
         };
 
-        optimize_runtime_module(&mut module).expect("float functions should normalize");
+        optimize_runtime_module(&mut module, None).expect("float functions should normalize");
 
         assert_eq!(module.functions.len(), 2);
     }
@@ -12485,6 +13509,87 @@ mod tests {
     }
 
     #[test]
+    fn inverse_indirect_operations_cancel_after_product_aliases() {
+        let mut call = operation("call.direct", 1, Vec::new(), Some(4), None);
+        call.type_id = 11;
+        let mut load = operation("indirect.load", 2, vec![1], None, None);
+        load.type_id = 12;
+        let product = product_operation("product.make", 3, 13, vec![2], None);
+        let projection = product_operation("product.project", 4, 12, vec![3], Some(0));
+        let mut make = operation("indirect.make", 5, vec![4], None, None);
+        make.type_id = 11;
+        let mut function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![call, load, product, projection, make],
+            terminator: RuntimeTerminator::Return {
+                value: 5,
+                span: span(),
+            },
+        }]);
+
+        fold_representation_roundtrips(&mut function);
+        eliminate_dead_pure_operations(&mut function);
+
+        assert_eq!(function.blocks[0].operations.len(), 1);
+        assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
+        let RuntimeTerminator::Return { value, .. } = function.blocks[0].terminator else {
+            panic!("roundtrip return changed shape");
+        };
+        assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn inverse_indirect_operations_cancel_after_type_deduplication() {
+        let mut source = operation("opaque", 1, Vec::new(), None, None);
+        source.type_id = 2;
+        let mut load = operation("indirect.load", 2, vec![1], None, None);
+        load.type_id = 0;
+        let mut make = operation("indirect.make", 3, vec![2], None, None);
+        make.type_id = 3;
+        let function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: Vec::new(),
+            operations: vec![source, load, make],
+            terminator: RuntimeTerminator::Return {
+                value: 3,
+                span: span(),
+            },
+        }]);
+        let mut module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: RUNTIME_HIR_SCHEMA,
+            source: "roundtrip-after-type-deduplication.blot".to_owned(),
+            types: vec![
+                RuntimeType::Unit,
+                RuntimeType::Unit,
+                RuntimeType::Indirect { target_type: 0 },
+                RuntimeType::Indirect { target_type: 1 },
+            ],
+            signatures: vec![RuntimeSignature {
+                parameters: Vec::new(),
+                result: 3,
+                effects: Vec::new(),
+            }],
+            static_stores: Vec::new(),
+            functions: vec![function],
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+
+        optimize_runtime_module(&mut module, None).expect("runtime module should normalize");
+
+        assert_eq!(module.functions[0].blocks[0].operations.len(), 1);
+        assert_eq!(module.functions[0].blocks[0].operations[0].kind, "opaque");
+        let RuntimeTerminator::Return { value, .. } = module.functions[0].blocks[0].terminator
+        else {
+            panic!("roundtrip return changed shape");
+        };
+        assert_eq!(value, 1);
+    }
+
+    #[test]
     fn unused_indirect_allocation_is_not_dead_code() {
         let mut indirect_make = operation("indirect.make", 1, vec![0], None, None);
         indirect_make.type_id = 1;
@@ -12501,6 +13606,32 @@ mod tests {
         eliminate_dead_pure_operations(&mut function);
 
         assert_eq!(function.blocks[0].operations.len(), 1);
+    }
+
+    #[test]
+    fn store_product_projection_reads_only_the_requested_field() {
+        let mut read = operation("store.read", 2, vec![0, 1], None, None);
+        read.type_id = 4;
+        let projection = product_operation("product.project", 3, 1, vec![2], Some(1));
+        let mut function = runtime_function(vec![RuntimeBlock {
+            id: 0,
+            parameters: vec![parameter(0), parameter(1)],
+            operations: vec![read, projection],
+            terminator: RuntimeTerminator::Return {
+                value: 3,
+                span: span(),
+            },
+        }]);
+
+        fold_store_field_reads(&mut function);
+        eliminate_dead_pure_operations(&mut function);
+
+        let [field_read] = function.blocks[0].operations.as_slice() else {
+            panic!("the full Store read was not eliminated");
+        };
+        assert_eq!(field_read.kind, "store.read.field");
+        assert_eq!(field_read.operands, [0, 1]);
+        assert_eq!(field_read.field, Some(1));
     }
 
     #[test]
@@ -12748,7 +13879,8 @@ mod tests {
             .operations
             .push(operation("sum.tag", 11, vec![4], None, None));
 
-        assert!(known_sum_switch_fold(&function, &function.blocks[4]).is_none());
+        let facts = SumFoldFacts::new(&function);
+        assert!(known_sum_switch_fold(&function, &function.blocks[4], &facts).is_none());
     }
 
     #[test]
@@ -12759,7 +13891,8 @@ mod tests {
         };
         *fallback = 6;
 
-        assert!(known_sum_switch_fold(&function, &function.blocks[4]).is_none());
+        let facts = SumFoldFacts::new(&function);
+        assert!(known_sum_switch_fold(&function, &function.blocks[4], &facts).is_none());
     }
 
     #[test]
@@ -12770,7 +13903,8 @@ mod tests {
         };
         cases[0].value = WireConstant::SignedInteger32(-1);
 
-        assert!(known_sum_switch_fold(&function, &function.blocks[4]).is_none());
+        let facts = SumFoldFacts::new(&function);
+        assert!(known_sum_switch_fold(&function, &function.blocks[4], &facts).is_none());
     }
 
     #[test]
@@ -12781,7 +13915,8 @@ mod tests {
         };
         cases[0].target = 4;
 
-        assert!(known_sum_switch_fold(&function, &function.blocks[4]).is_none());
+        let facts = SumFoldFacts::new(&function);
+        assert!(known_sum_switch_fold(&function, &function.blocks[4], &facts).is_none());
     }
 
     fn known_sum_switch_function() -> RuntimeFunction {

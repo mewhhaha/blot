@@ -28,6 +28,16 @@ interface CompilerWasmExports {
     moduleId: number,
     requestedFactMask: number,
   ): number;
+  share_compiler_session_module_v2(
+    sourceHandle: number,
+    targetHandle: number,
+    sourceModuleId: number,
+    targetModuleId: number,
+  ): number;
+  compiler_session_syntax_snapshot_v2(
+    handle: number,
+    moduleId: number,
+  ): number;
   remove_compiler_session_module(
     handle: number,
     pathPointer: number,
@@ -174,10 +184,13 @@ export type AddedCompilerModuleResult =
       readonly moduleHandle: string;
       readonly portableAstDigest: string;
       readonly syntaxDiagnostics: readonly CompilerSourceDiagnostic[];
-      readonly syntaxSnapshot: CompilerSyntaxSnapshot | null;
     };
   }
   | CompilerSourceFailure;
+
+export type CompilerSyntaxSnapshotResult =
+  | { readonly ok: true; readonly syntaxSnapshot: CompilerSyntaxSnapshot }
+  | CompilerTransportFailure;
 
 export interface CompilerDependencySite {
   readonly specifier: string;
@@ -762,6 +775,33 @@ export class CompilerWasm {
     return JSON.parse(
       new TextDecoder().decode(this.#readBinaryResponse(length)),
     ) as CompilerAnalysisResult;
+  }
+
+  shareCompilerSessionModule(
+    sourceHandle: number,
+    targetHandle: number,
+    path: string,
+  ): AddedCompilerModuleResult {
+    this.registerCompilerSessionPaths(sourceHandle, [path]);
+    this.registerCompilerSessionPaths(targetHandle, [path]);
+    const length = this.#exports.share_compiler_session_module_v2(
+      sourceHandle,
+      targetHandle,
+      this.#moduleId(sourceHandle, path),
+      this.#moduleId(targetHandle, path),
+    );
+    return this.#readResult(length) as AddedCompilerModuleResult;
+  }
+
+  compilerSessionSyntaxSnapshot(
+    handle: number,
+    path: string,
+  ): CompilerSyntaxSnapshotResult {
+    const length = this.#exports.compiler_session_syntax_snapshot_v2(
+      handle,
+      this.#moduleId(handle, path),
+    );
+    return this.#readResult(length) as CompilerSyntaxSnapshotResult;
   }
 
   exportCompilerSessionModuleAst(

@@ -182,6 +182,58 @@ Deno.test("document close releases a diskless LSP root", async () => {
   );
 });
 
+Deno.test("the LSP removes an unreachable statement with one action", async () => {
+  const uri = "untitled:lsp-unreachable-action.blot";
+  const responses = await exchange([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: "return 1\nlet unreachable = 2\n",
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/codeAction",
+      params: {
+        textDocument: { uri },
+        range: {
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 19 },
+        },
+        context: { diagnostics: [] },
+      },
+    },
+    { jsonrpc: "2.0", id: 3, method: "shutdown", params: null },
+    { jsonrpc: "2.0", method: "exit", params: null },
+  ]);
+
+  const codeActions = responses.find((response) => response.id === 2) as {
+    readonly result: readonly {
+      readonly title: string;
+      readonly edit: {
+        readonly documentChanges: readonly [{
+          readonly edits: readonly [{ readonly newText: string }];
+        }];
+      };
+    }[];
+  };
+  assertEquals(codeActions.result.map((action) => action.title), [
+    "Remove unreachable statement",
+  ]);
+  assertEquals(
+    codeActions.result[0]?.edit.documentChanges[0].edits[0].newText,
+    "",
+  );
+});
+
 async function exchange(
   messages: readonly unknown[],
 ): Promise<Record<string, unknown>[]> {

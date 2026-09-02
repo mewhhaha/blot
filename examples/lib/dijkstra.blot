@@ -1,0 +1,55 @@
+open import "blot:prelude"
+
+const Graph = import "./graph.blot"
+const DistanceTable = import "./distance_table.blot"
+const PriorityQueue = import "./int_min_priority_queue.blot"
+
+const Distances = DistanceTable.Distances
+const Queue = PriorityQueue.Queue
+
+const shortest_paths :: ([[(Int, Int)]], Int) -> Distances
+const shortest_paths = fn (&graph, source) => do:
+  let rec search :: (Distances, Queue) -> Distances
+  let rec search = fn (distances, queue) => do:
+    if PriorityQueue.is_empty (&queue):
+      return distances
+
+    let (distance, vertex) = PriorityQueue.minimum (&queue)
+    let queue = PriorityQueue.pop (?queue)
+    let (accepted, distances) = DistanceTable.accept_candidate (
+      ?distances,
+      (&vertex),
+      (&distance)
+    )
+
+    return case accepted of
+      #False => search (distances, queue)
+
+      #True => do:
+        let edges = Graph.outgoing ((&graph), (&vertex))
+        let rec relax :: (Int, Distances, Queue) -> (Distances, Queue)
+        let rec relax = fn (index, distances, queue) => do:
+          if index >= Array.length (&edges):
+            return (distances, queue)
+
+          let (neighbor, weight) = Array.expect_get ((&edges), index)
+          let candidate = distance + weight
+          let (improved, distances) = DistanceTable.improve (
+            ?distances,
+            (&neighbor),
+            (&candidate)
+          )
+          let queue = case improved of
+            #True => PriorityQueue.push (?queue, (candidate, neighbor))
+            #False => !queue
+          return relax (index + 1, distances, queue)
+
+        let (distances, queue) = relax (0, distances, queue)
+        return search (distances, queue)
+
+  let distances = DistanceTable.create (Array.length (&graph), source)
+  let queue = PriorityQueue.empty ()
+  queue := PriorityQueue.push (?queue, (0, source))
+  return search (distances, queue)
+
+return shortest_paths

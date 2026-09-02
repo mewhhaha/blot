@@ -4,6 +4,7 @@ import {
   directRule,
   fieldRule,
   fieldRules,
+  lineComments,
   producedExpression,
   spanKey,
   trailingWhitespace,
@@ -57,12 +58,19 @@ export const redundantTerminalElse: LintRule = {
           rule.span.start,
           fallback.span.start,
         ).trimEnd();
+        const elseComments = lineComments(context.source.slice(
+          fallback.span.start,
+          alternative.span.start,
+        ));
         const moved = reindentAlternative(
           alternative,
           context.source,
           indent,
         );
         let replacement = beforeElse;
+        for (const comment of elseComments) {
+          replacement = `${replacement}\n${indent}${comment}`;
+        }
         if (moved.length > 0) replacement = `${replacement}\n${indent}${moved}`;
         replacement += trailingWhitespace(context.source, rule.span);
 

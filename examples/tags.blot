@@ -5,10 +5,10 @@
 open import "blot:prelude"
 
 const multiply = fn factor => tag (
-    "multiply",
-    { .factor = factor; },
-    fn value => value * factor
-  )
+  "multiply",
+  { .factor = factor; },
+  fn value => value * factor
+)
 const increment = tag ("increment", (), fn value => value + 1)
 
 // The nearest tag runs first: multiply produces 6, then increment produces 7.
@@ -29,8 +29,8 @@ const rec factorial =
   fn n => do:
     if n == 0:
       return 1
-    else:
-      return n * factorial (n - 1)
+
+    return n * factorial (n - 1)
 
 // A test is an ordinary identity transform whose descriptor name is `test`.
 // Normal evaluation leaves this function alone; `blot test` discovers it.
@@ -39,6 +39,6 @@ let transformations_work = fn () => do:
   return expect (
     ordered == 7,
     "tags apply nearest-first"
-  )
+    )
 
 return { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }

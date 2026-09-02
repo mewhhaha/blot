@@ -119,6 +119,7 @@ pub struct FrontendState {
     program: CompactProgram,
     reuse: Vec<NodeReuse>,
     parser_executed: bool,
+    semantic_input_unchanged: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -148,6 +149,10 @@ impl FrontendState {
             parser_executed: self.parser_executed,
         }
     }
+
+    pub(crate) fn semantic_input_unchanged(&self) -> bool {
+        self.semantic_input_unchanged
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +177,7 @@ pub fn ingest_incremental(
                 program,
                 reuse,
                 parser_executed: false,
+                semantic_input_unchanged: true,
             },
         ));
     }
@@ -182,6 +188,10 @@ pub fn ingest_incremental(
     };
     let syntax_unchanged =
         previous.is_some_and(|previous| same_syntax_tokens(&tokens, &previous.tokens));
+    let semantic_input_unchanged = syntax_unchanged
+        && previous.is_some_and(|previous| {
+            same_semantic_tokens(source, &tokens, &previous.source, &previous.tokens)
+        });
     let delimiter_matches = match_delimiters(&tokens, plan.boundaries, &mut diagnostics);
     let root = if diagnostics.is_empty() && !syntax_unchanged {
         execute_root_island(&tokens, &delimiter_matches, plan, &mut diagnostics)
@@ -214,8 +224,25 @@ pub fn ingest_incremental(
             program,
             reuse,
             parser_executed: !syntax_unchanged,
+            semantic_input_unchanged,
         },
     ))
+}
+
+fn same_semantic_tokens(
+    current_source: &[u16],
+    current: &[Token],
+    previous_source: &[u16],
+    previous: &[Token],
+) -> bool {
+    current
+        .iter()
+        .filter(|token| token.terminal >= 0)
+        .zip(previous.iter().filter(|token| token.terminal >= 0))
+        .all(|(current, previous)| {
+            current_source[current.start..current.end]
+                == previous_source[previous.start..previous.end]
+        })
 }
 
 fn same_syntax_tokens(current: &[Token], previous: &[Token]) -> bool {
@@ -259,71 +286,66 @@ fn reused_nodes(
     source: &[u16],
     current: &CompactProgram,
 ) -> Vec<NodeReuse> {
-    let mut previous_by_fingerprint: HashMap<u64, Vec<usize>> = HashMap::new();
+    let common_prefix = previous_source
+        .iter()
+        .zip(source)
+        .take_while(|(previous, current)| previous == current)
+        .count();
+    let remaining_previous = previous_source.len() - common_prefix;
+    let remaining_current = source.len() - common_prefix;
+    let common_suffix = previous_source
+        .iter()
+        .rev()
+        .zip(source.iter().rev())
+        .take(remaining_previous.min(remaining_current))
+        .take_while(|(previous, current)| previous == current)
+        .count();
+    let previous_suffix_start = previous_source.len() - common_suffix;
+    let current_suffix_start = source.len() - common_suffix;
+    let mut previous_by_span: HashMap<(i32, usize, usize), Vec<usize>> = HashMap::new();
     for id in 0..previous.nodes.len() / 8 {
-        previous_by_fingerprint
-            .entry(node_fingerprint(previous_source, previous, id))
+        let base = id * 8;
+        previous_by_span
+            .entry((
+                previous.nodes[base],
+                previous.nodes[base + 2] as usize,
+                previous.nodes[base + 3] as usize,
+            ))
             .or_default()
             .push(id);
     }
     let mut reuse = Vec::new();
     for current_id in 0..current.nodes.len() / 8 {
-        let fingerprint = node_fingerprint(source, current, current_id);
-        let Some(candidates) = previous_by_fingerprint.get_mut(&fingerprint) else {
+        let base = current_id * 8;
+        let start = current.nodes[base + 2] as usize;
+        let end = current.nodes[base + 3] as usize;
+        let previous_span = if end <= common_prefix {
+            Some((start, end))
+        } else if start >= current_suffix_start {
+            Some((
+                previous_suffix_start + start - current_suffix_start,
+                previous_suffix_start + end - current_suffix_start,
+            ))
+        } else {
+            None
+        };
+        let Some((previous_start, previous_end)) = previous_span else {
+            continue;
+        };
+        let key = (current.nodes[base], previous_start, previous_end);
+        let Some(candidates) = previous_by_span.get_mut(&key) else {
             continue;
         };
         let Some(previous_id) = candidates.pop() else {
             continue;
         };
-        if same_node_source(
-            previous_source,
-            previous,
-            previous_id,
-            source,
-            current,
-            current_id,
-        ) {
-            reuse.push(NodeReuse {
-                previous: previous_id as u32,
-                current: current_id as u32,
-            });
-        }
+        reuse.push(NodeReuse {
+            previous: previous_id as u32,
+            current: current_id as u32,
+        });
     }
     reuse.sort_by_key(|item| item.current);
     reuse
-}
-
-fn node_fingerprint(source: &[u16], program: &CompactProgram, id: usize) -> u64 {
-    let base = id * 8;
-    let rule = program.nodes[base] as u64;
-    let start = program.nodes[base + 2] as usize;
-    let end = program.nodes[base + 3] as usize;
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64 ^ rule;
-    for unit in &source[start..end] {
-        hash ^= u64::from(*unit);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
-
-fn same_node_source(
-    previous_source: &[u16],
-    previous: &CompactProgram,
-    previous_id: usize,
-    source: &[u16],
-    current: &CompactProgram,
-    current_id: usize,
-) -> bool {
-    let previous_base = previous_id * 8;
-    let current_base = current_id * 8;
-    if previous.nodes[previous_base] != current.nodes[current_base] {
-        return false;
-    }
-    let previous_start = previous.nodes[previous_base + 2] as usize;
-    let previous_end = previous.nodes[previous_base + 3] as usize;
-    let current_start = current.nodes[current_base + 2] as usize;
-    let current_end = current.nodes[current_base + 3] as usize;
-    previous_source[previous_start..previous_end] == source[current_start..current_end]
 }
 
 fn frontend_plan() -> &'static FrontendPlan {

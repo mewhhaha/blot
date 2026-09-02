@@ -533,7 +533,7 @@ fn interval_value(intervals: Vec<Interval>) -> Value {
     }
     let mut members = vec![first];
     members.extend(remaining);
-    Value::Union(members)
+    Value::Union(members.into())
 }
 
 fn expression_span(module: &Module, expression: ExpressionId) -> Span {

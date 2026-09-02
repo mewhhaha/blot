@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
 
 use serde::Serialize;
 use wasm_encoder::{
@@ -21,7 +21,7 @@ const HEAP_GLOBAL: u32 = 0;
 const ACTIVE_EXPORT_GLOBAL: u32 = 3;
 const RESULT_POINTER_GLOBAL: u32 = 4;
 const HEAP_CHECKPOINT_GLOBAL: u32 = 5;
-const MAX_STRUCTURED_LOOP_BLOCKS: usize = 128;
+const MAX_STRUCTURED_DUPLICATED_BLOCKS: usize = 128;
 
 #[derive(Clone, Copy)]
 struct DynamicHelpers {
@@ -1091,10 +1091,12 @@ fn pool_static_data(
     Ok(offset)
 }
 
-fn scalar_store_literal_bytes(
+fn closed_store_literal_bytes(
     module: &RuntimeModule,
+    function: usize,
     operation: &RuntimeOperation,
     definitions: &HashMap<usize, &RuntimeOperation>,
+    text_offsets: &HashMap<(usize, usize), u32>,
 ) -> Result<Option<(u32, Vec<u8>, u32)>, String> {
     let RuntimeType::Store { element_type } = module
         .types
@@ -1107,13 +1109,9 @@ fn scalar_store_literal_bytes(
         ));
     };
     let element_type = *element_type;
-    let alignment = match module.types.get(element_type) {
-        Some(RuntimeType::Unit | RuntimeType::Boolean) => 1,
-        Some(RuntimeType::Integer32 | RuntimeType::Float32) => 4,
-        Some(RuntimeType::SignedInteger64 | RuntimeType::Float64) => 8,
-        _ => return Ok(None),
-    };
-    let constants = if let Some(store_id) = operation.static_store {
+    let element_memory_type = internal_memory_type(module, element_type)?;
+    let element_layout = memory_layout(&element_memory_type);
+    let length = if let Some(store_id) = operation.static_store {
         let store = module.static_stores.get(store_id).ok_or_else(|| {
             format!(
                 "{}: store.literal references unknown static Store {store_id}",
@@ -1126,51 +1124,252 @@ fn scalar_store_literal_bytes(
                 module.source, store.element_type, element_type
             ));
         }
-        store.values.iter().collect::<Vec<_>>()
+        store.values.len()
     } else {
-        let mut constants = Vec::with_capacity(operation.operands.len());
-        for operand in &operation.operands {
-            let Some(constant) = definitions.get(operand) else {
-                return Ok(None);
-            };
-            let Some(value) = constant.value.as_ref() else {
-                return Ok(None);
-            };
-            if constant.kind != "constant" || constant.type_id != element_type {
-                return Ok(None);
-            }
-            constants.push(value);
-        }
-        constants
+        operation.operands.len()
     };
-    let mut bytes = Vec::new();
-    for constant in &constants {
-        match (module.types.get(element_type), *constant) {
-            (Some(RuntimeType::Unit), WireConstant::Unit) => {}
-            (Some(RuntimeType::Boolean), WireConstant::Boolean(value)) => {
-                bytes.push(u8::from(*value));
+    let byte_length = usize::try_from(element_layout.size)
+        .ok()
+        .and_then(|stride| stride.checked_mul(length))
+        .ok_or_else(|| format!("{}: Store literal exceeds memory32", module.source))?;
+    let mut bytes = vec![0; byte_length];
+    if let Some(store_id) = operation.static_store {
+        let store = &module.static_stores[store_id];
+        for (index, value) in store.values.iter().enumerate() {
+            let offset = index * element_layout.size as usize;
+            if !write_static_constant(module, element_type, value, &mut bytes, offset)? {
+                return Ok(None);
             }
-            (Some(RuntimeType::Integer32), WireConstant::SignedInteger32(value)) => {
-                bytes.extend(value.to_le_bytes());
+        }
+    } else {
+        let writer = StaticOperationWriter {
+            module,
+            function,
+            definitions,
+            text_offsets,
+        };
+        for (index, operand) in operation.operands.iter().enumerate() {
+            let offset = index * element_layout.size as usize;
+            if !writer.write(element_type, *operand, &mut bytes, offset)? {
+                return Ok(None);
             }
-            (Some(RuntimeType::SignedInteger64), WireConstant::SignedInteger64(value)) => {
-                let value = value.parse::<i64>().map_err(|error| {
-                    format!("{}: invalid residual i64 {value}: {error}", module.source)
-                })?;
-                bytes.extend(value.to_le_bytes());
-            }
-            (Some(RuntimeType::Float32), WireConstant::Float32(value)) => {
-                bytes.extend(value.to_bits().to_le_bytes());
-            }
-            (Some(RuntimeType::Float64), WireConstant::Float64(value)) => {
-                bytes.extend(value.to_bits().to_le_bytes());
-            }
-            _ => return Ok(None),
         }
     }
-    let length = u32::try_from(constants.len())
+    let length = u32::try_from(length)
         .map_err(|_| format!("{}: Store literal length exceeds memory32", module.source))?;
-    Ok(Some((alignment, bytes, length)))
+    Ok(Some((element_layout.alignment, bytes, length)))
+}
+
+struct StaticOperationWriter<'a> {
+    module: &'a RuntimeModule,
+    function: usize,
+    definitions: &'a HashMap<usize, &'a RuntimeOperation>,
+    text_offsets: &'a HashMap<(usize, usize), u32>,
+}
+
+impl StaticOperationWriter<'_> {
+    fn write(
+        &self,
+        expected_type: usize,
+        value: usize,
+        destination: &mut [u8],
+        offset: usize,
+    ) -> Result<bool, String> {
+        let Some(operation) = self.definitions.get(&value) else {
+            return Ok(false);
+        };
+        if operation.type_id != expected_type {
+            return Err(format!(
+                "{}: static value {} has type {}, expected {}",
+                self.module.source, value, operation.type_id, expected_type
+            ));
+        }
+        if let Some(constant) = &operation.value {
+            if matches!(constant, WireConstant::Text(_)) {
+                let Some(pointer) = self.text_offsets.get(&(self.function, value)) else {
+                    return Err(format!(
+                        "{}: static text {} has no pooled address",
+                        self.module.source, value
+                    ));
+                };
+                let WireConstant::Text(text) = constant else {
+                    unreachable!("guarded static text")
+                };
+                write_static_bytes(destination, offset, &pointer.to_le_bytes())?;
+                let length = u32::try_from(text.len())
+                    .map_err(|_| format!("{}: static text exceeds memory32", self.module.source))?;
+                write_static_bytes(destination, offset + 4, &length.to_le_bytes())?;
+                return Ok(true);
+            }
+            return write_static_constant(
+                self.module,
+                expected_type,
+                constant,
+                destination,
+                offset,
+            );
+        }
+        match operation.kind {
+            "product.make" => {
+                let RuntimeType::Product { fields, .. } = &self.module.types[expected_type] else {
+                    return Err(format!(
+                        "{}: static product.make has non-product type {}",
+                        self.module.source, expected_type
+                    ));
+                };
+                if fields.len() != operation.operands.len() {
+                    return Err(format!(
+                        "{}: static product.make has {} fields but {} operands",
+                        self.module.source,
+                        fields.len(),
+                        operation.operands.len()
+                    ));
+                }
+                let AbiType::Record {
+                    fields: memory_fields,
+                } = internal_memory_type(self.module, expected_type)?
+                else {
+                    return Err(format!(
+                        "{}: static product type {} has no record layout",
+                        self.module.source, expected_type
+                    ));
+                };
+                for ((field, operand), memory_field) in fields
+                    .iter()
+                    .zip(&operation.operands)
+                    .zip(record_layout(&memory_fields))
+                {
+                    if field.name != memory_field.name {
+                        return Err(format!(
+                            "{}: static product field `{}` maps to `{}`",
+                            self.module.source, field.name, memory_field.name
+                        ));
+                    }
+                    if !self.write(
+                        field.type_id,
+                        *operand,
+                        destination,
+                        offset + memory_field.offset as usize,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            "sum.make" => {
+                let RuntimeType::Sum { cases, .. } = &self.module.types[expected_type] else {
+                    return Err(format!(
+                        "{}: static sum.make has non-sum type {}",
+                        self.module.source, expected_type
+                    ));
+                };
+                let case = operation.case.ok_or_else(|| {
+                    format!("{}: static sum.make omitted its case", self.module.source)
+                })?;
+                let runtime_case = cases.get(case).ok_or_else(|| {
+                    format!(
+                        "{}: static sum.make case {case} is outside {} cases",
+                        self.module.source,
+                        cases.len()
+                    )
+                })?;
+                let AbiType::Variant { cases: abi_cases } =
+                    internal_memory_type(self.module, expected_type)?
+                else {
+                    return Err(format!(
+                        "{}: static sum type {} has no variant layout",
+                        self.module.source, expected_type
+                    ));
+                };
+                let layout = variant_layout(&abi_cases);
+                let discriminant = u32::try_from(case)
+                    .map_err(|_| format!("{}: static sum case exceeds u32", self.module.source))?
+                    .to_le_bytes();
+                write_static_bytes(
+                    destination,
+                    offset,
+                    &discriminant[..layout.discriminant_size as usize],
+                )?;
+                let payload = operation.operands.first().ok_or_else(|| {
+                    format!(
+                        "{}: static sum.make omitted its payload",
+                        self.module.source
+                    )
+                })?;
+                self.write(
+                    runtime_case.payload_type,
+                    *payload,
+                    destination,
+                    offset + layout.payload_offset as usize,
+                )
+            }
+            "seal.wrap" | "seal.unwrap" => {
+                let operand = operation.operands.first().ok_or_else(|| {
+                    format!(
+                        "{}: {} omitted its operand",
+                        self.module.source, operation.kind
+                    )
+                })?;
+                let operand_type = self
+                    .definitions
+                    .get(operand)
+                    .map(|operation| operation.type_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: {} operand {} is absent",
+                            self.module.source, operation.kind, operand
+                        )
+                    })?;
+                self.write(operand_type, *operand, destination, offset)
+            }
+            _ => Ok(false),
+        }
+    }
+}
+
+fn write_static_constant(
+    module: &RuntimeModule,
+    expected_type: usize,
+    constant: &WireConstant,
+    destination: &mut [u8],
+    offset: usize,
+) -> Result<bool, String> {
+    let bytes = match (module.types.get(expected_type), constant) {
+        (Some(RuntimeType::Unit), WireConstant::Unit) => Vec::new(),
+        (Some(RuntimeType::Boolean), WireConstant::Boolean(value)) => vec![u8::from(*value)],
+        (Some(RuntimeType::Integer32), WireConstant::SignedInteger32(value)) => {
+            value.to_le_bytes().to_vec()
+        }
+        (Some(RuntimeType::SignedInteger64), WireConstant::SignedInteger64(value)) => value
+            .parse::<i64>()
+            .map_err(|error| format!("{}: invalid residual i64 {value}: {error}", module.source))?
+            .to_le_bytes()
+            .to_vec(),
+        (Some(RuntimeType::Float32), WireConstant::Float32(value)) => {
+            value.to_bits().to_le_bytes().to_vec()
+        }
+        (Some(RuntimeType::Float64), WireConstant::Float64(value)) => {
+            value.to_bits().to_le_bytes().to_vec()
+        }
+        _ => return Ok(false),
+    };
+    write_static_bytes(destination, offset, &bytes)?;
+    Ok(true)
+}
+
+fn write_static_bytes(destination: &mut [u8], offset: usize, bytes: &[u8]) -> Result<(), String> {
+    let destination_length = destination.len();
+    let end = offset
+        .checked_add(bytes.len())
+        .ok_or_else(|| "static value offset overflowed usize".to_owned())?;
+    let target = destination.get_mut(offset..end).ok_or_else(|| {
+        format!(
+            "static value byte range {offset}..{end} exceeds {} bytes",
+            destination_length
+        )
+    })?;
+    target.copy_from_slice(bytes);
+    Ok(())
 }
 
 fn emit_dynamic_module(
@@ -1187,12 +1386,6 @@ fn emit_dynamic_module(
     let mut pooled_data = HashMap::new();
     let mut data_segments = Vec::new();
     for function in &module.functions {
-        let definitions = function
-            .blocks
-            .iter()
-            .flat_map(|block| block.operations.iter())
-            .map(|operation| (operation.result, operation))
-            .collect::<HashMap<_, _>>();
         for block in &function.blocks {
             for operation in &block.operations {
                 if let Some(WireConstant::Text(value)) = &operation.value {
@@ -1207,13 +1400,29 @@ fn emit_dynamic_module(
                     static_data
                         .text_offsets
                         .insert((function.id, operation.result), offset);
-                    continue;
                 }
+            }
+        }
+    }
+    for function in &module.functions {
+        let definitions = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.operations.iter())
+            .map(|operation| (operation.result, operation))
+            .collect::<HashMap<_, _>>();
+        for block in &function.blocks {
+            for operation in &block.operations {
                 if operation.kind != "store.literal" {
                     continue;
                 }
-                let Some((alignment, bytes, length)) =
-                    scalar_store_literal_bytes(module, operation, &definitions)?
+                let Some((alignment, bytes, length)) = closed_store_literal_bytes(
+                    module,
+                    function.id,
+                    operation,
+                    &definitions,
+                    &static_data.text_offsets,
+                )?
                 else {
                     continue;
                 };
@@ -1663,42 +1872,61 @@ fn allocate_value_locals(
         .map(|block| (block.id, HashSet::new()))
         .collect::<HashMap<_, _>>();
     let mut live_out = live_in.clone();
-    loop {
-        let mut changed = false;
-        for block in function.blocks.iter().rev() {
-            let mut next_live_out = HashSet::new();
-            for target in terminator_targets(&block.terminator) {
-                let target_live = live_in.get(&target).ok_or_else(|| {
-                    format!(
-                        "{}: function {} targets unknown block {target}",
-                        module.source, function.name
-                    )
-                })?;
-                next_live_out.extend(target_live);
+    let mut predecessors = HashMap::<usize, Vec<usize>>::new();
+    for block in &function.blocks {
+        for target in terminator_targets(&block.terminator) {
+            if !live_in.contains_key(&target) {
+                return Err(format!(
+                    "{}: function {} targets unknown block {target}",
+                    module.source, function.name
+                ));
             }
-            let mut next_live_in = block_uses.get(&block.id).cloned().unwrap_or_default();
-            let defined = block_definitions.get(&block.id).ok_or_else(|| {
-                format!(
-                    "{}: function {} omitted liveness facts for block {}",
-                    module.source, function.name, block.id
-                )
-            })?;
-            next_live_in.extend(
-                next_live_out
-                    .iter()
-                    .filter(|value| !defined.contains(value)),
-            );
-            if live_out.get(&block.id) != Some(&next_live_out) {
-                live_out.insert(block.id, next_live_out);
-                changed = true;
-            }
-            if live_in.get(&block.id) != Some(&next_live_in) {
-                live_in.insert(block.id, next_live_in);
-                changed = true;
-            }
+            predecessors.entry(target).or_default().push(block.id);
         }
-        if !changed {
-            break;
+    }
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.id, block))
+        .collect::<HashMap<_, _>>();
+    let mut pending = function
+        .blocks
+        .iter()
+        .rev()
+        .map(|block| block.id)
+        .collect::<VecDeque<_>>();
+    let mut queued = function
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<HashSet<_>>();
+    while let Some(block_id) = pending.pop_front() {
+        queued.remove(&block_id);
+        let block = blocks[&block_id];
+        let mut next_live_out = HashSet::new();
+        for target in terminator_targets(&block.terminator) {
+            next_live_out.extend(&live_in[&target]);
+        }
+        let mut next_live_in = block_uses.get(&block.id).cloned().unwrap_or_default();
+        let defined = block_definitions.get(&block.id).ok_or_else(|| {
+            format!(
+                "{}: function {} omitted liveness facts for block {}",
+                module.source, function.name, block.id
+            )
+        })?;
+        next_live_in.extend(
+            next_live_out
+                .iter()
+                .filter(|value| !defined.contains(value)),
+        );
+        live_out.insert(block.id, next_live_out);
+        if live_in.get(&block.id) != Some(&next_live_in) {
+            live_in.insert(block.id, next_live_in);
+            for predecessor in predecessors.get(&block.id).into_iter().flatten() {
+                if queued.insert(*predecessor) {
+                    pending.push_back(*predecessor);
+                }
+            }
         }
     }
 
@@ -2608,6 +2836,122 @@ fn emit_dynamic_operation(
                 .local_get(scratch_length)
                 .local_set(result[1]);
         }
+        "text.join" => {
+            let store_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(store_type)
+                .ok_or_else(|| format!("{}: text.join has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: text.join operand is not a Store",
+                    module.source
+                ));
+            };
+            if !matches!(module.types.get(*element_type), Some(RuntimeType::Text))
+                || !matches!(module.types.get(operation.type_id), Some(RuntimeType::Text))
+            {
+                return Err(format!(
+                    "{}: text.join requires Store Text -> Text",
+                    module.source
+                ));
+            }
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            let text_layout = memory_layout(&AbiType::Text);
+            let pointer_load = wasm_encoder::MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            };
+            let length_load = wasm_encoder::MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: 0,
+            };
+            instructions
+                .i32_const(0)
+                .local_set(scratch_index)
+                .i32_const(0)
+                .local_set(scratch_length)
+                .block(BlockType::Empty)
+                .loop_(BlockType::Empty)
+                .local_get(scratch_index)
+                .local_get(store[1])
+                .i32_ge_u()
+                .br_if(1)
+                .local_get(scratch_length)
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(text_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .i32_load(length_load)
+                .i32_add()
+                .local_tee(result[1])
+                .local_get(scratch_length)
+                .i32_lt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(result[1])
+                .local_set(scratch_length)
+                .local_get(scratch_index)
+                .i32_const(1)
+                .i32_add()
+                .local_set(scratch_index)
+                .br(0)
+                .end()
+                .end()
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(1)
+                .local_get(scratch_length)
+                .call(helpers.realloc)
+                .local_set(result[0])
+                .local_get(scratch_length)
+                .local_set(result[1])
+                .i32_const(0)
+                .local_set(scratch_index)
+                .local_get(result[0])
+                .local_set(scratch_length)
+                .block(BlockType::Empty)
+                .loop_(BlockType::Empty)
+                .local_get(scratch_index)
+                .local_get(store[1])
+                .i32_ge_u()
+                .br_if(1)
+                .local_get(scratch_length)
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(text_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .i32_load(pointer_load)
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(text_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .i32_load(length_load)
+                .memory_copy(0, 0)
+                .local_get(scratch_length)
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(text_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .i32_load(length_load)
+                .i32_add()
+                .local_set(scratch_length)
+                .local_get(scratch_index)
+                .i32_const(1)
+                .i32_add()
+                .local_set(scratch_index)
+                .br(0)
+                .end()
+                .end();
+        }
         "text.from-i64" => {
             let i64_to_text = helpers.i64_to_text.ok_or_else(|| {
                 format!(
@@ -2975,6 +3319,92 @@ fn emit_dynamic_operation(
                 .i32_add()
                 .local_set(scratch_pointer);
             emit_load_canonical_result(instructions, &element_type, result, scratch_pointer, 0)?;
+        }
+        "store.read.field" => {
+            let store_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
+            let RuntimeType::Store { element_type } = module
+                .types
+                .get(store_type)
+                .ok_or_else(|| format!("{}: store.read.field has no Store type", module.source))?
+            else {
+                return Err(format!(
+                    "{}: store.read.field operand is not a Store",
+                    module.source
+                ));
+            };
+            let RuntimeType::Product { fields, .. } =
+                module.types.get(*element_type).ok_or_else(|| {
+                    format!(
+                        "{}: store.read.field element type {} does not exist",
+                        module.source, element_type
+                    )
+                })?
+            else {
+                return Err(format!(
+                    "{}: store.read.field reads a non-product Store element",
+                    module.source
+                ));
+            };
+            let field = operation
+                .field
+                .ok_or_else(|| format!("{}: store.read.field omitted its field", module.source))?;
+            let runtime_field = fields.get(field).ok_or_else(|| {
+                format!(
+                    "{}: store.read.field field {field} is outside a {}-field product",
+                    module.source,
+                    fields.len()
+                )
+            })?;
+            if runtime_field.type_id != operation.type_id {
+                return Err(format!(
+                    "{}: store.read.field result type {} does not match field type {}",
+                    module.source, operation.type_id, runtime_field.type_id
+                ));
+            }
+            let element_memory_type = internal_memory_type(module, *element_type)?;
+            let AbiType::Record {
+                fields: memory_fields,
+            } = &element_memory_type
+            else {
+                return Err(format!(
+                    "{}: store.read.field product has no record memory layout",
+                    module.source
+                ));
+            };
+            let laid_out_fields = record_layout(memory_fields);
+            let memory_field = laid_out_fields.get(field).ok_or_else(|| {
+                format!(
+                    "{}: store.read.field memory field {field} is absent",
+                    module.source
+                )
+            })?;
+            if memory_field.name != runtime_field.name {
+                return Err(format!(
+                    "{}: store.read.field runtime field `{}` maps to memory field `{}`",
+                    module.source, runtime_field.name, memory_field.name
+                ));
+            }
+            let element_layout = memory_layout(&element_memory_type);
+            let store = locals_for(module, value_locals, operation.operands[0])?;
+            let index = locals_for(module, value_locals, operation.operands[1])?;
+            instructions
+                .local_get(index[0])
+                .i32_wrap_i64()
+                .local_set(scratch_index)
+                .local_get(store[0])
+                .local_get(scratch_index)
+                .i32_const(element_layout.size as i32)
+                .i32_mul()
+                .i32_add()
+                .local_set(scratch_pointer);
+            emit_load_canonical_result(
+                instructions,
+                &memory_field.type_,
+                result,
+                scratch_pointer,
+                memory_field.offset,
+            )?;
         }
         "store.new" => {
             let RuntimeType::Store { element_type } = module
@@ -3397,18 +3827,17 @@ enum StructuredControlFlow {
 
 fn structured_control_flow(function: &RuntimeFunction) -> Option<StructuredControlFlow> {
     let mut active = HashSet::new();
-    let mut expanded = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut expanded_blocks = 0;
     let mut has_back_edge = false;
-    let expanded_blocks = structured_loop_expansion(
+    structured_loop_expansion(
         function,
         function.entry_block,
         &mut active,
-        &mut expanded,
+        &mut visited,
+        &mut expanded_blocks,
         &mut has_back_edge,
     )?;
-    if expanded_blocks > MAX_STRUCTURED_LOOP_BLOCKS {
-        return None;
-    }
     if has_back_edge {
         Some(StructuredControlFlow::EntryLoop)
     } else {
@@ -3471,36 +3900,38 @@ fn structured_loop_expansion(
     function: &RuntimeFunction,
     block_id: usize,
     active: &mut HashSet<usize>,
-    expanded: &mut HashSet<usize>,
+    visited: &mut HashSet<usize>,
+    expanded_blocks: &mut usize,
     has_back_edge: &mut bool,
-) -> Option<usize> {
-    // Recursive emission unfolds targets as nested Wasm constructs. A shared
-    // join would be emitted under more than one construct, so leave arbitrary
-    // reconvergent CFGs to the dispatcher instead of guessing a duplication.
-    if !active.insert(block_id) || !expanded.insert(block_id) {
+) -> Option<()> {
+    if !active.insert(block_id) {
+        return None;
+    }
+    visited.insert(block_id);
+    *expanded_blocks = expanded_blocks.checked_add(1)?;
+    if expanded_blocks.saturating_sub(visited.len()) > MAX_STRUCTURED_DUPLICATED_BLOCKS {
         return None;
     }
     let block = function.blocks.get(block_id)?;
     if block.id != block_id {
         return None;
     }
-    if matches!(block.terminator, RuntimeTerminator::Switch { .. }) {
-        return None;
-    }
-    let mut expanded_blocks = 1;
     for target in terminator_targets(&block.terminator) {
         if target == function.entry_block {
             *has_back_edge = true;
             continue;
         }
-        expanded_blocks +=
-            structured_loop_expansion(function, target, active, expanded, has_back_edge)?;
-        if expanded_blocks > MAX_STRUCTURED_LOOP_BLOCKS {
-            return None;
-        }
+        structured_loop_expansion(
+            function,
+            target,
+            active,
+            visited,
+            expanded_blocks,
+            has_back_edge,
+        )?;
     }
     active.remove(&block_id);
-    Some(expanded_blocks)
+    Some(())
 }
 
 fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
@@ -3656,8 +4087,67 @@ fn emit_structured_block(
             )?;
             instructions.end();
         }
-        RuntimeTerminator::Switch { .. } => {
-            return Err("a Runtime HIR switch entered structured emission".to_owned());
+        RuntimeTerminator::Switch {
+            selector,
+            cases,
+            fallback,
+            ..
+        } => {
+            let selector = locals_for(module, value_locals, *selector)?[0];
+            for (index, case_) in cases.iter().enumerate() {
+                let expected = switch_case_integer(&case_.value)?;
+                instructions.local_get(selector);
+                match case_.value {
+                    WireConstant::SignedInteger32(_) => {
+                        instructions.i32_const(expected as i32).i32_eq();
+                    }
+                    WireConstant::SignedInteger64(_) => {
+                        instructions.i64_const(expected).i64_eq();
+                    }
+                    _ => unreachable!("switch_case_integer accepted a non-integer"),
+                }
+                instructions.if_(BlockType::Empty);
+                emit_structured_target(
+                    instructions,
+                    module,
+                    function,
+                    case_.target,
+                    &[],
+                    manifest,
+                    helpers,
+                    static_data,
+                    facts,
+                    scratch_pointer,
+                    scratch_length,
+                    scratch_index,
+                    runtime_function_indices,
+                    iteration_checkpoint,
+                    result,
+                    loop_depth + index as u32 + 1,
+                )?;
+                instructions.else_();
+            }
+            emit_structured_target(
+                instructions,
+                module,
+                function,
+                *fallback,
+                &[],
+                manifest,
+                helpers,
+                static_data,
+                facts,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                iteration_checkpoint,
+                result,
+                loop_depth + cases.len() as u32,
+            )?;
+            for _ in cases {
+                instructions.end();
+            }
         }
         RuntimeTerminator::Return { value, .. } => {
             emit_structured_return(instructions, module, facts, *value, result)?;
@@ -4868,7 +5358,8 @@ fn emit_i64_operation(
                 .i64_lt_s()
                 .if_(BlockType::Empty)
                 .unreachable()
-                .end();
+                .end()
+                .drop();
         }
         Some("multiply") => {
             instructions
@@ -6675,6 +7166,46 @@ mod tests {
     }
 
     #[test]
+    fn checked_integer_subtraction_leaves_structured_branches_balanced() {
+        let mut function = Function::new(vec![(1, ValType::I64)]);
+        let mut instructions = function.instructions();
+        instructions.i32_const(1).if_(BlockType::Empty);
+        emit_i64_operation(
+            &mut instructions,
+            0,
+            1,
+            2,
+            Some("subtract"),
+            "structured-subtraction-test",
+        )
+        .expect("checked subtraction should emit");
+        instructions
+            .local_get(2)
+            .return_()
+            .else_()
+            .local_get(0)
+            .return_()
+            .end()
+            .unreachable()
+            .end();
+
+        let mut types = TypeSection::new();
+        types
+            .ty()
+            .function([ValType::I64, ValType::I64], [ValType::I64]);
+        let mut functions = FunctionSection::new();
+        functions.function(0);
+        let mut code = CodeSection::new();
+        code.function(&function);
+        let mut module = Module::new();
+        module.section(&types).section(&functions).section(&code);
+
+        wasmparser::Validator::new()
+            .validate_all(&module.finish())
+            .expect("checked subtraction should leave no operand below its result");
+    }
+
+    #[test]
     fn entry_cycle_with_acyclic_body_is_a_structured_loop() {
         let function = runtime_function(vec![
             conditional_block(0, 1, 2),
@@ -6700,7 +7231,7 @@ mod tests {
     }
 
     #[test]
-    fn reconverging_loop_body_keeps_the_dispatcher() {
+    fn bounded_reconverging_loop_body_is_structured() {
         let function = runtime_function(vec![
             conditional_block(0, 1, 2),
             branch_block(1, 3),
@@ -6708,7 +7239,52 @@ mod tests {
             branch_block(3, 0),
         ]);
 
-        assert_eq!(structured_control_flow(&function), None);
+        assert_eq!(
+            structured_control_flow(&function),
+            Some(StructuredControlFlow::EntryLoop)
+        );
+    }
+
+    #[test]
+    fn bounded_switch_with_a_shared_join_is_structured() {
+        let function = runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Switch {
+                    selector: 0,
+                    cases: vec![crate::hir::RuntimeSwitchCase {
+                        value: WireConstant::SignedInteger32(0),
+                        target: 1,
+                    }],
+                    fallback: 2,
+                    span: span(),
+                },
+            },
+            branch_block(1, 3),
+            branch_block(2, 3),
+            return_block(3),
+        ]);
+
+        assert_eq!(
+            structured_control_flow(&function),
+            Some(StructuredControlFlow::Acyclic)
+        );
+    }
+
+    #[test]
+    fn large_acyclic_control_flow_is_not_refused_for_its_unique_blocks() {
+        let mut blocks = (0..129)
+            .map(|block| branch_block(block, block + 1))
+            .collect::<Vec<_>>();
+        blocks.push(return_block(129));
+        let function = runtime_function(blocks);
+
+        assert_eq!(
+            structured_control_flow(&function),
+            Some(StructuredControlFlow::Acyclic)
+        );
     }
 
     #[test]
@@ -6862,10 +7438,36 @@ mod tests {
     #[test]
     fn generic_dispatch_uses_one_indexed_branch_table() {
         let function = runtime_function(vec![
-            conditional_block(0, 1, 2),
-            branch_block(1, 3),
-            branch_block(2, 3),
-            return_block(3),
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![parameter(0)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: vec![0],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: vec![parameter(1)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Branch {
+                    target: 2,
+                    arguments: vec![1],
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 2,
+                parameters: vec![parameter(2)],
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: vec![2],
+                    span: span(),
+                },
+            },
         ]);
         let module = RuntimeModule {
             format: "blot-runtime-hir",
@@ -6917,6 +7519,66 @@ mod tests {
                 .iter()
                 .any(|operator| matches!(operator, wasmparser::Operator::I32Eq))
         );
+    }
+
+    #[test]
+    fn closed_product_store_literal_is_serialized_into_static_memory() {
+        let module = RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
+            source: "static-product-test".to_owned(),
+            types: vec![
+                RuntimeType::Unit,
+                RuntimeType::Float32,
+                RuntimeType::SignedInteger64,
+                RuntimeType::Product {
+                    name: "Pair".to_owned(),
+                    fields: vec![
+                        crate::hir::RuntimeField {
+                            name: "a".to_owned(),
+                            type_id: 1,
+                        },
+                        crate::hir::RuntimeField {
+                            name: "b".to_owned(),
+                            type_id: 2,
+                        },
+                    ],
+                },
+                RuntimeType::Store { element_type: 3 },
+            ],
+            signatures: Vec::new(),
+            static_stores: Vec::new(),
+            functions: Vec::new(),
+            capabilities: Vec::new(),
+            links: Vec::new(),
+            exports: Vec::new(),
+        };
+        let mut left = plain_operation(1, Vec::new());
+        left.kind = "constant";
+        left.type_id = 1;
+        left.value = Some(WireConstant::Float32(1.5));
+        let mut right = plain_operation(2, Vec::new());
+        right.kind = "constant";
+        right.type_id = 2;
+        right.value = Some(WireConstant::SignedInteger64("7".to_owned()));
+        let mut pair = plain_operation(3, vec![1, 2]);
+        pair.kind = "product.make";
+        pair.type_id = 3;
+        let mut store = plain_operation(4, vec![3]);
+        store.kind = "store.literal";
+        store.type_id = 4;
+        let definitions = HashMap::from([(1, &left), (2, &right), (3, &pair), (4, &store)]);
+
+        let (alignment, bytes, length) =
+            closed_store_literal_bytes(&module, 0, &store, &definitions, &HashMap::new())
+                .expect("static product should serialize")
+                .expect("closed product should be pooled");
+
+        assert_eq!(alignment, 8);
+        assert_eq!(length, 1);
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(&bytes[0..4], &1.5_f32.to_bits().to_le_bytes());
+        assert_eq!(&bytes[8..16], &7_i64.to_le_bytes());
     }
 
     #[test]

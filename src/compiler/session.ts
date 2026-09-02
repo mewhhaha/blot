@@ -485,18 +485,24 @@ export class Compiler implements CompilerHost {
       );
       this.#syncLoaded(root);
       const inspected = this.#inspectedSources.get(root.path);
-      const snapshot = inspected?.module.syntaxSnapshot;
-      if (
-        inspected === undefined || inspected.source !== root.source ||
-        snapshot === undefined || snapshot === null
-      ) {
+      if (inspected === undefined || inspected.source !== root.source) {
         throw new CompilerInvariantFailure(
           "canonical syntax snapshot",
-          new Error(
-            `Rust frontend omitted the syntax snapshot for ${root.path}`,
-          ),
+          new Error(`Rust frontend omitted the source state for ${root.path}`),
         );
       }
+      const snapshotResult = this.#compiler.compilerSessionSyntaxSnapshot(
+        this.#inspectionHandle,
+        root.path,
+      );
+      if (!snapshotResult.ok) {
+        this.#throwFailure(
+          snapshotResult,
+          root.path,
+          "canonical syntax snapshot",
+        );
+      }
+      const snapshot = snapshotResult.syntaxSnapshot;
       const exported = this.#compiler.exportCompilerSessionModuleAst(
         this.#handle,
         root.path,
@@ -865,10 +871,17 @@ export class Compiler implements CompilerHost {
       }
       let added;
       if (loaded.storage.tag === "source") {
-        added = this.#compiler.addCompilerSessionModule(
+        const inspected = this.#inspectedSources.get(loaded.path);
+        if (inspected === undefined || inspected.source !== loaded.source) {
+          throw new CompilerInvariantFailure(
+            "compiler source-graph installation",
+            new Error(`source module ${loaded.path} was not inspected`),
+          );
+        }
+        added = this.#compiler.shareCompilerSessionModule(
+          this.#inspectionHandle,
           this.#handle,
           loaded.path,
-          loaded.source,
         );
       } else {
         added = this.#compiler.addCompilerSessionAst(

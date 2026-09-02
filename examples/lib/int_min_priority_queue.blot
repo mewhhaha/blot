@@ -1,0 +1,114 @@
+open import "blot:prelude"
+
+const Entry = (Int, Int)
+const Queue = { .entries = [Entry]; .length = Int; }
+
+const empty :: Unit -> Queue
+const empty = fn () => do:
+  let entries :: [(Int, Int)]
+  let entries = []
+  return { .entries = entries; .length = 0; }
+
+const comes_before :: ((Int, Int), (Int, Int)) -> Bool
+const comes_before = fn (left, right) => do:
+  if left.0 < right.0:
+    return True
+
+  return left.0 == right.0 && left.1 < right.1
+
+const rec bubble_up :: ([(Int, Int)], Int) -> [(Int, Int)]
+const rec bubble_up = fn (entries, index) => do:
+  if index <= 0:
+    return entries
+  else:
+    let parent = (index - 1) / 2
+    let child_entry = Array.expect_get ((&entries), index)
+    let parent_entry = Array.expect_get ((&entries), parent)
+    if comes_before (child_entry, parent_entry):
+      return bubble_up (Array.swap_or_keep (entries, index, parent), parent)
+    else:
+      return entries
+
+const push :: (Queue, Entry) -> Queue
+const push = fn (?queue, entry) => do:
+  let { .entries; .length; } = queue
+  if length < Array.length (&entries):
+    let entries = Array.expect_set (entries, length, entry)
+    return {
+      .entries = bubble_up (entries, length);
+      .length = length + 1;
+    }
+  else:
+    let entries = @array.push entries entry
+    return {
+      .entries = bubble_up (entries, length);
+      .length = length + 1;
+    }
+
+const is_empty :: Queue -> Bool
+const is_empty = fn &queue => queue.length == 0
+
+const minimum :: Queue -> Entry
+const minimum = fn &queue => do:
+  let (priority, vertex) = Array.expect_get ((&queue.entries), 0)
+  return (priority, vertex)
+
+const rec bubble_down :: ([(Int, Int)], Int, Int) -> [(Int, Int)]
+const rec bubble_down = fn (entries, index, length) => do:
+  let left = index * 2 + 1
+  if left >= length:
+    return entries
+  else:
+    let right = left + 1
+    let smaller = case right < length of
+      #False => left
+      #True => do:
+        let left_entry = Array.expect_get ((&entries), left)
+        let right_entry = Array.expect_get ((&entries), right)
+        if comes_before (right_entry, left_entry):
+          return right
+        else:
+          return left
+
+    let entry = Array.expect_get ((&entries), index)
+    let child = Array.expect_get ((&entries), smaller)
+    if comes_before (child, entry):
+      return bubble_down (
+        Array.swap_or_keep (entries, index, smaller),
+        smaller,
+        length
+      )
+    else:
+      return entries
+
+const prepare_pop :: ([(Int, Int)], Int) -> [(Int, Int)]
+const prepare_pop = fn (?entries, &length) => do:
+  if length <= 1:
+    return entries
+  else:
+    let last = length - 1
+    let (priority, vertex) = Array.expect_get ((&entries), last)
+    let replacement = (priority + 0, vertex + 0)
+    return Array.expect_set (entries, 0, replacement)
+
+const pop :: Queue -> Queue
+const pop = fn ?queue => do:
+  let { .entries; .length; } = queue
+  let entries = prepare_pop (?entries, (&length))
+  let length = case length > 0 of
+    #True => length - 1
+    #False => 0
+  return {
+    .entries = bubble_down (entries, 0, length);
+    .length = length;
+  }
+
+return {
+  .Entry = Entry;
+  .Queue = Queue;
+  .empty = empty;
+  .is_empty = is_empty;
+  .minimum = minimum;
+  .push = push;
+  .pop = pop;
+}

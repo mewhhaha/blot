@@ -1,0 +1,48 @@
+open import "blot:prelude"
+
+const Stack = { .values = [Int]; .length = Int; }
+
+const empty :: Unit -> Stack
+const empty = fn () => do:
+  let values :: [Int]
+  let values = []
+  return { .values = values; .length = 0; }
+
+const is_empty :: Stack -> Bool
+const is_empty = fn &stack => stack.length == 0
+
+const top :: Stack -> Int
+const top = fn &stack => do:
+  let value = Array.expect_get ((&stack.values), stack.length - 1)
+  return value + 0
+
+const push :: (Stack, Int) -> Stack
+const push = fn (?stack, value) => do:
+  let { .values; .length; } = stack
+  if length < Array.length (&values):
+    return {
+      .values = Array.expect_set (values, length, value);
+      .length = length + 1;
+    }
+  else:
+    return {
+      .values = @array.push values value;
+      .length = length + 1;
+    }
+
+const pop :: Stack -> Stack
+const pop = fn ?stack => do:
+  let { .values; .length; } = stack
+  let length = case length > 0 of
+    #True => length - 1
+    #False => 0
+  return { .values = values; .length = length; }
+
+return {
+  .Stack = Stack;
+  .empty = empty;
+  .is_empty = is_empty;
+  .top = top;
+  .push = push;
+  .pop = pop;
+}

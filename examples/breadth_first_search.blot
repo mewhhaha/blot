@@ -1,0 +1,20 @@
+open import "blot:prelude"
+
+const breadth_first = import "./lib/breadth_first.blot"
+
+let graph =
+  [[1, 2], [0, 3], [0, 3, 4], [1, 2, 5], [2, 5], [3, 4]]
+
+let traversal = breadth_first ((&graph), 0)
+let order = []
+let depths = []
+for index in Iter.range (0, Array.length (&traversal)):
+  let vertex = (Array.expect_get ((&traversal), index)).0 + 0
+  let depth = (Array.expect_get ((&traversal), index)).1 + 0
+  order := @array.push order vertex
+  depths := @array.push depths depth
+
+return {
+  .order = order;
+  .depths = depths;
+}

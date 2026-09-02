@@ -1,0 +1,1 @@
+{ .collect_range = <function>; .map_range = <function>; .filter_range = <function>; .partition_range = <function>; .split_text = <function>; .replace_text = <function>; .build_map = <function>; .take_at = <function>; }

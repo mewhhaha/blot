@@ -1,33 +1,70 @@
-// Count a pre-tokenized stream of words with an immutable text dictionary.
-//
-// Text currently has no split or tokenization operation, so this example starts
-// at the reusable aggregation boundary rather than pretending parsing exists.
-
 open import "blot:prelude"
 
-const Frequencies = Map.of (Text, Int)
+const Frequencies = OrderedTextMap.of Int
+const FrequencyEntries = [OrderedTextMap.entry Int]
 
-let increment :: (Frequencies, Text) -> Frequencies
-let increment = fn (frequencies, word) => do:
-  let count = case Dict.get (frequencies, word) of
+let count_words :: Text -> Frequencies
+let count_words = fn text => do:
+  let parts = Text.split (Text.trim text, " ")
+  let words = filter (
+    (&parts),
+    fn word => Text.length word > 0
+  )
+  let sorted = Array.merge_sort (
+    words,
+    fn (left, right) => not (is_greater (@text.cmp left right))
+  )
+  let length = Array.length (&sorted)
+  if length == 0:
+    let entries :: FrequencyEntries
+    let entries = []
+    return OrderedTextMap.copy entries
+  else:
+    let first = Array.expect_get ((&sorted), 0) <> ""
+    let rec collect_runs ::
+      (Int, Text, Int, FrequencyEntries) -> FrequencyEntries
+    let rec collect_runs = fn (index, word, count, entries) => do:
+      if index >= length:
+        return @array.push entries (word, count)
+      else:
+        let next = Array.expect_get ((&sorted), index)
+        if text_eq (next, word):
+          return collect_runs (index + 1, word, count + 1, entries)
+        else:
+          return collect_runs (
+            index + 1,
+            next <> "",
+            1,
+            @array.push entries (word, count)
+          )
+
+    return OrderedTextMap.copy (collect_runs (1, first, 1, []))
+
+let count :: (Frequencies, Text) -> Int
+let count = fn (&frequencies, word) => case OrderedTextMap.get (
+  (&frequencies),
+  word
+) of
     #Some value => value
     #None => 0
-  return (Dict.put (frequencies, word, count + 1)).1
 
-let words :: [Text]
-let words =
-  ["red", "blue", "red", "green", "blue", "red"]
-let frequencies :: Frequencies
-let frequencies = fold (words, Dict.empty, increment)
+let frequencies = count_words "red blue red green blue red"
+let red = count ((&frequencies), "red")
+let blue = count ((&frequencies), "blue")
+let green = count ((&frequencies), "green")
+let missing = count ((&frequencies), "violet")
+let frequency_entries = OrderedTextMap.freeze (!frequencies)
+let distinct = Array.length (&frequency_entries)
 
-let count :: Text -> Int
-let count = fn word => case Dict.get (frequencies, word) of
-  #Some value => value
-  #None => 0
+let empty = count_words "   "
+let empty_entries = OrderedTextMap.freeze (!empty)
+let empty_count = Array.length (&empty_entries)
 
 return {
-  .red = count "red";
-  .blue = count "blue";
-  .green = count "green";
-  .missing = count "violet";
+  .red = red;
+  .blue = blue;
+  .green = green;
+  .missing = missing;
+  .distinct = distinct;
+  .empty = empty_count;
 }

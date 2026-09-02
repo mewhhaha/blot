@@ -1,7 +1,6 @@
-// PATHOLOGICAL BUT SUPPORTED: the textbook Fibonacci definition expresses the
-// recurrence directly, including its overlapping non-tail calls. This is an
-// executable compiler baseline, not yet a claim that the exponential algorithm
-// has been memoized or transformed into a linear one.
+// The textbook Fibonacci definition expresses overlapping non-tail recursion.
+// Pure closed comptime calls reuse prior results, while the exported runtime
+// function retains the written recursive algorithm.
 
 open import "blot:prelude"
 

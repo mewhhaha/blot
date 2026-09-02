@@ -13,7 +13,7 @@ import type {
   LintRuleContext,
   LintVisitors,
 } from "./types.ts";
-import { spanKey } from "./syntax.ts";
+import { lineComments, spanKey } from "./syntax.ts";
 
 export function lintModule(
   module: Module,
@@ -47,7 +47,14 @@ export function lintModule(
         }),
       fix: (span, title, replacement, validation = "parse") => {
         const replaced = source.slice(span.start, span.end);
-        if (replaced.includes("//")) return null;
+        const replacedComments = lineComments(replaced);
+        const replacementComments = lineComments(replacement);
+        if (
+          replacedComments.length !== replacementComments.length ||
+          replacedComments.some((comment, index) =>
+            comment !== replacementComments[index]
+          )
+        ) return null;
         let rendered = replacement;
         if (
           rendered.length > 0 && replaced.endsWith("\n") &&

@@ -139,6 +139,14 @@ and a loop preserve that target. A `case` arm is an expression boundary: only an
 explicit block inside the arm introduces a return target, and `break` cannot
 cross the case boundary to an enclosing loop.
 
+Before surface control lowering, the frontend checks each module, explicit
+block, and nested statement suite in source order. Once a `return`, `break`, or
+conditional with a fallback that leaves on every branch is reached, every later
+statement in that sequence is `BLOT_UNREACHABLE_STATEMENT`. A conditional
+without a fallback and an iteration are conservatively treated as continuing.
+The diagnostic spans the later statement's significant source tokens; skipped
+layout and following comments are not part of the error.
+
 Blot has no element syntax. Components, properties, children, and suspension are
 ordinary functions, records, arrays, and nullary closures. The frontend has no
 element-specific lowering path.
@@ -197,6 +205,9 @@ Surface elaboration lowers rich control to the smaller Core owned by
 
 - a source value becomes a returned Core value;
 - every function application becomes a Core computation;
+- an immediately applied `if` or `case` of functions distributes that same
+  application into its selected arms before Core construction, preserving
+  selector-before-argument evaluation without allocating a closure choice;
 - a pure source position admits an applied computation only after its row
   settles empty;
 - `use x <- c` becomes a bind, while `use c` binds the result to a wildcard;
@@ -211,6 +222,10 @@ Surface elaboration lowers rich control to the smaller Core owned by
   irrefutable row propagated into every specific pattern branch it overlaps;
 - statement `return` and `break` become compiler-local control results before
   ordinary Core control is reconstructed;
+- a statement conditional whose returning branch is followed by a returning
+  fallthrough sequence reconstructs one ordinary Core conditional directly;
+  removing a redundant terminal `else` must not introduce a control envelope
+  or change the ownership relation between its branches;
 - handler syntax becomes explicit handler Core; and
 - known deferred calls retain one affine demand fact for specialization.
 

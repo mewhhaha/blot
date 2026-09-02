@@ -2754,10 +2754,7 @@ fn relation_may_carry_ownership(produced: &Produced, type_: &Type) -> bool {
         }
         Produced::Sequence(values) => values.iter().enumerate().any(|(index, value)| {
             let field = match type_ {
-                Type::Record(fields) => fields
-                    .iter()
-                    .find(|(name, _)| name == &index.to_string())
-                    .map(|(_, type_)| type_),
+                Type::Record(fields) => fields.get(&index.to_string()),
                 _ => None,
             };
             field.map_or_else(
@@ -2767,10 +2764,7 @@ fn relation_may_carry_ownership(produced: &Produced, type_: &Type) -> bool {
         }),
         Produced::Shape(values) => values.iter().any(|(name, value)| {
             let field = match type_ {
-                Type::Record(fields) => fields
-                    .iter()
-                    .find(|(field, _)| field == name)
-                    .map(|(_, type_)| type_),
+                Type::Record(fields) => fields.get(name),
                 _ => None,
             };
             field.map_or_else(
@@ -3639,13 +3633,10 @@ fn specialize_store_parameter_shareability(produced: &Produced, type_: &Type) ->
                 .iter()
                 .enumerate()
                 .map(|(index, value)| {
-                    fields
-                        .iter()
-                        .find(|(name, _)| name == &index.to_string())
-                        .map_or_else(
-                            || value.clone(),
-                            |(_, type_)| specialize_store_parameter_shareability(value, type_),
-                        )
+                    fields.get(&index.to_string()).map_or_else(
+                        || value.clone(),
+                        |type_| specialize_store_parameter_shareability(value, type_),
+                    )
                 })
                 .collect(),
         ),
@@ -3653,9 +3644,9 @@ fn specialize_store_parameter_shareability(produced: &Produced, type_: &Type) ->
             values
                 .iter()
                 .map(|(name, value)| {
-                    let value = fields.iter().find(|(field, _)| field == name).map_or_else(
+                    let value = fields.get(name).map_or_else(
                         || value.clone(),
-                        |(_, type_)| specialize_store_parameter_shareability(value, type_),
+                        |type_| specialize_store_parameter_shareability(value, type_),
                     );
                     (name.clone(), value)
                 })
@@ -4588,12 +4579,7 @@ fn written_parameter_pattern(
                     .iter()
                     .enumerate()
                     .map(|(index, pattern)| {
-                        let type_ = fields.and_then(|fields| {
-                            fields
-                                .iter()
-                                .find(|(name, _)| name == &index.to_string())
-                                .map(|(_, type_)| type_)
-                        });
+                        let type_ = fields.and_then(|fields| fields.get(&index.to_string()));
                         written_parameter_pattern(*pattern, module, type_)
                     })
                     .collect(),
@@ -4615,10 +4601,7 @@ fn written_parameter_pattern(
                 .iter()
                 .map(|field| {
                     let field_type = match type_ {
-                        Some(Type::Record(types)) => types
-                            .iter()
-                            .find(|(name, _)| name == &field.name)
-                            .map(|(_, type_)| type_),
+                        Some(Type::Record(types)) => types.get(&field.name),
                         _ => None,
                     };
                     (

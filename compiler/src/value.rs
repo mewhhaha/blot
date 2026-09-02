@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
 
@@ -391,9 +391,10 @@ fn value_references_environment(value: &Value, target: &Environment) -> bool {
         | Value::EmptyArray { element: value }
         | Value::Forall { body: value, .. }
         | Value::Sealed { inner: value, .. } => value_references_environment(value, target),
-        Value::Scratch { values, .. }
-        | Value::IndexedStep { elements: values }
-        | Value::Union(values) => values
+        Value::Scratch { values, .. } | Value::IndexedStep { elements: values } => values
+            .iter()
+            .any(|value| value_references_environment(value, target)),
+        Value::Union(values) => values
             .iter()
             .any(|value| value_references_environment(value, target)),
         Value::Region { .. } | Value::RegionRejoin { .. } => true,
@@ -694,6 +695,123 @@ impl<'a> IntoIterator for &'a mut ArrayValues {
 }
 
 #[derive(Clone, Debug, Default)]
+struct UnionStorage {
+    values: Vec<Value>,
+    buckets: Option<HashMap<u64, Vec<usize>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct UnionMembers(Rc<UnionStorage>);
+
+impl UnionMembers {
+    pub(crate) fn insert_unique(&mut self, value: Value) -> bool {
+        let fingerprint = union_member_fingerprint(&value);
+        if self.contains_equal_with_fingerprint(&value, fingerprint) {
+            return false;
+        }
+        let storage = Rc::make_mut(&mut self.0);
+        if storage.buckets.is_none() {
+            storage.buckets = Some(union_member_buckets(&storage.values));
+        }
+        let index = storage.values.len();
+        storage.values.push(value);
+        if let Some(fingerprint) = fingerprint {
+            storage
+                .buckets
+                .as_mut()
+                .expect("rebuilt union member index disappeared")
+                .entry(fingerprint)
+                .or_default()
+                .push(index);
+        }
+        true
+    }
+
+    pub(crate) fn into_values(self) -> Vec<Value> {
+        Rc::try_unwrap(self.0)
+            .unwrap_or_else(|storage| storage.as_ref().clone())
+            .values
+    }
+
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn contains_equal(&self, value: &Value) -> bool {
+        self.contains_equal_with_fingerprint(value, union_member_fingerprint(value))
+    }
+
+    fn contains_equal_with_fingerprint(&self, value: &Value, fingerprint: Option<u64>) -> bool {
+        if let Some(fingerprint) = fingerprint
+            && let Some(buckets) = &self.0.buckets
+        {
+            return buckets.get(&fingerprint).is_some_and(|indices| {
+                indices
+                    .iter()
+                    .any(|index| equal(&self.0.values[*index], value))
+            });
+        }
+        self.0.values.iter().any(|member| equal(member, value))
+    }
+}
+
+impl From<Vec<Value>> for UnionMembers {
+    fn from(values: Vec<Value>) -> Self {
+        let buckets = Some(union_member_buckets(&values));
+        Self(Rc::new(UnionStorage { values, buckets }))
+    }
+}
+
+impl FromIterator<Value> for UnionMembers {
+    fn from_iter<T: IntoIterator<Item = Value>>(values: T) -> Self {
+        values.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
+impl Deref for UnionMembers {
+    type Target = Vec<Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.values
+    }
+}
+
+impl DerefMut for UnionMembers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let storage = Rc::make_mut(&mut self.0);
+        storage.buckets = None;
+        &mut storage.values
+    }
+}
+
+impl IntoIterator for UnionMembers {
+    type Item = Value;
+    type IntoIter = std::vec::IntoIter<Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_values().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a UnionMembers {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.values.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut UnionMembers {
+    type Item = &'a mut Value;
+    type IntoIter = std::slice::IterMut<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.deref_mut().iter_mut()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct OrderedFields(Rc<OrderedFieldStorage>, Rc<()>);
 
 #[derive(Clone, Debug, Default)]
@@ -937,7 +1055,7 @@ pub enum Value {
         high: Box<Value>,
         domain: Option<Domain>,
     },
-    Union(Vec<Value>),
+    Union(UnionMembers),
     Unbounded,
     Arrow {
         /// Whether the callee, rather than the caller, decides if the argument
@@ -1284,9 +1402,13 @@ pub fn substitute_type_variable(
             high: Box::new(substitute(high)?),
             domain: *domain,
         },
-        Value::Union(members) => {
-            Value::Union(members.iter().map(substitute).collect::<Option<Vec<_>>>()?)
-        }
+        Value::Union(members) => Value::Union(
+            members
+                .iter()
+                .map(substitute)
+                .collect::<Option<Vec<_>>>()?
+                .into(),
+        ),
         Value::Arrow {
             deferred,
             domain,
@@ -1455,6 +1577,12 @@ fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
     }
 }
 
+pub(crate) fn contains_type_variables(value: &Value) -> bool {
+    let mut variables = BTreeSet::new();
+    collect_type_variables(value, &mut variables);
+    !variables.is_empty()
+}
+
 fn fresh_type_variable(left: &Value, right: &Value) -> u32 {
     let mut variables = BTreeSet::new();
     collect_type_variables(left, &mut variables);
@@ -1475,6 +1603,119 @@ fn range_domain(value: &Value) -> Option<Domain> {
             Domain::Int
         }
     }))
+}
+
+fn union_member_buckets(values: &[Value]) -> HashMap<u64, Vec<usize>> {
+    let mut buckets = HashMap::new();
+    for (index, value) in values.iter().enumerate() {
+        if let Some(fingerprint) = union_member_fingerprint(value) {
+            buckets
+                .entry(fingerprint)
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+    }
+    buckets
+}
+
+fn union_member_fingerprint(value: &Value) -> Option<u64> {
+    fn bytes(mut hash: u64, value: &[u8]) -> u64 {
+        for byte in value {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    fn word(hash: u64, value: u64) -> u64 {
+        bytes(hash, &value.to_le_bytes())
+    }
+
+    let start = 0xcbf29ce484222325_u64;
+    match value {
+        Value::Extended { inner, .. } => union_member_fingerprint(inner),
+        Value::Int(value) => Some(bytes(word(start, 1), &value.to_signed_bytes_le())),
+        Value::Float(value) => Some(word(word(start, 2), value.to_bits())),
+        Value::Float32(value) => Some(word(word(start, 3), u64::from(value.to_bits()))),
+        Value::Vector(lanes) => Some(lanes.iter().fold(word(start, 4), |hash, lane| {
+            word(hash, u64::from(lane.to_bits()))
+        })),
+        Value::VectorMask(lanes) => Some(
+            lanes
+                .iter()
+                .fold(word(start, 5), |hash, lane| word(hash, u64::from(*lane))),
+        ),
+        Value::IntegerVector { bits, lanes } => Some(
+            lanes
+                .iter()
+                .fold(word(word(start, 6), u64::from(*bits)), |hash, lane| {
+                    word(hash, *lane as u32 as u64)
+                }),
+        ),
+        Value::IntegerVectorMask { bits, lanes } => Some(
+            lanes
+                .iter()
+                .fold(word(word(start, 7), u64::from(*bits)), |hash, lane| {
+                    word(hash, u64::from(*lane))
+                }),
+        ),
+        Value::Text(value) => Some(bytes(word(start, 8), value.as_bytes())),
+        Value::Unit => Some(word(start, 9)),
+        Value::Unbounded => Some(word(start, 10)),
+        Value::RegionType(inner) => Some(word(union_member_fingerprint(inner)?, 11)),
+        Value::ScratchType(inner) => Some(word(union_member_fingerprint(inner)?, 12)),
+        Value::DeferredScratch { capacity } => Some(word(union_member_fingerprint(capacity)?, 13)),
+        Value::Tag { name, payload } => {
+            let mut hash = bytes(word(start, 14), name.as_bytes());
+            if let Some(payload) = payload {
+                hash = word(hash, union_member_fingerprint(payload)?);
+            }
+            Some(hash)
+        }
+        Value::Range { low, high, .. } => {
+            let domain = match range_domain(value)? {
+                Domain::Int => 0,
+                Domain::Text => 1,
+                Domain::Float => 2,
+                Domain::Float32 => 3,
+            };
+            Some(word(
+                word(
+                    word(word(start, 15), domain),
+                    union_member_fingerprint(low)?,
+                ),
+                union_member_fingerprint(high)?,
+            ))
+        }
+        Value::TypeVariable(variable) => Some(word(word(start, 16), u64::from(*variable))),
+        Value::Effect { id, .. } => Some(word(word(start, 17), u64::from(*id))),
+        Value::Operation { effect, name } => Some(bytes(
+            word(word(start, 18), u64::from(effect_id(effect)?)),
+            name.as_bytes(),
+        )),
+        Value::Sealed { name, inner } => Some(word(
+            bytes(word(start, 19), name.as_bytes()),
+            union_member_fingerprint(inner)?,
+        )),
+        Value::OpaqueType(name) => Some(bytes(word(start, 20), name.as_bytes())),
+        Value::Shape(_)
+        | Value::Array(_)
+        | Value::Scratch { .. }
+        | Value::Region { .. }
+        | Value::RegionRejoin { .. }
+        | Value::EmptyArray { .. }
+        | Value::Closure { .. }
+        | Value::Deferred { .. }
+        | Value::ClosureChoice { .. }
+        | Value::ModuleClosure { .. }
+        | Value::IndexedStep { .. }
+        | Value::Primitive { .. }
+        | Value::Union(_)
+        | Value::Arrow { .. }
+        | Value::Forall { .. }
+        | Value::Runtime(_)
+        | Value::Continuation { .. } => None,
+    }
 }
 
 pub fn equal(left: &Value, right: &Value) -> bool {
@@ -1529,10 +1770,8 @@ pub fn equal(left: &Value, right: &Value) -> bool {
                     .all(|(left, right)| equal(left, right))
         }
         (Value::Union(left), Value::Union(right)) => {
-            left.len() == right.len()
-                && left
-                    .iter()
-                    .all(|left| right.iter().any(|right| equal(left, right)))
+            left.same_storage(right)
+                || left.len() == right.len() && left.iter().all(|left| right.contains_equal(left))
         }
         (Value::RegionType(left), Value::RegionType(right)) => equal(left, right),
         (Value::ScratchType(left), Value::ScratchType(right)) => equal(left, right),

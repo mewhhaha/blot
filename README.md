@@ -14,7 +14,9 @@ compilation, runtime activation, and the rebuild latency gate. The
 `Slice -> Slice` formulation is actually appropriate. Executable application
 studies live in [case-studies/](case-studies/): a grep-like file search, an
 interactive terminal program, an agent-style conversation loop, and a 3D engine
-with a browser host and hot reload.
+with a browser host and hot reload. For smaller programs built around familiar
+tasks, start with the [executable example catalog](examples/README.md), which
+indexes everyday programs and common algorithms.
 
 `@mewhhaha/blot` has one semantic compiler, implemented in Rust and distributed
 as Wasm. Node resolves source graphs and hosts that artifact; TypeScript owns

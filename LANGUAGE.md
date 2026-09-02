@@ -1141,6 +1141,12 @@ result beginning with a name distinct from `name := value`, and it keeps every
 value that leaves a scope spelled one way, so a branch boundary stays visible
 where its result is short.
 
+A statement after an earlier statement that always leaves the same sequence is
+`BLOT_UNREACHABLE_STATEMENT`. The frontend proves this structurally for a
+`return`, a `break`, or a statement conditional with an `else` whose every
+branch leaves. A conditional without `else` and a loop may continue, so neither
+alone makes a following statement unreachable.
+
 ### 6.5 Recursion
 
 `rec` marks a `let` or `const` binding whose single name is visible inside its
@@ -1470,16 +1476,21 @@ coverage rule. A guarded row still contributes nothing to coverage.
 
 Comma-separated cases are surface syntax. Lowering captures each subject in a
 strict nullary closure, caches a demanded value in an ordinary strict binding,
-and passes the remaining closures as one tuple to the next row. The generated
-tree contains only ordinary `case`, `if`, lambda, application, tuple, and block
-nodes. The checker also sees a non-executed tuple case made from the unguarded
-rows, so exhaustiveness is proved without making the executable path eager. No
+and passes the remaining closures as one tuple when a row falls through. An
+unguarded matrix whose refutable columns contain only payload-free constructors
+uses an ordered decision tree: a demanded subject is tested once and rows with
+the same constructor prefix share that test. Other matrices use row fallbacks,
+with large matrices divided into bounded nested fallback scopes. Both lowerings
+preserve source row priority and demand a subject only when the earliest
+remaining row first tests or binds that column. The generated tree contains only
+ordinary `case`, `if`, lambda, application, tuple, and block nodes. The checker
+also sees a non-executed tuple case made from the unguarded rows, so
+exhaustiveness is proved without making the executable path eager. No
 multi-subject case node reaches inference, ownership, evaluation, Runtime HIR,
-or a backend. Large matrices are divided into bounded nested fallback scopes;
-those scopes retain the same shadowed compiler-local continuation identity, row
-order, demand behavior, and monomorphic result relation as the unchunked form.
-The editor linter offers this form when nested single-subject cases form the
-same decision matrix without depending on an outer arm's bindings.
+or a backend. Bounded fallback scopes retain the same shadowed compiler-local
+continuation identity and monomorphic result relation as the unchunked form. The
+editor linter offers this form when nested single-subject cases form the same
+decision matrix without depending on an outer arm's bindings.
 
 Coverage reads the columns. The arms taken together must cover the
 cross-product: a combination of columns no arm accepts is
@@ -2918,6 +2929,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@float.of_int`                             | widen an integer to a float                          |
 | `@int.of_float`                             | truncate a float toward zero                         |
 | `@text.concat`                              | concatenate text                                     |
+| `@text.join`                                | concatenate an array of text in one allocation       |
 | `@text.len`                                 | count Unicode code points                            |
 | `@text.scalar_at`                           | read one validated Unicode scalar                    |
 | `@text.slice`                               | slice at validated Unicode scalar bounds             |
@@ -2983,8 +2995,10 @@ shape fields are the construction form for names that settle at compile time.
 
 `Map.of (K, V)` is represented by an association array of `(K, V)` pairs.
 `Map.with equal` supplies key equality explicitly and returns the operations for
-that equality. The first matching key is visible. Its operations are ordinary
-prelude source:
+that equality. `Map.put (equal, entries, key, value)` and
+`Map.remove (equal, entries, key)` are the corresponding operations when the
+comparison is supplied at the call site. The first matching key is visible. Its
+operations are ordinary prelude source:
 
 - `empty` and `singleton (key, value)` construct maps;
 - `get (entries, key)` and `has (entries, key)` observe a map;
@@ -3016,6 +3030,12 @@ There are two indexed APIs, chosen explicitly.
 `Array.get (xs, index)` and `Array.set (xs, index, value)` are total. They
 return `#Some result` when `index` is in bounds and `#None` otherwise. Their
 guard is ordinary prelude source.
+
+`Array.expect_get (xs, index)` and `Array.expect_set (xs, index, value)` are
+invariant-oriented wrappers for an index the program already established as
+valid. They return the element or successor array directly and panic if that
+invariant is false. `expect_set` consumes the input Array Store so the successor
+can reuse it.
 
 `@array.take xs index` and `@array.split xs index` consume the input while
 preserving every element. They are proof-required direct operations:
@@ -3049,6 +3069,13 @@ admits arrays whose elements have no ownership obligation. Owned extraction uses
 a proved direct `@array.take` or `@array.split` call so every obligation is
 returned without copying.
 
+`Array.map (xs, transform)` and `Array.filter (xs, keep)` borrow `xs`, call
+their callback exactly once for each element in order, and return a fresh owned
+Array. `map` preserves the input length. `filter` preserves the relative order
+of the elements for which `keep` returns `#True`. Both take linear time and
+thread one output Store through their traversal, so extending the result does
+not retain and copy every earlier prefix.
+
 `Array.partition (xs, belongs_left)` classifies an array in one stable pass. It
 calls `belongs_left` exactly once for each element and returns `(left, right)`;
 `left` contains the elements for which the predicate returned `#True`, `right`
@@ -3058,14 +3085,15 @@ owned regions: it produces two independent arrays rather than two authorities
 over one backing Store.
 
 With the current contiguous Store representation, `uncons` takes linear time and
-allocates the remainder, while `partition` takes linear time and allocates two
-output Stores containing a total of `Array.length xs` elements. Stable partition
-cannot generally reuse the input Store as either output without moving the other
-class or retaining a view. `Array.append left right` visits `right` and produces
-one contiguous result; the generic monoid operation does not itself promise that
-either input allocation is reused. Append neither aliases both inputs nor
-restores a Store previously separated by `partition`. Zero-copy split/rejoin is
-the separate `Slice`/region operation and carries its proof explicitly.
+allocates the remainder. `map` allocates one output Store; `filter` allocates one
+output Store; and `partition` allocates two output Stores containing a total of
+`Array.length xs` elements. Stable partition cannot generally reuse the input
+Store as either output without moving the other class or retaining a view.
+`Array.append left right` visits `right` and produces one contiguous result; the
+generic monoid operation does not itself promise that either input allocation is
+reused. Append neither aliases both inputs nor restores a Store previously
+separated by `partition`. Zero-copy split/rejoin is the separate `Slice`/region
+operation and carries its proof explicitly.
 
 `Array.get` and `Array.length` bind their array parameter with `&`: observing an
 array does not consume it. An explicitly borrowed array must be passed in that
@@ -3679,6 +3707,9 @@ their checked prelude paths guard the lower-level scalar-at, slice, and search
 operations. Runtime and compile-time evaluation use the same scalar semantics.
 `Text.split`, `Text.lines`, `Text.trim`, `Text.scalars`, starts/ends-with, and
 `Text.replace` are ordinary prelude functions over those operations.
+`Text.replace` collects source slices and replacements in an affine Scratch
+builder, then calls `@text.join` once; it does not repeatedly copy the growing
+prefix.
 
 The backend retains UTF-8 internally: scalar count and offset helpers scan lead
 bytes, while substring matching scans bytes only after both input texts and the

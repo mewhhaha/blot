@@ -60,14 +60,16 @@ opened interface fields actually demanded, and peak pending solver worklist
 items. The executable scaling gate uses constraints, boundary materializations,
 and capture selection as semantic decisions. It also gates the wrapper and
 measure families on the sum of unique type nodes, intern attempts, and freshen
-visits, so cheap timings cannot hide a superlinear semantic graph. The wrapper,
-measure, evidence, operator-chain, literal-union, projection, and ownership
-families require the final doubling to stay at or below 2.25. Dense
-multi-subject cases use a 3.5 ceiling: their generated AST is linear, while
-relationships between ordered row fallbacks still produce superlinear solver
-work; keeping the ceiling below a quadratic doubling catches a return to copied
-fallback trees. Recursive graph visits remain visible separately; timing is
-never replaced by the gate.
+visits, and reports settle plus union visits as recursive solver work, so cheap
+timings cannot hide a superlinear semantic graph. The wrapper, measure,
+evidence, operator-chain, literal-union, projection, and ownership families
+require the final doubling to stay at or below 2.25. Dense multi-subject cases
+require semantic decisions at or below 2.25 and recursive solver work at or
+below 3.0. Guard-free nullary-constructor matrices lower to an ordered decision
+tree; the separate solver ceiling catches a return to copied row-fallback type
+graphs even when the decision counter remains linear. Timing is never replaced
+by the gate. When custom sizes grow by more than 2×, the gate reports the
+equivalent doubling derived from that actual size ratio.
 
 ## Current results
 
@@ -86,6 +88,26 @@ wall-clock time. The complete thirteen-family run at the default sizes also
 passes every gate. Its `N=128` to `N=256` semantic/graph ratios are 1.993/1.994
 for `wrapper` and 1.865/1.872 for `measure`; the remaining gated semantic ratios
 range from 1.956 to 2.007.
+
+A focused dense-matrix run after the ordered decision-tree change used compiler
+SHA-256 `50a275223e50929d5ab3809319d4a1c66878a646258538620238c6c987dece23`:
+
+| family       | compile N=64 | compile N=256 | compile N=512 | compile N=1024 | semantic doubling | solver doubling |
+| ------------ | -----------: | ------------: | ------------: | -------------: | ----------------: | --------------: |
+| `dense_case` |         20.3 |          49.5 |          78.0 |          139.6 |             1.520 |           1.302 |
+
+The doubling columns compare deterministic work from `N=512` to `N=1024`. The
+source grows from 64 to 1,024 case cells while compile time grows by 6.9×; both
+semantic gates pass. With the same artifact, the structural-row family grows
+from 128 to 1,024 fields while compile time grows from 27.9 ms to 180.1 ms; its
+observed compile slope is 0.89.
+
+A focused one-sample literal-union run with compiler SHA-256
+`7421a25bd61ae730fee22052540f044fc1fb74545e52e9da31f1f0f9b2fe881d` compiled 256,
+512, and 1,024 distinct singleton members in 42.4 ms, 83.4 ms, and 272.6 ms. The
+observed compile slope was 1.34 and the deterministic semantic doubling was
+2.000. Before persistent indexed union construction, the audited 1,024-member
+point took 2,097.6 ms.
 
 The profile identified retained private constraint chains and repeated recursive
 scheme materialization as the expensive representation work. A nonrecursive

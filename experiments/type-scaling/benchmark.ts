@@ -169,6 +169,7 @@ try {
       work: item.work,
       semantic_decisions: semanticDecisions(item.work),
       type_graph_work: typeGraphWork(item.work),
+      recursive_solver_work: recursiveSolverWork(item.work),
       median_ms: {
         frontend: median(measured.frontend),
         check: median(measured.check),
@@ -480,12 +481,18 @@ function typeGraphWork(work: Case["work"]): number | null {
   return work.typeNodes + work.typeInterns + work.freshenVisits;
 }
 
+function recursiveSolverWork(work: Case["work"]): number | null {
+  if (work === null) return null;
+  return work.settleVisits + work.unionVisits;
+}
+
 function scalingGate(
   rows: readonly {
     readonly family: Family;
     readonly size: number;
     readonly semantic_decisions: number | null;
     readonly type_graph_work: number | null;
+    readonly recursive_solver_work: number | null;
   }[],
 ): readonly {
   readonly family: Family;
@@ -493,19 +500,26 @@ function scalingGate(
   readonly maximum_semantic_doubling: number;
   readonly type_graph_last_doubling: number | null;
   readonly maximum_type_graph_doubling: number | null;
+  readonly recursive_solver_last_doubling: number | null;
+  readonly maximum_recursive_solver_doubling: number | null;
   readonly passed: boolean;
 }[] {
   const gates = [];
   for (
-    const [family, maximumSemanticDoubling, maximumTypeGraphDoubling] of [
-      ["wrapper", 2.25, 2.25],
-      ["measure", 2.25, 2.25],
-      ["evidence", 2.25, null],
-      ["dense_case", 3.5, null],
-      ["operator_chain", 2.25, null],
-      ["literal_union", 2.25, null],
-      ["projection", 2.25, null],
-      ["ownership", 2.25, null],
+    const [
+      family,
+      maximumSemanticDoubling,
+      maximumTypeGraphDoubling,
+      maximumRecursiveSolverDoubling,
+    ] of [
+      ["wrapper", 2.25, 2.25, null],
+      ["measure", 2.25, 2.25, null],
+      ["evidence", 2.25, null, null],
+      ["dense_case", 2.25, null, 3],
+      ["operator_chain", 2.25, null, null],
+      ["literal_union", 2.25, null, null],
+      ["projection", 2.25, null, null],
+      ["ownership", 2.25, null, null],
     ] as const
   ) {
     const familyRows = rows.filter((row) => row.family === family);
@@ -518,7 +532,11 @@ function scalingGate(
     ) {
       throw new Error(`${family} has no resident compiler-work counters`);
     }
-    const semanticLastDoubling = last / previous;
+    const semanticLastDoubling = equivalentDoubling(
+      familyRows,
+      last / previous,
+      family,
+    );
     let typeGraphLastDoubling = null;
     if (maximumTypeGraphDoubling !== null) {
       const previousTypeGraph = familyRows.at(-2)?.type_graph_work;
@@ -529,12 +547,41 @@ function scalingGate(
       ) {
         throw new Error(`${family} has no resident type-graph counters`);
       }
-      typeGraphLastDoubling = lastTypeGraph / previousTypeGraph;
+      typeGraphLastDoubling = equivalentDoubling(
+        familyRows,
+        lastTypeGraph / previousTypeGraph,
+        family,
+      );
+    }
+    let recursiveSolverLastDoubling = null;
+    if (maximumRecursiveSolverDoubling !== null) {
+      const previousRecursiveSolver = familyRows.at(-2)
+        ?.recursive_solver_work;
+      const lastRecursiveSolver = familyRows.at(-1)?.recursive_solver_work;
+      if (
+        previousRecursiveSolver === null ||
+        previousRecursiveSolver === undefined ||
+        lastRecursiveSolver === null || lastRecursiveSolver === undefined
+      ) {
+        throw new Error(`${family} has no recursive solver-work counters`);
+      }
+      recursiveSolverLastDoubling = equivalentDoubling(
+        familyRows,
+        lastRecursiveSolver / previousRecursiveSolver,
+        family,
+      );
     }
     let passed = semanticLastDoubling <= maximumSemanticDoubling;
     if (
       typeGraphLastDoubling !== null && maximumTypeGraphDoubling !== null &&
       typeGraphLastDoubling > maximumTypeGraphDoubling
+    ) {
+      passed = false;
+    }
+    if (
+      recursiveSolverLastDoubling !== null &&
+      maximumRecursiveSolverDoubling !== null &&
+      recursiveSolverLastDoubling > maximumRecursiveSolverDoubling
     ) {
       passed = false;
     }
@@ -544,10 +591,29 @@ function scalingGate(
       maximum_semantic_doubling: maximumSemanticDoubling,
       type_graph_last_doubling: typeGraphLastDoubling,
       maximum_type_graph_doubling: maximumTypeGraphDoubling,
+      recursive_solver_last_doubling: recursiveSolverLastDoubling,
+      maximum_recursive_solver_doubling: maximumRecursiveSolverDoubling,
       passed,
     });
   }
   return gates;
+}
+
+function equivalentDoubling(
+  rows: readonly { readonly size: number }[],
+  observedGrowth: number,
+  family: Family,
+): number {
+  const previousSize = rows.at(-2)?.size;
+  const lastSize = rows.at(-1)?.size;
+  if (
+    previousSize === undefined || lastSize === undefined ||
+    lastSize <= previousSize
+  ) {
+    throw new Error(`${family} scaling sizes must increase`);
+  }
+  const sizeGrowth = lastSize / previousSize;
+  return observedGrowth ** (Math.log(2) / Math.log(sizeGrowth));
 }
 
 function caseKey(item: Pick<Case, "family" | "size">): string {

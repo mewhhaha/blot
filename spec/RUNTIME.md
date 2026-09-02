@@ -193,16 +193,24 @@ an invariant failure, not a Runtime-HIR feature or backend inference case.
 The target write is related to construction of a fresh source result. It does
 not retroactively make source aliases mutable.
 
+A persistent `store.write` or `store.grow` preserves the source Store and
+allocates a private result Store. That result therefore carries reusable
+authority when ownership transfers it to a later consuming use, even though the
+current operation is marked `persistent`. Losing this successor authority would
+turn a one-time copy from shared or static storage into a copy on every loop
+iteration.
+
 A closed residual array construction is one `store.literal` operation. A dynamic
 literal's operands have the Store's checked element representation and remain in
-source order. Runtime-HIR schema 9 may instead name one entry in the module's
+source order. Runtime-HIR schema 10 may instead name one entry in the module's
 typed static-Store table and carry no operands. Normalization uses that form for
-scalar constants and interns equal element type and value sequences across
-residual functions and exports. Emission places each table entry in immutable
-static data. Other element representations allocate once and write each operand
-once; the emitter must not reconstruct either form as a chain of persistent
-Store grows. An owned update of a pooled Store first copies it into private heap
-storage, so sharing static bytes cannot make either source array mutable.
+closed scalar, text, product, sum, and sealed constants and interns equal
+element type and value sequences across residual functions and exports. Emission
+writes their complete private memory representation into immutable static data.
+Other element representations allocate once and write each operand once; the
+emitter must not reconstruct either form as a chain of persistent Store grows.
+An owned update of a pooled Store first copies it into private heap storage, so
+sharing static bytes cannot make either source array mutable.
 
 A residual array literal remains a static `Array` value until its first runtime
 spread. At that boundary the producer materializes the static prefix as a fresh
@@ -217,6 +225,16 @@ element against it; in particular, a constructor member is injected into the
 checked closed sum instead of defining a one-constructor Store from the first
 element. A mismatch while constructing these operations is an
 `InvariantFailure`.
+
+The fresh Stores built by `@array.take` and `@array.split` have no observable
+predecessor version. Their internal prefix and suffix copy loops therefore use
+owned `store.grow` operations. The source Store is only read. A representation
+mismatch at this boundary is an invariant failure after successful checking.
+
+A direct projection from a product-valued `store.read` is normalized to
+`store.read.field`. The operation retains the same checked Store, index, and
+field type, but emission loads only the selected field from the element layout.
+It is not width subtyping or a backend reconstruction of a record type.
 
 Dynamic cases over integers and closed sums lower to a `switch` terminator in
 Runtime HIR schema 6. Its selector is a closed `integer-32` or
@@ -234,16 +252,35 @@ representations into the closed constructor set already established by surface
 lowering. Dense `integer-32` switches emit `br_table`; other switches emit a
 balanced comparison tree.
 
-A non-reconvergent acyclic function emits as direct structured Wasm without a
-program-counter local or dispatch loop. The same bounded structural expansion
-emits an entry-recursive cycle as one Wasm loop. Switches, non-entry cycles,
-reconvergent control flow, and graphs beyond the fixed expansion budget retain
-the indexed dispatcher; the emitter does not duplicate a shared join to force
-structure.
+When finite branches expose narrower nested members of the same checked
+aggregate, the join closes products, sums, Stores, Scratch builders, and seals
+structurally and injects each branch into that representation. This adapts
+already-checked representations; it does not infer a source type in Runtime HIR.
+The same closure applies to binary and multi-way joins.
+
+An acyclic function emits as direct structured Wasm without a program-counter
+local or dispatch loop. The same structural expansion emits an entry-recursive
+cycle as one Wasm loop and lowers integer switches to nested structured
+conditionals. A shared acyclic join may be duplicated, but a fixed budget counts
+only those duplicate expansions rather than unique blocks. This admits large
+linear graphs without a size cliff while bounding code growth. Non-entry cycles
+and graphs whose duplicated joins exceed that budget retain the indexed
+dispatcher.
 
 Every `call.direct` target receives an internal callable Wasm body even when the
 same normalized Runtime-HIR function also backs a public export wrapper. The
 wrapper remains separate because it owns canonical ABI lifting and lowering.
+
+A residual multi-way function value is defunctionalized only when every arm has
+a closed lambda or partially applied primitive source. One private sum selector
+carries the merged capture layouts and dispatches to that finite alternative
+table. An immediately applied surface choice is distributed by the frontend and
+does not construct this selector.
+
+`text.join` consumes one `Store Text`, sums its byte lengths with overflow
+checks, allocates the exact result once, and copies each slice in order. It does
+not mutate the Store or any source text. Scratch-backed prelude builders use it
+to make repeated text replacement linear in the bytes copied to the result.
 
 When every predecessor constructs a known member of that closed sum and no other
 reader observes the joined sum, Runtime-HIR simplification may bypass the tag
@@ -251,6 +288,22 @@ switch. Each predecessor branches directly to the matching arm and passes the
 constructor payload as an arm parameter. The source case remains a switch when
 an arm is shared, an incoming edge is indirect, or another operation reads the
 sum.
+
+Runtime-HIR normalization is dependency-driven. Result-use counts remove dead
+total operation chains from their leaves; inverse-use queues propagate
+representation aliases with path compression; reverse CFG edges propagate
+block-parameter and emitter liveness. Boolean administrative diamonds and known
+sum dispatches are reconsidered only when an affected block changes. Closed
+recursive runtime types and alpha-normalized function bodies are compacted by
+inverse-edge partition refinement over ordered child or call positions. These
+algorithms preserve the same normalized graph while avoiding a whole-function or
+whole-table scan for every link in a chain.
+
+Type compaction may make previously distinct recursive representation IDs
+identical. Normalization therefore repeats inverse representation folding after
+type compaction and removes the dead producers exposed by that fold. A surviving
+`indirect.load (indirect.make value)` or inverse pair after its input and result
+types compact to the same ID is an invalid normalized module.
 
 Borrowed reads never grant Store ownership. Splits and joins consume exact
 family, root, footprint, and produced-value lineage. Equal-looking intervals or

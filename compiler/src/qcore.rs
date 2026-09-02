@@ -1794,19 +1794,17 @@ mod tests {
             ("identity.blot", "return fn value => value\n"),
             ("deferred.blot", "return fn ~value => value\n"),
         ] {
-            let lowered =
-                crate::source::lower_incremental(&source.encode_utf16().collect::<Vec<_>>(), None)
-                    .expect("representative source must lower");
+            let lowered = crate::source::lower_incremental(
+                &source.encode_utf16().collect::<Vec<_>>(),
+                None,
+                None,
+            )
+            .expect("representative source must lower");
             let ast = lowered.module;
             let context = Rc::new(Context::default());
             context.modules.borrow_mut().insert(
                 path.to_owned(),
-                LoadedModule::new(
-                    path,
-                    Rc::new(ast.clone()),
-                    Default::default(),
-                    Default::default(),
-                ),
+                LoadedModule::new(path, ast.clone(), Default::default(), Default::default()),
             );
             let checker = Checker::new(context);
             let certificate = checker

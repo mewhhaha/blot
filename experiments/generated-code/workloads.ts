@@ -153,6 +153,14 @@ export const WORKLOADS: readonly Workload[] = [
     "direct recursive construction and traversal through private indirection",
     (count) => count * (count + 1n) / 2n,
   ),
+  ...scalingWorkloads(
+    "star Dijkstra",
+    "experiments/generated-code/programs/star_dijkstra.blot",
+    "workload_star_dijkstra",
+    "blot:star_total",
+    "a dynamic adjacency list, distance table, and integer min-heap",
+    (count) => count * (count - 1n) / 2n,
+  ),
 ];
 
 export interface BenchmarkInput {

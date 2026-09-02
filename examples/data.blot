@@ -11,8 +11,6 @@ const Point =
     .y = I32;
   }
 
-const Message = #Ready | #Progress I32 | #Failed Text
-
 let origin = { .x = 0; .y = 0; }
 let moved = { ...origin; .x = 20; }
 
@@ -25,13 +23,13 @@ let (first, second) = pair
 let positional = pair.0
 
 let values = [1, 2, 3]
-let [one, two, three] = values
+let [one, _, three] = values
 let extended = [0, ...values, 4]
 
 let describe = fn m => case m of
   #Ready => "ready"
   #Progress 0 => "idle"
-  #Progress n => "working"
+  #Progress _ => "working"
   #Failed reason => reason
 
 // Literals are singleton types, so matching one narrows the union branch.
@@ -42,7 +40,7 @@ let classify = fn value => case value of
   _ => "other"
 
 let nested_match = fn value => case value of
-  #Progress (a, b) => a
+  #Progress (a, _) => a
   #Progress n => n
   _ => 0
 

@@ -1,8 +1,3 @@
-// A small validation pipeline with tagged success and error values.
-//
-// Validation stays total: every input becomes either an accepted integer or a
-// rejected reason, and a second fold summarizes those results.
-
 open import "blot:prelude"
 
 const Result = #Accepted Int | #Rejected Text
@@ -16,23 +11,32 @@ let validate :: Int -> Result
 let validate = fn value => do:
   if value <= 0:
     return #Rejected "not positive"
-  else:
-    if Int.rem value 2 == 0:
-      return #Accepted value
-    else:
-      return #Rejected "not even"
 
-let summarize :: (Summary, Result) -> Summary
-let summarize = fn (state, result) => case result of
-  #Accepted value => {
-    .accepted = [...state.accepted, value];
-    .errors = state.errors;
-  }
+  if value % 2 != 0:
+    return #Rejected "not even"
 
-  #Rejected reason => {
-    .accepted = state.accepted;
-    .errors = [...state.errors, reason];
-  }
+  return #Accepted value
 
-let results = map ([-2, 3, 4, 10], validate)
-return fold (results, { .accepted = []; .errors = []; }, summarize)
+let rec summarize :: ([Int], Int, [Int], [Text]) -> Summary
+let rec summarize = fn (&values, index, accepted, errors) => case Array.get (
+  (&values),
+  index
+) of
+    #None => { .accepted = accepted; .errors = errors; }
+    #Some value => case validate value of
+      #Accepted accepted_value => summarize (
+        (&values),
+        index + 1,
+        @array.push accepted accepted_value,
+        !errors
+      )
+
+      #Rejected reason => summarize (
+        (&values),
+        index + 1,
+        !accepted,
+        @array.push errors reason
+      )
+
+let values = [-2, 3, 4, 10]
+return summarize ((&values), 0, [], [])

@@ -235,6 +235,44 @@ Structured loops additionally reclaim iteration-local allocations only when
 every owned backedge parameter is the identical incoming Runtime-HIR value.
 These are structural compiler observations, not runtime timings.
 
+## 2026-09-02 collection and graph observation
+
+This run used the same AMD Ryzen 7 7800X3D with Linux 7.1.5, Deno 2.9.5,
+V8 15.0.245.2-rusty, and rustc 1.97.1. The Blot compiler artifact SHA-256 was
+`a19bdeb352e98278ba5aefc2a8a821b85519c88281a753ce38528db357af040d`.
+
+The runtime collection fixture now exercises host-sized `Array.map`,
+`Array.filter`, and `Array.partition`. The graph fixture builds a host-sized
+star adjacency list and runs the same reusable Dijkstra module as the executable
+catalog. Its distance table uses consuming integer and mark arrays. Its binary
+min-heap retains one backing Store and changes a logical length on pop.
+
+| Source                       | Functions | Blocks | Operations | Owned growth | Persistent growth | Largest CFG | Wasm locals | Local declarations | Wasm bytes |
+| ---------------------------- | --------: | -----: | ---------: | -----------: | ----------------: | ----------: | ----------: | -----------------: | ---------: |
+| runtime collection lowerings |        22 |    191 |        445 |           15 |                 3 |          18 |         463 |                123 |     19,619 |
+| star Dijkstra                |        37 |    195 |        462 |            6 |                 0 |          30 |         695 |                192 |     11,541 |
+
+The three persistent collection-growth operations are outside lowered cycles;
+the audit rejects persistent Store growth in a cyclic function. It also rejects
+inverse indirect representation pairs and enforces a 550-operation, 14,000-byte
+budget on star Dijkstra. Runtime-HIR normalization repeats inverse folding after
+type compaction because structurally equal recursive types can acquire the same
+ID only at that point.
+
+| Star Dijkstra / n |      16 |      64 |      256 |    1,024 |
+| ----------------- | ------: | ------: | -------: | -------: |
+| Blot Wasm         | 2.19 µs | 14.2 µs |  83.9 µs |   520 µs |
+| Rust Wasm         |  380 ns | 1.88 µs | 9.71 µs | 46.3 µs |
+| Blot / Rust       |   5.76× |    7.58× |    8.65× |   11.25× |
+
+The workload has `E = V - 1`, so its expected bound is `O(V log V)`. A first
+version implemented heap pop by removing the last Array element and rebuilding
+the remainder. It measured 5.93 ms at `n=1,024` and curved toward quadratic
+growth. Retaining the backing Store reduced that case by about 11.4× to 520 µs;
+the four current sizes follow the expected near-`n log n` curve. Blot remains
+5.8–11× slower than the matched Rust Wasm here, so this result establishes the
+absence of the copying pathology, not runtime parity.
+
 ## Artifact size
 
 Marginal bytes subtract a boundary-matched baseline: host roundtrip for the

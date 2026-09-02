@@ -1,0 +1,58 @@
+open import "blot:prelude"
+
+const VertexMarks = import "./vertex_marks.blot"
+
+const Distances = { .values = [Int]; .known = [Bool]; }
+
+const create :: (Int, Int) -> Distances
+const create = fn (count, source) => do:
+  let values :: [Int]
+  let values = []
+  for Iter.range (0, count):
+    values := @array.push values 0
+
+  let known = VertexMarks.create count
+  let (_, known) = VertexMarks.mark (?known, (&source))
+  return { .values = values; .known = known; }
+
+const accept_candidate :: (Distances, Int, Int) -> (Bool, Distances)
+const accept_candidate = fn (?distances, &vertex, &candidate) => do:
+  let { .values; .known; } = distances
+  let was_known = case Array.expect_get (
+    (&known),
+    (&vertex)
+  ) of
+    #True => True
+    #False => False
+  if not was_known:
+    return @panic "Dijkstra queued a vertex without a known distance"
+
+  let distance = Array.expect_get ((&values), (&vertex))
+  let accepted = case candidate == distance of
+    #True => True
+    #False => False
+  return (
+    accepted,
+    {
+      .values = !values;
+      .known = !known;
+    }
+  )
+
+const improve :: (Distances, Int, Int) -> (Bool, Distances)
+const improve = fn (?distances, &vertex, &candidate) => do:
+  let { .values; .known; } = distances
+  let current = Array.expect_get ((&values), (&vertex)) + 0
+  let (was_known, known) = VertexMarks.mark (?known, (&vertex))
+  if not was_known || candidate < current:
+    let values = Array.expect_set (values, (&vertex), candidate + 0)
+    return (True, { .values = values; .known = known; })
+
+  return (False, { .values = !values; .known = known; })
+
+return {
+  .Distances = Distances;
+  .create = create;
+  .accept_candidate = accept_candidate;
+  .improve = improve;
+}

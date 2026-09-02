@@ -111,7 +111,7 @@ installing anything.
 
 ## Host ABI
 
-Compiler-host ABI 5 registers UTF-8 paths once and refers to them through stable
+Compiler-host ABI 6 registers UTF-8 paths once and refers to them through stable
 session-local `ModuleId` values. Changed UTF-8 source or compact AST bytes,
 resolved import edges, included bytes, and removals travel in validated batched
 binary delta frames. Trusted compiler-distributed snapshots use a separate
@@ -122,14 +122,18 @@ unit. Successful checks return compact binary summaries; full diagnostics and
 requested analysis facts remain available in the same versioned response
 envelope.
 
-The compiler also exports session operations for evaluation, tagged test
-execution, canonical AST export, Runtime-HIR preparation, whole-program
-compilation, and development-unit compilation. ABI 5 prepares development units
-under a transaction identity and exposes indexed access to compiled Wasm and
-manifest bytes. The host commits that identity only after copying and hashing
-the full result; stale or duplicate commits fail without changing the resident
-artifact cache. It does not change the binary graph-delta frame schema.
-Transport failures preserve the compiler's four public classes:
+The compiler also exports session operations for sharing an inspection session's
+immutable source AST with a semantic session and for copying a compact syntax
+snapshot only when tooling requests it. Shared AST ownership does not share
+module revisions, checked facts, or artifacts. Session operations also cover
+evaluation, tagged test execution, canonical AST export, Runtime-HIR
+preparation, whole-program compilation, and development-unit compilation. The
+ABI prepares development units under a transaction identity and exposes indexed
+access to compiled Wasm and manifest bytes. The host commits that identity only
+after copying and hashing the full result; stale or duplicate commits fail
+without changing the resident artifact cache. It does not change the binary
+graph-delta frame schema. Transport failures preserve the compiler's four public
+classes:
 
 - located source diagnostics;
 - explicit resource-limit diagnostics;

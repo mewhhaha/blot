@@ -5,8 +5,8 @@ use crate::ast::Span;
 use crate::diagnostic::Diagnostic;
 use crate::eval::Phase;
 use crate::value::{
-    Domain, OrderedFields, Value, attach_signature, boolean, closure_signature, equal, show,
-    substitute_type_variable, tuple,
+    Domain, OrderedFields, UnionMembers, Value, attach_signature, boolean, closure_signature,
+    equal, show, substitute_type_variable, tuple,
 };
 
 const F32X4: &str = "F32x4";
@@ -84,6 +84,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@scratch.finish"
         | "@scratch.recycle"
         | "@int.neg"
+        | "@text.join"
         | "@text.len"
         | "@text.of_int"
         | "@linear.own"
@@ -259,7 +260,7 @@ fn simd_arity(name: &str) -> Option<usize> {
 
 pub fn run_primitive(
     name: &str,
-    arguments: Vec<Value>,
+    mut arguments: Vec<Value>,
     span: Span,
     phase: Phase,
 ) -> Result<Value, Diagnostic> {
@@ -273,7 +274,15 @@ pub fn run_primitive(
             high: Box::new(arguments[1].clone()),
             domain: None,
         }),
-        "@type.union" => Ok(union(arguments[0].clone(), arguments[1].clone())),
+        "@type.union" => {
+            let right = arguments
+                .pop()
+                .expect("checked binary type union omitted its right argument");
+            let left = arguments
+                .pop()
+                .expect("checked binary type union omitted its left argument");
+            Ok(union(left, right))
+        }
         "@type.intersect" => intersect(&arguments[0], &arguments[1], span),
         "@type.diff" => difference(&arguments[0], &arguments[1], span),
         "@type.arrow" => Ok(Value::Arrow {
@@ -725,6 +734,19 @@ pub fn run_primitive(
             text(&arguments[0], span, name)?,
             text(&arguments[1], span, name)?
         ))),
+        "@text.join" => {
+            let values = array(&arguments[0], span, name)?;
+            let mut joined = String::with_capacity(
+                values
+                    .iter()
+                    .map(|value| text(value, span, name).map(str::len))
+                    .sum::<Result<usize, Diagnostic>>()?,
+            );
+            for value in values {
+                joined.push_str(text(value, span, name)?);
+            }
+            Ok(Value::Text(joined))
+        }
         "@text.len" => Ok(Value::Int(BigInt::from(
             text(&arguments[0], span, name)?.chars().count(),
         ))),
@@ -1506,8 +1528,7 @@ fn vector_shuffle(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic
 }
 
 fn union(left: Value, right: Value) -> Value {
-    let mut members = Vec::new();
-    fn add(members: &mut Vec<Value>, value: Value) {
+    fn add(members: &mut UnionMembers, value: Value) {
         if let Value::Extended { inner, .. } = value {
             add(members, *inner);
             return;
@@ -1516,14 +1537,29 @@ fn union(left: Value, right: Value) -> Value {
             for value in nested {
                 add(members, value);
             }
-        } else if !members.iter().any(|member| equal(member, &value)) {
-            members.push(value);
+        } else {
+            members.insert_unique(value);
         }
     }
-    add(&mut members, left);
+    fn initial(value: Value) -> UnionMembers {
+        match value {
+            Value::Extended { inner, .. } => initial(*inner),
+            Value::Union(members) => members,
+            value => {
+                let mut members = UnionMembers::default();
+                members.insert_unique(value);
+                members
+            }
+        }
+    }
+
+    let mut members = initial(left);
     add(&mut members, right);
     if members.len() == 1 {
-        members.remove(0)
+        members
+            .into_values()
+            .pop()
+            .expect("one-member union lost its member")
     } else {
         Value::Union(members)
     }
@@ -1533,11 +1569,11 @@ fn intersect(left: &Value, right: &Value, span: Span) -> Result<Value, Diagnosti
     let left = transparent_type(left);
     let right = transparent_type(right);
     let left = match left {
-        Value::Union(values) => values.clone(),
+        Value::Union(values) => values.iter().cloned().collect(),
         value => vec![value.clone()],
     };
     let right = match right {
-        Value::Union(values) => values.clone(),
+        Value::Union(values) => values.iter().cloned().collect(),
         value => vec![value.clone()],
     };
     let mut kept = Vec::new();
@@ -1783,7 +1819,7 @@ fn reflect(value: &Value) -> Value {
                 ),
             ])),
         ),
-        Value::Union(members) => tagged("Union", Value::Array(members.clone().into())),
+        Value::Union(members) => tagged("Union", Value::Array(members.iter().cloned().collect())),
         Value::Shape(_) => tagged("Shape", value.clone()),
         Value::Array(_) | Value::EmptyArray { .. } => tagged("Array", value.clone()),
         Value::Arrow {
@@ -2076,6 +2112,49 @@ mod tests {
         )
         .expect("F32 square root evaluates");
         assert!(matches!(root, Value::Float32(value) if value == 3.0));
+    }
+
+    #[test]
+    fn text_join_preserves_empty_and_nonempty_slice_order() {
+        let joined = run_primitive(
+            "@text.join",
+            vec![Value::Array(
+                vec![
+                    Value::Text("left".to_owned()),
+                    Value::Text(String::new()),
+                    Value::Text("right".to_owned()),
+                ]
+                .into(),
+            )],
+            Span { start: 1, end: 2 },
+            Phase::Comptime,
+        )
+        .expect("Text slices should join");
+
+        assert!(matches!(joined, Value::Text(value) if value == "leftright"));
+    }
+
+    #[test]
+    fn large_type_unions_preserve_first_occurrence_order_and_remove_duplicates() {
+        const MEMBER_COUNT: usize = 4_096;
+        let mut value = Value::Int(BigInt::from(0));
+        for member in 1..MEMBER_COUNT {
+            value = union(value, Value::Int(BigInt::from(member)));
+        }
+        value = union(value, Value::Int(BigInt::from(MEMBER_COUNT / 2)));
+
+        let Value::Union(members) = value else {
+            panic!("large type union collapsed to one member");
+        };
+        assert_eq!(members.len(), MEMBER_COUNT);
+        for (expected, member) in members.iter().enumerate() {
+            assert!(matches!(member, Value::Int(value) if value == &BigInt::from(expected)));
+        }
+        let original = members.clone();
+        let mut extended = members;
+        assert!(extended.insert_unique(Value::Int(BigInt::from(MEMBER_COUNT))));
+        assert_eq!(original.len(), MEMBER_COUNT);
+        assert_eq!(extended.len(), MEMBER_COUNT + 1);
     }
 
     #[test]

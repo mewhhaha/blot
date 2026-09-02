@@ -60,6 +60,7 @@ struct DevelopmentArtifactCacheKey {
     program_root: String,
     unit_name: String,
     unit_root: String,
+    units: Rc<[(String, String)]>,
 }
 
 #[derive(Eq, Hash, PartialEq)]
@@ -165,7 +166,6 @@ pub struct AddedModule {
     pub module_handle: String,
     pub portable_ast_digest: String,
     pub syntax_diagnostics: Vec<Diagnostic>,
-    pub syntax_snapshot: Option<SyntaxSnapshot>,
 }
 
 pub(crate) use crate::source::SourceError as AddSourceError;
@@ -434,7 +434,17 @@ impl CompilerSession {
         path: String,
         source: Vec<u16>,
     ) -> Result<AddedModule, AddSourceError> {
-        let lowered = crate::source::lower_incremental(&source, self.frontends.get(&path))?;
+        let previous_module = self
+            .context
+            .modules
+            .borrow()
+            .get(&path)
+            .map(|loaded| loaded.module.clone());
+        let lowered = crate::source::lower_incremental(
+            &source,
+            self.frontends.get(&path),
+            previous_module.as_ref(),
+        )?;
         let dependencies = module_dependencies(&lowered.module);
         if let Some(span) = dependencies.invalid_include_paths.first() {
             return Err(AddSourceError::Diagnostics(vec![Diagnostic::new(
@@ -443,13 +453,9 @@ impl CompilerSession {
                 *span,
             )]));
         }
-        let snapshot = lowered.frontend.snapshot();
         self.frontends.insert(path.clone(), lowered.frontend);
-        let mut added = self
-            .install_module(path, lowered.module)
-            .map_err(AddSourceError::Lowering)?;
-        added.syntax_snapshot = Some(snapshot);
-        Ok(added)
+        self.install_module(path, lowered.module)
+            .map_err(AddSourceError::Lowering)
     }
 
     pub fn add_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
@@ -460,16 +466,40 @@ impl CompilerSession {
         {
             return Err("`@include` requires a literal text path".to_owned());
         }
+        self.install_module(path, Rc::new(module))
+    }
+
+    pub fn syntax_snapshot(&self, path: &str) -> Result<SyntaxSnapshot, String> {
+        self.frontends
+            .get(path)
+            .map(FrontendState::snapshot)
+            .ok_or_else(|| format!("cannot snapshot frontend for unknown source module {path}"))
+    }
+
+    pub fn resident_module(&self, path: &str) -> Result<Rc<Module>, String> {
+        self.context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.module.clone())
+            .ok_or_else(|| format!("cannot share unknown source module {path}"))
+    }
+
+    pub fn install_shared_module(
+        &mut self,
+        path: String,
+        module: Rc<Module>,
+    ) -> Result<AddedModule, String> {
         self.install_module(path, module)
     }
 
-    fn install_module(&mut self, path: String, module: Module) -> Result<AddedModule, String> {
+    fn install_module(&mut self, path: String, module: Rc<Module>) -> Result<AddedModule, String> {
         let dependencies = module_dependencies(&module);
         let added = added_module(&path, &module, &dependencies)?;
         let previous = self.context.modules.borrow().get(&path).cloned();
         let unchanged = previous
             .as_ref()
-            .is_some_and(|loaded| loaded.module.as_ref() == &module);
+            .is_some_and(|loaded| Rc::ptr_eq(&loaded.module, &module) || loaded.module == module);
         if unchanged {
             return Ok(added);
         }
@@ -533,7 +563,7 @@ impl CompilerSession {
         self.mark_dirty(&path, "payload changed");
         self.context.modules.borrow_mut().insert(
             path.clone(),
-            LoadedModule::new(&path, Rc::new(module), imports, includes),
+            LoadedModule::new(&path, module, imports, includes),
         );
         if let Some(bindings) = retained_bindings
             && !bindings.is_empty()
@@ -821,7 +851,7 @@ impl CompilerSession {
             span,
         });
         let temporary = format!("{path}\0test");
-        self.install_module(temporary.clone(), module)
+        self.install_module(temporary.clone(), Rc::new(module))
             .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
         self.configure_module(&temporary, loaded.imports.clone(), loaded.includes.clone())
             .map_err(|message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span).at(path))?;
@@ -979,71 +1009,137 @@ impl CompilerSession {
             #[cfg(feature = "development-profile")]
             &mut memory_profile,
         )?;
+        let changed_paths = self
+            .invalidation
+            .borrow()
+            .checked_modules
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let configured_units = units
+            .iter()
+            .map(|(name, root)| (name.clone(), root.clone()))
+            .collect::<Vec<_>>();
+        let configured_units: Rc<[(String, String)]> = configured_units.into();
+        let reusable_partitions = units
+            .iter()
+            .filter_map(|(name, root)| {
+                let cache_key = DevelopmentArtifactCacheKey {
+                    program_root: path.to_owned(),
+                    unit_name: name.clone(),
+                    unit_root: root.clone(),
+                    units: configured_units.clone(),
+                };
+                self.development_artifacts
+                    .borrow()
+                    .get(&cache_key)
+                    .and_then(|cached| cached.reusable_partition(&changed_paths))
+                    .map(|partition| (name.clone(), partition))
+            })
+            .collect::<HashMap<_, _>>();
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("closed-program");
         let split =
-            split_runtime_module(program.runtime(), entry_unit, units).map_err(|message| {
-                Diagnostic::new(
-                    "BLOT_TARGET_REFUSAL",
-                    message,
-                    crate::ast::Span { start: 0, end: 0 },
-                )
-                .at(path)
-            })?;
+            split_runtime_module(program.runtime(), entry_unit, units, &reusable_partitions)
+                .map_err(|message| {
+                    Diagnostic::new(
+                        "BLOT_TARGET_REFUSAL",
+                        message,
+                        crate::ast::Span { start: 0, end: 0 },
+                    )
+                    .at(path)
+                })?;
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("split-program");
         let mut compiled_units = Vec::with_capacity(split.units.len());
         let mut active_keys = HashSet::with_capacity(split.units.len());
         let mut replacements = HashMap::with_capacity(split.units.len());
         for unit in split.units {
-            let identity = development_module_identity(&unit.module).map_err(|message| {
-                Diagnostic::new(
-                    "BLOT_BACKEND_ERROR",
-                    message,
-                    crate::ast::Span { start: 0, end: 0 },
-                )
-                .at(path)
-            })?;
-            #[cfg(feature = "development-profile")]
-            memory_profile.checkpoint(format!("unit:{}:identity", unit.name));
-            let implementation_key = identity.implementation_key().to_owned();
             let cache_key = DevelopmentArtifactCacheKey {
                 program_root: path.to_owned(),
                 unit_name: unit.name.clone(),
                 unit_root: unit.root.clone(),
+                units: configured_units.clone(),
             };
             active_keys.insert(cache_key.clone());
-            let reused = self
-                .development_artifacts
-                .borrow()
-                .get(&cache_key)
-                .and_then(|cached| cached.reuse(&identity));
-            let artifact = if let Some(reused) = reused {
-                reused
+            #[cfg(feature = "development-profile")]
+            let unit_was_prepared = unit.module.is_some();
+            let unaffected = if unit.module.is_none() {
+                self.development_artifacts
+                    .borrow()
+                    .get(&cache_key)
+                    .map(CachedDevelopmentArtifact::reuse_unaffected)
             } else {
-                let compiled = Rc::new(
-                    crate::backend::close(unit.module)
-                        .and_then(|program| program.compile())
-                        .map_err(|message| {
-                            let code = if message.contains("development link")
-                                && message.contains("unsupported")
-                            {
-                                "BLOT_TARGET_REFUSAL"
-                            } else {
-                                "BLOT_BACKEND_ERROR"
-                            };
-                            Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 })
+                None
+            };
+            let (artifact, implementation_key) = if let Some(unaffected) = unaffected {
+                #[cfg(feature = "development-profile")]
+                memory_profile.checkpoint(format!("unit:{}:unaffected", unit.name));
+                unaffected
+            } else {
+                let unit_module = unit.module.ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        format!("development splitter omitted uncached unit {:?}", unit.name),
+                        crate::ast::Span { start: 0, end: 0 },
+                    )
+                    .at(path)
+                })?;
+                let identity = development_module_identity(&unit_module).map_err(|message| {
+                    Diagnostic::new(
+                        "BLOT_BACKEND_ERROR",
+                        message,
+                        crate::ast::Span { start: 0, end: 0 },
+                    )
+                    .at(path)
+                })?;
+                #[cfg(feature = "development-profile")]
+                memory_profile.checkpoint(format!("unit:{}:identity", unit.name));
+                let implementation_key = identity.implementation_key().to_owned();
+                let reused = self
+                    .development_artifacts
+                    .borrow()
+                    .get(&cache_key)
+                    .and_then(|cached| cached.reuse(&identity));
+                let artifact = if let Some(reused) = reused {
+                    reused
+                } else {
+                    let compiled = Rc::new(
+                        crate::backend::close(unit_module)
+                            .and_then(|program| program.compile())
+                            .map_err(|message| {
+                                let code = if message.contains("development link")
+                                    && message.contains("unsupported")
+                                {
+                                    "BLOT_TARGET_REFUSAL"
+                                } else {
+                                    "BLOT_BACKEND_ERROR"
+                                };
+                                Diagnostic::new(
+                                    code,
+                                    message,
+                                    crate::ast::Span { start: 0, end: 0 },
+                                )
                                 .at(path)
-                        })?,
-                );
-                replacements.insert(
-                    cache_key.clone(),
-                    CachedDevelopmentArtifact::new(identity, compiled.clone()),
-                );
-                DevelopmentUnitArtifact::Compiled(compiled)
+                            })?,
+                    );
+                    replacements.insert(
+                        cache_key.clone(),
+                        CachedDevelopmentArtifact::new(
+                            identity,
+                            compiled.clone(),
+                            unit.source_paths,
+                            unit.partition,
+                        ),
+                    );
+                    DevelopmentUnitArtifact::Compiled(compiled)
+                };
+                (artifact, implementation_key)
             };
             #[cfg(feature = "development-profile")]
-            memory_profile.checkpoint(format!("unit:{}:artifact", unit.name));
+            if unit_was_prepared {
+                memory_profile.checkpoint(format!("unit:{}:artifact", unit.name));
+            }
             compiled_units.push(DevelopmentCompilationUnit {
                 name: unit.name,
                 root: unit.root,
@@ -2167,22 +2263,33 @@ fn added_module(
     module: &Module,
     dependencies: &ModuleDependencies,
 ) -> Result<AddedModule, String> {
-    let encoded = serde_json::to_vec(module)
-        .map_err(|error| format!("portable AST digest encoding failed: {error}"))?;
-    let mut digest = 0xcbf29ce484222325_u64;
-    for byte in encoded {
-        digest ^= u64::from(byte);
-        digest = digest.wrapping_mul(0x100000001b3);
+    struct DigestWriter(u64);
+
+    impl std::io::Write for DigestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            for byte in bytes {
+                self.0 ^= u64::from(*byte);
+                self.0 = self.0.wrapping_mul(0x100000001b3);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
+
+    let mut digest = DigestWriter(0xcbf29ce484222325_u64);
+    serde_json::to_writer(&mut digest, module)
+        .map_err(|error| format!("portable AST digest encoding failed: {error}"))?;
     Ok(AddedModule {
         imports: dependencies.imports.clone(),
         includes: dependencies.includes.clone(),
         import_sites: dependencies.import_sites.clone(),
         include_sites: dependencies.include_sites.clone(),
         module_handle: path.to_owned(),
-        portable_ast_digest: format!("fnv1a64:{digest:016x}"),
+        portable_ast_digest: format!("fnv1a64:{:016x}", digest.0),
         syntax_diagnostics: Vec::new(),
-        syntax_snapshot: None,
     })
 }
 
@@ -2364,6 +2471,82 @@ mod tests {
     const CLOSURE_LOCAL_FAULT_SOURCE: &str = "let action = fn () => do:\n  const Fault = @effect { .raise = @type.unit -> @type.unit; }\n  const Extended = @type.attach Fault \"origin\" \"snapshot\"\n  let origin = @shape.get (@type.members Extended) \"origin\"\n  use result <- Fault.raise ()\n  return result\n\u{e000}return @type.reflect (@type.of action)\n";
     const CLOSURE_PROVENANCE_SOURCE: &str = "const make = fn captured => fn constructor => constructor { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
 
+    #[test]
+    fn source_ast_is_shared_between_inspection_and_semantic_sessions() {
+        const PATH: &str = "shared-source.blot";
+        let mut inspection = CompilerSession::default();
+        let mut semantic = CompilerSession::default();
+        let added = inspection
+            .add_source(PATH.to_owned(), source("return 1\n"))
+            .expect("inspection source should load");
+        let source_module = inspection
+            .resident_module(PATH)
+            .expect("inspection module should be resident");
+
+        semantic
+            .install_shared_module(PATH.to_owned(), source_module.clone())
+            .expect("semantic session should accept the inspected module");
+        let semantic_module = semantic
+            .resident_module(PATH)
+            .expect("semantic module should be resident");
+
+        assert!(Rc::ptr_eq(&source_module, &semantic_module));
+        assert_eq!(added.module_handle, PATH);
+        let snapshot = serde_json::to_value(inspection.syntax_snapshot(PATH).unwrap()).unwrap();
+        assert!(
+            snapshot["tokens"]
+                .as_array()
+                .is_some_and(|tokens| !tokens.is_empty())
+        );
+    }
+
+    #[test]
+    fn syntax_only_edit_retains_the_lowered_ast() {
+        const PATH: &str = "syntax-only-edit.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(PATH.to_owned(), source("return 1\n"))
+            .expect("initial source should load");
+        let initial = session
+            .resident_module(PATH)
+            .expect("initial module should be resident");
+
+        session
+            .add_source(PATH.to_owned(), source("return 1\n// changed\n"))
+            .expect("comment edit should load");
+        let edited = session
+            .resident_module(PATH)
+            .expect("edited module should be resident");
+        let snapshot = serde_json::to_value(session.syntax_snapshot(PATH).unwrap()).unwrap();
+
+        assert!(Rc::ptr_eq(&initial, &edited));
+        assert_eq!(snapshot["parserExecuted"], false);
+    }
+
+    #[test]
+    fn same_shape_token_edit_relowers_literal_values() {
+        const PATH: &str = "literal-edit.blot";
+        let mut session = CompilerSession::default();
+        session
+            .add_source(PATH.to_owned(), source("return 1\n"))
+            .expect("initial source should load");
+        let initial = session
+            .resident_module(PATH)
+            .expect("initial module should be resident");
+
+        session
+            .add_source(PATH.to_owned(), source("return 2\n"))
+            .expect("literal edit should load");
+        let edited = session
+            .resident_module(PATH)
+            .expect("edited module should be resident");
+        let snapshot = serde_json::to_value(session.syntax_snapshot(PATH).unwrap()).unwrap();
+
+        assert!(!Rc::ptr_eq(&initial, &edited));
+        assert_eq!(snapshot["parserExecuted"], false);
+        assert_eq!(session.evaluate_module(PATH)["display"], "2");
+    }
+
     fn snapshot_from_source(path: &str, text: &str) -> Vec<u8> {
         let mut session = CompilerSession::default();
         session
@@ -2372,9 +2555,12 @@ mod tests {
         session
             .configure_module(path, BTreeMap::new(), BTreeMap::new())
             .expect("snapshot source should configure");
-        session
-            .module_snapshot(path)
-            .expect("module snapshot should encode")
+        session.module_snapshot(path).unwrap_or_else(|error| {
+            panic!(
+                "module snapshot should encode: {error}; check: {}",
+                session.check_module(path)
+            )
+        })
     }
 
     #[test]
@@ -2387,6 +2573,40 @@ mod tests {
             snapshot.comptime_environment.is_some(),
             "the generated prelude snapshot must retain its comptime environment"
         );
+    }
+
+    #[test]
+    fn map_update_and_alter_consume_their_owned_successors() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../examples/lib/array_builder_and_map_updates.blot"
+                    )),
+                )
+                .expect("Map update source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("Map update source should configure");
+
+            let evaluated = session.evaluate_module("main.blot");
+
+            assert_eq!(evaluated["ok"], true, "{evaluated}");
+            assert_eq!(evaluated["display"], "(3, #Some 11, #Some 20)");
+        });
     }
 
     fn run_with_compiler_test_stack(test: impl FnOnce() + Send + 'static) {
@@ -5511,6 +5731,81 @@ mod tests {
     }
 
     #[test]
+    fn development_edit_reidentifies_only_checked_units() {
+        const ENTRY: &str = "collision-main.blot";
+        const FIRST: &str = "collision-first.blot";
+        const SECOND: &str = "collision-second.blot";
+        let provider_source = |increment| {
+            source(&format!(
+                "let add = fn value => @int.add value {increment}\n\u{e000}return {{ .add = add; }}\u{e000}\n"
+            ))
+        };
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                ENTRY.to_owned(),
+                source(concat!(
+                    "const first = import \"first\"\n",
+                    "const second = import \"second\"\n",
+                    "return fn value => @int.add (first.add value) (second.add value)\n",
+                )),
+            )
+            .expect("entry source should load");
+        session
+            .configure_module(
+                ENTRY,
+                BTreeMap::from([
+                    ("first".to_owned(), FIRST.to_owned()),
+                    ("second".to_owned(), SECOND.to_owned()),
+                ]),
+                BTreeMap::new(),
+            )
+            .expect("entry source should configure");
+        for (path, increment) in [(FIRST, 1), (SECOND, 2)] {
+            session
+                .add_source(path.to_owned(), provider_source(increment))
+                .expect("provider source should load");
+            session
+                .configure_module(path, BTreeMap::new(), BTreeMap::new())
+                .expect("provider source should configure");
+        }
+        let units = BTreeMap::from([
+            ("first".to_owned(), FIRST.to_owned()),
+            ("game".to_owned(), ENTRY.to_owned()),
+            ("second".to_owned(), SECOND.to_owned()),
+        ]);
+        let initial = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("initial development program should compile");
+        session
+            .commit_development_program(initial.transaction_id)
+            .expect("initial development program should commit");
+
+        crate::development::reset_module_identity_computations();
+        session
+            .add_source(FIRST.to_owned(), provider_source(2))
+            .expect("edited provider should load");
+        let edited = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("edited development program should compile");
+        let artifact_sources = edited
+            .units
+            .iter()
+            .map(|unit| (unit.name.as_str(), unit.artifact.artifact_source()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            artifact_sources,
+            BTreeMap::from([
+                ("first", "compiled"),
+                ("game", "unit-cache"),
+                ("second", "unit-cache"),
+            ])
+        );
+        assert_eq!(crate::development::module_identity_computations(), 2);
+    }
+
+    #[test]
     fn development_provider_boolean_result_remains_a_reload_boundary() {
         run_with_compiler_test_stack(|| {
             const ENTRY: &str = "game.blot";
@@ -5803,11 +6098,17 @@ mod tests {
 
         let committed = session.development_artifacts.borrow();
         assert_eq!(committed.len(), replaced_units.len());
+        let configured_units = replaced_units
+            .iter()
+            .map(|(name, root)| (name.clone(), root.clone()))
+            .collect::<Vec<_>>();
+        let configured_units: Rc<[(String, String)]> = configured_units.into();
         for (name, root) in replaced_units {
             assert!(committed.contains_key(&DevelopmentArtifactCacheKey {
                 program_root: ENTRY.to_owned(),
                 unit_name: name,
                 unit_root: root,
+                units: configured_units.clone(),
             }));
         }
     }
@@ -6250,6 +6551,70 @@ mod tests {
     }
 
     #[test]
+    fn source_inspection_rejects_a_statement_after_return() {
+        let text = "return 1\nlet unreachable = 2\n// Keep this following comment.\n";
+        let mut session = CompilerSession::default();
+        let result = session.add_source("main.blot".to_owned(), source(text));
+        let AddSourceError::Diagnostics(diagnostics) =
+            result.expect_err("a statement after return should fail inspection")
+        else {
+            panic!("unreachable statement failed without a source diagnostic");
+        };
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "BLOT_UNREACHABLE_STATEMENT");
+        let statement_start = text.find("let").unwrap() as u32;
+        assert_eq!(diagnostics[0].span.start, statement_start);
+        assert_eq!(
+            diagnostics[0].span.end,
+            statement_start + "let unreachable = 2".len() as u32
+        );
+    }
+
+    #[test]
+    fn source_inspection_rejects_a_statement_after_a_departing_conditional() {
+        let text = "if ready:\n  return 1\nelse:\n  return 2\nlet unreachable = 3\n";
+        let mut session = CompilerSession::default();
+        let result = session.add_source("main.blot".to_owned(), source(text));
+        let AddSourceError::Diagnostics(diagnostics) =
+            result.expect_err("a statement after a departing conditional should fail inspection")
+        else {
+            panic!("unreachable statement failed without a source diagnostic");
+        };
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "BLOT_UNREACHABLE_STATEMENT");
+        assert_eq!(diagnostics[0].span.start, text.find("let").unwrap() as u32);
+    }
+
+    #[test]
+    fn source_inspection_rejects_a_statement_after_break() {
+        let text = "for value in values:\n  break\n  let unreachable = value\nreturn ()\n";
+        let mut session = CompilerSession::default();
+        let result = session.add_source("main.blot".to_owned(), source(text));
+        let AddSourceError::Diagnostics(diagnostics) =
+            result.expect_err("a statement after break should fail inspection")
+        else {
+            panic!("unreachable statement failed without a source diagnostic");
+        };
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "BLOT_UNREACHABLE_STATEMENT");
+        assert_eq!(diagnostics[0].span.start, text.find("let").unwrap() as u32);
+    }
+
+    #[test]
+    fn source_inspection_accepts_a_statement_after_a_conditional_without_else() {
+        let mut session = CompilerSession::default();
+        session
+            .add_source(
+                "main.blot".to_owned(),
+                source("if ready:\n  return 1\nreturn 2\n"),
+            )
+            .expect("a conditional without else may continue");
+    }
+
+    #[test]
     fn rejected_modules_discard_declaration_evaluations() {
         let path = "main.blot";
         let mut session = CompilerSession::default();
@@ -6369,6 +6734,39 @@ mod tests {
     }
 
     #[test]
+    fn an_immediate_case_of_functions_distributes_the_call_into_its_arms() {
+        let (session, module) = prepared(concat!(
+            "const positive = fn value => case @int.cmp value 0 of\n",
+            "  #Greater => #True\n",
+            "  #Less => #False\n",
+            "  #Equal => #False\n",
+            "\n",
+            "let run :: @type.int -> @type.int\n",
+            "let run = fn flag => (case positive flag of\n",
+            "  #True => fn value => @int.add value 1\n",
+            "  #False => fn value => @int.sub value 1\n",
+            ") flag\n",
+            "return { .run = run; }\n",
+        ));
+
+        let has_choice_table = module["types"]
+            .as_array()
+            .expect("a type table")
+            .iter()
+            .filter_map(|type_| type_["cases"].as_array())
+            .any(|cases| {
+                cases.iter().any(|case_| {
+                    case_["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("choice$"))
+                })
+            });
+
+        assert!(!has_choice_table, "{module}");
+        assert!(session.compile_module("main.blot").is_ok());
+    }
+
+    #[test]
     fn two_closures_from_one_body_stay_separate_alternatives() {
         // `bump 1` and `bump 2` share a body and capture no runtime value: only
         // the environment they closed over tells them apart. Merging them would
@@ -6442,11 +6840,7 @@ mod tests {
             .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
             .expect("source should configure");
         let prepared = session.prepare_runtime_hir("main.blot");
-        assert_eq!(
-            prepared["ok"], true,
-            "preparation failed: {}",
-            prepared["diagnostic"]
-        );
+        assert_eq!(prepared["ok"], true, "preparation failed: {prepared}",);
         let module = prepared["module"].clone();
         (session, module)
     }
@@ -6972,9 +7366,12 @@ mod tests {
             let prepared = session.prepare_runtime_hir("main.blot");
 
             assert_eq!(prepared["ok"], true, "{prepared}");
-            session
+            let compiled = session
                 .compile_module("main.blot")
                 .expect("owned radix sorts should emit Wasm");
+            wasmparser::Validator::new()
+                .validate_all(&compiled.wasm)
+                .expect("owned radix sort Wasm should validate for its declared features");
         });
     }
 
@@ -7439,6 +7836,173 @@ mod tests {
     }
 
     #[test]
+    fn runtime_collect_reuses_its_owned_accumulator_store() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let collect_range :: Int -> [Int]\n",
+                        "let collect_range = fn count => collect (Iter.range (0, count))\n",
+                        "return collect_range\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let growth = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .find(|operation| operation["kind"] == "store.grow")
+                .expect("collect should grow its result Store");
+            assert_eq!(growth["update"], "owned-reuse", "{prepared}");
+        });
+    }
+
+    #[test]
+    fn runtime_memory_lowering_fixture_prepares_and_emits_all_builders() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/runtime_memory_lowerings.blot")),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let operations = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .filter_map(|operation| operation["kind"].as_str())
+                .collect::<Vec<_>>();
+            assert!(operations.contains(&"scratch.push"), "{prepared}");
+            assert!(operations.contains(&"text.join"), "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("runtime memory fixture should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn runtime_text_replace_emits_its_single_join() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let replace :: (Text, Text, Text) -> Text\n",
+                        "let replace = fn (text, query, replacement) => ",
+                        "Text.replace (text, query, replacement)\n",
+                        "return replace\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let joins = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .filter(|operation| operation["kind"] == "text.join")
+                .count();
+            assert_eq!(joins, 1, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("runtime Text.replace should emit Wasm");
+        });
+    }
+
+    #[test]
     fn surface_for_preserves_owned_array_accumulators() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -7495,6 +8059,81 @@ mod tests {
                 .find(|operation| operation["kind"] == "store.grow")
                 .expect("surface loop should append to its Store");
             assert_eq!(growth["update"], "owned-reuse", "{prepared}");
+        });
+    }
+
+    #[test]
+    fn an_early_return_preserves_recursive_array_reuse() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const rewrite_count :: Int -> Int\n",
+                        "const rewrite_count = fn count => do:\n",
+                        "  let values = Array.copy [0]\n",
+                        "  let rec rewrite :: ([Int], Int) -> [Int]\n",
+                        "  let rec rewrite = fn (values, remaining) => do:\n",
+                        "    if remaining <= 0:\n",
+                        "      return values\n",
+                        "\n",
+                        "    let values = Array.expect_set (values, 0, remaining)\n",
+                        "    return rewrite (values, remaining - 1)\n",
+                        "\n",
+                        "  let values = rewrite (values, count)\n",
+                        "  return Array.expect_get ((&values), 0)\n",
+                        "return rewrite_count\n",
+                    )),
+                )
+                .expect("source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("source should configure");
+
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let writes = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["blocks"]
+                        .as_array()
+                        .expect("runtime blocks")
+                        .iter()
+                })
+                .flat_map(|block| {
+                    block["operations"]
+                        .as_array()
+                        .expect("runtime operations")
+                        .iter()
+                })
+                .filter(|operation| operation["kind"] == "store.write")
+                .collect::<Vec<_>>();
+            assert!(
+                !writes.is_empty(),
+                "recursive rewrite should update its Store"
+            );
+            assert!(
+                writes
+                    .iter()
+                    .all(|operation| operation["update"] == "owned-reuse"),
+                "{prepared}"
+            );
         });
     }
 
@@ -7955,29 +8594,9 @@ mod tests {
                         .as_array()
                         .is_some_and(|cases| cases.len() == 3))
             );
-            let compiled = session
+            session
                 .compile_module("main.blot")
                 .expect("dynamic sum case should emit Wasm");
-            let has_branch_table = wasmparser::Parser::new(0)
-                .parse_all(&compiled.wasm)
-                .filter_map(
-                    |payload| match payload.expect("emitted Wasm should parse") {
-                        wasmparser::Payload::CodeSectionEntry(body) => Some(body),
-                        _ => None,
-                    },
-                )
-                .any(|body| {
-                    body.get_operators_reader()
-                        .expect("function operators should parse")
-                        .into_iter()
-                        .any(|operator| {
-                            matches!(
-                                operator.expect("operator should parse"),
-                                wasmparser::Operator::BrTable { .. }
-                            )
-                        })
-                });
-            assert!(has_branch_table, "dense sum dispatch should emit br_table");
         });
     }
 
@@ -8167,9 +8786,15 @@ mod tests {
                 )
                 .expect("Fibonacci source should configure");
 
+            crate::eval::reset_comptime_call_cache_hits();
             session
                 .compile_module("main.blot")
                 .expect("exported non-tail recursion should emit Wasm");
+            let cache_hits = crate::eval::comptime_call_cache_hits();
+            assert!(
+                cache_hits >= 15,
+                "overlapping Fibonacci calls produced {cache_hits} comptime cache hits"
+            );
         });
     }
 
@@ -8495,6 +9120,87 @@ mod tests {
 
             assert!(ast.is_ok(), "{ast:?}");
             assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn dense_constructor_matrix_solver_work_scales_with_source_rows() {
+        run_with_compiler_test_stack(|| {
+            const SUBJECT_COUNT: usize = 8;
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let names = (0..SUBJECT_COUNT)
+                .map(|index| format!("subject{index}"))
+                .collect::<Vec<_>>();
+            let mut work = Vec::new();
+            for row_count in [32, 64, 128] {
+                let mut text = format!(
+                    "open import \"blot:prelude\"\nlet choose = fn ({}) => case {} of\n",
+                    names.join(", "),
+                    names.join(", ")
+                );
+                for row in 0..row_count {
+                    let patterns = (0..SUBJECT_COUNT)
+                        .map(|column| {
+                            if row & (1 << column) == 0 {
+                                "#False"
+                            } else {
+                                "#True"
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    text.push_str(&format!("  {} => {row_count}\n", patterns.join(", ")));
+                }
+                text.push_str(&format!(
+                    "  {} => {row_count}\n",
+                    ["_"; SUBJECT_COUNT].join(", ")
+                ));
+                text.push_str(&format!(
+                    "return choose ({})\n",
+                    ["#True"; SUBJECT_COUNT].join(", ")
+                ));
+                let path = format!("dense-rows-{row_count}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(path.clone(), source(&text))
+                    .expect("dense constructor source should load");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("dense constructor source should configure");
+                let analysis = session.analyze_module(&path);
+                assert_eq!(analysis["ok"], true, "{analysis}");
+                work.push((
+                    analysis["work"]["settleVisits"]
+                        .as_u64()
+                        .expect("settlement work should be reported"),
+                    analysis["work"]["unionVisits"]
+                        .as_u64()
+                        .expect("union work should be reported"),
+                ));
+            }
+            for pair in work.windows(2) {
+                assert!(
+                    pair[1].0 <= pair[0].0 * 3,
+                    "doubling rows expanded settlement visits from {} to {}",
+                    pair[0].0,
+                    pair[1].0
+                );
+                assert!(
+                    pair[1].1 <= pair[0].1 * 3,
+                    "doubling rows expanded union visits from {} to {}",
+                    pair[0].1,
+                    pair[1].1
+                );
+            }
         });
     }
 
@@ -8939,9 +9645,12 @@ mod tests {
             let prepared = session.prepare_runtime_hir("case-studies/engine/game_loop.blot");
 
             assert_eq!(prepared["ok"], true, "{prepared}");
-            session
+            let compiled = session
                 .compile_module("case-studies/engine/game_loop.blot")
                 .expect("game loop should emit Wasm");
+            wasmparser::Validator::new()
+                .validate_all(&compiled.wasm)
+                .expect("game loop Wasm should validate for its declared features");
 
             let prepared = session.prepare_runtime_hir("case-studies/engine/main.blot");
 

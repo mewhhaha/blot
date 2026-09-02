@@ -1,6 +1,10 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join, toFileUrl } from "@std/path";
-import { LanguageService } from "./language_service.ts";
+import {
+  type CodeAction,
+  deduplicateCodeActions,
+  LanguageService,
+} from "./language_service.ts";
 
 Deno.test("ordered range changes update one editor revision", async () => {
   const service = new LanguageService();
@@ -65,6 +69,75 @@ Deno.test("language diagnostics check the open editor revision", async () => {
   } finally {
     await service.destroy();
   }
+});
+
+Deno.test("language diagnostics report unreachable statements as errors", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:unreachable-statement.blot";
+  const source = `return 1
+let unreachable = 2
+// Keep the explanation for the remaining statement.
+let also_unreachable = 3
+`;
+  try {
+    service.open(uri, source, 1);
+    const diagnostics = await service.diagnostics(uri);
+    const unreachable = diagnostics.filter((diagnostic) =>
+      diagnostic.code === "BLOT_UNREACHABLE_STATEMENT"
+    );
+    assertEquals(unreachable.length, 2);
+    assertEquals(unreachable[0]?.severity, 1);
+    assertEquals(unreachable[0]?.range.start, { line: 1, character: 0 });
+
+    const actions = await service.codeActions(uri, {
+      start: { line: 1, character: 0 },
+      end: { line: 1, character: 19 },
+    });
+    assertEquals(actions.map((action) => action.title), [
+      "Remove unreachable statement",
+    ]);
+    assertEquals(actions[0]?.edit.documentChanges[0].edits, [{
+      range: {
+        start: { line: 1, character: 0 },
+        end: { line: 2, character: 0 },
+      },
+      newText: "",
+    }]);
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("identical edits become one code action", () => {
+  const diagnostic = {
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 1 },
+    },
+    severity: 4,
+    code: "BLOT_LINT_UNUSED_BINDING",
+    source: "blot",
+    message: "unused",
+  } as const;
+  const edit = {
+    documentChanges: [{
+      textDocument: { uri: "untitled:duplicate.blot", version: 1 },
+      edits: [{ range: diagnostic.range, newText: "" }],
+    }],
+  } as const;
+  const actions = [{
+    title: "First title",
+    kind: "quickfix",
+    diagnostics: [diagnostic],
+    edit,
+  }, {
+    title: "Second title",
+    kind: "quickfix",
+    diagnostics: [],
+    edit,
+  }] satisfies readonly CodeAction[];
+
+  assertEquals(deduplicateCodeActions(actions), [actions[0]]);
 });
 
 Deno.test("closing a document stops its overlay from shadowing disk", async () => {
@@ -716,12 +789,14 @@ Deno.test("control-flow flattening actions preserve the checked interface", asyn
   const source = `open import "blot:prelude"
 let increment :: Int -> Int
 let increment = fn value => do:
-  return value + 1
+  // Increment at the boundary.
+  return value + 1 // The returned value stays documented.
 let label :: Int -> Text
 let label = fn value => do:
   if value == 0:
+    // Zero has its own label.
     return "zero"
-  else:
+  else: // All remaining values share this label.
     return "other"
 return (increment, label)
 `;
@@ -729,14 +804,14 @@ return (increment, label)
     service.open(uri, source, 1);
     const actions = await service.codeActions(uri, {
       start: { line: 0, character: 0 },
-      end: { line: 10, character: 25 },
+      end: { line: 13, character: 25 },
     });
     const redundantDo = actions.find((action) =>
       action.title === "Remove redundant `do:` block"
     );
     assertEquals(
       redundantDo?.edit.documentChanges[0].edits[0]?.newText,
-      "(value + 1)\n",
+      `(\n  // Increment at the boundary.\n  value + 1\n  // The returned value stays documented.\n)\n`,
     );
     const redundantElse = actions.find((action) =>
       action.title === "Remove redundant terminal `else`"
@@ -744,7 +819,9 @@ return (increment, label)
     assertEquals(
       redundantElse?.edit.documentChanges[0].edits[0]?.newText,
       `if value == 0:
+    // Zero has its own label.
     return "zero"
+  // All remaining values share this label.
   return "other"
 `,
     );

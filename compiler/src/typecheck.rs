@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -85,6 +86,83 @@ impl<'a, T> IntoIterator for &'a TypeList<T> {
     }
 }
 
+#[derive(Debug)]
+struct TypeRowStorage {
+    entries: Vec<(String, Type)>,
+    positions: HashMap<String, usize>,
+}
+
+impl Clone for TypeRowStorage {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            positions: self.positions.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TypeRow(Rc<TypeRowStorage>);
+
+impl Clone for TypeRow {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl TypeRow {
+    fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&Type> {
+        let position = self.0.positions.get(name)?;
+        Some(&self.0.entries[*position].1)
+    }
+}
+
+impl std::ops::Deref for TypeRow {
+    type Target = Vec<(String, Type)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.entries
+    }
+}
+
+impl From<Vec<(String, Type)>> for TypeRow {
+    fn from(entries: Vec<(String, Type)>) -> Self {
+        let mut positions = HashMap::with_capacity(entries.len());
+        for (position, (name, _)) in entries.iter().enumerate() {
+            positions.entry(name.clone()).or_insert(position);
+        }
+        Self(Rc::new(TypeRowStorage { entries, positions }))
+    }
+}
+
+impl FromIterator<(String, Type)> for TypeRow {
+    fn from_iter<I: IntoIterator<Item = (String, Type)>>(entries: I) -> Self {
+        entries.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
+impl IntoIterator for TypeRow {
+    type Item = (String, Type);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Rc::unwrap_or_clone(self.0).entries.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TypeRow {
+    type Item = &'a (String, Type);
+    type IntoIter = std::slice::Iter<'a, (String, Type)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum Domain {
     Int,
@@ -113,16 +191,16 @@ pub enum Type {
         effects: Rc<Type>,
         result: Rc<Type>,
     },
-    Record(TypeList<(String, Type)>),
+    Record(TypeRow),
     RecordUpdate {
         base: Rc<Type>,
-        fields: TypeList<(String, Type)>,
+        fields: TypeRow,
     },
     Array(Rc<Type>),
     Region(Rc<Type>),
     Scratch(Rc<Type>),
     Variant {
-        cases: TypeList<(String, Type)>,
+        cases: TypeRow,
         open: bool,
     },
     Effects(BTreeSet<String>),
@@ -136,7 +214,7 @@ pub enum Type {
     Bottom,
 }
 
-pub(crate) fn record_update_type(base: Type, updates: TypeList<(String, Type)>) -> Type {
+pub(crate) fn record_update_type(base: Type, updates: TypeRow) -> Type {
     match base {
         Type::Record(fields) => {
             let mut fields = fields.into_iter().collect::<Vec<_>>();
@@ -287,16 +365,16 @@ enum ConstraintTypeNode {
         effects: ConstraintTypeId,
         result: ConstraintTypeId,
     },
-    Record(Vec<(String, ConstraintTypeId)>),
+    Record(ConstraintTypeRow),
     RecordUpdate {
         base: ConstraintTypeId,
-        fields: Vec<(String, ConstraintTypeId)>,
+        fields: ConstraintTypeRow,
     },
     Array(ConstraintTypeId),
     Region(ConstraintTypeId),
     Scratch(ConstraintTypeId),
     Variant {
-        cases: Vec<(String, ConstraintTypeId)>,
+        cases: ConstraintTypeRow,
         open: bool,
     },
     Effects(BTreeSet<String>),
@@ -308,6 +386,78 @@ enum ConstraintTypeNode {
     Opaque(String),
     Top,
     Bottom,
+}
+
+#[derive(Clone, Debug)]
+struct ConstraintTypeRow(Rc<ConstraintTypeRowStorage>);
+
+#[derive(Clone, Debug)]
+struct ConstraintTypeRowStorage {
+    entries: Vec<(String, ConstraintTypeId)>,
+    positions: HashMap<String, usize>,
+}
+
+impl ConstraintTypeRow {
+    fn get(&self, name: &str) -> Option<ConstraintTypeId> {
+        let position = self.0.positions.get(name)?;
+        Some(self.0.entries[*position].1)
+    }
+}
+
+impl PartialEq for ConstraintTypeRow {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0) || self.0.entries == other.0.entries
+    }
+}
+
+impl Eq for ConstraintTypeRow {}
+
+impl Hash for ConstraintTypeRow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.entries.hash(state);
+    }
+}
+
+impl std::ops::Deref for ConstraintTypeRow {
+    type Target = Vec<(String, ConstraintTypeId)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.entries
+    }
+}
+
+impl From<Vec<(String, ConstraintTypeId)>> for ConstraintTypeRow {
+    fn from(entries: Vec<(String, ConstraintTypeId)>) -> Self {
+        let mut positions = HashMap::with_capacity(entries.len());
+        for (position, (name, _)) in entries.iter().enumerate() {
+            positions.entry(name.clone()).or_insert(position);
+        }
+        Self(Rc::new(ConstraintTypeRowStorage { entries, positions }))
+    }
+}
+
+impl FromIterator<(String, ConstraintTypeId)> for ConstraintTypeRow {
+    fn from_iter<I: IntoIterator<Item = (String, ConstraintTypeId)>>(entries: I) -> Self {
+        entries.into_iter().collect::<Vec<_>>().into()
+    }
+}
+
+impl IntoIterator for ConstraintTypeRow {
+    type Item = (String, ConstraintTypeId);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Rc::unwrap_or_clone(self.0).entries.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ConstraintTypeRow {
+    type Item = &'a (String, ConstraintTypeId);
+    type IntoIter = std::slice::Iter<'a, (String, ConstraintTypeId)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 #[derive(Default)]
@@ -658,21 +808,17 @@ impl ConstraintTypeArena {
 
     fn same_fields(
         &self,
-        left: &[(String, ConstraintTypeId)],
-        right: &[(String, ConstraintTypeId)],
+        left: &ConstraintTypeRow,
+        right: &ConstraintTypeRow,
         rigids: &mut Vec<(VariableId, VariableId)>,
     ) -> bool {
         if left.len() != right.len() {
             return false;
         }
-        let right = right
-            .iter()
-            .map(|(name, type_)| (name.as_str(), *type_))
-            .collect::<HashMap<_, _>>();
         left.iter().all(|(name, type_)| {
             right
-                .get(name.as_str())
-                .is_some_and(|candidate| self.same_with_rigids(*type_, *candidate, rigids))
+                .get(name)
+                .is_some_and(|candidate| self.same_with_rigids(*type_, candidate, rigids))
         })
     }
 }
@@ -760,7 +906,7 @@ struct TypeEnvironment {
 
 #[derive(Clone)]
 struct OpenedTypes {
-    inferred: TypeList<(String, Type)>,
+    inferred: TypeRow,
     values: OrderedFields,
     resolved: Rc<RefCell<HashMap<String, Type>>>,
     used: Rc<RefCell<BTreeSet<String>>>,
@@ -775,11 +921,7 @@ impl OpenedTypes {
         if let Some(type_) = self.resolved.borrow().get(target) {
             return Some(type_.clone());
         }
-        let type_ = match self
-            .inferred
-            .iter()
-            .find_map(|(name, type_)| (name == target).then_some(type_))
-        {
+        let type_ = match self.inferred.get(target) {
             Some(type_) => type_.clone(),
             None => checker.bridge_runtime_value(self.values.get(target)?),
         };
@@ -3325,6 +3467,7 @@ impl Checker {
                 let synthetic = loaded.module.arena.synthetic_closure_bodies.contains(&body);
                 let (mut signature, mut type_recursive) =
                     self.residual_signature_analysis(type_.clone());
+                let synthetic_recursive = synthetic_recursive_bodies.contains(&body);
                 if synthetic
                     && self.reify_runtime_type(&signature).is_none()
                     && let Some(compact) = self.representation_function_signature(&type_)
@@ -3355,7 +3498,7 @@ impl Checker {
                         .recursive_closure_bodies
                         .borrow()
                         .contains_key(path, &body);
-                if synthetic_recursive_bodies.contains(&body) {
+                if synthetic_recursive {
                     signature = stable_loop_signature(signature);
                 }
                 (body, signature, recursive)
@@ -4037,7 +4180,19 @@ impl Checker {
                     )?;
                 }
             }
-            Value::Union(elements) | Value::IndexedStep { elements } => {
+            Value::Union(elements) => {
+                for element in elements {
+                    self.refuse_runtime_const_captures(
+                        path,
+                        element,
+                        environment,
+                        source,
+                        binding_name,
+                        span,
+                    )?;
+                }
+            }
+            Value::IndexedStep { elements } => {
                 for element in elements {
                     self.refuse_runtime_const_captures(
                         path,
@@ -7060,11 +7215,11 @@ impl Checker {
 
     fn freshen_constraint_fields(
         &self,
-        fields: Vec<(String, ConstraintTypeId)>,
+        fields: ConstraintTypeRow,
         level: u32,
         fresh: &mut HashMap<VariableId, Type>,
         rewritten: &mut HashMap<ConstraintTypeId, ConstraintTypeId>,
-    ) -> Vec<(String, ConstraintTypeId)> {
+    ) -> ConstraintTypeRow {
         fields
             .into_iter()
             .map(|(name, field)| {
@@ -7504,12 +7659,8 @@ impl Checker {
                 true
             }
             (ConstraintTypeNode::Record(left_fields), ConstraintTypeNode::Record(right_fields)) => {
-                let left_fields = left_fields
-                    .iter()
-                    .map(|(name, type_)| (name.as_str(), *type_))
-                    .collect::<HashMap<_, _>>();
                 for (name, right_field) in right_fields {
-                    let Some(left_field) = left_fields.get(name.as_str()).copied() else {
+                    let Some(left_field) = left_fields.get(&name) else {
                         let right_type = self.expand_constraint(right_field);
                         if admits_omission(&right_type) {
                             continue;
@@ -7532,12 +7683,8 @@ impl Checker {
                 ConstraintTypeNode::RecordUpdate { base, fields },
                 ConstraintTypeNode::Record(right_fields),
             ) => {
-                let fields = fields
-                    .iter()
-                    .map(|(name, type_)| (name.as_str(), *type_))
-                    .collect::<HashMap<_, _>>();
                 for (name, right_field) in right_fields {
-                    if let Some(updated) = fields.get(name.as_str()).copied() {
+                    if let Some(updated) = fields.get(&name) {
                         work.push_back(WorkItem {
                             left: updated,
                             right: right_field,
@@ -7569,17 +7716,13 @@ impl Checker {
                 if left_fields.len() != right_fields.len() {
                     false
                 } else {
-                    let right_fields = right_fields
-                        .iter()
-                        .map(|(name, type_)| (name.as_str(), *type_))
-                        .collect::<HashMap<_, _>>();
                     work.push_back(WorkItem {
                         left: left_base,
                         right: right_base,
                         span,
                     });
                     for (name, left_field) in left_fields {
-                        let Some(right_field) = right_fields.get(name.as_str()).copied() else {
+                        let Some(right_field) = right_fields.get(&name) else {
                             return self.type_error(
                                 self.expand_constraint(left),
                                 self.expand_constraint(right),
@@ -7641,20 +7784,13 @@ impl Checker {
                     open: right_open,
                 },
             ) => {
-                let right_cases = right
-                    .iter()
-                    .map(|(name, type_)| (name.as_str(), *type_))
-                    .collect::<HashMap<_, _>>();
                 if !right_open
-                    && (left_open
-                        || left
-                            .iter()
-                            .any(|(name, _)| !right_cases.contains_key(name.as_str())))
+                    && (left_open || left.iter().any(|(name, _)| right.get(name).is_none()))
                 {
                     false
                 } else {
                     for (name, left) in left {
-                        if let Some(right) = right_cases.get(name.as_str()).copied() {
+                        if let Some(right) = right.get(&name) {
                             work.push_back(WorkItem { left, right, span });
                         }
                     }
@@ -8620,9 +8756,7 @@ impl Checker {
             (Pattern::Tuple { elements, .. }, Type::Record(fields))
             | (Pattern::Array { elements, .. }, Type::Record(fields)) => {
                 for (index, pattern) in elements.iter().enumerate() {
-                    if let Some((_, field)) =
-                        fields.iter().find(|(name, _)| name == &index.to_string())
-                    {
+                    if let Some(field) = fields.get(&index.to_string()) {
                         self.bind_pattern_from_type_seen(
                             module,
                             *pattern,
@@ -8635,8 +8769,7 @@ impl Checker {
             }
             (Pattern::Constructor { name, payload, .. }, Type::Variant { cases, .. }) => {
                 if let Some(payload) = payload
-                    && let Some((_, payload_type)) =
-                        cases.iter().find(|(candidate, _)| candidate == name)
+                    && let Some(payload_type) = cases.get(name)
                 {
                     self.bind_pattern_from_type_seen(
                         module,
@@ -8649,10 +8782,7 @@ impl Checker {
             }
             (Pattern::Shape { fields, .. }, Type::Record(type_fields)) => {
                 for field in fields {
-                    if let Some((_, field_type)) = type_fields
-                        .iter()
-                        .find(|(candidate, _)| candidate == &field.name)
-                    {
+                    if let Some(field_type) = type_fields.get(&field.name) {
                         self.bind_pattern_from_type_seen(
                             module,
                             field.pattern,
@@ -9992,6 +10122,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             curried(vec![vector], f32_)
         }
         "@text.concat" => curried(vec![text.clone(), text.clone()], text),
+        "@text.join" => curried(vec![Type::Array(Rc::new(text.clone()))], text),
         "@text.len" => curried(vec![text], int),
         "@text.scalar_at" => curried(vec![text.clone(), int], text),
         "@text.slice" => curried(vec![text.clone(), int.clone(), int], text),
@@ -11442,8 +11573,7 @@ fn case_constraint(
                         };
                         total |= total_pattern(module, elements[index]);
                         if let Type::Record(fields) = type_
-                            && let Some((_, field)) =
-                                fields.iter().find(|(name, _)| name == &index.to_string())
+                            && let Some(field) = fields.get(&index.to_string())
                         {
                             candidates.push(field.clone());
                         }
@@ -11497,8 +11627,8 @@ fn tuple_coverage_type(
     let fields = (0..arity)
         .map(|index| {
             let evidence = evidence_fields
-                .and_then(|fields| fields.iter().find(|(name, _)| name == &index.to_string()))
-                .map(|(_, field)| field.clone())
+                .and_then(|fields| fields.get(&index.to_string()))
+                .cloned()
                 .filter(|field| !matches!(field, Type::Bottom | Type::Top));
             let mut candidates = Vec::new();
             let mut column_has_irrefutable_pattern = false;
@@ -11515,8 +11645,7 @@ fn tuple_coverage_type(
                     continue;
                 }
                 if let Type::Record(fields) = type_
-                    && let Some((_, field)) =
-                        fields.iter().find(|(name, _)| name == &index.to_string())
+                    && let Some(field) = fields.get(&index.to_string())
                 {
                     candidates.push(field.clone());
                 }
@@ -12164,7 +12293,8 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
                         },
                     })
                 })
-                .collect::<Option<Vec<_>>>()?,
+                .collect::<Option<Vec<_>>>()?
+                .into(),
         )),
         Type::Function {
             deferred,
@@ -12200,7 +12330,8 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
             members
                 .iter()
                 .map(|member| reify_type_with_holes(context, member, next_hole))
-                .collect::<Option<Vec<_>>>()?,
+                .collect::<Option<Vec<_>>>()?
+                .into(),
         )),
         Type::Top => {
             let hole = *next_hole;

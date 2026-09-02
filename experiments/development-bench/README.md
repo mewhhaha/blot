@@ -69,8 +69,19 @@ that checkpoint, measured in 64 KiB pages. It is a high-water observation, not a
 live-allocation count. Native builds report zero pages. Only `solver-start`,
 `semantic-request`, and `checked-entry` carry the optional `solver` cardinality;
 the remaining checkpoints isolate Runtime HIR, program splitting, unit identity,
-and backend emission. The production artifact omits this instrumentation and
-reports `compilerProfiling.featureStatus` as `production`.
+and backend emission. A committed unit outside the checked impact cone reports
+`unit:<name>:unaffected` and has no identity or artifact-construction checkpoint
+when its function/link partition is also unchanged; the splitter traced its
+calls and reload edges but did not materialize the unit module. The production
+artifact omits this instrumentation and reports
+`compilerProfiling.featureStatus` as `production`.
 
 This workload does not cover interface edits or demand changes. Those require
 separate scenarios because they intentionally change the consumer closure.
+
+On 2026-09-01, the production artifact identified by SHA-256
+`aacb245e0d3f3c6cbe1984fb7d4e6b3bf8ed83826c4199758a78da694d586b21` compiled the
+5,273,553-byte workload at 81.3 ms committed p50 and 90.7 ms p95. Only the
+edited unit was transferred; maximum post-activation RSS growth was 6,660,096
+bytes. The first warm sample was the 319.6 ms maximum and does not enter the
+nearest-rank p95 for 20 samples.

@@ -1,0 +1,40 @@
+open import "blot:prelude"
+
+const Graph = import "./graph.blot"
+const IntStack = import "./int_stack.blot"
+const VertexMarks = import "./vertex_marks.blot"
+
+const search :: ([[Int]], Int) -> [Int]
+const search = fn (&graph, start) => do:
+  let vertex_count = Array.length (&graph)
+  let rec visit :: (
+    { .values = [Int]; .length = Int; },
+    [Bool],
+    [Int]
+  ) -> [Int]
+  let rec visit = fn (stack, visited, traversal) => do:
+    if IntStack.is_empty (&stack):
+      return traversal
+    else:
+      let vertex = IntStack.top (&stack)
+      let stack = IntStack.pop (?stack)
+      let (was_visited, visited) = VertexMarks.mark (?visited, (&vertex))
+      if was_visited:
+        return visit (stack, visited, traversal)
+      else:
+        let neighbors = Graph.outgoing ((&graph), (&vertex))
+        let neighbor_count = Array.length (&neighbors)
+        for offset in Iter.range (0, neighbor_count):
+          let neighbor = Array.expect_get (
+            (&neighbors),
+            neighbor_count - offset - 1
+          )
+          stack := IntStack.push (?stack, neighbor)
+
+        return visit (stack, visited, @array.push traversal vertex)
+
+  let stack = IntStack.empty ()
+  let stack = IntStack.push (?stack, start)
+  return visit (stack, VertexMarks.create vertex_count, [])
+
+return search

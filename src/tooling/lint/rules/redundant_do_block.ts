@@ -3,6 +3,7 @@ import {
   directRule,
   fieldRule,
   fieldRules,
+  lineComments,
   trailingWhitespace,
 } from "../syntax.ts";
 import type { LintRule } from "../types.ts";
@@ -32,11 +33,13 @@ export const redundantDoBlock: LintRule = {
           resultIndent,
           context.source,
         );
-        const replacement = preserveGrouping(
-          returned,
+        const replacement = preserveBlockComments(
+          rule,
           value,
+          returned,
           blockIndent,
           resultIndent,
+          context.source,
         ) + trailingWhitespace(context.source, rule.span);
         context.report({
           message:
@@ -53,6 +56,28 @@ export const redundantDoBlock: LintRule = {
     };
   },
 };
+
+function preserveBlockComments(
+  block: Rule,
+  value: Rule,
+  returned: string,
+  indent: string,
+  nestedIndent: string,
+  source: string,
+): string {
+  const before = lineComments(source.slice(block.span.start, value.span.start));
+  const after = lineComments(source.slice(value.span.end, block.span.end));
+  if (before.length === 0 && after.length === 0) {
+    return preserveGrouping(returned, value, indent, nestedIndent);
+  }
+
+  const lines = [
+    ...before,
+    ...returned.split("\n"),
+    ...after,
+  ].map((line) => `${nestedIndent}${line}`);
+  return `(\n${lines.join("\n")}\n${indent})`;
+}
 
 function preserveGrouping(
   returned: string,

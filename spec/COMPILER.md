@@ -92,7 +92,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 5. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 6. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -104,7 +104,11 @@ check hot path; diagnostic and requested analysis payloads retain their
 classified content. ABI 5 prepares development-program artifacts under a
 transaction identity, exposes indexed Wasm and manifest bytes until the next
 transport call, and commits the resident artifact cache only through the
-matching commit operation. The graph-delta frame remains schema 3.
+matching commit operation. ABI 6 can install one inspection session's immutable
+source AST into a semantic session by shared Rust ownership and exports compact
+syntax snapshots on demand. The receiving session creates its own revision,
+configuration, checked facts, and artifacts; sharing the AST allocation grants
+no semantic cache authority. The graph-delta frame remains schema 3.
 
 [`compiler/protocol.json`](../compiler/protocol.json) is the version authority
 for the compiler-host ABI, checked-module certificate, module snapshot, value
@@ -205,9 +209,17 @@ growth. Each source subject is captured by one strict nullary thunk and forced
 only when its column is first inspected. The forced value is cached; a later row
 receives either the original thunk or a new thunk over that cached value.
 
-Executable row failure is bound once as an unspellable strict continuation over
-one tuple of subject thunks. Every row in one matrix uses the same
-compiler-local continuation identity, so inference shares one monomorphic
+An unguarded matrix containing only wildcard, name, and payload-free constructor
+patterns specializes the earliest remaining row's first refutable column.
+Constructor branches retain matching and irrefutable rows in source order; the
+wildcard branch retains only irrefutable rows. This ordered decision tree shares
+one demanded subject test across equal prefixes without changing which row first
+demands a column. Reaching an irrefutable row forces only its name columns and
+then evaluates that row.
+
+Other matrices bind executable row failure once as an unspellable strict
+continuation over one tuple of subject thunks. Every row in one matrix uses the
+same compiler-local continuation identity, so inference shares one monomorphic
 result/effect fact per matrix instead of retaining an isomorphic type graph for
 every row. Tuple passing keeps continuation type depth constant as subject count
 grows. When a matrix exceeds the direct fallback-depth budget, lowering places
@@ -482,22 +494,29 @@ normalized input/result ownership, traps, and public metadata.
 Before validation, Runtime-HIR normalization pools closed scalar Store literals
 in the module's typed static-Store table, cancels inverse indirect
 construction/loading and product construction/projection representations,
-removes unused total operations to a fixed point, and removes non-entry block
-parameters together with the corresponding arguments on every incoming edge.
-Entry parameters stay aligned with the closed function signature. It then
-interns structurally equal closed types, signatures, and alpha-normalized
-function bodies. Each body is alpha-normalized and serialized once with function
-targets replaced by ordered call positions. A global inverse-edge partition
-refinement starts from those body shapes and splits classes only when an equally
-positioned callee enters a different class. This single judgment covers acyclic
-and recursive functions, including equivalent functions in separate recursive
-components. Calls and exports are rewritten to the first canonical body; source
-names and spans select that representative but do not prevent body sharing.
-Outside the proved representation cancellations above, normalization does not
-remove calls, host operations, allocation, mutation, reads, or arithmetic whose
-checked operation may trap. Every rewritten reference is validated against the
-compacted tables; the backend consumes those facts and does not repeat type or
-effect inference.
+removes unused total operations through result-use propagation, and removes
+non-entry block parameters together with the corresponding arguments on every
+incoming edge. Representation aliases, operation uses, and block-parameter
+liveness use dependency worklists; a chain is not rediscovered by rescanning the
+whole function after each removed node. Entry parameters stay aligned with the
+closed function signature. It then interns structurally equal closed types,
+signatures, and alpha-normalized function bodies. Closed runtime types and
+function call graphs use inverse-edge partition refinement, including recursive
+components, instead of repeated whole-table remapping rounds. Each body is
+alpha-normalized and serialized once with function targets replaced by ordered
+call positions. A global inverse-edge partition refinement starts from those
+body shapes and splits classes only when an equally positioned callee enters a
+different class. This single judgment covers acyclic and recursive functions,
+including equivalent functions in separate recursive components. Calls and
+exports are rewritten to the first canonical body; source names and spans select
+that representative but do not prevent body sharing in a production program.
+Development preparation adds the configured unit root to the initial equivalence
+class, so equal bodies within one unit still share while bodies owned by
+different reload units remain distinct. Outside the proved representation
+cancellations above, normalization does not remove calls, host operations,
+allocation, mutation, reads, or arithmetic whose checked operation may trap.
+Every rewritten reference is validated against the compacted tables; the backend
+consumes those facts and does not repeat type or effect inference.
 
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked
@@ -779,6 +798,11 @@ backend layout.
 Production and development preparation use the same residual outlining rule. The
 splitter partitions the resulting graph; it does not cause additional closures
 to be outlined or preserve evaluator inlining according to unit membership.
+Function interning respects that later partition: two definitions at different
+configured roots cannot become one representative before splitting. Otherwise an
+implementation edit that happens to make two provider bodies equal could move
+the representative's source root, changing unrelated unit identities and links
+despite an unchanged interface.
 
 For development unit `U`, the compiler deterministically serializes the complete
 normalized Runtime-HIR module for `U`, including link signatures, link targets,

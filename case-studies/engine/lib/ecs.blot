@@ -23,21 +23,22 @@ open import "blot:prelude"
 const Store = fn component => [Option component]
 
 const attach = fn (store, value) => @array.push store (Some value)
-const at = fn (store, id) => case Array.get (store, id) of
+const at = fn (&store, id) => case Array.get ((&store), id) of
   #Some value => value
   #None => None
 const replace = fn (store, id, value) => case Array.set (store, id, value) of
   #Some updated => updated
   #None => store
-const count = fn store => Array.length store
+const count = fn &store => Array.length (&store)
 
 // A system over one component: rebuild the store from the entities that have
 // it. The entities that do not are carried through untouched, so a system is a
 // total function over the world even when it reads a slice of it.
 const each_1 = fn (store, step) => do:
+  let length = count (&store)
   let state = store
-  for id in Iter.range (0, count store):
-    state := case at (store, id) of
+  for id in Iter.range (0, length):
+    state := case at ((&state), id) of
       #Some value => replace (state, id, Some (step value))
       #None => state
 
@@ -50,9 +51,10 @@ const each_1 = fn (store, step) => do:
 // and everything else is the other. Reading both stores before either is
 // tested is what "an entity id indexes every store alike" already promised.
 const each_2 = fn (left, right, step) => do:
+  let length = count (&left)
   let state = left
-  for id in Iter.range (0, count left):
-    state := case (at (left, id), at (right, id)) of
+  for id in Iter.range (0, length):
+    state := case (at ((&state), id), at ((&right), id)) of
       (#Some a, #Some b) => replace (state, id, Some (step (a, b)))
       _ => state
 
@@ -69,9 +71,9 @@ const each_2 = fn (left, right, step) => do:
 // type from that set and refuses the mismatch. Until a shape survives
 // a tuple scrutinee, a renderer's join stays two `case`s.
 const visit_2 = fn (left, right, visit) => do:
-  for id in Iter.range (0, count left):
-    use case at (left, id) of
-      #Some a => case at (right, id) of
+  for id in Iter.range (0, count (&left)):
+    use case at ((&left), id) of
+      #Some a => case at ((&right), id) of
         #Some b => visit (a, b)
         #None => ()
 

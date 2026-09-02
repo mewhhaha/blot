@@ -1,0 +1,55 @@
+// Route a small set of HTTP-style requests.
+//
+// Matching the method and path together makes the dispatch table explicit,
+// while ordinary text predicates cover parameterized routes.
+
+open import "blot:prelude"
+
+const Method = #Get | #Post | #Delete
+
+const Request =
+  {
+    .method = Method;
+    .path = Text;
+  }
+
+const Response =
+  {
+    .status = Int;
+    .body = Text;
+  }
+
+let not_found = fn () => { .status = 404; .body = "not found"; }
+
+let route :: Request -> Response
+let route = fn request => case (request.method, request.path) of
+  (#Get, "/health") => { .status = 200; .body = "healthy"; }
+  (#Post, "/users") => { .status = 201; .body = "created"; }
+  (#Get, path) => do:
+    if Text.starts_with (path, "/users/"):
+      return { .status = 200; .body = "user profile"; }
+
+    return not_found ()
+
+  (#Delete, path) => do:
+    if Text.starts_with (path, "/users/"):
+      return { .status = 204; .body = "deleted"; }
+
+    return not_found ()
+
+  (#Post, _) => not_found ()
+
+let requests :: [Request]
+let requests =
+  [
+    { .method = #Get; .path = "/health"; },
+    { .method = #Post; .path = "/users"; },
+    { .method = #Delete; .path = "/users/42"; },
+    { .method = #Get; .path = "/missing"; }
+  ]
+
+let responses = map (requests, route)
+return {
+  .statuses = map (responses, fn result => result.status);
+  .bodies = map (responses, fn result => result.body);
+}

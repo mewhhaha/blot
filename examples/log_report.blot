@@ -1,0 +1,36 @@
+// Clean and summarize a small application log.
+//
+// Text operations stay ordinary prelude functions, so the same map/filter
+// pipeline used for records also works for lines of text.
+
+open import "blot:prelude"
+
+let source =
+  " INFO boot \nERROR token=secret timeout\nWARN retrying\nERROR disk full\n INFO shutdown "
+
+let lines = map (Text.lines source, fn line => Text.trim line)
+let errors =
+  filter (
+    lines,
+    fn line => Text.starts_with (line, "ERROR")
+  )
+let safe_errors =
+  map (
+    errors,
+    fn line => Text.replace (line, "token=secret", "token=[redacted]")
+  )
+let warnings =
+  filter (
+    lines,
+    fn line => Text.starts_with (line, "WARN")
+  )
+
+return {
+  .line_count = Array.length lines;
+  .errors = safe_errors;
+  .warning_count = Array.length warnings;
+  .shut_down = any (
+    lines,
+    fn line => Text.ends_with (line, "shutdown")
+  );
+  }

@@ -1,10 +1,10 @@
 {
   "protocol": {
-    "compilerHostAbi": 5,
+    "compilerHostAbi": 6,
     "checkedModuleCertificate": 16,
     "moduleSnapshotSchema": 2,
     "valueCapsuleSchema": 4,
-    "runtimeHir": 9
+    "runtimeHir": 10
   },
   "operators": [
     {
@@ -337,6 +337,7 @@
     "BLOT_UNMATCHABLE_PIN",
     "BLOT_UNORDERED",
     "BLOT_UNPROVEN_INDEX",
+    "BLOT_UNREACHABLE_STATEMENT",
     "BLOT_UNREPRESENTABLE_INTEGER",
     "BLOT_UNRESOLVED_CHAIN",
     "BLOT_UNRESOLVED_IMPORT",
@@ -554,6 +555,7 @@
     "@text.concat",
     "@text.contains",
     "@text.find_from",
+    "@text.join",
     "@text.len",
     "@text.of_int",
     "@text.scalar_at",
@@ -722,31 +724,31 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 14731
+      "lines": 14862
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 12977
+      "lines": 14112
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 9124
+      "lines": 9833
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 7376
+      "lines": 8038
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6701
+      "lines": 6684
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6064
+      "lines": 6292
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 3883
+      "lines": 4342
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -754,31 +756,31 @@
     },
     {
       "path": "compiler/src/value_capsule.rs",
-      "lines": 3373
+      "lines": 3376
+    },
+    {
+      "path": "src/prelude/prelude.blot",
+      "lines": 3350
     },
     {
       "path": "src/syntax/lower.ts",
       "lines": 3219
     },
     {
-      "path": "src/prelude/prelude.blot",
-      "lines": 3210
+      "path": "compiler/src/value.rs",
+      "lines": 2325
     },
     {
       "path": "compiler/src/qcore.rs",
-      "lines": 2238
+      "lines": 2236
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2117
+      "lines": 2196
     },
     {
       "path": "compiler/src/qcore_typing.rs",
       "lines": 2115
-    },
-    {
-      "path": "compiler/src/value.rs",
-      "lines": 2086
     }
   ]
 }

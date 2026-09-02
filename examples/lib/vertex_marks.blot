@@ -1,0 +1,25 @@
+open import "blot:prelude"
+
+const create :: Int -> [Bool]
+const create = fn count => do:
+  let marks :: [Bool]
+  let marks = []
+  for Iter.range (0, count):
+    marks := @array.push marks False
+
+  return marks
+
+const mark :: ([Bool], Int) -> (Bool, [Bool])
+const mark = fn (?marks, &vertex) => do:
+  let was_marked = case Array.expect_get ((&marks), vertex) of
+    #True => True
+    #False => False
+  if was_marked:
+    return (True, !marks)
+
+  return (False, Array.expect_set (marks, vertex, True))
+
+return {
+  .create = create;
+  .mark = mark;
+}

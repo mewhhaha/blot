@@ -2374,14 +2374,17 @@ fn decode_value(
             )?),
             domain: domain.map(decode_domain).transpose()?,
         },
-        CapsuleValue::Union(values) => Value::Union(decode_values(
-            values,
-            environments,
-            provenance,
-            module_path,
-            module,
-            context,
-        )?),
+        CapsuleValue::Union(values) => Value::Union(
+            decode_values(
+                values,
+                environments,
+                provenance,
+                module_path,
+                module,
+                context,
+            )?
+            .into(),
+        ),
         CapsuleValue::Unbounded => Value::Unbounded,
         CapsuleValue::Arrow {
             deferred,

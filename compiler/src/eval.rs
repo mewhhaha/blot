@@ -11,12 +11,27 @@ use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
     ClosureAlternative, DecodedEnvironmentIdentity, DeferredDemands, Domain as ValueDomain,
-    EffectOperationOwnership, EffectOwnership, Environment, OpenedValues, OrderedFields,
+    EffectOperationOwnership, EffectOwnership, Env, Environment, OpenedValues, OrderedFields,
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
-    capture_env, child_env, declaration_env, equal, lookup, lookup_signature, opened_members,
-    recursive_env, reusable_across_module_instances, show, tuple,
+    capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
+    lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
 };
 use crate::value_capsule::ValueCapsule;
+
+#[cfg(test)]
+thread_local! {
+    static COMPTIME_CALL_CACHE_HITS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_comptime_call_cache_hits() {
+    COMPTIME_CALL_CACHE_HITS.with(|hits| hits.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn comptime_call_cache_hits() -> usize {
+    COMPTIME_CALL_CACHE_HITS.with(Cell::get)
+}
 
 pub(crate) type RuntimeTypeResolver = Rc<dyn Fn(ExpressionId) -> Option<Value>>;
 
@@ -1244,6 +1259,75 @@ pub enum Phase {
     Runtime,
 }
 
+const COMPTIME_CALL_RESULT_LIMIT: usize = 65_536;
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+enum ComptimeArgument {
+    Int(num_bigint::BigInt),
+    Float(u64),
+    Float32(u32),
+    Vector([u32; 4]),
+    VectorMask([bool; 4]),
+    IntegerVector { bits: u8, lanes: Vec<i32> },
+    IntegerVectorMask { bits: u8, lanes: Vec<bool> },
+    Text(String),
+    Unit,
+    Shape(Vec<(String, ComptimeArgument)>),
+    Array(Vec<ComptimeArgument>),
+    Tag(String, Option<Box<ComptimeArgument>>),
+    Sealed(String, Box<ComptimeArgument>),
+}
+
+struct ComptimeClosureIdentity {
+    module: Rc<String>,
+    body: ExpressionId,
+    environment: Weak<Env>,
+    module_instances: Weak<ModuleInstanceScope>,
+    effect_scope: Weak<EffectScope>,
+}
+
+impl PartialEq for ComptimeClosureIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module
+            && self.body == other.body
+            && Weak::ptr_eq(&self.environment, &other.environment)
+            && Weak::ptr_eq(&self.module_instances, &other.module_instances)
+            && Weak::ptr_eq(&self.effect_scope, &other.effect_scope)
+    }
+}
+
+impl Eq for ComptimeClosureIdentity {}
+
+impl Hash for ComptimeClosureIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        self.body.hash(state);
+        self.environment.as_ptr().hash(state);
+        self.module_instances.as_ptr().hash(state);
+        self.effect_scope.as_ptr().hash(state);
+    }
+}
+
+struct ComptimeCallKey {
+    closure: ComptimeClosureIdentity,
+    argument: ComptimeArgument,
+}
+
+impl PartialEq for ComptimeCallKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.closure == other.closure && self.argument == other.argument
+    }
+}
+
+impl Eq for ComptimeCallKey {}
+
+impl Hash for ComptimeCallKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.closure.hash(state);
+        self.argument.hash(state);
+    }
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub phase: Phase,
@@ -1256,6 +1340,7 @@ pub struct Runtime {
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
     checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
+    comptime_call_results: Rc<RefCell<HashMap<ComptimeCallKey, Value>>>,
 }
 
 struct ArrayProgress {
@@ -1294,6 +1379,7 @@ impl Runtime {
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
             checked_arguments: Rc::new(RefCell::new(HashMap::new())),
+            comptime_call_results: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -1328,8 +1414,91 @@ impl Runtime {
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
             checked_arguments: self.checked_arguments.clone(),
+            comptime_call_results: self.comptime_call_results.clone(),
         }
     }
+}
+
+fn comptime_argument(value: &Value) -> Option<ComptimeArgument> {
+    match value {
+        Value::Int(value) => Some(ComptimeArgument::Int(value.clone())),
+        Value::Float(value) => Some(ComptimeArgument::Float(value.to_bits())),
+        Value::Float32(value) => Some(ComptimeArgument::Float32(value.to_bits())),
+        Value::Vector(values) => Some(ComptimeArgument::Vector(values.map(f32::to_bits))),
+        Value::VectorMask(values) => Some(ComptimeArgument::VectorMask(*values)),
+        Value::IntegerVector { bits, lanes } => Some(ComptimeArgument::IntegerVector {
+            bits: *bits,
+            lanes: lanes.clone(),
+        }),
+        Value::IntegerVectorMask { bits, lanes } => Some(ComptimeArgument::IntegerVectorMask {
+            bits: *bits,
+            lanes: lanes.clone(),
+        }),
+        Value::Text(value) => Some(ComptimeArgument::Text(value.clone())),
+        Value::Unit => Some(ComptimeArgument::Unit),
+        Value::Shape(fields) => Some(ComptimeArgument::Shape(
+            fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), comptime_argument(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        Value::Array(values) => Some(ComptimeArgument::Array(
+            values
+                .iter()
+                .map(comptime_argument)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        Value::Tag { name, payload } => Some(ComptimeArgument::Tag(
+            name.clone(),
+            match payload.as_deref() {
+                Some(payload) => Some(Box::new(comptime_argument(payload)?)),
+                None => None,
+            },
+        )),
+        Value::Sealed { name, inner } => Some(ComptimeArgument::Sealed(
+            name.clone(),
+            Box::new(comptime_argument(inner)?),
+        )),
+        Value::RegionType(_)
+        | Value::ScratchType(_)
+        | Value::Scratch { .. }
+        | Value::DeferredScratch { .. }
+        | Value::Region { .. }
+        | Value::RegionRejoin { .. }
+        | Value::EmptyArray { .. }
+        | Value::Closure { .. }
+        | Value::Deferred { .. }
+        | Value::ClosureChoice { .. }
+        | Value::ModuleClosure { .. }
+        | Value::IndexedStep { .. }
+        | Value::Primitive { .. }
+        | Value::Range { .. }
+        | Value::Union(_)
+        | Value::Unbounded
+        | Value::Arrow { .. }
+        | Value::TypeVariable(_)
+        | Value::Forall { .. }
+        | Value::Effect { .. }
+        | Value::Operation { .. }
+        | Value::Extended { .. }
+        | Value::OpaqueType(_)
+        | Value::Runtime(_)
+        | Value::Continuation { .. } => None,
+    }
+}
+
+fn memoizable_comptime_signature(signature: Option<&Value>) -> bool {
+    let Some(signature) = signature else {
+        return false;
+    };
+    matches!(
+        signature,
+        Value::Arrow {
+            effects,
+            effect_tail: None,
+            ..
+        } if effects.is_empty()
+    ) && !contains_type_variables(signature)
 }
 
 pub enum Computation {
@@ -1964,6 +2133,7 @@ pub fn evaluate_expression(
             let target_environment = environment.clone();
             let target_runtime = runtime.clone();
             let arms = arms.clone();
+            let case_checked_representation = checked_representation.clone();
             evaluate_expression(context, module_path, *target, environment, runtime).and_then(
                 move |target| {
                     if let Value::Runtime(target) = &target {
@@ -1972,9 +2142,12 @@ pub fn evaluate_expression(
                             target_module,
                             target_environment,
                             target_runtime,
-                            target.clone(),
-                            arms,
-                            span,
+                            DynamicCase {
+                                target: target.clone(),
+                                arms,
+                                checked_result: case_checked_representation,
+                                span,
+                            },
                         );
                     }
                     let module = match module(&target_context, &target_module) {
@@ -2089,15 +2262,26 @@ fn evaluate_many(
     )
 }
 
+struct DynamicCase {
+    target: RuntimeValue,
+    arms: Vec<crate::ast::Arm>,
+    checked_result: Option<Value>,
+    span: Span,
+}
+
 fn evaluate_dynamic_case(
     context: Rc<Context>,
     module_path: Rc<String>,
     environment: Environment,
     runtime: Runtime,
-    target: RuntimeValue,
-    arms: Vec<crate::ast::Arm>,
-    span: Span,
+    case: DynamicCase,
 ) -> Computation {
+    let DynamicCase {
+        target,
+        arms,
+        checked_result,
+        span,
+    } = case;
     match target.meaning.clone() {
         RuntimeMeaning::Ordering | RuntimeMeaning::ScalarOrdering { .. } => evaluate_ordering_arms(
             context,
@@ -2118,6 +2302,7 @@ fn evaluate_dynamic_case(
             target,
             cases,
             arms,
+            checked_result.clone(),
             span,
         ),
         RuntimeMeaning::Plain
@@ -2152,6 +2337,7 @@ fn evaluate_dynamic_case(
                     target,
                     cases,
                     arms,
+                    checked_result,
                     span,
                 );
             }
@@ -2508,10 +2694,13 @@ fn evaluate_integer_switch_arm(
                 span,
             );
         }
-        match trace
-            .borrow_mut()
-            .join_switch(&join_context, (*next_switch).clone(), outcomes, span)
-        {
+        match trace.borrow_mut().join_switch(
+            &join_context,
+            (*next_switch).clone(),
+            outcomes,
+            None,
+            span,
+        ) {
             Ok(value) => Computation::value(value),
             Err(error) => Computation::error(error),
         }
@@ -2628,6 +2817,7 @@ fn evaluate_sum_case(
     target: RuntimeValue,
     cases: Vec<String>,
     arms: Vec<crate::ast::Arm>,
+    checked_result: Option<Value>,
     span: Span,
 ) -> Computation {
     if cases.is_empty() {
@@ -2693,6 +2883,7 @@ fn evaluate_sum_case(
         0,
         switch,
         Vec::new(),
+        checked_result,
         span,
     )
 }
@@ -2709,6 +2900,7 @@ fn evaluate_sum_switch_arm(
     index: usize,
     switch: Rc<crate::hir::ResidualSwitch>,
     outcomes: Vec<(usize, Option<Value>)>,
+    checked_result: Option<Value>,
     span: Span,
 ) -> Computation {
     let loaded = match module(&context, &module_path) {
@@ -2758,6 +2950,7 @@ fn evaluate_sum_switch_arm(
     let next_cases = cases.clone();
     let next_arms = arms.clone();
     let next_switch = switch.clone();
+    let next_checked_result = checked_result.clone();
     evaluate_expression(context, module_path, arm.body, scope, runtime).map_result(move |result| {
         let value = match result {
             Ok(value) => Some(value),
@@ -2782,13 +2975,17 @@ fn evaluate_sum_switch_arm(
                 index + 1,
                 next_switch,
                 outcomes,
+                next_checked_result,
                 span,
             );
         }
-        match trace
-            .borrow_mut()
-            .join_switch(&join_context, (*next_switch).clone(), outcomes, span)
-        {
+        match trace.borrow_mut().join_switch(
+            &join_context,
+            (*next_switch).clone(),
+            outcomes,
+            checked_result.as_ref(),
+            span,
+        ) {
             Ok(value) => Computation::value(value),
             Err(error) => Computation::error(error),
         }
@@ -3824,6 +4021,15 @@ fn apply_with_expected(
                 .or_else(|| inferred_signature.map(Box::new));
             let signature =
                 signature.map(|signature| Box::new(substitute_signature(&signature, &environment)));
+            let memoized_closure = (runtime.residual.is_none()
+                && memoizable_comptime_signature(signature.as_deref()))
+            .then(|| ComptimeClosureIdentity {
+                module: closure_module.clone(),
+                body,
+                environment: Rc::downgrade(&environment),
+                module_instances: Rc::downgrade(&module_instances),
+                effect_scope: Rc::downgrade(&creation_scope),
+            });
             let loaded = match module(&context, &closure_module) {
                 Ok(module) => module,
                 Err(error) => return Computation::error(error),
@@ -3915,6 +4121,19 @@ fn apply_with_expected(
                     Err(error) => return Computation::error(error),
                 }
             }
+            let memo_key = memoized_closure.and_then(|closure| {
+                Some(ComptimeCallKey {
+                    closure,
+                    argument: comptime_argument(&argument)?,
+                })
+            });
+            if let Some(key) = &memo_key
+                && let Some(value) = runtime.comptime_call_results.borrow().get(key).cloned()
+            {
+                #[cfg(test)]
+                COMPTIME_CALL_CACHE_HITS.with(|hits| hits.set(hits.get() + 1));
+                return Computation::value(value);
+            }
             let reuse_scope = if reuse_assertion.is_some() {
                 runtime.residual.as_ref().map(|trace| {
                     let scope = trace.borrow().begin_reuse_scope();
@@ -3931,6 +4150,7 @@ fn apply_with_expected(
                 ));
             }
             let mut closure_runtime = runtime;
+            let comptime_call_results = closure_runtime.comptime_call_results.clone();
             closure_runtime.module = closure_module.clone();
             closure_runtime.module_instances = module_instances;
             Rc::make_mut(&mut closure_runtime.effect_scope).push(ClosureApplication {
@@ -3973,6 +4193,14 @@ fn apply_with_expected(
                             && nested.is_none()
                         {
                             *nested = Some(span);
+                        }
+                        if let Some(key) = memo_key
+                            && comptime_argument(&value).is_some()
+                        {
+                            let mut results = comptime_call_results.borrow_mut();
+                            if results.len() < COMPTIME_CALL_RESULT_LIMIT {
+                                results.insert(key, value.clone());
+                            }
                         }
                         let Some((trace, compilation)) = residual_compilation else {
                             return Computation::value(value);

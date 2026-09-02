@@ -2,14 +2,17 @@ import type { Rule } from "../../../syntax/cursor.ts";
 import {
   fieldRule,
   fieldRules,
+  lineComments,
+  sourceCodeSpan,
+  sourceEditSpan,
   spanKey,
-  trailingWhitespace,
 } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
 interface FlattenedArm {
   readonly patterns: readonly string[];
   readonly body: Rule;
+  readonly comments: readonly string[];
 }
 
 interface FlattenedCases {
@@ -34,14 +37,16 @@ export const nestedCaseChain: LintRule = {
           covered.add(spanKey(nested.span));
         }
         const indent = lineIndent(context.source, rule.span.start);
+        const codeSpan = sourceCodeSpan(context.source, rule.span);
+        const editSpan = sourceEditSpan(context.source, rule.span);
         const replacement = renderCases(flattened, context, indent) +
-          trailingWhitespace(context.source, rule.span);
+          context.source.slice(codeSpan.end, editSpan.end);
         context.report({
           message:
             "This nested case tree is one decision matrix; match its subjects in a single multi-subject `case`.",
           span: rule.span,
           fix: context.fix(
-            rule.span,
+            editSpan,
             "Flatten nested cases",
             replacement,
             "check",
@@ -60,7 +65,11 @@ function flattenCases(
   const arms: FlattenedArm[] = [];
   const cases: Rule[] = [];
 
-  function visit(rule: Rule, prefix: readonly string[]): boolean {
+  function visit(
+    rule: Rule,
+    prefix: readonly string[],
+    inheritedComments: readonly string[] = [],
+  ): boolean {
     const targets = fieldRules(rule, "targets");
     if (targets.length !== 1 || fieldRules(rule, "rest").length < 1) {
       return false;
@@ -74,6 +83,8 @@ function flattenCases(
     else if (existing !== subject) return false;
     cases.push(rule);
 
+    let previousEnd = target.span.end;
+    let firstArm = true;
     for (const arm of caseArms(rule)) {
       if (fieldRule(arm, "guard") !== null) return false;
       const patterns = fieldRules(arm, "patterns");
@@ -81,14 +92,32 @@ function flattenCases(
       const pattern = patterns[0];
       const body = fieldRule(arm, "body");
       if (pattern === undefined || body === null) return false;
+      const comments = lineComments(
+        context.source.slice(previousEnd, pattern.span.start),
+      );
+      const leadingComments = firstArm
+        ? [...inheritedComments, ...comments]
+        : comments;
       const writtenPattern = singleLine(context.sourceText(pattern));
       const nested = directCaseBody(body);
       if (nested === null) {
-        arms.push({ patterns: [...prefix, writtenPattern], body });
-        continue;
+        arms.push({
+          patterns: [...prefix, writtenPattern],
+          body,
+          comments: leadingComments,
+        });
+      } else {
+        if (patternMayBind(writtenPattern)) return false;
+        if (
+          !visit(
+            nested,
+            [...prefix, writtenPattern],
+            leadingComments,
+          )
+        ) return false;
       }
-      if (patternMayBind(writtenPattern)) return false;
-      if (!visit(nested, [...prefix, writtenPattern])) return false;
+      previousEnd = sourceCodeSpan(context.source, body.span).end;
+      firstArm = false;
     }
     return true;
   }
@@ -106,7 +135,10 @@ function renderCases(
   const arms = flattened.arms.map((arm) => {
     const patterns = [...arm.patterns];
     while (patterns.length < flattened.subjects.length) patterns.push("_");
-    return renderArm(patterns.join(", "), arm.body, context, armIndent);
+    const body = renderArm(patterns.join(", "), arm.body, context, armIndent);
+    if (arm.comments.length === 0) return body;
+    const comments = arm.comments.map((comment) => `${armIndent}${comment}`);
+    return `${comments.join("\n")}\n${body}`;
   });
   return `case ${flattened.subjects.join(", ")} of\n${arms.join("\n")}`;
 }
@@ -117,7 +149,8 @@ function renderArm(
   context: LintRuleContext,
   indent: string,
 ): string {
-  const source = context.source.slice(body.span.start, body.span.end).trimEnd();
+  const span = sourceCodeSpan(context.source, body.span);
+  const source = context.source.slice(span.start, span.end).trimEnd();
   const lines = source.split("\n");
   const first = lines[0]?.trimStart();
   if (first === undefined) {

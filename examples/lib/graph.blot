@@ -1,0 +1,8 @@
+open import "blot:prelude"
+
+const outgoing :: @forall (fn T => ([[T]], Int) -> [T])
+const outgoing = fn (&graph, &vertex) => Array.expect_get ((&graph), (&vertex))
+
+return {
+  .outgoing = outgoing;
+}

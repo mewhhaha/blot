@@ -1,0 +1,1 @@
+{ .confirmed = #Confirmed { .sku = "notebook"; .total = 3600; }; .missing = #OutOfStock { .sku = "camera"; .total = 4000; }; .declined = #PaymentDeclined { .sku = "notebook"; .total = 9000; }; }

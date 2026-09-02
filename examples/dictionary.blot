@@ -6,7 +6,7 @@ let second = Dict.put (first.1, "label", 2)
 let replaced = Dict.put (second.1, "count", 3)
 let removed = Dict.remove (replaced.1, "count")
 
-let option_or = fn (value, fallback) => case value of
+let option_or = fn (?value, fallback) => case value of
   #Some found => found
   #None => fallback
 

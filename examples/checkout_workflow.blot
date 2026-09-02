@@ -1,0 +1,49 @@
+// Keep checkout policy separate from inventory and payment implementations.
+//
+// Effects name the capabilities the workflow needs. Deterministic handlers
+// make the three business outcomes executable without network mocks.
+
+open import "blot:prelude"
+
+const Inventory = @effect { .reserve = Text -> Bool; }
+const Payment = @effect { .charge = Int -> Bool; }
+
+const CheckoutDetails = { .sku = Text; .total = Int; }
+const Checkout = #Confirmed CheckoutDetails | #OutOfStock CheckoutDetails | #PaymentDeclined CheckoutDetails
+
+let checkout :: (Text, Int) -> Checkout ~ { Inventory, Payment }
+let checkout = fn (sku, total) => do:
+  let details = { .sku = sku; .total = total; }
+  use reserved <- Inventory.reserve sku
+  if not reserved:
+    return #OutOfStock details
+
+  use charged <- Payment.charge total
+  if not charged:
+    return #PaymentDeclined details
+
+  return #Confirmed details
+
+let inventory =
+  {
+    .reserve = fn (sku, ?resume) => resume (text_eq (sku, "notebook"));
+  }
+
+let payment =
+  {
+    .charge = fn (total, ?resume) => resume (total <= 5000);
+  }
+
+let simulate_checkout = fn (sku, total) => do:
+  let handled =
+    (fn () => checkout (sku, total))
+      |> @handle (Inventory, inventory)
+      |> @handle (Payment, payment)
+  use result <- handled
+  return result
+
+return {
+  .confirmed = simulate_checkout ("notebook", 3600);
+  .missing = simulate_checkout ("camera", 4000);
+  .declined = simulate_checkout ("notebook", 9000);
+  }

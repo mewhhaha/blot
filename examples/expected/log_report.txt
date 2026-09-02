@@ -1,0 +1,1 @@
+{ .line_count = 5; .errors = ["ERROR token=[redacted] timeout", "ERROR disk full"]; .warning_count = 1; .shut_down = #True; }

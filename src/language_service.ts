@@ -23,6 +23,7 @@ import { hoverAt } from "./tooling/hover.ts";
 import { lineAtOffset, sourceLineStarts } from "./tooling/formatter.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./tooling/lint.ts";
 import type { LintDiagnostic } from "./tooling/lint.ts";
+import { sourceCodeSpan } from "./tooling/lint/syntax.ts";
 import { validateLintDiagnostics } from "./tooling/lint.ts";
 
 export interface Position {
@@ -222,9 +223,11 @@ export class LanguageService {
     try {
       parsed = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      const diagnostic = diagnosticFromError(path, error);
-      if (diagnostic !== null) {
-        return [languageDiagnostic(document.source, diagnostic, 1)];
+      const rejected = diagnosticsFromError(path, error);
+      if (rejected !== null) {
+        return rejected.map((diagnostic) =>
+          languageDiagnostic(document.source, diagnostic, 1)
+        );
       }
       throw error;
     }
@@ -248,9 +251,11 @@ export class LanguageService {
         }, 1));
       }
     } catch (error) {
-      const semantic = diagnosticFromError(path, error);
-      if (semantic !== null) {
-        diagnostics.push(languageDiagnostic(document.source, semantic, 1));
+      const rejected = diagnosticsFromError(path, error);
+      if (rejected !== null) {
+        for (const diagnostic of rejected) {
+          diagnostics.push(languageDiagnostic(document.source, diagnostic, 1));
+        }
       } else {
         throw error;
       }
@@ -270,15 +275,47 @@ export class LanguageService {
     range: Range,
   ): Promise<readonly CodeAction[]> {
     const document = this.#requiredDocument(uri);
+    const requestedStart = offsetAtPosition(document.source, range.start);
+    const requestedEnd = offsetAtPosition(document.source, range.end);
     let parsed: CompilerSyntaxSnapshot;
     try {
       parsed = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      const rejected = diagnosticsFromError(editorPath(uri), error);
+      if (rejected !== null) {
+        const actions: CodeAction[] = [];
+        for (const diagnostic of rejected) {
+          if (diagnostic.code !== "BLOT_UNREACHABLE_STATEMENT") continue;
+          if (
+            requestedEnd < diagnostic.span.start ||
+            requestedStart > diagnostic.span.end
+          ) continue;
+          const editSpan = unreachableStatementRemovalSpan(
+            document.source,
+            diagnostic.span,
+          );
+          const replacement = document.source.slice(0, editSpan.start) +
+            document.source.slice(editSpan.end);
+          if (!(await parse(replacement)).ok) continue;
+          actions.push({
+            title: "Remove unreachable statement",
+            kind: "quickfix",
+            diagnostics: [languageDiagnostic(document.source, diagnostic, 1)],
+            edit: {
+              documentChanges: [{
+                textDocument: { uri, version: document.version },
+                edits: [{
+                  range: rangeOf(document.source, editSpan),
+                  newText: "",
+                }],
+              }],
+            },
+          });
+        }
+        return deduplicateCodeActions(actions);
+      }
       throw error;
     }
-    const requestedStart = offsetAtPosition(document.source, range.start);
-    const requestedEnd = offsetAtPosition(document.source, range.end);
     const actions: CodeAction[] = [];
     for (
       const diagnostic of await this.#validatedLints(uri, parsed)
@@ -387,7 +424,7 @@ export class LanguageService {
         },
       });
     }
-    return actions;
+    return deduplicateCodeActions(actions);
   }
 
   async definition(
@@ -399,7 +436,7 @@ export class LanguageService {
     try {
       parsed = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      if (diagnosticFromError(editorPath(uri), error) !== null) return null;
+      if (diagnosticsFromError(editorPath(uri), error) !== null) return null;
       throw error;
     }
     const offset = offsetAtPosition(document.source, position);
@@ -433,7 +470,7 @@ export class LanguageService {
     try {
       parsed = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      if (diagnosticsFromError(editorPath(uri), error) !== null) return [];
       throw error;
     }
     const offset = offsetAtPosition(document.source, position);
@@ -467,7 +504,7 @@ export class LanguageService {
     try {
       parsed = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      if (diagnosticFromError(editorPath(uri), error) !== null) return null;
+      if (diagnosticsFromError(editorPath(uri), error) !== null) return null;
       throw error;
     }
     const checked = await this.#typedRevision(uri, document);
@@ -708,7 +745,7 @@ export class LanguageService {
     try {
       snapshot = await this.#syntaxRevision(uri, document);
     } catch (error) {
-      if (diagnosticFromError(editorPath(uri), error) !== null) return [];
+      if (diagnosticsFromError(editorPath(uri), error) !== null) return [];
       throw error;
     }
     const formatted = await formatSource(document.source, {
@@ -1319,26 +1356,93 @@ function comparePosition(left: Position, right: Position): number {
   return left.character - right.character;
 }
 
-function diagnosticFromError(path: string, error: unknown): Diagnostic | null {
+function unreachableStatementRemovalSpan(source: string, span: Span): Span {
+  const code = sourceCodeSpan(source, span);
+  const lineStart = source.lastIndexOf("\n", code.start - 1) + 1;
+  let start = code.start;
+  if (source.slice(lineStart, code.start).trim().length === 0) {
+    start = lineStart;
+  }
+
+  let end = code.end;
+  const lineEnd = source.indexOf("\n", code.end);
+  const contentEnd = lineEnd < 0 ? source.length : lineEnd;
+  if (/^[ \t\r]*$/.test(source.slice(code.end, contentEnd))) {
+    end = contentEnd;
+    if (lineEnd >= 0) end += 1;
+  }
+  return { start, end };
+}
+
+export function deduplicateCodeActions(
+  actions: readonly CodeAction[],
+): readonly CodeAction[] {
+  const unique: CodeAction[] = [];
+  const indices = new Map<string, number>();
+  for (const action of actions) {
+    const key = JSON.stringify(action.edit.documentChanges.map((change) => ({
+      uri: change.textDocument.uri,
+      version: change.textDocument.version,
+      edits: change.edits.map((edit) => ({
+        range: edit.range,
+        newText: edit.newText,
+      })),
+    })));
+    const existingIndex = indices.get(key);
+    if (existingIndex === undefined) {
+      indices.set(key, unique.length);
+      unique.push(action);
+      continue;
+    }
+
+    const existing = unique[existingIndex];
+    if (existing === undefined) {
+      throw new Error(`code action index ${existingIndex} is missing`);
+    }
+    const diagnostics = [...existing.diagnostics];
+    const diagnosticKeys = new Set(diagnostics.map(languageDiagnosticKey));
+    for (const diagnostic of action.diagnostics) {
+      const diagnosticKey = languageDiagnosticKey(diagnostic);
+      if (diagnosticKeys.has(diagnosticKey)) continue;
+      diagnosticKeys.add(diagnosticKey);
+      diagnostics.push(diagnostic);
+    }
+    unique[existingIndex] = { ...existing, diagnostics };
+  }
+  return unique;
+}
+
+function languageDiagnosticKey(diagnostic: LanguageDiagnostic): string {
+  return JSON.stringify([
+    diagnostic.code,
+    diagnostic.range,
+    diagnostic.message,
+    diagnostic.severity,
+  ]);
+}
+
+function diagnosticsFromError(
+  path: string,
+  error: unknown,
+): readonly Diagnostic[] | null {
   if (error instanceof LoadError) {
-    const diagnostic = error.diagnostics[0];
-    if (diagnostic === undefined) return null;
-    if (resolve(error.path) === resolve(path)) return diagnostic;
-    return {
+    if (error.diagnostics.length === 0) return null;
+    if (resolve(error.path) === resolve(path)) return error.diagnostics;
+    return error.diagnostics.map((diagnostic) => ({
       ...diagnostic,
       message: `${error.path}: ${diagnostic.message}`,
       span: { start: 0, end: 0 },
-    };
+    }));
   }
   if (!(error instanceof BlotError)) return null;
   if (error.origin !== null && resolve(error.origin.path) !== resolve(path)) {
-    return {
+    return [{
       ...error.diagnostic,
       message: `${error.origin.path}: ${error.diagnostic.message}`,
       span: { start: 0, end: 0 },
-    };
+    }];
   }
-  return error.diagnostic;
+  return [error.diagnostic];
 }
 
 function languageDiagnostic(

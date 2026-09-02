@@ -1,6 +1,6 @@
 import type { Decl, Expr } from "../../../syntax/ast.ts";
 import { patternNames } from "../../../syntax/ast.ts";
-import { declarationSequenceReads } from "../syntax.ts";
+import { declarationSequenceReads, sourceEditSpan } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
 export const unusedBinding: LintRule = {
@@ -39,12 +39,13 @@ function reportUnused(
         new Set(names),
       )
     ) continue;
+    const editSpan = sourceEditSpan(context.source, declaration.span);
     context.report({
       message: names.length === 1
         ? `\`${sourceName(names[0])}\` is never read; remove its pure binding.`
         : "None of the names introduced by this pure binding are read; remove it.",
       span: declaration.span,
-      fix: context.fix(declaration.span, "Remove unused binding", ""),
+      fix: context.fix(editSpan, "Remove unused binding", ""),
     });
   }
 }

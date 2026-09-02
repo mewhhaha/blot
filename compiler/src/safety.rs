@@ -39,7 +39,7 @@ struct Constraint {
     bound: BigInt,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Node {
     Zero,
     Variable(Identity),
@@ -1157,47 +1157,54 @@ fn term_at_least(left: &Term, right: &Term, constraints: &[Constraint]) -> bool 
 }
 
 fn entails(required: &[Constraint], constraints: &[Constraint]) -> bool {
-    let distances = shortest_paths(constraints);
-    required.iter().all(|required| {
-        distances
-            .get(&required.right)
-            .and_then(|from| from.get(&required.left))
+    let node_count = constraints
+        .iter()
+        .flat_map(|constraint| [constraint.left, constraint.right])
+        .chain(std::iter::once(Node::Zero))
+        .collect::<HashSet<_>>()
+        .len();
+    let mut distances = HashMap::<Node, HashMap<Node, BigInt>>::new();
+    for required in required {
+        let from = distances
+            .entry(required.right)
+            .or_insert_with(|| shortest_paths_from(required.right, constraints, node_count));
+        if !from
+            .get(&required.left)
             .is_some_and(|distance| distance <= &required.bound)
-    })
+        {
+            return false;
+        }
+    }
+    true
 }
 
-fn shortest_paths(constraints: &[Constraint]) -> HashMap<Node, HashMap<Node, BigInt>> {
-    let mut nodes = HashSet::from([Node::Zero]);
-    for constraint in constraints {
-        nodes.insert(constraint.left);
-        nodes.insert(constraint.right);
-    }
-    let mut result = HashMap::new();
-    for source in &nodes {
-        let mut distances = HashMap::from([(*source, BigInt::from(0))]);
-        for _ in 0..nodes.len() {
-            let mut changed = false;
-            for constraint in constraints {
-                let Some(right) = distances.get(&constraint.right).cloned() else {
-                    continue;
-                };
-                let candidate = right + &constraint.bound;
-                if distances
-                    .get(&constraint.left)
-                    .is_some_and(|current| current <= &candidate)
-                {
-                    continue;
-                }
-                distances.insert(constraint.left, candidate);
-                changed = true;
+fn shortest_paths_from(
+    source: Node,
+    constraints: &[Constraint],
+    node_count: usize,
+) -> HashMap<Node, BigInt> {
+    let mut distances = HashMap::from([(source, BigInt::from(0))]);
+    for _ in 0..node_count {
+        let mut changed = false;
+        for constraint in constraints {
+            let Some(right) = distances.get(&constraint.right).cloned() else {
+                continue;
+            };
+            let candidate = right + &constraint.bound;
+            if distances
+                .get(&constraint.left)
+                .is_some_and(|current| current <= &candidate)
+            {
+                continue;
             }
-            if !changed {
-                break;
-            }
+            distances.insert(constraint.left, candidate);
+            changed = true;
         }
-        result.insert(*source, distances);
+        if !changed {
+            break;
+        }
     }
-    result
+    distances
 }
 
 fn constraint_term_count(constraints: &[Constraint]) -> usize {
@@ -1327,32 +1334,64 @@ fn forget_identity(constraints: &mut Vec<Constraint>, identity: Identity) {
     {
         return;
     }
-    let distances = shortest_paths(constraints);
-    let nodes: Vec<Node> = distances
-        .keys()
-        .copied()
-        .filter(|node| *node != dead)
-        .collect();
-    let mut projected = Vec::new();
-    for right in &nodes {
-        let Some(from) = distances.get(right) else {
+    let mut into_dead = BTreeMap::<Node, BigInt>::new();
+    let mut from_dead = BTreeMap::<Node, BigInt>::new();
+    let mut projected = BTreeMap::<(Node, Node), BigInt>::new();
+    for constraint in constraints.iter() {
+        if constraint.left == dead && constraint.right != dead {
+            into_dead
+                .entry(constraint.right)
+                .and_modify(|bound| {
+                    if constraint.bound < *bound {
+                        *bound = constraint.bound.clone();
+                    }
+                })
+                .or_insert_with(|| constraint.bound.clone());
             continue;
-        };
-        for left in &nodes {
-            if left == right {
+        }
+        if constraint.right == dead && constraint.left != dead {
+            from_dead
+                .entry(constraint.left)
+                .and_modify(|bound| {
+                    if constraint.bound < *bound {
+                        *bound = constraint.bound.clone();
+                    }
+                })
+                .or_insert_with(|| constraint.bound.clone());
+            continue;
+        }
+        if constraint.left == dead || constraint.right == dead {
+            continue;
+        }
+        projected
+            .entry((constraint.left, constraint.right))
+            .and_modify(|bound| {
+                if constraint.bound < *bound {
+                    *bound = constraint.bound.clone();
+                }
+            })
+            .or_insert_with(|| constraint.bound.clone());
+    }
+    for (right, into_bound) in into_dead {
+        for (left, from_bound) in &from_dead {
+            if *left == right {
                 continue;
             }
-            let Some(bound) = from.get(left) else {
-                continue;
-            };
-            projected.push(Constraint {
-                left: *left,
-                right: *right,
-                bound: bound.clone(),
-            });
+            let bound = &into_bound + from_bound;
+            projected
+                .entry((*left, right))
+                .and_modify(|current| {
+                    if bound < *current {
+                        *current = bound.clone();
+                    }
+                })
+                .or_insert(bound);
         }
     }
-    *constraints = projected;
+    *constraints = projected
+        .into_iter()
+        .map(|((left, right), bound)| Constraint { left, right, bound })
+        .collect();
 }
 
 fn unproven(span: Span) -> Diagnostic {
@@ -1395,5 +1434,40 @@ mod tests {
         assert!(constraints.iter().all(|constraint| {
             constraint.left != Node::Variable(2) && constraint.right != Node::Variable(2)
         }));
+    }
+
+    #[test]
+    fn forgetting_an_identity_does_not_close_unrelated_paths() {
+        let mut constraints = (10..110)
+            .map(|identity| Constraint {
+                left: Node::Variable(identity),
+                right: Node::Variable(identity + 1),
+                bound: BigInt::from(1),
+            })
+            .collect::<Vec<_>>();
+        constraints.extend([
+            Constraint {
+                left: Node::Variable(1),
+                right: Node::Variable(2),
+                bound: BigInt::from(3),
+            },
+            Constraint {
+                left: Node::Variable(2),
+                right: Node::Variable(3),
+                bound: BigInt::from(4),
+            },
+        ]);
+
+        forget_identity(&mut constraints, 2);
+
+        assert_eq!(constraints.len(), 101);
+        assert!(entails(
+            &[Constraint {
+                left: Node::Variable(1),
+                right: Node::Variable(3),
+                bound: BigInt::from(7),
+            }],
+            &constraints,
+        ));
     }
 }

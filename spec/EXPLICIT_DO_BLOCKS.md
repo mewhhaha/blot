@@ -61,3 +61,8 @@ is mechanical: insert `do:` after the expression introducer and retain the
 existing indentation. The executable corpus and embedded source fixtures must be
 migrated in the same change so no compatibility parser remains hidden behind
 formatting or lowering.
+
+Within a block or nested suite, the frontend rejects statements after a
+structurally guaranteed `return` or `break`. A conditional guarantees departure
+only when it has an `else` and every branch departs; loops and conditionals
+without `else` may continue.

@@ -1,0 +1,1 @@
+{ .skus = ["keyboard", "monitor", "usb-c"]; .units = 52; .cost = 283000; }

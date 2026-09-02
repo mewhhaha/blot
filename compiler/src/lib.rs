@@ -91,8 +91,10 @@ pub unsafe extern "C" fn lower_source(source_pointer: *const i32, source_unit_co
     let source_words =
         unsafe { std::slice::from_raw_parts(source_pointer, source_unit_count as usize) };
     let lowered = decode_source_words(source_words).map(|source| {
-        match source::lower_incremental(&source, None) {
-            Ok(lowered) => serde_json::json!({ "ok": true, "module": lowered.module }),
+        match source::lower_incremental(&source, None, None) {
+            Ok(lowered) => {
+                serde_json::json!({ "ok": true, "module": lowered.module.as_ref() })
+            }
             Err(source::SourceError::Diagnostics(diagnostics)) => serde_json::json!({
                 "ok": false,
                 "diagnostics": diagnostics.iter().map(diagnostic_json).collect::<Vec<_>>(),
@@ -235,6 +237,69 @@ pub extern "C" fn analyze_compiler_session_module_v2(
         })
     });
     write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn share_compiler_session_module_v2(
+    source_handle: u32,
+    target_handle: u32,
+    source_module_id: u32,
+    target_module_id: u32,
+) -> u32 {
+    let shared = session_index(source_handle).and_then(|source_index| {
+        let target_index = session_index(target_handle)?;
+        if source_index == target_index {
+            return Err("compiler module sharing requires distinct sessions".to_owned());
+        }
+        SESSIONS.with(|sessions| {
+            let mut sessions = sessions.borrow_mut();
+            let (source_path, module) = {
+                let source = sessions
+                    .get(source_index)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| format!("unknown compiler session {source_handle}"))?;
+                let path = source.registered_path(source_module_id)?.to_owned();
+                let module = source.resident_module(&path)?;
+                (path, module)
+            };
+            let target = sessions
+                .get_mut(target_index)
+                .and_then(Option::as_mut)
+                .ok_or_else(|| format!("unknown compiler session {target_handle}"))?;
+            let target_path = target.registered_path(target_module_id)?.to_owned();
+            if target_path != source_path {
+                return Err(format!(
+                    "compiler module sharing path mismatch: source {source_path}, target {target_path}"
+                ));
+            }
+            target.install_shared_module(target_path, module)
+        })
+    });
+    let result = match shared {
+        Ok(module) => serde_json::json!({ "ok": true, "module": module }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("shared module result serialization failed"))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn compiler_session_syntax_snapshot_v2(handle: u32, module_id: u32) -> u32 {
+    let snapshot = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            let path = session.registered_path(module_id)?;
+            session.syntax_snapshot(path)
+        })
+    });
+    let result = match snapshot {
+        Ok(snapshot) => serde_json::json!({ "ok": true, "syntaxSnapshot": snapshot }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    };
+    write_result(serde_json::to_vec(&result).expect("syntax snapshot serialization failed"))
 }
 
 #[unsafe(no_mangle)]

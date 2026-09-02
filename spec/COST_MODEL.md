@@ -130,15 +130,26 @@ and indexed traversal is `O(n)`. Growth at the heap cursor extends in place;
 otherwise it moves and copies the initialized prefix only when capacity is
 exhausted. A persistent append still allocates and copies its `O(n)` prefix
 because an earlier Store version remains observable, so repeated persistent
-growth remains `O(n^2)`. The lowering audit follows direct calls transitively
-from compiler-generated loop functions; moving a persistent append into a source
-helper does not remove it from this check.
+growth remains `O(n^2)`. Its fresh result may be reused by the next consuming
+iteration; a loop seeded from shared or pooled storage therefore pays at most
+one persistent copy before switching to amortized owned growth. The lowering
+audit follows direct calls transitively from compiler-generated loop functions;
+moving a persistent append into a source helper does not remove it from this
+check.
 
-A closed scalar `store.literal` contributes `O(n)` static bytes and no runtime
-construction steps. A non-scalar literal performs one `O(n)` allocation and `n`
-writes. Equal pooled scalar literals do not increase static bytes after the
-first occurrence. Pooling occurs before Runtime-HIR serialization, so the
-literal's scalar producer operations are absent from every backend artifact.
+A closed scalar, text, product, sum, or sealed `store.literal` contributes
+`O(n)` static bytes and no runtime construction steps. A residual literal
+performs one `O(n)` allocation and `n` writes. Equal pooled closed literals do
+not increase static bytes after the first occurrence. Pooling occurs before
+Runtime-HIR serialization, so the literal's producer operations are absent from
+every backend artifact.
+
+`@text.join` scans `k` slices once to compute the byte length, allocates once,
+and copies `b` bytes in `O(k + b)`. `Text.replace` builds those slices with
+geometric Scratch growth, so it does not copy a growing text prefix. Map lookup,
+put, and remove share one borrowed linear index scan; put performs at most one
+owned Store write or append after the scan, and remove performs one
+decomposition after the scan.
 
 ## 3. Size parameters
 
@@ -166,6 +177,12 @@ once per transaction, while failed union choices add the work of the candidates
 actually explored. Runtime validation, Core construction, and emission should be
 linear in their artifact sizes.
 
+The live and constraint-arena type views store each finite record, update, and
+variant row as one source-ordered vector plus one shared label-to-position
+index. Constructing a row is `O(L)` expected work, cloning it is `O(1)`, and one
+field or constructor lookup is expected `O(1)`; checking `L` case arms against
+an `L`-constructor variant must not scan the complete row for every arm.
+
 The type-mechanics scaling experiment varies one source dimension `N` at a time.
 An ordinary declaration chain, one wide structural requirement, `N` independent
 polymorphic instantiations, `N` fixed-size predicate refinements, a chain of `N`
@@ -189,7 +206,9 @@ reuses a checked revision reports no work record. The scaling gate counts
 semantic decisions—constraints, boundary materializations, and capture
 selection—separately from type-graph work. The wrapper and measure lanes also
 gate the sum of unique type nodes, recursive intern attempts, and freshening
-visits. Other recursive graph visits remain visible because a shared
+visits. The dense multi-subject lane additionally gates settle plus union
+visits, so a nearly linear decision count cannot hide a quadratic recursive
+solver walk. Other recursive graph visits remain visible because a shared
 constant-time visit may still reveal a representation target even when it no
 longer dominates wall time. Timing and all counter classes must be reported; one
 must not be relabeled as another.
@@ -207,9 +226,28 @@ without adding information. Stack-disciplined push and pop keeps the same cycle
 predicate with `O(D)` path storage. A flat stack is preferred while measured
 depth keeps its membership scan cheaper than hashing every island call.
 
+Incremental compact-node reuse computes one maximal unchanged source prefix and
+suffix, then performs expected `O(N)` rule/span index work for `N` compact
+nodes. It does not rescan every nested node's complete source span. A
+syntax-equivalent token edit can skip Baba island execution; lowered-AST reuse
+additionally requires unchanged semantic token spellings and positions.
+
 Compile-time evaluation can dominate these bounds because it executes source
-programs. Its budget and measured reductions are reported separately from
-structural compiler traversal.
+programs. Within one staging execution, closed monomorphic empty-effect calls
+with closed first-order arguments and results use a bounded result cache keyed
+by closure-creation identity and structural argument value. A textbook
+overlapping recurrence then pays for each distinct argument once during staging,
+while its residual runtime function retains the written algorithm. Its budget
+and measured reductions are reported separately from structural compiler
+traversal.
+
+Compile-time union values retain one source-ordered member vector behind shared
+immutable ownership and a fingerprint-to-member index. Extending an unaliased
+union moves that storage and performs expected `O(1)` membership work for
+fingerprintable closed literals, constructors, ranges, and nominal values.
+Fingerprints select candidates only; exact semantic equality resolves every
+collision. An aliased union copies on extension so source immutability remains
+observable, and values without a sound fingerprint use exact linear fallback.
 
 A resident deterministic nullary module result is evaluated once per semantic
 revision when its closed interface exposes no generative effect identity.
@@ -226,6 +264,14 @@ runtime value, a fixed-size semantic-revision identity replaces graph
 serialization. Complete first-order boundaries can still stop propagation after
 a private edit; graph-private boundaries conservatively recheck their importers
 instead of paying for an incomplete or recursively sized fingerprint.
+
+After invalidation, development splitting still traces the complete reachable
+call graph and reload edges. It materializes, serializes, ABI-closes, and emits
+only units whose retained source membership intersects the checked impact cone
+or whose exact function/link partition changed. For `U` configured units, `E`
+reachable call edges, and changed unit artifacts of total size `A_c`, an edit
+pays `O(E + U)` classification plus `O(A_c)` unit preparation rather than
+serializing every unit artifact.
 
 The snapshot's immutable flat-type arena is validated in place and moved into
 the installed interface. A snapshot revision uses its manifest-validated digest
@@ -247,6 +293,12 @@ descendant in every ancestor and on diamonds it repeats shared subgraphs per
 path. That cost carries no semantic information and is therefore duplicate
 compiler work.
 
+After the first synchronization of an immutable loaded node, its local payload
+and direct-configuration digests are resident facts. A warm graph revision pays
+`O(A_m + d_m)` only for replaced or rebound nodes and `O(1)` digest lookup for
+each retained node. Rehashing every retained source byte would make an isolated
+edit scale with total workspace size before semantic invalidation begins.
+
 Published semantic boundaries follow the same rule inside a resident session.
 The producing module compares its complete canonical bytes, but a parent stores
 only a collision-free fixed-size session identity for each direct dependency. No
@@ -260,11 +312,14 @@ and report cold derivation separately from repeated lookup; a synthetic
 fact-graph replay is evidence about solver scaling, not end-to-end compiler
 speed.
 
-Projecting one dead refinement identity from `V` graph nodes and `E` difference
-edges costs `O(VE)` with the current repeated-relaxation closure and may emit
-`O(V^2)` canonical remaining bounds. It is therefore performed only when a
-rebinding removes the last visible alias, and benchmarks report both retained
-fact count and wall time.
+A difference entailment with `S` distinct required source nodes performs `S`
+single-source relaxations, each bounded by `O(VE)`, rather than an all-pairs
+closure. Projecting one dead refinement identity deduplicates its incident
+edges, retains nonincident facts, and composes its `P` predecessor bounds with
+its `Q` successor bounds in `O(E + P Q)` work. It emits no transitive paths
+among unrelated live nodes. Projection occurs only when a rebinding removes the
+last visible alias, and benchmarks report both retained fact count and wall
+time.
 
 For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
 the fallback dispatcher emits `O(H)` branch targets and executes one indexed
@@ -272,22 +327,27 @@ the fallback dispatcher emits `O(H)` branch targets and executes one indexed
 block-identity comparisons. A non-reconvergent acyclic function emits its direct
 structured path with no dispatcher, and a reducible entry cycle executes one
 structured path per iteration. Unfolding shared acyclic joins can increase
-emitted `Q`, so eligibility includes a fixed expansion budget and otherwise
-preserves the dispatcher. HIR removal of known boolean and sum round-trips
-reduces both the expansion and the executed administrative steps without
-changing source work. For closed sums this removal applies to the canonical
-integer switch over the constructor tag, not a reconstructed chain of equality
-conditionals.
+emitted `Q`, so eligibility budgets duplicate visits while unique linear blocks
+do not consume that budget; excess duplication preserves the dispatcher. HIR
+removal of known boolean and sum round-trips reduces both the expansion and the
+executed administrative steps without changing source work. For closed sums this
+removal applies to the canonical integer switch over the constructor tag, not a
+reconstructed chain of equality conditionals.
 
-Runtime-HIR normalization scans operations and table references to a fixed
-point. Exact type, signature, and function-body interning adds work proportional
-to their closed structural size plus call-graph partition refinement and
-publishes only compacted identifiers. A function body is alpha-normalized and
-serialized once. Ordered call positions form deterministic transition labels;
-inverse-edge partition splitting queues the smaller new class, bounding
-refinement by the call edges that can distinguish a class rather than by
-body-size times recursive color rounds. WebAssembly local allocation performs
-block liveness, constructs one conservative interval per SSA definition, and
+Runtime-HIR normalization propagates operation uses, aliases, block liveness,
+and affected control-flow folds through dependency worklists. Exact type,
+signature, and function-body interning adds work proportional to their closed
+structural size plus call-graph partition refinement and publishes only
+compacted identifiers. A function body is alpha-normalized and serialized once.
+Ordered call positions form deterministic transition labels; inverse-edge
+partition splitting queues the smaller new class, bounding refinement by the
+call edges that can distinguish a class rather than by body-size times recursive
+color rounds. Recursive runtime types use the same ordered inverse-edge
+partition judgment. Type compaction is followed by one fixed-point inverse
+representation fold and dead-producer sweep; this prevents equivalent recursive
+types from leaving allocation and load round-trips in the published module.
+WebAssembly local allocation performs reverse-CFG worklist
+liveness, constructs one conservative interval per SSA definition, and
 linear-scans intervals within equal physical representations. It stores
 `O(V + H)` range and queue state beyond the block-liveness facts rather than an
 explicit pairwise interference graph; the sort and active-interval queue cost

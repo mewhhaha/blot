@@ -1,0 +1,78 @@
+open import "blot:prelude"
+
+const Graph = import "./graph.blot"
+const SortResult = { .order = [Int]; .acyclic = Bool; }
+
+const sort :: [[Int]] -> SortResult
+const sort = fn &graph => do:
+  let vertex_count = Array.length (&graph)
+  let incoming :: [Int]
+  let incoming = []
+  for Iter.range (0, vertex_count):
+    incoming := @array.push incoming 0
+
+  for vertex in Iter.range (0, vertex_count):
+    let updated = incoming
+    let neighbors = Graph.outgoing ((&graph), (&vertex))
+    for neighbor_index in Iter.range (0, Array.length (&neighbors)):
+      let neighbor = Array.expect_get ((&neighbors), neighbor_index)
+      let count = Array.expect_get ((&updated), neighbor)
+      updated := Array.expect_set (updated, neighbor, count + 1)
+
+    incoming := updated
+
+  let rec collect_ready :: (Int, [Int]) -> [Int]
+  let rec collect_ready = fn (vertex, ready) => do:
+    if vertex >= vertex_count:
+      return ready
+    else:
+      if Array.expect_get ((&incoming), vertex) == 0:
+        return collect_ready (vertex + 1, @array.push ready vertex)
+      else:
+        return collect_ready (vertex + 1, !ready)
+
+  let ready = collect_ready (0, [])
+
+  let rec visit :: ([Int], Int, [Int], [Int]) -> [Int]
+  let rec visit = fn (ready, cursor, incoming, order) => case Array.get (
+    (&ready),
+    cursor
+  ) of
+    #None => order
+    #Some vertex => do:
+      let vertex = vertex + 0
+      let neighbors = Graph.outgoing ((&graph), (&vertex))
+      let rec decrease_incoming ::
+        (Int, [Int], [Int]) -> ([Int], [Int])
+      let rec decrease_incoming = fn (index, incoming, ready) => case Array.get (
+        (&neighbors),
+        index
+      ) of
+        #None => (incoming, ready)
+        #Some neighbor => do:
+          let count = Array.expect_get ((&incoming), neighbor) - 1
+          let incoming = Array.expect_set (incoming, neighbor, count)
+          if count == 0:
+            return decrease_incoming (
+              index + 1,
+              incoming,
+              @array.push ready neighbor
+            )
+          else:
+            return decrease_incoming (index + 1, incoming, !ready)
+
+      let (incoming, ready) = decrease_incoming (0, incoming, ready)
+      return visit (
+        ready,
+        cursor + 1,
+        incoming,
+        @array.push order vertex
+      )
+
+  let order = visit (ready, 0, incoming, [])
+  return {
+    .order = order;
+    .acyclic = Array.length (&order) == vertex_count;
+  }
+
+return sort

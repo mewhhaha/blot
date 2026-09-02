@@ -12,6 +12,70 @@ export function trailingWhitespace(source: string, span: Span): string {
   return match[0];
 }
 
+export function lineComments(source: string): readonly string[] {
+  return inspectSource(source).comments.map((comment) => comment.text);
+}
+
+export function sourceCodeSpan(source: string, span: Span): Span {
+  const inspected = inspectSource(source.slice(span.start, span.end));
+  return { start: span.start, end: span.start + inspected.codeEnd };
+}
+
+export function sourceEditSpan(source: string, span: Span): Span {
+  const inspected = inspectSource(source.slice(span.start, span.end));
+  const trailingComment = inspected.comments.find((comment) =>
+    comment.start >= inspected.codeEnd
+  );
+  let end = span.end;
+  if (trailingComment !== undefined) end = span.start + trailingComment.start;
+  return { start: span.start, end };
+}
+
+function inspectSource(
+  source: string,
+): {
+  readonly comments: readonly {
+    readonly start: number;
+    readonly text: string;
+  }[];
+  readonly codeEnd: number;
+} {
+  const comments: { readonly start: number; readonly text: string }[] = [];
+  let codeEnd = 0;
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '"') {
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        const textCharacter = source[index];
+        index += 1;
+        if (textCharacter === '"') break;
+      }
+      codeEnd = index;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "/") {
+      const start = index;
+      index += 2;
+      while (
+        index < source.length && source[index] !== "\n" &&
+        source[index] !== "\r"
+      ) index += 1;
+      comments.push({ start, text: source.slice(start, index) });
+      continue;
+    }
+    index += 1;
+    if (character === undefined || /\s/.test(character)) continue;
+    codeEnd = index;
+  }
+  return { comments, codeEnd };
+}
+
 export function fieldRule(rule: Rule, name: string): Rule | null {
   const value = field(rule, name);
   if (value === null || !isRule(value)) return null;

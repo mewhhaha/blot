@@ -1,0 +1,1 @@
+{ .dag = { .order = ["shop", "design", "cook", "code", "eat", "test", "deploy"]; .acyclic = #True; }; .cycle = { .order = ["shop", "cook", "eat"]; .acyclic = #False; }; }

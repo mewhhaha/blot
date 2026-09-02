@@ -1,0 +1,24 @@
+open import "blot:prelude"
+
+const shortest_paths = import "./lib/dijkstra.blot"
+const infinity = 1000000
+
+// Each tuple is `(destination, weight)`.
+let graph =
+  [
+    [(1, 7), (2, 9), (5, 14)],
+    [(2, 10), (3, 15)],
+    [(3, 11), (5, 2)],
+    [(4, 6)],
+    [],
+    [(4, 9)]
+  ]
+let { .values; .known; } = shortest_paths ((&graph), 0)
+let output = []
+for vertex in Iter.range (0, Array.length (&values)):
+  let value = case Array.expect_get ((&known), vertex) of
+    #True => Array.expect_get ((&values), vertex) + 0
+    #False => infinity
+  output := @array.push output value
+
+return output

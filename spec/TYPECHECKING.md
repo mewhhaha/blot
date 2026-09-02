@@ -1381,8 +1381,11 @@ Closed-union deduplication uses a canonical structural key with scoped
 alpha-equivalence. Types containing unresolved variables retain the ordinary
 structural comparison. Pretty printing is not an identity operation and must not
 be used to construct a union, constraint, cache, or visited key. Finite record,
-update, and variant comparisons build label indexes for the duration of the
-operation while preserving the authoritative source field order. Evaluated
+update, and variant rows preserve their authoritative source order beside one
+shared immutable label-to-position index. Cloning a row shares both structures;
+field and constructor lookup does not scan the ordered entries once per arm.
+Constraint-arena rows retain the same ordered/indexed shape, so cloning a solver
+work item shares the index instead of rebuilding it for each relation. Evaluated
 closure inference inspects only the closure body's free names and bridges the
 matching captured values. Scanning every value in every captured frame would
 make an unused environment part of inference cost without changing the judgment.

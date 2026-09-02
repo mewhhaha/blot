@@ -1,0 +1,76 @@
+// Apply a bounded retry policy to a sequence of request outcomes.
+//
+// The loop carries one immutable state record. `break` stops at the first final
+// outcome, and retry delays remain visible as ordinary values.
+
+open import "blot:prelude"
+
+const Outcome = #TimedOut | #Rejected Text | #Succeeded Int
+const RetryDetails = { .status = Int; .message = Text; }
+const RetryResult = #Pending | #Failed RetryDetails | #Succeeded RetryDetails
+
+const RetryState =
+  {
+    .attempts = Int;
+    .result = RetryResult;
+  }
+
+let advance :: (RetryState, Outcome) -> RetryState
+let advance = fn (state, outcome) => case outcome of
+  #Succeeded status => {
+    .attempts = state.attempts + 1;
+    .result = #Succeeded {
+      .status = status;
+      .message = "request completed";
+    };
+  }
+
+  #Rejected reason => {
+    .attempts = state.attempts + 1;
+    .result = #Failed { .status = 0; .message = reason; };
+  }
+
+  #TimedOut => do:
+    let attempts = state.attempts + 1
+    if attempts >= 4:
+      return {
+        .attempts = attempts;
+        .result = #Failed {
+          .status = 0;
+          .message = "retry limit reached";
+        };
+      }
+
+    return {
+      .attempts = attempts;
+      .result = #Pending;
+    }
+
+let outcomes :: [Outcome]
+let outcomes =
+  [#TimedOut, #TimedOut, #Succeeded 204, #Rejected "not reached"]
+
+let state :: RetryState
+let state =
+  {
+    .attempts = 0;
+    .result = #Pending;
+  }
+
+for outcome in Iter.items outcomes:
+  state := advance (state, outcome)
+  let finished = case state.result of
+    #Pending => False
+    _ => True
+  if finished:
+    break
+
+let delays = []
+for attempt in Iter.range (1, state.attempts):
+  delays := @array.push delays (attempt * 100)
+
+return {
+  .attempts = state.attempts;
+  .delays = delays;
+  .result = state.result;
+}

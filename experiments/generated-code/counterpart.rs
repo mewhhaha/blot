@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 #[link(wasm_import_module = "blot:host/Benchmark")]
 unsafe extern "C" {
     fn input() -> i64;
@@ -129,6 +132,40 @@ fn recursive_list(count: i64) -> i64 {
     recursive_list_total(&recursive_list_build(count))
 }
 
+fn star_dijkstra_total(count: i64) -> i64 {
+    if count <= 0 {
+        return 0;
+    }
+    let count = count as usize;
+    let mut graph = Vec::with_capacity(count);
+    for vertex in 0..count {
+        let mut edges = Vec::new();
+        if vertex == 0 {
+            for neighbor in 1..count {
+                edges.push((neighbor, (count - neighbor) as i64));
+            }
+        }
+        graph.push(edges);
+    }
+
+    let mut distances = vec![i64::MAX; count];
+    distances[0] = 0;
+    let mut queue = BinaryHeap::from([Reverse((0_i64, 0_usize))]);
+    while let Some(Reverse((distance, vertex))) = queue.pop() {
+        if distance != distances[vertex] {
+            continue;
+        }
+        for &(neighbor, weight) in &graph[vertex] {
+            let candidate = distance + weight;
+            if candidate < distances[neighbor] {
+                distances[neighbor] = candidate;
+                queue.push(Reverse((candidate, neighbor)));
+            }
+        }
+    }
+    distances.into_iter().sum()
+}
+
 fn benchmark_input() -> i64 {
     // SAFETY: the benchmark harness supplies the import with the declared
     // signature for the lifetime of the instance.
@@ -217,4 +254,10 @@ pub extern "C" fn run_arena_list(count: i64) -> i64 {
 #[unsafe(export_name = "blot:recursive_list")]
 pub extern "C" fn run_recursive_list(count: i64) -> i64 {
     recursive_list(count)
+}
+
+#[cfg(workload_star_dijkstra)]
+#[unsafe(export_name = "blot:star_total")]
+pub extern "C" fn run_star_dijkstra(count: i64) -> i64 {
+    star_dijkstra_total(count)
 }

@@ -6,11 +6,24 @@ use serde::Serialize;
 use crate::backend::CompiledModule;
 use crate::hir::{RuntimeExport, RuntimeFunction, RuntimeLink, RuntimeModule, RuntimeOperation};
 
+#[cfg(test)]
+thread_local! {
+    static MODULE_IDENTITY_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone)]
 pub(crate) struct DevelopmentUnit {
     pub(crate) name: String,
     pub(crate) root: String,
-    pub(crate) module: RuntimeModule,
+    pub(crate) module: Option<RuntimeModule>,
+    pub(crate) source_paths: HashSet<String>,
+    pub(crate) partition: DevelopmentUnitPartition,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DevelopmentUnitPartition {
+    function_ids: Vec<usize>,
+    boundary_links: Vec<(LinkDemand, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -155,11 +168,23 @@ impl DevelopmentUnitArtifact {
 pub(crate) struct CachedDevelopmentArtifact {
     identity: DevelopmentModuleIdentity,
     compiled: Rc<CompiledModule>,
+    source_paths: HashSet<String>,
+    partition: DevelopmentUnitPartition,
 }
 
 impl CachedDevelopmentArtifact {
-    pub(crate) fn new(identity: DevelopmentModuleIdentity, compiled: Rc<CompiledModule>) -> Self {
-        Self { identity, compiled }
+    pub(crate) fn new(
+        identity: DevelopmentModuleIdentity,
+        compiled: Rc<CompiledModule>,
+        source_paths: HashSet<String>,
+        partition: DevelopmentUnitPartition,
+    ) -> Self {
+        Self {
+            identity,
+            compiled,
+            source_paths,
+            partition,
+        }
     }
 
     pub(crate) fn reuse(
@@ -173,11 +198,31 @@ impl CachedDevelopmentArtifact {
             capabilities: self.compiled.capabilities.clone(),
         })
     }
+
+    pub(crate) fn reusable_partition(
+        &self,
+        changed_paths: &HashSet<String>,
+    ) -> Option<DevelopmentUnitPartition> {
+        changed_paths
+            .is_disjoint(&self.source_paths)
+            .then(|| self.partition.clone())
+    }
+
+    pub(crate) fn reuse_unaffected(&self) -> (DevelopmentUnitArtifact, String) {
+        (
+            DevelopmentUnitArtifact::Reused {
+                capabilities: self.compiled.capabilities.clone(),
+            },
+            self.identity.implementation_key.clone(),
+        )
+    }
 }
 
 pub(crate) fn development_module_identity(
     module: &RuntimeModule,
 ) -> Result<DevelopmentModuleIdentity, String> {
+    #[cfg(test)]
+    MODULE_IDENTITY_COMPUTATIONS.with(|computations| computations.set(computations.get() + 1));
     let canonical_runtime_module = serde_json::to_vec(module).map_err(|error| {
         format!(
             "{}: could not encode development implementation identity: {error}",
@@ -195,6 +240,16 @@ pub(crate) fn development_module_identity(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn reset_module_identity_computations() {
+    MODULE_IDENTITY_COMPUTATIONS.with(|computations| computations.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn module_identity_computations() -> usize {
+    MODULE_IDENTITY_COMPUTATIONS.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct LinkDemand {
     consumer: String,
@@ -206,6 +261,7 @@ pub(crate) fn split_runtime_module(
     module: &RuntimeModule,
     entry_unit: &str,
     configured_units: &BTreeMap<String, String>,
+    reusable_partitions: &HashMap<String, DevelopmentUnitPartition>,
 ) -> Result<DevelopmentProgram, String> {
     let entry_root = configured_units
         .get(entry_unit)
@@ -314,10 +370,28 @@ pub(crate) fn split_runtime_module(
         let function_ids = included
             .get(name)
             .ok_or_else(|| format!("development unit {name:?} lost its function set"))?;
-        units.push(DevelopmentUnit {
-            name: name.clone(),
-            root: root.clone(),
-            module: build_unit_module(
+        let source_paths = std::iter::once(root.clone())
+            .chain(function_ids.iter().map(|function_id| {
+                functions
+                    .get(function_id)
+                    .expect("included development function disappeared")
+                    .span
+                    .file
+                    .clone()
+            }))
+            .collect();
+        let partition = DevelopmentUnitPartition {
+            function_ids: function_ids.iter().copied().collect(),
+            boundary_links: demands
+                .iter()
+                .filter(|demand| demand.consumer == *name || demand.provider == *name)
+                .map(|demand| (demand.clone(), link_names[demand].clone()))
+                .collect(),
+        };
+        let unit_module = if reusable_partitions.get(name) == Some(&partition) {
+            None
+        } else {
+            Some(build_unit_module(
                 module,
                 name,
                 root,
@@ -326,7 +400,14 @@ pub(crate) fn split_runtime_module(
                 &unit_by_root,
                 &demands,
                 &link_names,
-            )?,
+            )?)
+        };
+        units.push(DevelopmentUnit {
+            name: name.clone(),
+            root: root.clone(),
+            module: unit_module,
+            source_paths,
+            partition,
         });
     }
     let edges = demands
@@ -935,7 +1016,12 @@ mod tests {
             capabilities: vec!["blot:host/Test".to_owned()],
         });
         let compiled_ownership = Rc::downgrade(&compiled);
-        let cached = CachedDevelopmentArtifact::new(cached_identity, compiled);
+        let cached = CachedDevelopmentArtifact::new(
+            cached_identity,
+            compiled,
+            HashSet::from(["game.blot".to_owned()]),
+            DevelopmentUnitPartition::default(),
+        );
 
         let reused = cached
             .reuse(&requested_identity)
@@ -966,6 +1052,8 @@ mod tests {
                 manifest: br#"{"format":"blot-core-wasm"}"#.to_vec(),
                 capabilities: Vec::new(),
             }),
+            HashSet::from(["game.blot".to_owned()]),
+            DevelopmentUnitPartition::default(),
         );
 
         assert!(cached.reuse(&different).is_none());
@@ -979,7 +1067,7 @@ mod tests {
             ("math".to_owned(), "math.blot".to_owned()),
         ]);
 
-        let split = split_runtime_module(&original, "game", &configured)
+        let split = split_runtime_module(&original, "game", &configured, &HashMap::new())
             .expect("development program should split");
 
         assert_eq!(split.entry_unit, "game");
@@ -990,20 +1078,80 @@ mod tests {
             .iter()
             .find(|unit| unit.name == "game")
             .expect("entry unit");
-        let operation = &game.module.functions[0].blocks[0].operations[0];
+        let game_module = game.module.as_ref().expect("entry unit should be prepared");
+        let operation = &game_module.functions[0].blocks[0].operations[0];
         assert_eq!(operation.kind, "call.external");
         assert_eq!(operation.capability.as_deref(), Some("math"));
-        assert_eq!(game.module.links.len(), 1);
+        assert_eq!(game_module.links.len(), 1);
         let math = split
             .units
             .iter()
             .find(|unit| unit.name == "math")
             .expect("provider unit");
-        assert_eq!(math.module.exports.len(), 1);
+        assert_eq!(
+            math.module
+                .as_ref()
+                .expect("provider unit should be prepared")
+                .exports
+                .len(),
+            1
+        );
 
-        let edited = split_runtime_module(&scalar_program(42), "game", &configured)
-            .expect("edited development program should split");
+        let edited =
+            split_runtime_module(&scalar_program(42), "game", &configured, &HashMap::new())
+                .expect("edited development program should split");
         assert_eq!(split.edges, edited.edges);
+
+        let reusable_partitions = HashMap::from([("math".to_owned(), math.partition.clone())]);
+        let reused = split_runtime_module(
+            &scalar_program(42),
+            "game",
+            &configured,
+            &reusable_partitions,
+        )
+        .expect("unaffected provider should skip unit preparation");
+        let reused_math = reused
+            .units
+            .iter()
+            .find(|unit| unit.name == "math")
+            .expect("provider unit");
+        assert!(reused_math.module.is_none());
+        assert!(reused_math.source_paths.contains("math.blot"));
+    }
+
+    #[test]
+    fn changed_call_demand_rebuilds_an_unchanged_provider_partition() {
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+        ]);
+        let initial =
+            split_runtime_module(&scalar_program(41), "game", &configured, &HashMap::new())
+                .expect("initial development program should split");
+        let math_partition = initial
+            .units
+            .iter()
+            .find(|unit| unit.name == "math")
+            .expect("provider unit")
+            .partition
+            .clone();
+
+        let mut edited = scalar_program(41);
+        let mut alternative = edited.functions[1].clone();
+        alternative.id = 2;
+        alternative.name = "alternative".to_owned();
+        edited.functions.push(alternative);
+        edited.functions[0].blocks[0].operations[0].function = Some(2);
+        let reusable_partitions = HashMap::from([("math".to_owned(), math_partition)]);
+        let split = split_runtime_module(&edited, "game", &configured, &reusable_partitions)
+            .expect("changed call demand should split");
+        let math = split
+            .units
+            .iter()
+            .find(|unit| unit.name == "math")
+            .expect("provider unit");
+
+        assert!(math.module.is_some());
     }
 
     #[test]
@@ -1012,17 +1160,29 @@ mod tests {
             ("game".to_owned(), "game.blot".to_owned()),
             ("project".to_owned(), "project.blot".to_owned()),
         ]);
-        let initial = split_runtime_module(&static_store_program(41), "game", &configured)
-            .expect("initial development program should split");
-        let edited = split_runtime_module(&static_store_program(42), "game", &configured)
-            .expect("edited development program should split");
+        let initial = split_runtime_module(
+            &static_store_program(41),
+            "game",
+            &configured,
+            &HashMap::new(),
+        )
+        .expect("initial development program should split");
+        let edited = split_runtime_module(
+            &static_store_program(42),
+            "game",
+            &configured,
+            &HashMap::new(),
+        )
+        .expect("edited development program should split");
         fn unit_module<'a>(program: &'a DevelopmentProgram, name: &str) -> &'a RuntimeModule {
-            &program
+            program
                 .units
                 .iter()
                 .find(|unit| unit.name == name)
                 .unwrap_or_else(|| panic!("development program omitted {name} unit"))
                 .module
+                .as_ref()
+                .expect("development unit should be prepared")
         }
         let initial_game = unit_module(&initial, "game");
         let edited_game = unit_module(&edited, "game");
@@ -1047,13 +1207,14 @@ mod tests {
             ("game".to_owned(), "game.blot".to_owned()),
             ("math".to_owned(), "math.blot".to_owned()),
         ]);
-        let split = split_runtime_module(&scalar_program(41), "game", &configured)
+        let split = split_runtime_module(&scalar_program(41), "game", &configured, &HashMap::new())
             .expect("development program should split");
 
         for unit in split.units {
-            let compiled = crate::backend::close(unit.module)
-                .and_then(|program| program.compile())
-                .unwrap_or_else(|error| panic!("unit {} did not emit: {error}", unit.name));
+            let compiled =
+                crate::backend::close(unit.module.expect("development unit should be prepared"))
+                    .and_then(|program| program.compile())
+                    .unwrap_or_else(|error| panic!("unit {} did not emit: {error}", unit.name));
             assert_eq!(compiled.wasm.get(..4), Some(b"\0asm".as_slice()));
             let manifest: serde_json::Value = serde_json::from_slice(&compiled.manifest)
                 .expect("development manifest should be JSON");
@@ -1072,7 +1233,8 @@ mod tests {
             ("math".to_owned(), "math.blot".to_owned()),
         ]);
 
-        let Err(error) = split_runtime_module(&original, "game", &configured) else {
+        let Err(error) = split_runtime_module(&original, "game", &configured, &HashMap::new())
+        else {
             panic!("a cross-unit closure should be refused");
         };
 

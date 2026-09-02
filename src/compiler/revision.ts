@@ -3,6 +3,8 @@ import type { Loaded } from "./frontend.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 
 const revisionKeyByLoaded = new WeakMap<Loaded, string>();
+const payloadDigestByLoaded = new WeakMap<Loaded, string>();
+const configurationDigestByLoaded = new WeakMap<Loaded, string>();
 
 export type InstalledStorage = "source" | "ast" | "snapshot";
 
@@ -18,29 +20,38 @@ function digest(value: unknown): string {
 
 /** Local payload identity; transitive dependency revisions deliberately do not enter. */
 export function loadedPayloadDigest(loaded: Loaded): string {
+  const cached = payloadDigestByLoaded.get(loaded);
+  if (cached !== undefined) return cached;
+
+  let payloadDigest: string;
   if (loaded.storage.tag === "source") {
-    return digest({
+    payloadDigest = digest({
       path: loaded.path,
       storage: "source",
       source: loaded.source,
     });
-  }
-  if (loaded.storage.tag === "snapshot") {
-    return digest({
+  } else if (loaded.storage.tag === "snapshot") {
+    payloadDigest = digest({
       path: loaded.path,
       storage: "snapshot",
       digest: loaded.storage.digest,
     });
+  } else {
+    payloadDigest = digest({
+      path: loaded.path,
+      storage: "ast",
+      module: encodePortableModule(loaded.module),
+    });
   }
-  return digest({
-    path: loaded.path,
-    storage: "ast",
-    module: encodePortableModule(loaded.module),
-  });
+  payloadDigestByLoaded.set(loaded, payloadDigest);
+  return payloadDigest;
 }
 
 /** Exact direct graph-edge and include identity for one configured module. */
 export function loadedConfigurationDigest(loaded: Loaded): string {
+  const cached = configurationDigestByLoaded.get(loaded);
+  if (cached !== undefined) return cached;
+
   const imports = [...loaded.dependencies]
     .map(([specifier, dependency]) => [specifier, dependency.path] as const)
     .sort(([left], [right]) => left.localeCompare(right));
@@ -53,7 +64,9 @@ export function loadedConfigurationDigest(loaded: Loaded): string {
       ] as const
     )
     .sort(([left], [right]) => left.localeCompare(right));
-  return digest({ imports, includes });
+  const configurationDigest = digest({ imports, includes });
+  configurationDigestByLoaded.set(loaded, configurationDigest);
+  return configurationDigest;
 }
 
 /**

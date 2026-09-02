@@ -1,0 +1,75 @@
+// Turn current inventory levels into a purchase order.
+//
+// Records state the business inputs, then filter and map form a small immutable
+// pipeline. Money stays in integer minor units.
+
+open import "blot:prelude"
+
+const Product =
+  {
+    .sku = Text;
+    .stock = Int;
+    .reorder_at = Int;
+    .target_stock = Int;
+    .unit_cost = Int;
+  }
+
+const Purchase =
+  {
+    .sku = Text;
+    .quantity = Int;
+    .cost = Int;
+  }
+
+let products :: [Product]
+let products =
+  [
+    {
+      .sku = "keyboard";
+      .stock = 4;
+      .reorder_at = 8;
+      .target_stock = 20;
+      .unit_cost = 7000;
+    },
+    {
+      .sku = "mouse";
+      .stock = 15;
+      .reorder_at = 10;
+      .target_stock = 20;
+      .unit_cost = 2500;
+    },
+    {
+      .sku = "monitor";
+      .stock = 2;
+      .reorder_at = 5;
+      .target_stock = 8;
+      .unit_cost = 24000;
+    },
+    {
+      .sku = "usb-c";
+      .stock = 0;
+      .reorder_at = 12;
+      .target_stock = 30;
+      .unit_cost = 900;
+    }
+  ]
+
+let needs_restock :: Product -> Bool
+let needs_restock = fn product => product.stock < product.reorder_at
+
+let purchase :: Product -> Purchase
+let purchase = fn product => do:
+  let quantity = product.target_stock - product.stock
+  return {
+    .sku = product.sku;
+    .quantity = quantity;
+    .cost = quantity * product.unit_cost;
+    }
+
+let purchases = map (filter (products, needs_restock), purchase)
+
+return {
+  .skus = map (purchases, fn order => order.sku);
+  .units = sum (map (purchases, fn order => order.quantity));
+  .cost = sum (map (purchases, fn order => order.cost));
+  }

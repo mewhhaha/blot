@@ -2,7 +2,8 @@ import type { Expr } from "../../../syntax/ast.ts";
 import {
   binaryCall,
   producedExpression,
-  trailingWhitespace,
+  sourceCodeSpan,
+  sourceEditSpan,
 } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
 
@@ -40,6 +41,8 @@ export const equalityCase: LintRule = {
         const subjects = comparisons.map((comparison) => comparison.subject);
         const subjectList = subjects.join(", ");
         const indent = lineIndent(context.source, expression.span.start);
+        const codeSpan = sourceCodeSpan(context.source, expression.span);
+        const editSpan = sourceEditSpan(context.source, expression.span);
         const replacement = renderCase(
           subjects,
           comparisons.map((comparison) => comparison.pattern),
@@ -47,13 +50,13 @@ export const equalityCase: LintRule = {
           expression.fallback,
           context,
           indent,
-        ) + trailingWhitespace(context.source, expression.span);
+        ) + context.source.slice(codeSpan.end, editSpan.end);
         context.report({
           message:
             `Match ${subjectList} directly instead of matching a derived Boolean.`,
           span: expression.span,
           fix: context.fix(
-            expression.span,
+            editSpan,
             "Match the compared values directly",
             replacement,
             "check",
@@ -134,7 +137,8 @@ function renderArm(
   indent: string,
 ): string {
   const body = producedExpression(expression);
-  const source = context.sourceText(body).trimEnd();
+  const span = sourceCodeSpan(context.source, body.span);
+  const source = context.source.slice(span.start, span.end).trimEnd();
   const lines = source.split("\n");
   const first = lines[0]?.trimStart();
   if (first === undefined) {

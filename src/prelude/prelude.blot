@@ -282,7 +282,14 @@ const text_scalars = fn text => {
   ;
 }
 
-const rec text_split_from = fn (text, separator, start, parts) => do:
+const rec text_split_from ::
+  (
+    @type.text,
+    @type.text,
+    @type.int,
+    [@type.text]
+    ) -> [@type.text]
+const rec text_split_from = fn (text, separator, start, ?parts) => do:
   use result <- case text_find_from (text, separator, start) of
     #Some found => do:
       let piece = case text_slice (text, start, found) of
@@ -292,7 +299,7 @@ const rec text_split_from = fn (text, separator, start, parts) => do:
         text,
         separator,
         found + @text.len separator,
-        @array.push (@array.copy (&parts)) piece
+        @array.push parts piece
       )
       return continued
 
@@ -300,7 +307,7 @@ const rec text_split_from = fn (text, separator, start, parts) => do:
       let piece = case text_slice (text, start, @text.len text) of
         #Some value => value
         #None => @panic "Text.split produced invalid final bounds"
-      return @array.push (@array.copy (&parts)) piece
+      return @array.push parts piece
   return result
 
 const text_split = fn (text, separator) => do:
@@ -336,26 +343,45 @@ const text_trim = fn text => do:
   let end = text_trim_end (text, start, length)
   return @text.slice text start end
 
+const rec text_replace_from ::
+  (
+    @type.text,
+    @type.text,
+    @type.text,
+    @type.int,
+    @scratch.type @type.text
+    ) -> @type.text
 const rec text_replace_from =
-  fn (text, query, replacement, start, result) => do:
+  fn (text, query, replacement, start, chunks) => do:
     return case text_find_from (text, query, start) of
       #Some found => do:
         let segment = @text.slice text start found
+        let chunks = @scratch.push chunks segment
+        let chunks = @scratch.push chunks replacement
         return text_replace_from (
           text,
           query,
           replacement,
           found + @text.len query,
-          @text.concat (@text.concat result segment) replacement
+          chunks
         )
 
-      #None => @text.concat result (@text.slice text start (@text.len text))
+      #None => do:
+        let tail = @text.slice text start (@text.len text)
+        let chunks = @scratch.push chunks tail
+        return @text.join (@scratch.finish chunks)
 
 const text_replace = fn (text, query, replacement) => do:
   if is_equal (@int.cmp (@text.len query) 0):
     return text
   else:
-    return text_replace_from (text, query, replacement, 0, "")
+    return text_replace_from (
+      text,
+      query,
+      replacement,
+      0,
+      @scratch.with_capacity 1
+    )
 
 const TextOperations =
   {
@@ -438,29 +464,8 @@ const array_append = fn left => fn right => do:
     fn (state, value) => @array.push state value
   )
 
-const array_map = fn (values, transform) => do:
-  return fold (
-    values,
-    @array.empty,
-    fn (state, value) => @array.push state (transform value)
-  )
-
-const array_filter = fn (values, keep) => fold (
-  values,
-  @array.empty,
-  fn (state, value) => case keep value of
-    #True => @array.push state value
-    #False => state
-)
-
-const array_partition = fn (values, belongs_left) => fold (
-  values,
-  (@array.empty, @array.empty),
-  fn ((left, right), value) => case belongs_left value of
-    #True => (@array.push left value, right)
-    #False => (left, @array.push right value)
-)
-
+const array_uncons_at ::
+  @forall (fn T => ([T], @type.int) -> (#None | #Some (T, [T])))
 const array_uncons_at = fn (values, index) => do:
   if index >= 0:
     if index < @array.len values:
@@ -470,6 +475,8 @@ const array_uncons_at = fn (values, index) => do:
   else:
     return #None
 
+const array_uncons ::
+  @forall (fn T => [T] -> (#None | #Some (T, [T])))
 const array_uncons = fn values => array_uncons_at (values, 0)
 
 const array_items = fn values => do:
@@ -753,6 +760,85 @@ const array_build = fn (capacity, fill) => do:
   let builder = Scratch.with_capacity capacity
   let builder = fill builder
   return Scratch.finish builder
+
+const map_borrowed ::
+  @forall (fn T => @forall (fn U => ([T], (T -> U)) -> [U]))
+const map_borrowed = fn (&values, &transform) => do:
+  return case array_get ((&values), 0) of
+    #None => []
+    #Some first => do:
+      use first_mapped <- transform first
+      let rec visit = fn (index, ?output) => do:
+        return case array_get ((&values), index) of
+          #None => output
+          #Some value => do:
+            use mapped <- transform value
+            return visit (
+              index + 1,
+              @array.push output mapped
+            )
+
+      return visit (1, [first_mapped])
+
+const map ::
+  @forall (fn T => @forall (fn U => ([T], (T -> U)) -> [U]))
+const map = fn (&values, ?transform) => do:
+  return map_borrowed ((&values), (&transform))
+
+const filter_borrowed ::
+  @forall (fn T => ([T], (T -> Bool)) -> [T])
+const filter_borrowed = fn (&values, &keep) => do:
+  return case array_get ((&values), 0) of
+    #None => []
+    #Some first => do:
+      let (_, output) = @array.take [first] 0
+      let rec visit = fn (index, ?current) => do:
+        return case array_get ((&values), index) of
+          #None => current
+          #Some value => do:
+            if keep value:
+              return visit (index + 1, @array.push current value)
+            else:
+              return visit (index + 1, @linear.own current)
+
+      return visit (0, output)
+
+const filter ::
+  @forall (fn T => ([T], (T -> Bool)) -> [T])
+const filter = fn (&values, ?keep) => do:
+  return filter_borrowed ((&values), (&keep))
+
+const partition_borrowed ::
+  @forall (fn T => ([T], (T -> Bool)) -> ([T], [T]))
+const partition_borrowed = fn (&values, &belongs_left) => do:
+  return case array_get ((&values), 0) of
+    #None => ([], [])
+    #Some first => do:
+      let (_, right) = @array.take [first] 0
+      let left = @array.copy (&right)
+      let rec visit = fn (index, ?current_left, ?current_right) => do:
+        return case array_get ((&values), index) of
+          #None => (current_left, current_right)
+          #Some value => do:
+            if belongs_left value:
+              return visit (
+                index + 1,
+                @array.push current_left value,
+                @linear.own current_right
+              )
+            else:
+              return visit (
+                index + 1,
+                @linear.own current_left,
+                @array.push current_right value
+              )
+
+      return visit (0, left, right)
+
+const partition ::
+  @forall (fn T => ([T], (T -> Bool)) -> ([T], [T]))
+const partition = fn (&values, ?belongs_left) => do:
+  return partition_borrowed ((&values), (&belongs_left))
 
 const ArrayBuilder =
   {
@@ -1399,9 +1485,9 @@ const Array =
     .empty = @array.empty;
     .append = array_append;
     .fold = fold;
-    .map = array_map;
-    .filter = array_filter;
-    .partition = array_partition;
+    .map = map;
+    .filter = filter;
+    .partition = partition;
     .uncons = array_uncons;
     .items = array_items;
     .length = fn &values => @array.len (&values);
@@ -1409,6 +1495,7 @@ const Array =
     .get = array_get;
     .expect_get = array_expect_get;
     .set = array_set;
+    .expect_set = array_expect_set;
     .push = fn (values, value) => @array.push values value;
     .swap_or_keep = array_swap_or_keep;
     .expect_partition_last = array_expect_partition_last;
@@ -1521,12 +1608,6 @@ const each = fn (values, visit) => do:
       use visit value
   )
   return result
-
-const map = array_map
-
-const filter = array_filter
-
-const partition = array_partition
 
 const sum = fn values => do:
   return fold (
@@ -1954,12 +2035,22 @@ const iterate = fn (iterator, initial, visit) => do:
 
   return go (iterator.state, initial)
 
+const collect ::
+  @forall (fn State => @forall (fn Element => do:
+    return {
+      .state = State;
+      .step = State -> (#Some (Element, State) | #None);
+      } -> [Element]
+  ))
 const collect = fn iterator => do:
-  let values = []
-  for value in iterator:
-    values := @array.push (Array.copy values) value
+  let rec go =
+    fn (state, ?values) => case iterator.step state of
+      #None => values
+      #Some (value, next) => go (next, @array.push values value)
 
-  return values
+  return case iterator.step iterator.state of
+    #None => []
+    #Some (value, next) => go (next, [value])
 
 // Namespaced because `range` is already the type constructor — `I32` is a
 // range — and two things called `range` in one scope would be worse than a
@@ -2092,56 +2183,87 @@ const List =
 
 const map_type = fn (key, value) => [(key, value)]
 
-const map_get = fn (equal, entries, key) => do:
-  let rec find =
-    fn index => case array_get (entries, index) of
-      #Some entry => case equal entry.0 key of
-        #True => Some entry.1
-        #False => find (@int.add index 1)
+const map_find_index ::
+  @forall (fn Key => @forall (fn Value => do:
+    return (
+      (Key -> Key -> Bool),
+      [(Key, Value)],
+      Key
+      ) -> @type.int
+  ))
+const map_find_index = fn (equal, &entries, &key) => do:
+  let found = -1
+  for index in Iter.range (0, Array.length (&entries)):
+    let entry = case Array.get ((&entries), index) of
+      #Some current => current
+      #None => @panic "Map search lost its checked entry"
+    if equal (&entry.0) (&key):
+      found := index
+      break
 
-      #None => None
+  return found
 
-  return find 0
+const map_get = fn (equal, &entries, &key) => do:
+  let index = map_find_index (equal, (&entries), (&key))
+  if index < 0:
+    return None
+  else:
+    return case array_get ((&entries), index) of
+      #Some entry => Some entry.1
+      #None => @panic "Map.get lost its checked entry"
 
-const map_put = fn (equal, entries, key, value) => do:
-  let replaced =
-    fold (
-      entries,
-      (Array.empty, None, False),
-      fn (state, entry) => do:
-        if state.2:
-          return (@array.push (Array.copy state.0) entry, state.1, state.2)
-        else if equal entry.0 key:
-          return (
-            @array.push (Array.copy state.0) (key, value),
-            Some entry.1,
-            True
-          )
-        else:
-          return (@array.push (Array.copy state.0) entry, state.1, state.2)
-    )
-  let updated = case replaced.2 of
-    #True => replaced.0
-    #False => @array.push (Array.copy replaced.0) (key, value)
-  return (replaced.1, updated)
+const map_put ::
+  @forall (fn Key => @forall (fn Value => do:
+    return (
+      (Key -> Key -> Bool),
+      [(Key, Value)],
+      Key,
+      Value
+      ) -> (Option Value, [(Key, Value)])
+  ))
+const map_put = fn (equal, ?entries, key, value) => do:
+  let index = map_find_index (equal, (&entries), (&key))
+  return case index < 0 of
+    #True => (#None, @array.push entries (key, value))
+    #False => case index < Array.length (&entries) of
+      #True => do:
+        let previous = case Array.get ((&entries), index) of
+          #Some entry => entry.1
+          #None => @panic "Map.put lost its checked entry"
+        let updated = @array.set entries index (key, value)
+        return (#Some previous, updated)
 
-const map_remove = fn (equal, entries, key) => do:
-  let removed =
-    fold (
-      entries,
-      (Array.empty, None, False),
-      fn (state, entry) => do:
-        if state.2:
-          return (@array.push (Array.copy state.0) entry, state.1, state.2)
-        else if equal entry.0 key:
-          return (state.0, Some entry.1, True)
-        else:
-          return (@array.push (Array.copy state.0) entry, state.1, state.2)
-    )
-  return (removed.1, removed.0)
+      #False => @panic "Map.put search returned an invalid index"
 
-const map_alter = fn (equal, entries, key, transform) => do:
-  let previous = map_get (equal, entries, key)
+const map_remove ::
+  @forall (fn Key => @forall (fn Value => do:
+    return (
+      (Key -> Key -> Bool),
+      [(Key, Value)],
+      Key
+      ) -> (Option Value, [(Key, Value)])
+  ))
+const map_remove = fn (equal, ?entries, key) => do:
+  let index = map_find_index (equal, (&entries), (&key))
+  return case index < 0 of
+    #True => (#None, entries)
+    #False => do:
+      let (removed, remaining) = case array_uncons_at (entries, index) of
+        #Some result => result
+        #None => @panic "Map.remove lost its checked entry"
+      return (#Some removed.1, remaining)
+
+const map_alter ::
+  @forall (fn Key => @forall (fn Value => do:
+    return (
+      (Key -> Key -> Bool),
+      [(Key, Value)],
+      Key,
+      (Option Value -> Option Value)
+      ) -> (Option Value, [(Key, Value)])
+  ))
+const map_alter = fn (equal, ?entries, key, transform) => do:
+  let previous = map_get (equal, (&entries), (&key))
   let replacement = transform previous
   return case replacement of
     #Some value => (previous, (map_put (equal, entries, key, value)).1)
@@ -2149,7 +2271,16 @@ const map_alter = fn (equal, entries, key, transform) => do:
       #Some _ => map_remove (equal, entries, key)
       #None => (None, entries)
 
-const map_update = fn (equal, entries, key, transform) => do:
+const map_update ::
+  @forall (fn Key => @forall (fn Value => do:
+    return (
+      (Key -> Key -> Bool),
+      [(Key, Value)],
+      Key,
+      (Value -> Option Value)
+      ) -> (Option Value, [(Key, Value)])
+  ))
+const map_update = fn (equal, ?entries, key, transform) => do:
   return map_alter (
     equal,
     entries,
@@ -2160,11 +2291,11 @@ const map_update = fn (equal, entries, key, transform) => do:
   )
 
 const map_with = fn equal => do:
-  let put = fn (entries, key, value) => map_put (equal, entries, key, value)
+  let put = fn (?entries, key, value) => map_put (equal, entries, key, value)
   let alter =
-    fn (entries, key, transform) => map_alter (equal, entries, key, transform)
+    fn (?entries, key, transform) => map_alter (equal, entries, key, transform)
   let update =
-    fn (entries, key, transform) => map_update (equal, entries, key, transform)
+    fn (?entries, key, transform) => map_update (equal, entries, key, transform)
   let append = fn left => fn right => do:
     return fold (
       right,
@@ -2175,31 +2306,36 @@ const map_with = fn equal => do:
     .of = map_type;
     .empty = Array.empty;
     .singleton = fn (key, value) => [(key, value)];
-    .get = fn (entries, key) => map_get (equal, entries, key);
-    .has = fn (entries, key) => case map_get (equal, entries, key) of
+    .get = fn (&entries, &key) => map_get (equal, (&entries), (&key));
+    .has = fn (&entries, &key) => case map_get (equal, (&entries), (&key)) of
       #Some _ => True
       #None => False
     ;
     .put = put;
-    .remove = fn (entries, key) => map_remove (equal, entries, key);
+    .remove = fn (?entries, key) => map_remove (equal, entries, key);
     .alter = alter;
     .update = update;
     .append = append;
     .fold = fold;
     .map = fn (entries, transform) => do:
-      return array_map (
+      return map (
         entries,
         fn entry => (entry.0, transform entry.1)
       )
     ;
-    .filter = array_filter;
+    .filter = filter;
     .length = Array.length;
-    .keys = fn entries => array_map (entries, fn entry => entry.0);
-    .values = fn entries => array_map (entries, fn entry => entry.1);
+    .keys = fn entries => map (entries, fn entry => entry.0);
+    .values = fn entries => map (entries, fn entry => entry.1);
     .items = array_items;
   }
 
-const Map = { .of = map_type; .with = map_with; }
+const Map = {
+  .of = map_type;
+  .with = map_with;
+  .put = map_put;
+  .remove = map_remove;
+}
 
 const set_type = fn value => [value]
 
@@ -2277,19 +2413,19 @@ const set_with = fn equal => do:
     .append = union;
     .union = union;
     .intersect = fn left => fn right => do:
-      return array_filter (
+      return filter (
         left,
         fn value => set_has (equal, right, value)
       )
     ;
     .diff = fn left => fn right => do:
-      return array_filter (
+      return filter (
         left,
         fn value => not (set_has (equal, right, value))
       )
     ;
     .fold = fold;
-    .filter = array_filter;
+    .filter = filter;
     .map = fn (values, transform) => map_with_equal (values, equal, transform);
     .map_with = map_with_equal;
     .length = Array.length;
@@ -2642,20 +2778,24 @@ const shape_update_compatible = fn pair => case reflect pair of
 
   _ => False
 
-const shape_entries = fn shape => array_map (
+const shape_entries = fn shape => map (
   @shape.names shape,
   fn name => (name, @shape.get shape name)
 )
 
 const shape_update = fn (left, patch) => do:
   let _ = @satisfies (left, patch) shape_update_compatible
-  for (name, value) in array_items (shape_entries patch):
-    left := {
-      ...left;
-      .[name] = value;
-    }
+  let rec apply = fn (current, ?entries) => do:
+    return case array_uncons entries of
+      #None => current
+      #Some pair => do:
+        let ((name, value), remaining) = pair
+        return apply ({
+          ...current;
+          .[name] = value;
+        }, remaining)
 
-  return left
+  return apply (left, shape_entries patch)
 
 const Shape =
   {
@@ -2855,7 +2995,7 @@ const packed = fn shape => do:
   let order = @shape.names shape
   let bits = layout (shape, bit_width)
   let fields =
-    freeze (map (
+    @linear.freeze (map (
       bits.fields,
       fn field => {
         .name = field.name;

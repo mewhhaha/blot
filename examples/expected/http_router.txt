@@ -1,0 +1,1 @@
+{ .statuses = [200, 201, 204, 404]; .bodies = ["healthy", "created", "deleted", "not found"]; }

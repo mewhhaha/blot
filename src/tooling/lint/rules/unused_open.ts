@@ -1,7 +1,7 @@
 import type { CompilerReadabilityFact } from "../../../compiler/wasm.ts";
 import type { Span } from "../../../syntax/ast.ts";
 import { isRule, type Rule } from "../../../syntax/cursor.ts";
-import { directRule, spanKey } from "../syntax.ts";
+import { directRule, sourceEditSpan, spanKey } from "../syntax.ts";
 import type { LintRule } from "../types.ts";
 
 type OpenUsageFact = Extract<
@@ -22,8 +22,9 @@ export const unusedOpen: LintRule = {
         if (declaration.tag !== "open") return;
         const fact = openUsageFact(context.readability, declaration.value.span);
         if (fact === undefined || fact.used.length > 0) return;
+        const editSpan = sourceEditSpan(context.source, declaration.span);
         let fix = context.fix(
-          declaration.span,
+          editSpan,
           "Remove unused `open`",
           "",
           "check-interface",

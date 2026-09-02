@@ -1,0 +1,43 @@
+open import "blot:prelude"
+
+const shortest_paths = import "../../../examples/lib/dijkstra.blot"
+
+// Keep the affine graph builder outside the nested edge-building loop.
+const star_edges :: (Int, Int) -> [(Int, Int)]
+const star_edges = fn (vertex, count) => do:
+  let first_neighbor = case vertex == 0 of
+    #True => 1
+    #False => count
+  let edges :: [(Int, Int)]
+  let edges = []
+  for neighbor in Iter.range (first_neighbor, count):
+    edges := @array.push edges (neighbor, count - neighbor)
+
+  return edges
+
+const star_total :: Int -> Int
+const star_total = fn count => do:
+  if count <= 0:
+    return 0
+
+  let rec build_graph ::
+    (Int, Scratch.of [(Int, Int)]) -> Scratch.of [(Int, Int)]
+  let rec build_graph = fn (vertex, ?graph) => do:
+    if vertex >= count:
+      return graph
+    else:
+      let edges = star_edges (vertex, count)
+      return build_graph (vertex + 1, Scratch.push (graph, edges))
+
+  let graph = @scratch.with_capacity count
+  let graph = build_graph (0, ?graph)
+  let graph = Scratch.finish graph
+  let { .values; .known; } = shortest_paths ((&graph), 0)
+  let total = 0
+  for vertex in Iter.range (0, count):
+    if Array.expect_get ((&known), vertex):
+      total := total + Array.expect_get ((&values), vertex)
+
+  return total
+
+return { .star_total = star_total; }

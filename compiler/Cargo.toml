@@ -19,6 +19,9 @@ serde_json = { version = "=1.0.140", features = ["preserve_order"] }
 wasm-encoder = "=0.255.0"
 wasmparser = { version = "=0.255.0", default-features = false, features = ["simd"] }
 
+[dev-dependencies]
+wasmparser = { version = "=0.255.0", default-features = false, features = ["simd", "validate"] }
+
 [profile.release]
 codegen-units = 1
 lto = "fat"

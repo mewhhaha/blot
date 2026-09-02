@@ -94,6 +94,38 @@ impl<'a> CompactCst<'a> {
 
     pub fn span(&self, cursor: Cursor) -> Result<Span, String> {
         let raw = self.raw_span(cursor)?;
+        self.map_span(raw)
+    }
+
+    pub fn significant_span(&self, cursor: Cursor) -> Result<Span, String> {
+        let mut stack = vec![cursor];
+        let mut significant = None::<Span>;
+        while let Some(cursor) = stack.pop() {
+            match cursor {
+                Cursor::Rule(rule) => stack.extend(self.children(rule)?),
+                Cursor::Token(token) => {
+                    if matches!(
+                        self.token_kind(token)?.as_str(),
+                        "LAYOUT_NEWLINE" | "LAYOUT_INDENT" | "LAYOUT_DEDENT"
+                    ) {
+                        continue;
+                    }
+                    let span = self.raw_span(cursor)?;
+                    significant = Some(match significant {
+                        Some(found) => Span {
+                            start: found.start.min(span.start),
+                            end: found.end.max(span.end),
+                        },
+                        None => span,
+                    });
+                }
+            }
+        }
+        let raw = significant.ok_or_else(|| "rule contains no significant token".to_owned())?;
+        self.map_span(raw)
+    }
+
+    fn map_span(&self, raw: Span) -> Result<Span, String> {
         let Some(offsets) = self.original_offsets else {
             return Ok(raw);
         };

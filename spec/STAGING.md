@@ -98,6 +98,23 @@ otherwise residual empty-row expression does not authorize erasure; the
 expression remains residual unless the language requires compile-time
 resolution.
 
+Finite compile-time unions are flattened, retain the first semantic occurrence
+of each member, and compare as sets. The evaluator may keep an indexed
+persistent member representation, but an index collision must fall back to exact
+type-value equality and extending an aliased union must not mutate the alias.
+
+Within one staging execution, a successful closure call may reuse a prior result
+only when its settled arrow is monomorphic and has a closed empty effect row,
+the call is not residual, and both argument and result are closed first-order
+values. The key contains the closure's exact creation environment,
+module-instance stack, effect scope, body identity, and a structural argument
+value. Functions, effects, operations, capabilities, Regions, Scratch values,
+continuations, residual values, open effects, and type variables are not cache
+keys or cached results. Failures are not cached. The bounded cache is local to
+that execution and therefore cannot outlive a revision or substitute one module
+occurrence for another. This changes evaluation work only; the exported runtime
+body retains the source algorithm.
+
 ## 5. Generative and applicative identities
 
 ### 5.1 Ordinary effects

@@ -6,6 +6,11 @@ import type {
 } from "../src/runtime/hir.ts";
 
 const sources = [
+  "examples/collect_principal_type.blot",
+  "examples/lib/text_processing_eval.blot",
+  "examples/polymorphic_collections.blot",
+  "examples/runtime_memory_lowerings.blot",
+  "experiments/generated-code/programs/star_dijkstra.blot",
   "examples/lib/owned_radix_sorts.blot",
   "examples/lib/owned_merge_sort.blot",
   "case-studies/engine/game_loop.blot",
@@ -20,23 +25,53 @@ const budgets: Record<
     readonly wasmLocalDeclarations: number;
   }
 > = {
+  "examples/collect_principal_type.blot": {
+    operations: 8,
+    largestControlFlowGraph: 4,
+    wasmBytes: 2_500,
+    wasmLocalDeclarations: 8,
+  },
+  "examples/lib/text_processing_eval.blot": {
+    operations: 16,
+    largestControlFlowGraph: 4,
+    wasmBytes: 4_500,
+    wasmLocalDeclarations: 20,
+  },
+  "examples/polymorphic_collections.blot": {
+    operations: 32,
+    largestControlFlowGraph: 4,
+    wasmBytes: 9_000,
+    wasmLocalDeclarations: 24,
+  },
+  "examples/runtime_memory_lowerings.blot": {
+    operations: 500,
+    largestControlFlowGraph: 24,
+    wasmBytes: 22_000,
+    wasmLocalDeclarations: 140,
+  },
+  "experiments/generated-code/programs/star_dijkstra.blot": {
+    operations: 550,
+    largestControlFlowGraph: 36,
+    wasmBytes: 14_000,
+    wasmLocalDeclarations: 230,
+  },
   "examples/lib/owned_radix_sorts.blot": {
-    operations: 1_400,
+    operations: 900,
     largestControlFlowGraph: 16,
-    wasmBytes: 32_000,
-    wasmLocalDeclarations: 450,
+    wasmBytes: 24_000,
+    wasmLocalDeclarations: 330,
   },
   "examples/lib/owned_merge_sort.blot": {
-    operations: 500,
+    operations: 220,
     largestControlFlowGraph: 16,
-    wasmBytes: 13_000,
-    wasmLocalDeclarations: 120,
+    wasmBytes: 8_000,
+    wasmLocalDeclarations: 64,
   },
   "case-studies/engine/game_loop.blot": {
-    operations: 3_600,
-    largestControlFlowGraph: 112,
-    wasmBytes: 84_000,
-    wasmLocalDeclarations: 760,
+    operations: 2_300,
+    largestControlFlowGraph: 88,
+    wasmBytes: 62_000,
+    wasmLocalDeclarations: 340,
   },
 };
 
@@ -67,12 +102,51 @@ interface WasmShape {
 const compiler = await Compiler.create();
 const reports: LoweringReport[] = [];
 const failures: string[] = [];
+// A nullary function that tail-calls itself distinguishes an invalid artifact
+// from a valid Wasm 3.0 artifact that this audit's V8 cannot validate.
+const tailCallProbe = Uint8Array.of(
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x04,
+  0x01,
+  0x60,
+  0x00,
+  0x00,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x0a,
+  0x06,
+  0x01,
+  0x04,
+  0x00,
+  0x12,
+  0x00,
+  0x0b,
+);
+const hostSupportsTailCalls = WebAssembly.validate(tailCallProbe);
 try {
   for (const source of sources) {
     try {
       const runtime = await compiler.prepare(source);
       const artifact = await compiler.compile(source);
-      if (!WebAssembly.validate(artifact.wasm as BufferSource)) {
+      const manifest = JSON.parse(
+        new TextDecoder().decode(artifact.manifestBytes),
+      ) as { readonly abi: { readonly requiredFeatures: readonly string[] } };
+      const unsupportedTailCalls = !hostSupportsTailCalls &&
+        manifest.abi.requiredFeatures.includes("tail-call");
+      if (
+        !unsupportedTailCalls &&
+        !WebAssembly.validate(artifact.wasm as BufferSource)
+      ) {
         failures.push(`${source}: emitted invalid Wasm`);
       }
       inspectInterning(runtime, failures);
@@ -401,40 +475,123 @@ function inspectLoopGrowth(
       ] as const
     ),
   );
-  const reachable = new Set(
+  const recursiveFunctions = new Set(
     runtime.functions
-      .filter((runtimeFunction) => runtimeFunction.name.endsWith("$go$"))
+      .filter((runtimeFunction) =>
+        reachesFunction(runtimeFunction.id, runtimeFunction.id)
+      )
       .map((runtimeFunction) => runtimeFunction.id),
   );
-  const pending = [...reachable];
-  while (pending.length > 0) {
-    const functionId = pending.pop();
-    if (functionId === undefined) break;
-    const runtimeFunction = functions.get(functionId);
-    if (runtimeFunction === undefined) {
-      failures.push(
-        `${runtime.source}: loop call graph references absent function ${functionId}`,
-      );
-      continue;
-    }
-    for (const operation of functionOperations(runtimeFunction)) {
-      if (operation.kind !== "call.direct") continue;
-      if (reachable.has(operation.function)) continue;
-      reachable.add(operation.function);
-      pending.push(operation.function);
-    }
-  }
-  for (const functionId of reachable) {
-    const runtimeFunction = functions.get(functionId);
-    if (runtimeFunction === undefined) continue;
-    for (const operation of functionOperations(runtimeFunction)) {
-      if (isStoreGrowth(operation) && operation.update === "persistent") {
+  for (const runtimeFunction of runtime.functions) {
+    const cyclicBlocks = blocksInCycles(runtimeFunction);
+    for (const block of runtimeFunction.blocks) {
+      for (const operation of block.operations) {
+        const persistentStoreGrowth = isStoreGrowth(operation) &&
+          operation.update === "persistent";
+        const repeatedTextAppend = operation.kind === "text.append";
+        if (!persistentStoreGrowth && !repeatedTextAppend) {
+          continue;
+        }
+        if (
+          !recursiveFunctions.has(runtimeFunction.id) &&
+          !cyclicBlocks.has(block.id)
+        ) {
+          continue;
+        }
+        if (repeatedTextAppend) {
+          failures.push(
+            `${operation.span.file}:${operation.span.start}: cyclic ${runtimeFunction.name} repeatedly copies a Text prefix`,
+          );
+          continue;
+        }
         failures.push(
-          `${operation.span.file}:${operation.span.start}: loop-reachable ${runtimeFunction.name} uses persistent Store growth`,
+          `${operation.span.file}:${operation.span.start}: cyclic ${runtimeFunction.name} block ${block.id} uses persistent ${operation.kind} (recursive function: ${
+            recursiveFunctions.has(runtimeFunction.id)
+          }, cyclic block: ${cyclicBlocks.has(block.id)})`,
         );
       }
     }
   }
+
+  function reachesFunction(start: number, target: number): boolean {
+    const pending = [start];
+    const visited = new Set<number>([start]);
+    while (pending.length > 0) {
+      const functionId = pending.pop();
+      if (functionId === undefined) break;
+      const runtimeFunction = functions.get(functionId);
+      if (runtimeFunction === undefined) continue;
+      for (const operation of functionOperations(runtimeFunction)) {
+        if (operation.kind !== "call.direct") continue;
+        if (operation.function === target) return true;
+        if (!functions.has(operation.function)) {
+          failures.push(
+            `${runtime.source}: ${runtimeFunction.name} calls absent function ${operation.function}`,
+          );
+          continue;
+        }
+        if (visited.has(operation.function)) continue;
+        visited.add(operation.function);
+        pending.push(operation.function);
+      }
+    }
+    return false;
+  }
+}
+
+function blocksInCycles(runtimeFunction: BlotRuntimeFunction): Set<number> {
+  const successors = new Map<number, readonly number[]>();
+  for (const block of runtimeFunction.blocks) {
+    const terminator = block.terminator;
+    if (terminator.kind === "branch") {
+      successors.set(block.id, [terminator.target]);
+      continue;
+    }
+    if (terminator.kind === "conditional") {
+      successors.set(block.id, [
+        terminator.consequent,
+        terminator.alternate,
+      ]);
+      continue;
+    }
+    if (terminator.kind === "switch") {
+      successors.set(block.id, [
+        ...terminator.cases.map((arm) => arm.target),
+        terminator.fallback,
+      ]);
+      continue;
+    }
+    successors.set(block.id, []);
+  }
+  const cyclic = new Set<number>();
+  for (const block of runtimeFunction.blocks) {
+    const initial = successors.get(block.id);
+    if (initial === undefined) {
+      throw new Error(
+        `${runtimeFunction.name}: block ${block.id} has no successor facts`,
+      );
+    }
+    const pending = [...initial];
+    const visited = new Set<number>();
+    while (pending.length > 0) {
+      const candidate = pending.pop();
+      if (candidate === undefined) break;
+      if (candidate === block.id) {
+        cyclic.add(block.id);
+        break;
+      }
+      if (visited.has(candidate)) continue;
+      visited.add(candidate);
+      const next = successors.get(candidate);
+      if (next === undefined) {
+        throw new Error(
+          `${runtimeFunction.name}: block ${candidate} has no successor facts`,
+        );
+      }
+      pending.push(...next);
+    }
+  }
+  return cyclic;
 }
 
 function functionOperations(

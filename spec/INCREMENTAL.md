@@ -79,19 +79,27 @@ another Store are not interchangeable.
 
 Source inspection runs in a dedicated Rust session that has no semantic module
 configuration, checked boundary, or artifact authority. It returns literal
-import and include specifiers with source spans, a deterministic portable-AST
-digest, and the compact syntax snapshot used by formatting and editor tooling.
-Its module handles and revision identities remain private to that inspection
-session.
+import and include specifiers with source spans and a deterministic portable-AST
+digest. Compact syntax snapshots stay in the Rust frontend and are copied only
+when formatting or editor tooling explicitly requests one. Its module handles
+and revision identities remain private to that inspection session.
 
 Node resolves the reported sites and checks them against its Baba-backed syntax
 view. The Rust result remains the source of semantic graph edges; parity failure
 rejects the candidate. After the complete source graph succeeds, the host
-installs the accepted source or portable AST independently in the resident
-semantic session and verifies the same dependency sets before configuration. A
-source revision may therefore be parsed once for inspection and again for
-semantic installation. No inspection-session identity authorizes semantic cache
-reuse.
+installs an accepted source AST in the resident semantic session through shared
+immutable Rust ownership and verifies the same dependency sets before
+configuration. Portable-AST inputs remain independently decoded. Sharing an AST
+allocation does not share a module revision, frontend state, configuration,
+checked boundary, or semantic fact; no inspection-session identity authorizes
+semantic cache reuse.
+
+The resident host memoizes local payload and direct-configuration digests by
+immutable loaded-node identity. An unchanged node therefore does not serialize
+its source or portable AST again during graph synchronization. Rebinding an
+importer creates a new loaded node, so its direct-edge digest is recomputed;
+replacing a payload likewise creates a new identity. This memoization changes
+work only and does not weaken exact payload or configuration comparison.
 
 If source inspection, dependency resolution, include loading, or syntax parity
 fails, the workspace retains its prior loaded graph, roots, overlays, dirty set,
@@ -187,8 +195,14 @@ resolved AST, origins, and diagnostics.
 An identical source revision reuses the complete resident compact tree without
 lexing or parsing. A changed revision resynchronizes an unchanged token suffix,
 publishes a deterministic old-to-new compact-node reuse map, and may reuse a
-complete compact tree when the resulting syntax-token sequence is identical.
-Every reuse decision remains subordinate to fresh-frontend equivalence.
+complete compact tree when the resulting syntax-token sequence is identical. The
+reuse map indexes nodes by rule and source spans mapped through the maximal
+unchanged prefix and suffix; it does not hash every nested source slice. Parser
+bypass and AST reuse are distinct facts: changing `1` to `2` can retain the same
+compact tree but must rerun CST lowering, while a trivia-only edit whose
+semantic token spellings and positions are unchanged may retain the immutable
+lowered AST. Every reuse decision remains subordinate to fresh-frontend
+equivalence.
 
 Operator identity uses the generated fixed language-plan revision. Source
 modules have no custom fixity environment to preserve or compare.
@@ -369,13 +383,23 @@ not change staging, specialization, or source meaning.
 The resident development-artifact cache has one committed map and at most one
 pending update. Preparing a program abandons the previous pending update before
 any fallible work, reads only the committed map, and stages replacements plus
-the exact active cache-key set under a fresh transaction identity. Preparation
-does not insert or prune committed entries. A failed preparation therefore
-publishes nothing. Commit accepts only the current identity, applies all staged
-replacements and exact-key pruning in one mutation, then consumes the identity.
-A stale, duplicate, or missing identity changes nothing. An abandoned reduced
-unit set cannot prune committed units, and replacing a configured root prunes
-the exact former key only when its replacement commits.
+the exact active cache-key set under a fresh transaction identity. Each artifact
+key contains the complete ordered unit-name-to-root mapping, and each committed
+artifact retains the source-module membership of its split unit. After semantic
+invalidation settles, a unit whose prior membership is disjoint from the checked
+impact cone and whose exact function/link partition is unchanged skips
+unit-module construction, identity serialization, ABI closure, and emission. The
+splitter still traces calls and reload edges so a changed cross-unit demand
+rebuilds both sides of that boundary. Checked units are rebuilt and compared by
+their complete canonical Runtime HIR; this conservative step is required because
+an imported compile-time value can change generated code without changing
+consumer source. Preparation does not insert or prune committed entries. A
+failed preparation therefore publishes nothing. Commit accepts only the current
+identity, applies all staged replacements and exact-key pruning in one mutation,
+then consumes the identity. A stale, duplicate, or missing identity changes
+nothing. An abandoned reduced unit set cannot prune committed units, and
+replacing a configured root prunes the exact former key only when its
+replacement commits.
 
 The host copies and hashes every compiled unit, resolves identity-only cache
 hits against private retained artifacts, and computes the canonical development
@@ -405,13 +429,14 @@ distributed snapshot instead reports corrupt distribution when its authority is
 the distribution itself.
 
 Compiler-host ABI 4 introduced trusted-snapshot installation separately from
-graph deltas, and ABI 5 preserves that boundary. The bundled host invokes it
+graph deltas, and ABI 6 preserves that boundary. The bundled host invokes it
 only after the artifact manifest authenticates the prelude digest. A caller
 supplying a custom compiler and snapshot explicitly owns that trust decision.
 Source, portable-AST, configuration, and removal deltas cannot carry snapshot
 bytes, and registry packages cannot reach this authority. Development-program
-preparation and commit are separate ABI 5 session operations and do not widen
-the graph-delta or snapshot decoders.
+preparation and commit are separate ABI 5 session operations. ABI 6 adds
+inspection-AST sharing and on-demand syntax-snapshot operations; neither widens
+the graph-delta or trusted-snapshot decoder.
 
 Snapshot preparation is transactional. The AST, interface, compile-time capsule,
 and result evaluation are completed in path-scoped staging state before the

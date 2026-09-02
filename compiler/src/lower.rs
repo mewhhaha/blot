@@ -9,6 +9,7 @@ use crate::ast::{
     Qualifier, ResultEffects, ShapeMember, ShapePatternField, Span,
 };
 use crate::cst::{CompactCst, Cursor};
+use crate::diagnostic::Diagnostic;
 use crate::fixity::{ChainStep, FixityTable, target_expression};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -98,6 +99,14 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         result_effects = ResultEffects::Ambient;
         statements.pop();
     }
+    if statements_need_control(cst, &statements)?
+        && let Some(lowered) =
+            lower_early_return_sequence(cst, &statements, result, &context, span, &mut arena)?
+    {
+        result = lowered;
+        result_effects = ResultEffects::Ambient;
+        statements.clear();
+    }
     let (lowered_declarations, result_effects) = if statements_need_control(cst, &statements)? {
         let pure_result = arena.expression(Expression::Block {
             declarations: Vec::new(),
@@ -121,6 +130,7 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         (lowered, result_effects)
     };
     elaborate_handler_steps(&mut arena);
+    distribute_immediate_choice_applications(&mut arena);
     Ok(Module {
         parameter,
         declarations: lowered_declarations,
@@ -129,6 +139,73 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         span,
         arena,
     })
+}
+
+fn distribute_immediate_choice_applications(arena: &mut AstArena) {
+    for index in 0..arena.expressions.len() {
+        let Expression::Apply {
+            function,
+            argument,
+            span,
+        } = arena.expressions[index]
+        else {
+            continue;
+        };
+        match arena.expressions[function.0 as usize].clone() {
+            Expression::Case {
+                target,
+                arms,
+                span: case_span,
+            } => {
+                let arms = arms
+                    .into_iter()
+                    .map(|arm| Arm {
+                        pattern: arm.pattern,
+                        body: arena.expression(Expression::Apply {
+                            function: arm.body,
+                            argument,
+                            span,
+                        }),
+                    })
+                    .collect();
+                arena.expressions[index] = Expression::Case {
+                    target,
+                    arms,
+                    span: case_span,
+                };
+            }
+            Expression::If {
+                branches,
+                fallback,
+                span: conditional_span,
+            } => {
+                let branches = branches
+                    .into_iter()
+                    .map(|branch| Branch {
+                        condition: branch.condition,
+                        consequence: arena.expression(Expression::Apply {
+                            function: branch.consequence,
+                            argument,
+                            span,
+                        }),
+                    })
+                    .collect();
+                let fallback = fallback.map(|fallback| {
+                    arena.expression(Expression::Apply {
+                        function: fallback,
+                        argument,
+                        span,
+                    })
+                });
+                arena.expressions[index] = Expression::If {
+                    branches,
+                    fallback,
+                    span: conditional_span,
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Mirrors the handler rules source elaboration applies in
@@ -2008,35 +2085,121 @@ fn statements_contain_loop_break(
 }
 
 fn statements_can_continue(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
+    statements_can_continue_cached(cst, statements, &mut HashMap::new())
+}
+
+fn statements_can_continue_cached(
+    cst: &CompactCst<'_>,
+    statements: &[Cursor],
+    cache: &mut HashMap<u32, bool>,
+) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        let name = cst.rule_name(statement)?;
-        if name == "result" || name == "breaking" {
-            return Ok(false);
-        }
-        if name != "conditional_statement" {
-            continue;
-        }
-        let body = as_rule(required(cst, statement, "body")?)?;
-        if cst.rule_name(body)? == "conditional_statement_guard" {
-            continue;
-        }
-        if cst.field(body, "fallback")?.is_none() {
-            continue;
-        }
-        let nested = nested_statement_lists(cst, statement)?;
-        let mut every_branch_leaves = true;
-        for branch in nested {
-            if statements_can_continue(cst, &branch)? {
-                every_branch_leaves = false;
-                break;
-            }
-        }
-        if every_branch_leaves {
+        if !statement_can_continue(cst, statement, cache)? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+fn statement_can_continue(
+    cst: &CompactCst<'_>,
+    statement: u32,
+    cache: &mut HashMap<u32, bool>,
+) -> Result<bool, String> {
+    if let Some(can_continue) = cache.get(&statement) {
+        return Ok(*can_continue);
+    }
+    let name = cst.rule_name(statement)?;
+    let can_continue = if name == "result" || name == "breaking" {
+        false
+    } else if name != "conditional_statement" {
+        true
+    } else {
+        let body = as_rule(required(cst, statement, "body")?)?;
+        if cst.rule_name(body)? == "conditional_statement_guard"
+            || cst.field(body, "fallback")?.is_none()
+        {
+            true
+        } else {
+            let mut every_branch_leaves = true;
+            for branch in nested_statement_lists(cst, statement)? {
+                if statements_can_continue_cached(cst, &branch, cache)? {
+                    every_branch_leaves = false;
+                    break;
+                }
+            }
+            !every_branch_leaves
+        }
+    };
+    cache.insert(statement, can_continue);
+    Ok(can_continue)
+}
+
+pub(crate) fn reachability_diagnostics(cst: &CompactCst<'_>) -> Result<Vec<Diagnostic>, String> {
+    let root = as_rule(cst.root())?;
+    let mut diagnostics = Vec::new();
+    let mut cache = HashMap::new();
+    collect_reachability_diagnostics(cst, root, &mut diagnostics, &mut cache)?;
+    Ok(diagnostics)
+}
+
+fn collect_reachability_diagnostics(
+    cst: &CompactCst<'_>,
+    rule: u32,
+    diagnostics: &mut Vec<Diagnostic>,
+    cache: &mut HashMap<u32, bool>,
+) -> Result<(), String> {
+    let statement_field = match cst.rule_name(rule)? {
+        "program" => Some("declarations"),
+        "do_block" | "statement_suite" => Some("statements"),
+        _ => None,
+    };
+    if let Some(statement_field) = statement_field {
+        let statements = cst.field_list(rule, statement_field)?;
+        collect_unreachable_statements(cst, &statements, diagnostics, cache)?;
+    }
+
+    for child in cst.children(rule)? {
+        if let Cursor::Rule(child) = child {
+            collect_reachability_diagnostics(cst, child, diagnostics, cache)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_unreachable_statements(
+    cst: &CompactCst<'_>,
+    statements: &[Cursor],
+    diagnostics: &mut Vec<Diagnostic>,
+    cache: &mut HashMap<u32, bool>,
+) -> Result<(), String> {
+    let mut departure = None;
+    for statement in statements {
+        let statement_rule = statement_rule(cst, *statement)?;
+        if let Some(departure) = departure {
+            diagnostics.push(Diagnostic::new(
+                "BLOT_UNREACHABLE_STATEMENT",
+                format!("This statement is unreachable because {departure}."),
+                cst.significant_span(Cursor::Rule(statement_rule))?,
+            ));
+            continue;
+        }
+        if statement_can_continue(cst, statement_rule, cache)? {
+            continue;
+        }
+        departure = Some(match cst.rule_name(statement_rule)? {
+            "result" => "an earlier `return` leaves this statement sequence",
+            "breaking" => "an earlier `break` leaves this statement sequence",
+            "conditional_statement" => "an earlier conditional leaves on every branch",
+            name => {
+                return Err(format!(
+                    "non-continuing statement has unexpected rule {name}"
+                ));
+            }
+        });
+    }
+    Ok(())
 }
 
 fn statements_contain_effect(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
@@ -2937,6 +3100,18 @@ fn lower_primary(
             if contains_only_result {
                 return Ok(result);
             }
+            if statements_need_control(cst, &statements)?
+                && let Some(result) = lower_early_return_sequence(
+                    cst,
+                    &statements,
+                    result,
+                    &block_context,
+                    span,
+                    arena,
+                )?
+            {
+                return Ok(result);
+            }
             if statements_need_control(cst, &statements)? {
                 let result = resolve_control_sequence(
                     cst,
@@ -2971,6 +3146,130 @@ fn lower_primary(
             "Rust middle has not lowered expression `{name}` yet"
         )),
     }
+}
+
+fn first_control_statement(
+    cst: &CompactCst<'_>,
+    statements: &[Cursor],
+) -> Result<Option<usize>, String> {
+    for (index, statement) in statements.iter().enumerate() {
+        if statements_need_control(cst, std::slice::from_ref(statement))? {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+fn lower_early_return_sequence(
+    cst: &CompactCst<'_>,
+    statements: &[Cursor],
+    result: ExpressionId,
+    context: &LoweringContext<'_>,
+    span: Span,
+    arena: &mut AstArena,
+) -> Result<Option<ExpressionId>, String> {
+    let mut remaining = statements;
+    let mut found_early_return = false;
+    while let Some(index) = first_control_statement(cst, remaining)? {
+        let conditional = statement_rule(cst, remaining[index])?;
+        if cst.rule_name(conditional)? != "conditional_statement" {
+            return Ok(None);
+        }
+        let body = as_rule(required(cst, conditional, "body")?)?;
+        if cst.rule_name(body)? != "conditional_statement_branches"
+            || cst.field(body, "fallback")?.is_some()
+            || !cst.field_list(body, "alternatives")?.is_empty()
+        {
+            return Ok(None);
+        }
+        let consequence = statement_suite(cst, body, "consequence")?;
+        let Some(last) = consequence.last().copied() else {
+            return Ok(None);
+        };
+        if cst.rule_name(statement_rule(cst, last)?)? != "result"
+            || statements_need_control(cst, &consequence[..consequence.len() - 1])?
+        {
+            return Ok(None);
+        }
+        found_early_return = true;
+        remaining = &remaining[index + 1..];
+    }
+    if !found_early_return {
+        return Ok(None);
+    }
+
+    fn lower_supported(
+        cst: &CompactCst<'_>,
+        statements: &[Cursor],
+        result: ExpressionId,
+        context: &LoweringContext<'_>,
+        span: Span,
+        arena: &mut AstArena,
+    ) -> Result<ExpressionId, String> {
+        let control = first_control_statement(cst, statements)?;
+        let Some(index) = control else {
+            if statements.is_empty() {
+                return Ok(result);
+            }
+            let mut declarations = Vec::with_capacity(statements.len());
+            for statement in statements {
+                declarations.push(lower_declaration(
+                    cst,
+                    statement_rule(cst, *statement)?,
+                    context,
+                    arena,
+                )?);
+            }
+            return Ok(arena.expression(Expression::Block {
+                declarations,
+                result,
+                result_effects: ResultEffects::Ambient,
+                span,
+            }));
+        };
+
+        let conditional = statement_rule(cst, statements[index])?;
+        let body = as_rule(required(cst, conditional, "body")?)?;
+        let consequence = statement_suite(cst, body, "consequence")?;
+        let consequence = lower_terminal_suite(cst, &consequence, context, arena)?
+            .expect("a supported early-return branch has a terminal return");
+        let alternative =
+            lower_supported(cst, &statements[index + 1..], result, context, span, arena)?;
+        let condition = lower_expression(
+            cst,
+            as_rule(required(cst, body, "condition")?)?,
+            context,
+            arena,
+        )?;
+        let conditional = arena.expression(Expression::If {
+            branches: vec![Branch {
+                condition,
+                consequence,
+            }],
+            fallback: Some(alternative),
+            span: cst.span(Cursor::Rule(body))?,
+        });
+        if index == 0 {
+            return Ok(conditional);
+        }
+        let mut declarations = Vec::with_capacity(index);
+        for statement in &statements[..index] {
+            declarations.push(lower_declaration(
+                cst,
+                statement_rule(cst, *statement)?,
+                context,
+                arena,
+            )?);
+        }
+        Ok(arena.expression(Expression::Block {
+            declarations,
+            result: conditional,
+            result_effects: ResultEffects::Ambient,
+            span,
+        }))
+    }
+
+    lower_supported(cst, statements, result, context, span, arena).map(Some)
 }
 
 fn lower_terminal_return(
@@ -3200,6 +3499,9 @@ fn lower_multi_case_rows(
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
     let cached = vec![None; subjects.len()];
+    if constructor_decision_matrix(rows, arena) {
+        return lower_constructor_decision_rows(rows, subjects, &cached, span, 0, arena);
+    }
     if rows.len() <= MULTI_CASE_ROWS_PER_CHUNK {
         return lower_multi_case_row_chain(rows, subjects, &cached, None, span, 0, arena);
     }
@@ -3277,6 +3579,163 @@ fn lower_multi_case_rows(
         });
     }
     Ok(result)
+}
+
+fn constructor_decision_matrix(rows: &[MultiCaseArm], arena: &AstArena) -> bool {
+    rows.iter().all(|row| {
+        row.guard.is_none()
+            && row.patterns.iter().all(|pattern| {
+                matches!(
+                    arena.patterns[pattern.0 as usize],
+                    Pattern::Name { .. }
+                        | Pattern::Wildcard { .. }
+                        | Pattern::Constructor { payload: None, .. }
+                )
+            })
+    })
+}
+
+fn lower_constructor_decision_rows(
+    rows: &[MultiCaseArm],
+    subjects: &[MultiCaseSubject],
+    cached: &[Option<String>],
+    span: Span,
+    depth: usize,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let Some(first) = rows.first() else {
+        return Ok(compiler_panic(
+            "complete multi-subject case reached its failure path",
+            span,
+            arena,
+        ));
+    };
+    let decision_column = first.patterns.iter().position(|pattern| {
+        matches!(
+            arena.patterns[pattern.0 as usize],
+            Pattern::Constructor { payload: None, .. }
+        )
+    });
+    let Some(column) = decision_column else {
+        if let Some(column) = first
+            .patterns
+            .iter()
+            .enumerate()
+            .find_map(|(column, pattern)| {
+                matches!(arena.patterns[pattern.0 as usize], Pattern::Name { .. })
+                    .then_some(column)
+                    .filter(|column| cached[*column].is_none())
+            })
+        {
+            return cache_multi_case_subject(rows, subjects, cached, span, depth, column, arena);
+        }
+        return lower_multi_case_body(first, subjects, cached, "", span, arena);
+    };
+    if cached[column].is_none() {
+        return cache_multi_case_subject(rows, subjects, cached, span, depth, column, arena);
+    }
+
+    let mut constructors = Vec::<(String, PatternId)>::new();
+    for row in rows {
+        let Pattern::Constructor {
+            name,
+            payload: None,
+            ..
+        } = &arena.patterns[row.patterns[column].0 as usize]
+        else {
+            continue;
+        };
+        if constructors.iter().all(|(candidate, _)| candidate != name) {
+            constructors.push((name.clone(), row.patterns[column]));
+        }
+    }
+
+    let mut arms = Vec::with_capacity(constructors.len() + 1);
+    for (constructor, pattern) in constructors {
+        let mut selected = Vec::new();
+        for row in rows {
+            match &arena.patterns[row.patterns[column].0 as usize] {
+                Pattern::Constructor {
+                    name,
+                    payload: None,
+                    ..
+                } if name == &constructor => {
+                    let mut row = row.clone();
+                    row.patterns[column] = arena.pattern(Pattern::Wildcard { span });
+                    selected.push(row);
+                }
+                Pattern::Name { .. } | Pattern::Wildcard { .. } => selected.push(row.clone()),
+                _ => {}
+            }
+        }
+        let body =
+            lower_constructor_decision_rows(&selected, subjects, cached, span, depth + 1, arena)?;
+        arms.push(Arm { pattern, body });
+    }
+    let fallback_rows = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                arena.patterns[row.patterns[column].0 as usize],
+                Pattern::Name { .. } | Pattern::Wildcard { .. }
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let fallback =
+        lower_constructor_decision_rows(&fallback_rows, subjects, cached, span, depth + 1, arena)?;
+    arms.push(Arm {
+        pattern: arena.pattern(Pattern::Wildcard { span }),
+        body: fallback,
+    });
+    let target = variable(
+        cached[column]
+            .as_deref()
+            .expect("decision subjects are cached before matching"),
+        span,
+        arena,
+    );
+    Ok(arena.expression(Expression::Case { target, arms, span }))
+}
+
+fn cache_multi_case_subject(
+    rows: &[MultiCaseArm],
+    subjects: &[MultiCaseSubject],
+    cached: &[Option<String>],
+    span: Span,
+    depth: usize,
+    column: usize,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let subject_name = format!("case_value${}${}${depth}${column}", span.start, span.end);
+    let function = variable(&subjects[column].name, span, arena);
+    let argument = arena.expression(Expression::Unit { span });
+    let argument = arena.expression(Expression::Apply {
+        function,
+        argument,
+        span,
+    });
+    arena.synthetic_runtime_type_expressions.insert(argument);
+    let parameter = arena.pattern(Pattern::Name {
+        name: subject_name.clone(),
+        qualifier: Qualifier::None,
+        span,
+    });
+    let mut next_cached = cached.to_vec();
+    next_cached[column] = Some(subject_name);
+    let body =
+        lower_constructor_decision_rows(rows, subjects, &next_cached, span, depth + 1, arena)?;
+    let function = arena.expression(Expression::Lambda {
+        parameter,
+        body,
+        deferred: false,
+        span,
+    });
+    Ok(arena.expression(Expression::Apply {
+        function,
+        argument,
+        span,
+    }))
 }
 
 fn lower_multi_case_row_chain(

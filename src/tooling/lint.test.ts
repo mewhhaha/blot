@@ -10,7 +10,12 @@ import type {
 } from "../compiler/wasm.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import type { LintRule } from "./lint.ts";
-import { binaryCall } from "./lint/syntax.ts";
+import {
+  binaryCall,
+  lineComments,
+  sourceCodeSpan,
+  sourceEditSpan,
+} from "./lint/syntax.ts";
 
 function rendererSimplificationFacts(
   module: Module,
@@ -72,6 +77,19 @@ function rendererSimplificationFacts(
   }
   return facts;
 }
+
+Deno.test("source trivia distinguishes comments from text literals", () => {
+  const source = `return "https://example.test"\n// Keep this comment.\n`;
+  assertEquals(lineComments(source), ["// Keep this comment."]);
+  assertEquals(sourceCodeSpan(source, { start: 0, end: source.length }), {
+    start: 0,
+    end: source.indexOf("\n"),
+  });
+  assertEquals(sourceEditSpan(source, { start: 0, end: source.length }), {
+    start: 0,
+    end: source.indexOf("// Keep"),
+  });
+});
 
 async function applyLintFix(
   source: string,
@@ -264,6 +282,25 @@ Deno.test("two nested cases become one demand-driven case", async () => {
   );
 });
 
+Deno.test("a nested case fix keeps comments with their flattened arm", async () => {
+  const source = `return case first of
+  #True => case second of
+    #True => 1
+    // This explains the second fallback.
+    #False => 2
+  #False => 3
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_NESTED_CASE_CHAIN"),
+    `return case first, second of
+  #True, #True => 1
+  // This explains the second fallback.
+  #True, #False => 2
+  #False, _ => 3
+`,
+  );
+});
+
 Deno.test("a Boolean equality case matches the compared value directly", async () => {
   const source = `return case 0 == value of
   #False => "nonzero"
@@ -274,6 +311,26 @@ Deno.test("a Boolean equality case matches the compared value directly", async (
     `return case value of
   0 => "zero"
   _ => "nonzero"
+`,
+  );
+});
+
+Deno.test("an equality case fix leaves following documentation in place", async () => {
+  const source = `let classify = fn value => case value == 0 of
+  #True => "zero"
+  #False => "nonzero"
+
+// This documents the exported function, not its fallback arm.
+return classify
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_EQUALITY_CASE"),
+    `let classify = fn value => case value of
+  0 => "zero"
+  _ => "nonzero"
+
+// This documents the exported function, not its fallback arm.
+return classify
 `,
   );
 });
@@ -488,6 +545,26 @@ return pair
   );
 });
 
+Deno.test("a redundant do fix preserves its comments", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let increment = fn value => do:
+  // Keep the reason for incrementing.
+  return value + 1 // Keep the result note.
+return increment
+`,
+      "BLOT_LINT_REDUNDANT_DO_BLOCK",
+    ),
+    `let increment = fn value => (
+  // Keep the reason for incrementing.
+  value + 1
+  // Keep the result note.
+)
+return increment
+`,
+  );
+});
+
 Deno.test("a do block with a declaration keeps its return scope", async () => {
   const source = `let increment = fn value => do:
   let next = value + 1
@@ -522,6 +599,30 @@ return label
     return "zero"
   let next = value + 1
   return Text.of_int next
+return label
+`,
+  );
+});
+
+Deno.test("a terminal else fix preserves its comments", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let label = fn value => do:
+  if value == 0:
+    // Zero has its own label.
+    return "zero"
+  else: // All remaining values use this label.
+    return "other"
+return label
+`,
+      "BLOT_LINT_REDUNDANT_TERMINAL_ELSE",
+    ),
+    `let label = fn value => do:
+  if value == 0:
+    // Zero has its own label.
+    return "zero"
+  // All remaining values use this label.
+  return "other"
 return label
 `,
   );
@@ -665,6 +766,22 @@ return 0
       diagnostic.code === "BLOT_LINT_UNUSED_PATTERN_NAME"
     ),
     [],
+  );
+});
+
+Deno.test("an unused binding fix leaves following documentation in place", async () => {
+  assertEquals(
+    await applyLintFix(
+      `let forgotten = 1
+
+// This documents the result.
+return 2
+`,
+      "BLOT_LINT_UNUSED_BINDING",
+    ),
+    `// This documents the result.
+return 2
+`,
   );
 });
 
