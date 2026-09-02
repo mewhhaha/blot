@@ -1,0 +1,30 @@
+name: Export source-defined operators workspace
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'codex/source-defined-operators'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/source-defined-operators
+          fetch-depth: 0
+      - name: Pack workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git -czf "$RUNNER_TEMP/blot-workspace.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-source-defined-operators-workspace
+          path: ${{ runner.temp }}/blot-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 1
