@@ -17,8 +17,8 @@ const required_find = fn (text, needle) => case Text.find (text, needle) of
 const parse_field = fn field => do:
   let colon = required_find (field, ":")
   return {
-    .name = Text.trim (required_slice (field, 0, colon));
-    .type = Text.trim (
+    .field_name = Text.trim (required_slice (field, 0, colon));
+    .field_type = Text.trim (
       required_slice (field, colon + 1, Text.length field)
     );
     }
@@ -39,8 +39,8 @@ const parse_struct = fn declaration => do:
     fn field => Text.length field > 0
   )
   return {
-    .name = Text.trim (required_slice (declaration, 7, opening));
-    .fields = map (fields, parse_field);
+    .struct_name = Text.trim (required_slice (declaration, 7, opening));
+    .members = map (fields, parse_field);
     }
 
 const shader_metadata = fn source => do:
