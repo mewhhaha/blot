@@ -1,0 +1,64 @@
+// Read WGSL at compile time and project only the metadata the program needs.
+//
+// This deliberately tiny parser accepts one-line struct declarations. It is a
+// proof of the include-transform boundary, not a replacement for a WGSL parser.
+// The value returned from `@include` has no `.text` field.
+
+open import "blot:prelude"
+
+const required_slice = fn (text, start, end) =>
+  case Text.slice (text, start, end) of
+    #Some value => value
+    #None => @panic "shader metadata parser used invalid text bounds"
+
+const required_find = fn (text, needle) =>
+  case Text.find (text, needle) of
+    #Some index => index
+    #None => @panic "shader metadata parser could not find a delimiter"
+
+const parse_field = fn field => do:
+  let colon = required_find (field, ":")
+  return {
+    .name = Text.trim (required_slice (field, 0, colon));
+    .type = Text.trim (
+      required_slice (field, colon + 1, Text.length field)
+    );
+    }
+
+const parse_struct = fn declaration => do:
+  let opening = required_find (declaration, "{")
+  let closing = required_find (declaration, "}")
+  let raw_fields =
+    map (
+      Text.split (
+        required_slice (declaration, opening + 1, closing),
+        ","
+      ),
+      fn field => Text.trim field
+    )
+  let fields = filter (
+    raw_fields,
+    fn field => Text.length field > 0
+  )
+  return {
+    .name = Text.trim (required_slice (declaration, 7, opening));
+    .fields = map (fields, parse_field);
+    }
+
+const shader_metadata = fn source => do:
+  let lines = map (Text.lines source.text, fn line => Text.trim line)
+  let declarations = filter (
+    lines,
+    fn line => Text.starts_with (line, "struct ")
+  )
+  let filename = fold (
+    Text.split (source.specifier, "/"),
+    source.specifier,
+    fn (_, part) => part
+  )
+  return {
+    .filename = filename;
+    .structs = map (declarations, parse_struct);
+    }
+
+return @include "./assets/material.wgsl" shader_metadata
