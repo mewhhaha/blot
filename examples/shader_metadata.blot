@@ -39,8 +39,8 @@ const parse_struct = fn declaration => do:
     fn field => Text.length field > 0
   )
   return {
-    .struct_name = Text.trim (required_slice (declaration, 7, opening));
     .members = map (fields, parse_field);
+    .struct_name = Text.trim (required_slice (declaration, 7, opening));
     }
 
 const shader_metadata = fn source => do:
