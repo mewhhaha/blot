@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   export:
@@ -17,18 +17,73 @@ jobs:
         with:
           ref: codex/source-defined-operators
           fetch-depth: 0
+      - name: Preserve prelude semantic source offsets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          path = Path("src/prelude/prelude.blot")
+          source = path.read_text()
+          baseline = subprocess.check_output(
+              ["git", "show", "origin/main:src/prelude/prelude.blot"],
+              text=True,
+          )
+          target = baseline.index("const Type =")
+          first = source.index("infixr 10 ($) = Fn.apply")
+          last_text = "prefix 90 (&) = @linear.borrow"
+          last = source.index(last_text, first) + len(last_text)
+          declarations = source[first:last] + "\n"
+          intro = (
+              "// The prelude.\n"
+              "//\n"
+              "// Conventional operators are ordinary source metadata. This bounded header is\n"
+              "// the single bootstrap source and modules may override it. Targets are ordinary\n"
+              "// bindings, so polymorphic source functions work without compiler dispatch.\n\n"
+          )
+          prefix = intro + declarations + "\n"
+          padding_width = target - len(prefix)
+          if padding_width < 3:
+              raise SystemExit("prelude fixity header no longer fits the stable prefix")
+          padding = "//" + " " * (padding_width - 3) + "\n"
+          result = prefix + padding + source[source.index("const Type ="):]
+          if result.index("const Type =") != target:
+              raise SystemExit("failed to preserve the first semantic source offset")
+          path.write_text(result)
+          PY
+          git diff --check
+          if ! git diff --quiet -- src/prelude/prelude.blot; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add src/prelude/prelude.blot
+            git commit -m "Preserve prelude declaration offsets"
+            git push origin HEAD:codex/source-defined-operators
+          fi
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24.19.0
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
+      - name: Rebuild compiler and prelude snapshot
+        run: >-
+          deno run
+          --allow-read
+          --allow-write
+          --allow-run=cargo,git,rustc
+          --allow-env
+          scripts/build_compiler.ts
       - name: Capture Rust test output
         shell: bash
         run: |
