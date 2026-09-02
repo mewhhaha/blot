@@ -33,6 +33,14 @@ After installing or building the matching compiler artifact, run
 Node before publishing. Runtime exports resolve to generated JavaScript, and
 their generated declarations are checked from a TypeScript consumer.
 
+To prepare a local JSR release, regenerate the checked-in parser outputs and
+build the compiler artifact, then publish from the repository root:
+
+```bash
+deno task prepare:publish
+deno publish
+```
+
 ## Direct definitions should stay viable
 
 Blot's performance goal is not to make programmers translate the clear version
