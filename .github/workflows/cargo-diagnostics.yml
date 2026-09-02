@@ -5,6 +5,10 @@ on:
     branches:
       - codex/source-defined-operators-diagnostics
 
+concurrency:
+  group: cargo-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -63,8 +67,10 @@ jobs:
           '''
           source = source[:start] + replacement + source[end:]
 
-          marker = '''    #[test]
-              fn online_aggregate_representations_distinguish_runtime_leaf_types() {'''
+          marker = (
+              '    #[test]\n'
+              '    fn online_aggregate_representations_distinguish_runtime_leaf_types() {'
+          )
           test = '''    #[test]
               fn residual_sum_types_are_canonical_by_constructor_name() {
                   let mut trace = ResidualTrace::new("sum-order-test.blot");
