@@ -25,17 +25,21 @@ jobs:
 
           path = Path("compiler/src/hir.rs")
           source = path.read_text()
-          old = '''            return Err(hir_error(
-                          "A function export result does not match its checked type.",
-                      ));'''
-          new = '''            let message = format!(
-                          "A function export `{name}` result does not match its checked type: actual {} {:?}; expected {} {:?}.",
-                          result.type_id,
-                          self.types[result.type_id],
-                          expected,
-                          self.types[expected],
-                      );
-                      return Err(hir_error(&message));'''
+          old = (
+              '            return Err(hir_error(\n'
+              '                "A function export result does not match its checked type.",\n'
+              '            ));'
+          )
+          new = (
+              '            let message = format!(\n'
+              '                "A function export `{name}` result does not match its checked type: actual {} {:?}; expected {} {:?}.",\n'
+              '                result.type_id,\n'
+              '                self.types[result.type_id],\n'
+              '                expected,\n'
+              '                self.types[expected],\n'
+              '            );\n'
+              '            return Err(hir_error(&message));'
+          )
           if old not in source:
               raise SystemExit("export mismatch diagnostic anchor not found")
           path.write_text(source.replace(old, new, 1))
