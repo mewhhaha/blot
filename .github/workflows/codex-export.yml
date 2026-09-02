@@ -45,9 +45,9 @@ jobs:
           )
           prefix = intro + declarations + "\n"
           padding_width = target - len(prefix)
-          if padding_width < 3:
+          if padding_width < 4:
               raise SystemExit("prelude fixity header no longer fits the stable prefix")
-          padding = "//" + " " * (padding_width - 3) + "\n"
+          padding = "// " + "-" * (padding_width - 4) + "\n"
           result = prefix + padding + source[source.index("const Type ="):]
           if result.index("const Type =") != target:
               raise SystemExit("failed to preserve the first semantic source offset")
