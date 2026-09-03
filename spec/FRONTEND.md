@@ -224,8 +224,8 @@ Surface elaboration lowers rich control to the smaller Core owned by
   ordinary Core control is reconstructed;
 - a statement conditional whose returning branch is followed by a returning
   fallthrough sequence reconstructs one ordinary Core conditional directly;
-  removing a redundant terminal `else` must not introduce a control envelope
-  or change the ownership relation between its branches;
+  removing a redundant terminal `else` must not introduce a control envelope or
+  change the ownership relation between its branches;
 - handler syntax becomes explicit handler Core; and
 - known deferred calls retain one affine demand fact for specialization.
 

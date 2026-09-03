@@ -3085,9 +3085,9 @@ owned regions: it produces two independent arrays rather than two authorities
 over one backing Store.
 
 With the current contiguous Store representation, `uncons` takes linear time and
-allocates the remainder. `map` allocates one output Store; `filter` allocates one
-output Store; and `partition` allocates two output Stores containing a total of
-`Array.length xs` elements. Stable partition cannot generally reuse the input
+allocates the remainder. `map` allocates one output Store; `filter` allocates
+one output Store; and `partition` allocates two output Stores containing a total
+of `Array.length xs` elements. Stable partition cannot generally reuse the input
 Store as either output without moving the other class or retaining a view.
 `Array.append left right` visits `right` and produces one contiguous result; the
 generic monoid operation does not itself promise that either input allocation is

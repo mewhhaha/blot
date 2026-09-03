@@ -346,15 +346,15 @@ color rounds. Recursive runtime types use the same ordered inverse-edge
 partition judgment. Type compaction is followed by one fixed-point inverse
 representation fold and dead-producer sweep; this prevents equivalent recursive
 types from leaving allocation and load round-trips in the published module.
-WebAssembly local allocation performs reverse-CFG worklist
-liveness, constructs one conservative interval per SSA definition, and
-linear-scans intervals within equal physical representations. It stores
-`O(V + H)` range and queue state beyond the block-liveness facts rather than an
-explicit pairwise interference graph; the sort and active-interval queue cost
-`O(V log V)`. The emitted local count remains bounded by simultaneously live
-intervals rather than total SSA definitions. A proved iteration allocation
-region restores one cursor per backedge, so temporary allocation within a loop
-is bounded by the largest iteration instead of the sum across iterations.
+WebAssembly local allocation performs reverse-CFG worklist liveness, constructs
+one conservative interval per SSA definition, and linear-scans intervals within
+equal physical representations. It stores `O(V + H)` range and queue state
+beyond the block-liveness facts rather than an explicit pairwise interference
+graph; the sort and active-interval queue cost `O(V log V)`. The emitted local
+count remains bounded by simultaneously live intervals rather than total SSA
+definitions. A proved iteration allocation region restores one cursor per
+backedge, so temporary allocation within a loop is bounded by the largest
+iteration instead of the sum across iterations.
 
 Cold capsule loading hashes and decompresses `O(C)`, validates the `M` bundled
 flat ASTs, and resolves the `X` external edges through installed manifests. It
