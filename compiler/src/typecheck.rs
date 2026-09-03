@@ -4920,7 +4920,20 @@ impl Checker {
                     )
                 })?;
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
-                let previous = stable_rebinding_type(self.instantiate(previous));
+                let previous = self.instantiate(previous);
+                let previous = match self.settle(previous.clone(), true) {
+                    Type::Range {
+                        domain: Domain::Int,
+                        low: Some(Scalar::Int(low)),
+                        high: Some(Scalar::Int(high)),
+                    } if low == high => int_type(),
+                    Type::Range {
+                        domain: Domain::Text,
+                        low: Some(Scalar::Text(low)),
+                        high: Some(Scalar::Text(high)),
+                    } if low == high => text_type(),
+                    _ => previous,
+                };
                 let inferred_type = stable_rebinding_type(inferred.type_.clone());
                 self.constrain(inferred_type.clone(), previous.clone(), span)?;
                 self.constrain(previous.clone(), inferred_type, span)?;
