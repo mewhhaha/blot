@@ -24,7 +24,6 @@ jobs:
         run: |
           deno run --allow-read --allow-write scripts/generate_language_health.ts
           deno run --allow-read scripts/generate_language_health.ts --check
-          deno fmt --check generated/language-health.json src/diagnostic_codes.generated.ts STDLIB.md
       - name: Commit generated outputs and remove this one-shot workflow
         run: |
           rm .github/workflows/codex-refresh-health.yml
