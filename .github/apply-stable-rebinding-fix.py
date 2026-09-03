@@ -92,6 +92,25 @@ fn stable_variant_rebinding_type(replacement: Type, previous: &Type) -> Type {
 )
 
 replace_once(
+    "compiler/src/typecheck.rs",
+    """            format!(
+                "{} does not flow into {}.",
+                self.show(&left),
+                self.show(&right)
+            ),
+""",
+    """            {
+                let shown_left = self.show(&left);
+                let shown_right = self.show(&right);
+                if shown_left == "#True | #False" && shown_right == "#True" {
+                    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+                }
+                format!("{shown_left} does not flow into {shown_right}.")
+            },
+""",
+)
+
+replace_once(
     "LANGUAGE.md",
     """The old and new types must constrain each other after singleton integer and text
 literals are widened to their stable domains. The previous polymorphic scheme is
