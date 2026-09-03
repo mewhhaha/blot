@@ -1,0 +1,82 @@
+name: Apply static product layout fix
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'codex/source-defined-include-transforms'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/source-defined-include-transforms
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - run: pnpm install --frozen-lockfile
+      - name: Match static product memory fields by name
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("compiler/src/backend.rs")
+          source = path.read_text()
+          old = '''                for ((field, operand), memory_field) in fields
+                      .iter()
+                      .zip(&operation.operands)
+                      .zip(record_layout(&memory_fields))
+                  {
+                      if field.name != memory_field.name {
+                          return Err(format!(
+                              "{}: static product field `{}` maps to `{}`",
+                              self.module.source, field.name, memory_field.name
+                          ));
+                      }
+          '''
+          new = '''                let memory_fields = record_layout(&memory_fields)
+                      .into_iter()
+                      .map(|field| (field.name.clone(), field))
+                      .collect::<BTreeMap<_, _>>();
+                  for (field, operand) in fields.iter().zip(&operation.operands) {
+                      let memory_field = memory_fields.get(&field.name).ok_or_else(|| {
+                          format!(
+                              "{}: static product field `{}` has no record layout",
+                              self.module.source, field.name
+                          )
+                      })?;
+          '''
+          if old not in source:
+              raise SystemExit("static product write block did not match")
+          path.write_text(source.replace(old, new, 1))
+          PY
+      - name: Format and run compiler tests
+        run: |
+          cargo fmt --manifest-path compiler/Cargo.toml --all
+          cargo test --manifest-path compiler/Cargo.toml
+      - name: Build compiler and run static product regression
+        run: |
+          pnpm compiler:build
+          pnpm exec tsx --test src/compiler/static_product_layout.test.ts
+      - name: Commit validated fix and remove this one-shot workflow
+        run: |
+          rm .github/workflows/codex-static-product-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add compiler/src/backend.rs src/compiler/static_product_layout.test.ts .github/workflows/codex-static-product-fix.yml
+          git commit -m "Match static product memory fields by name"
+          git push origin HEAD:codex/source-defined-include-transforms
