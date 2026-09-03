@@ -7,48 +7,21 @@ permissions:
   contents: read
 
 jobs:
-  take-at-shape:
-    name: take_at ${{ matrix.shape }}
+  take-at-layout:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shape:
-          - array_then_option
-          - flagged_tuple
-          - sentinel_tuple
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - name: Replace take_at with candidate representation
-        env:
-          SHAPE: ${{ matrix.shape }}
+      - name: Isolate take_at and expose runtime layouts
         run: |
           python3 - <<'PY'
-          import os
           import re
           from pathlib import Path
 
-          candidates = {
-              "array_then_option": "let take_at :: ([Int], Int) -> ([Int], Option Int)\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    let (selected, remainder) = @array.take values index\n    return (remainder, Some selected)\n\n  return (values, None)\n",
-              "flagged_tuple": "let take_at :: ([Int], Int) -> (Bool, Int, [Int])\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    let (selected, remainder) = @array.take values index\n    return (True, selected, remainder)\n\n  return (False, 0, values)\n",
-              "sentinel_tuple": "let take_at :: ([Int], Int) -> (Int, [Int])\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    return @array.take values index\n\n  return (0, values)\n",
-          }
-
           fixture = Path("examples/runtime_memory_lowerings.blot")
           source = fixture.read_text()
-          source, count = re.subn(
-              r"let take_at :: \(\[Int\], Int\) -> Option \(Int, \[Int\]\)\n"
-              r"let take_at = fn \(values, index\) => do:\n"
-              r"  if index >= 0 && index < Array.length \(&values\):\n"
-              r"    return Some \(@array.take values index\)\n\n"
-              r"  return None\n",
-              candidates[os.environ["SHAPE"]],
-              source,
-          )
-          assert count == 1, "could not replace take_at"
           source, count = re.subn(
               r"return \{\n(?:  \.[^\n]+\n)+\}\n\Z",
               "return {\n  .take_at = take_at;\n}\n",
@@ -71,6 +44,28 @@ jobs:
           keep = test.index(assertion) + len(assertion)
           test = test[:keep] + "\n        });\n    }\n"
           session.write_text(source[:start] + test + source[end:])
+
+          hir = Path("compiler/src/hir.rs")
+          source = hir.read_text()
+          old = '''        if result.type_id != expected {
+              return Err(hir_error(
+                  "A function export result does not match its checked type.",
+              ));
+          }
+          '''
+          new = '''        if result.type_id != expected {
+              let actual_type = serde_json::to_string(&self.types[result.type_id])
+                  .unwrap_or_else(|_| format!("type {}", result.type_id));
+              let expected_type = serde_json::to_string(&self.types[expected])
+                  .unwrap_or_else(|_| format!("type {expected}"));
+              return Err(hir_error(&format!(
+                  "A function export result does not match its checked type: actual {} = {actual_type}; expected {expected} = {expected_type}.",
+                  result.type_id,
+              )));
+          }
+          '''
+          assert old in source, "could not instrument function export layout check"
+          hir.write_text(source.replace(old, new, 1))
           PY
-      - name: Prepare candidate
+      - name: Prepare take_at
         run: cargo test --manifest-path compiler/Cargo.toml runtime_memory_lowering_fixture_prepares_and_emits_all_builders -- --nocapture
