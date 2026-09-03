@@ -1,5 +1,5 @@
 // `@include` supplies a source record to an ordinary Blot function. These
-// helpers are values, not include modes understood by the compiler.
+// helpers are source-defined values, not compiler-defined include modes.
 
 const as_raw = fn source => source.text
 const as_json = @json.parse #Widen
