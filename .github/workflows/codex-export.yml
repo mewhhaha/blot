@@ -29,8 +29,6 @@ jobs:
           git apply .github/codex-source-fixity.patch
           rm .github/codex-source-fixity.patch
           rm .github/workflows/codex-export.yml
-          cargo fmt --manifest-path compiler/Cargo.toml
-          deno fmt compiler/src/lower.rs src/syntax/lower.ts src/syntax/module.test.ts
           git diff --check
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
@@ -47,6 +45,12 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
+      - name: Format candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path compiler/Cargo.toml
+          deno fmt src/syntax/lower.ts src/syntax/module.test.ts
       - name: Rebuild compiler and prelude snapshot
         run: >-
           deno run
