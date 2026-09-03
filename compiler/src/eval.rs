@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::{Rc, Weak};
 
+use num_traits::ToPrimitive;
+
 use crate::ast::{
     Declaration, DeclarationId, DeclarationKind, Expression, ExpressionId, Module, Pattern,
     PatternId, ShapeMember, Span,
@@ -1876,19 +1878,60 @@ pub fn evaluate_expression(
     let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
     let computation = match expression {
-        Expression::Int { value, .. } => {
-            if runtime.phase == Phase::Runtime
-                && (value < &(-BigIntExt::two_to_63()) || value > &BigIntExt::two_to_63_minus_one())
-            {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_INTEGER_OVERFLOW",
-                    format!("The runtime integer {value} is outside signed i64."),
-                    span,
-                ));
+        Expression::Int { value, .. } => match checked_representation.as_ref() {
+            Some(Value::Range {
+                domain: Some(ValueDomain::Float),
+                ..
+            }) => {
+                let Some(value) = value.to_f64() else {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_INTEGER_OVERFLOW",
+                        format!("The integer literal {value} cannot be represented as F64."),
+                        span,
+                    ));
+                };
+                Computation::value(Value::Float(value))
             }
-            Computation::value(Value::Int(value.clone()))
+            Some(Value::Range {
+                domain: Some(ValueDomain::Float32),
+                ..
+            }) => {
+                let Some(value) = value.to_f32() else {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_INTEGER_OVERFLOW",
+                        format!("The integer literal {value} cannot be represented as F32."),
+                        span,
+                    ));
+                };
+                Computation::value(Value::Float32(value))
+            }
+            _ => {
+                if runtime.phase == Phase::Runtime
+                    && (value < &(-BigIntExt::two_to_63())
+                        || value > &BigIntExt::two_to_63_minus_one())
+                {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_INTEGER_OVERFLOW",
+                        format!("The runtime integer {value} is outside signed i64."),
+                        span,
+                    ));
+                }
+                Computation::value(Value::Int(value.clone()))
+            }
+        },
+        Expression::Float { value, .. } => {
+            if matches!(
+                checked_representation.as_ref(),
+                Some(Value::Range {
+                    domain: Some(ValueDomain::Float32),
+                    ..
+                })
+            ) {
+                Computation::value(Value::Float32(*value as f32))
+            } else {
+                Computation::value(Value::Float(*value))
+            }
         }
-        Expression::Float { value, .. } => Computation::value(Value::Float(*value)),
         Expression::Text { value, .. } => Computation::value(Value::Text(value.clone())),
         Expression::Unit { .. } => Computation::value(Value::Unit),
         Expression::Tag { name, .. } => Computation::value(Value::Tag {

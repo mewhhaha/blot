@@ -5,11 +5,10 @@
 // `pair.0` a projection: the field has no digit before its dot and a float
 // always does.
 //
-// `F64` is the only float type. There is no `1.5` singleton the way there is a
-// `1` singleton, because a float bound would have to be a real number and
-// nothing the lattice does with bounds — adjacency, enumeration — has a
-// meaning there. So a float literal inhabits `F64` and the narrowing machinery
-// never has to answer a question about reals.
+// There is no `1.5` singleton the way there is a `1` singleton, because a
+// float bound would have to be a real number and nothing the lattice does with
+// bounds — adjacency, enumeration — has a meaning there. A float literal
+// defaults to `F64`, while an `F32` context selects single precision directly.
 
 open import "blot:prelude"
 
@@ -82,13 +81,13 @@ let root = F64.truncate (F64.mul (F64.sqrt 2.0) 1000.0)
 
 // --- the narrower one -------------------------------------------------------
 //
-// `F32` is a distinct type reached by conversion. There is no f32 literal: the
-// grammar has one float token, and `F32.of_float` is what makes the loss of
-// precision a step the program takes rather than one performed on it.
+// `F32` is a distinct type. The grammar has one float token; an `F32` call or
+// signature selects its single-precision representation. Conversion remains
+// explicit for a value that was already bound as `F64`.
 //
 // It is a separate type rather than a precision `F64` sometimes has, so mixing
-// them is an error rather than a rounding nobody wrote down — and because it is
-// the lane type a four-wide vector needs.
+// bound values is an error rather than a rounding nobody wrote down — and
+// because it is the lane type a four-wide vector needs.
 
 let third_64 :: Int
 let third_64 = F64.truncate (F64.mul (F64.div 1.0 3.0) 1000000000.0)
@@ -98,7 +97,7 @@ let third_64 = F64.truncate (F64.mul (F64.div 1.0 3.0) 1000000000.0)
 let third_32 :: Int
 let third_32 =
   F64.truncate (F64.mul
-    (F32.widen (F32.div (F32.of_int 1) (F32.of_int 3)))
+    (F32.widen (F32.div 1 3))
     1000000000.0)
 
 // A double that is exact in f32 survives the round trip; one that is not does
@@ -106,13 +105,13 @@ let third_32 =
 let exact_round_trip :: Bool
 let exact_round_trip =
   is_equal (F64.cmp
-    (F32.widen (F32.of_float 0.5))
+    (F32.widen 0.5)
     0.5)
 
 let lossy_round_trip :: Bool
 let lossy_round_trip =
   is_equal (F64.cmp
-    (F32.widen (F32.of_float 0.1))
+    (F32.widen 0.1)
     0.1)
 
 // --- the boundary -----------------------------------------------------------
