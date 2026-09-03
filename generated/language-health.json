@@ -736,7 +736,7 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8038
+      "lines": 8039
     },
     {
       "path": "compiler/src/ownership.rs",
