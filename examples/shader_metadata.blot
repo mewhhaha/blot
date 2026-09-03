@@ -2,7 +2,7 @@
 //
 // This deliberately tiny parser accepts one-line struct declarations. It is a
 // proof of the include-transform boundary, not a replacement for a WGSL parser.
-// The value returned from `@include` has no `.text` field.
+// Only the projected metadata crosses the boundary; no `.text` field remains.
 
 open import "blot:prelude"
 
