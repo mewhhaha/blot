@@ -7,42 +7,24 @@ permissions:
   contents: read
 
 jobs:
-  inspect-sum-layouts:
+  inspect-sum-callers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Print sum layout construction sites
+      - name: Print residual sum_type callers
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           lines = Path("compiler/src/hir.rs").read_text().splitlines()
-          needles = [
-              "RuntimeType::Sum",
-              "RuntimeCase {",
-              "fn runtime_type_from_checked_type",
-              "fn type_from_type_value",
-              "fn lower_value(",
-              "fn symbolic_value",
-              "fn insert_type",
-              "fn insert_product_type",
-              "fn join_values",
-              "sum.make",
-              "fn array_take",
+          centers = [
+              index
+              for index, line in enumerate(lines)
+              if "sum_type(" in line and "fn sum_type" not in line
           ]
-          centers = []
-          for index, line in enumerate(lines):
-              if any(needle in line for needle in needles):
-                  centers.append(index)
-          windows = []
           for center in centers:
-              start = max(0, center - 18)
-              end = min(len(lines), center + 35)
-              if windows and start <= windows[-1][1] + 3:
-                  windows[-1] = (windows[-1][0], max(windows[-1][1], end))
-              else:
-                  windows.append((start, end))
-          for start, end in windows:
+              start = max(0, center - 12)
+              end = min(len(lines), center + 16)
               print(f"\n===== compiler/src/hir.rs:{start + 1}-{end} =====")
               for index in range(start, end):
                   print(f"{index + 1:05d}: {lines[index]}")
