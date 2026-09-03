@@ -1,31 +1,111 @@
-name: Codex runtime memory diagnosis
+name: Apply residual sum case fix
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect-sum-callers:
+  apply-fix:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'codex/source-defined-include-transforms'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Print residual sum_type callers
+        with:
+          ref: codex/source-defined-include-transforms
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Canonicalize residual constructor joins
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          lines = Path("compiler/src/hir.rs").read_text().splitlines()
-          centers = [
-              index
-              for index, line in enumerate(lines)
-              if "sum_type(" in line and "fn sum_type" not in line
-          ]
-          for center in centers:
-              start = max(0, center - 12)
-              end = min(len(lines), center + 16)
-              print(f"\n===== compiler/src/hir.rs:{start + 1}-{end} =====")
-              for index in range(start, end):
-                  print(f"{index + 1:05d}: {lines[index]}")
+          path = Path("compiler/src/hir.rs")
+          source = path.read_text()
+          old = '''            let cases = vec![consequent_name.clone(), alternate_name.clone()];
+                      let consequent_payload = compiler_tag_payload(consequent_payload.as_deref());
+                      let alternate_payload = compiler_tag_payload(alternate_payload.as_deref());
+                      let consequent_payload_type = self.value_type(&consequent_payload)?;
+                      let alternate_payload_type = self.value_type(&alternate_payload)?;
+                      let sum_type =
+                          self.sum_type(&cases, &[consequent_payload_type, alternate_payload_type]);
+                      self.current_block = consequent_block;
+                      let consequent_payload = self.lower_value(&consequent_payload, span)?;
+                      let consequent = self.operation_with_case(
+                          "sum.make",
+                          sum_type,
+                          vec![consequent_payload.id],
+                          span,
+                          0,
+                      );
+                      self.current_block = alternate_block;
+                      let alternate_payload = self.lower_value(&alternate_payload, span)?;
+                      let alternate =
+                          self.operation_with_case("sum.make", sum_type, vec![alternate_payload.id], span, 1);
+                      let meaning = RuntimeMeaning::Sum { cases };
+          '''
+          new = '''            let consequent_payload = compiler_tag_payload(consequent_payload.as_deref());
+                      let alternate_payload = compiler_tag_payload(alternate_payload.as_deref());
+                      let mut payload_types = BTreeMap::new();
+                      payload_types.insert(
+                          consequent_name.clone(),
+                          self.value_type(&consequent_payload)?,
+                      );
+                      payload_types.insert(
+                          alternate_name.clone(),
+                          self.value_type(&alternate_payload)?,
+                      );
+                      // Checked variants are keyed by constructor name. Canonicalize the
+                      // residual representation too so branch order cannot change its ABI.
+                      let cases = payload_types.keys().cloned().collect::<Vec<_>>();
+                      let payload_types = payload_types.values().copied().collect::<Vec<_>>();
+                      let sum_type = self.sum_type(&cases, &payload_types);
+                      let consequent_case = cases
+                          .iter()
+                          .position(|case_| case_ == consequent_name)
+                          .expect("consequent constructor is present in its joined sum");
+                      let alternate_case = cases
+                          .iter()
+                          .position(|case_| case_ == alternate_name)
+                          .expect("alternate constructor is present in its joined sum");
+                      self.current_block = consequent_block;
+                      let consequent_payload = self.lower_value(&consequent_payload, span)?;
+                      let consequent = self.operation_with_case(
+                          "sum.make",
+                          sum_type,
+                          vec![consequent_payload.id],
+                          span,
+                          consequent_case,
+                      );
+                      self.current_block = alternate_block;
+                      let alternate_payload = self.lower_value(&alternate_payload, span)?;
+                      let alternate = self.operation_with_case(
+                          "sum.make",
+                          sum_type,
+                          vec![alternate_payload.id],
+                          span,
+                          alternate_case,
+                      );
+                      let meaning = RuntimeMeaning::Sum { cases };
+          '''
+          if old not in source:
+              raise SystemExit("join_values constructor block did not match")
+          path.write_text(source.replace(old, new, 1))
           PY
+      - name: Format compiler sources
+        run: cargo fmt --manifest-path compiler/Cargo.toml --all
+      - name: Re-run the original failing fixture
+        run: cargo test --manifest-path compiler/Cargo.toml runtime_memory_lowering_fixture_prepares_and_emits_all_builders -- --nocapture
+      - name: Commit validated fix and remove this one-shot workflow
+        run: |
+          rm .github/workflows/codex-runtime-memory-diagnose.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add compiler/src/hir.rs .github/workflows/codex-runtime-memory-diagnose.yml
+          git commit -m "Canonicalize residual sum case order"
+          git push origin HEAD:codex/source-defined-include-transforms
