@@ -1,0 +1,65 @@
+name: Codex runtime memory diagnosis
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  isolate-export:
+    name: isolate ${{ matrix.export }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        export:
+          - collect_range
+          - map_range
+          - filter_range
+          - partition_range
+          - split_text
+          - replace_text
+          - build_map
+          - take_at
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Isolate one function export
+        env:
+          EXPORT_NAME: ${{ matrix.export }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          fixture = Path("examples/runtime_memory_lowerings.blot")
+          source = fixture.read_text()
+          source, count = re.subn(
+              r"return \{\n(?:  \.[^\n]+\n)+\}\n\Z",
+              f"return {{\n  .{os.environ['EXPORT_NAME']} = {os.environ['EXPORT_NAME']};\n}}\n",
+              source,
+          )
+          assert count == 1, "could not isolate fixture export"
+          fixture.write_text(source)
+
+          session = Path("compiler/src/session.rs")
+          source = session.read_text()
+          start = source.index(
+              "    fn runtime_memory_lowering_fixture_prepares_and_emits_all_builders()"
+          )
+          end = source.index(
+              "\n    #[test]\n    fn runtime_text_replace_emits_its_single_join()",
+              start,
+          )
+          test = source[start:end]
+          assertion = '            assert_eq!(prepared["ok"], true, "{prepared}");'
+          keep = test.index(assertion) + len(assertion)
+          test = test[:keep] + "\n        });\n    }\n"
+          session.write_text(source[:start] + test + source[end:])
+          PY
+      - name: Prepare isolated export
+        run: cargo test --manifest-path compiler/Cargo.toml runtime_memory_lowering_fixture_prepares_and_emits_all_builders -- --nocapture
