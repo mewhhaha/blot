@@ -12,7 +12,7 @@ export interface Fixity {
   readonly span: Span;
 }
 
-/** Reads the bounded fixity header before any expression is folded. */
+/** Reads the complete bounded source fixity header before any expression chain is folded. */
 export function declaredFixities(root: Rule): readonly Fixity[] {
   return fieldList(root, "operators").map((cursor) => {
     const rule = asRule(cursor, "fixity_declaration");
