@@ -1,0 +1,34 @@
+name: Apply Deno formatting
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'codex/source-defined-include-transforms'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/source-defined-include-transforms
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Apply repository formatting
+        run: deno fmt
+      - name: Verify formatting
+        run: deno fmt --check
+      - name: Commit formatted files and remove this one-shot workflow
+        run: |
+          rm .github/workflows/codex-format.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Format documentation and examples"
+          git push origin HEAD:codex/source-defined-include-transforms
