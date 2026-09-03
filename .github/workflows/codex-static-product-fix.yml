@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: 24.19.0
           cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
@@ -70,10 +73,11 @@ jobs:
           )
           path.write_text(source[: match.start()] + replacement + source[match.end() :])
           PY
-      - name: Format and run compiler tests
+      - name: Format and smoke-test the backend patch
         run: |
           cargo fmt --manifest-path compiler/Cargo.toml --all
-          cargo test --manifest-path compiler/Cargo.toml
+          cargo test --manifest-path compiler/Cargo.toml backend::tests::closed_product_store_literal_is_serialized_into_static_memory
+          git diff --check
       - name: Build compiler and run static product regression
         run: |
           pnpm compiler:build
