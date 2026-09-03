@@ -59,6 +59,8 @@ jobs:
           --allow-run=cargo,git,rustc
           --allow-env
           scripts/build_compiler.ts
+      - name: Regenerate language health
+        run: pnpm generate:health
       - name: Check generated artifacts
         run: deno task check:generated
       - name: Check Rust formatting and lint
