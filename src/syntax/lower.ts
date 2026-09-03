@@ -67,7 +67,14 @@ export function lowerModule(root: Rule, source: string): Module {
 
   let statements = fieldList(root, "declarations")
     .map((cursor) => unwrap(cursor));
-  let result: Expr = { tag: "unit", span: root.span };
+  // Fixity declarations are syntax metadata. Keep them out of the semantic
+  // module extent so adding or editing a header cannot perturb backend IDs.
+  const span: Span = {
+    start: headerCursor?.span.start ?? statements[0]?.span.start ??
+      root.span.end,
+    end: root.span.end,
+  };
+  let result: Expr = { tag: "unit", span };
   let resultEffects: Module["resultEffects"] = "pure";
   const last = statements.at(-1);
   if (last !== undefined) {
@@ -87,7 +94,7 @@ export function lowerModule(root: Rule, source: string): Module {
       resultEffects,
       span: result.span,
     };
-    result = resolveControlSequence(statements, result, context, root.span);
+    result = resolveControlSequence(statements, result, context, span);
     resultEffects = "ambient";
     loweredDeclarations = [];
   } else {
@@ -100,7 +107,7 @@ export function lowerModule(root: Rule, source: string): Module {
     declarations: loweredDeclarations,
     result,
     resultEffects,
-    span: root.span,
+    span,
   };
 }
 

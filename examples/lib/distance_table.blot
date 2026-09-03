@@ -21,7 +21,7 @@ const accept_candidate = fn (?distances, &vertex, &candidate) => do:
   let was_known = case Array.expect_get (
     (&known),
     (&vertex)
-  ) of
+    ) of
     #True => True
     #False => False
   if not was_known:
@@ -37,7 +37,7 @@ const accept_candidate = fn (?distances, &vertex, &candidate) => do:
       .values = !values;
       .known = !known;
     }
-  )
+    )
 
 const improve :: (Distances, Int, Int) -> (Bool, Distances)
 const improve = fn (?distances, &vertex, &candidate) => do:
@@ -55,4 +55,4 @@ return {
   .create = create;
   .accept_candidate = accept_candidate;
   .improve = improve;
-}
+  }

@@ -68,9 +68,10 @@ impl<'a> LoweringContext<'a> {
 pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     let root = as_rule(cst.root())?;
     require_rule(cst, root, "program")?;
-    let span = cst.span(Cursor::Rule(root))?;
+    let root_span = cst.span(Cursor::Rule(root))?;
     let mut arena = AstArena::default();
-    let parameter = match cst.field(root, "header")? {
+    let header = cst.field(root, "header")?;
+    let parameter = match header {
         Some(header) => {
             let header = as_rule(header)?;
             Some(lower_pattern(
@@ -89,6 +90,16 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     let table = FixityTable::new(&fixities)?;
     let context = LoweringContext::root(&table);
     let mut statements = cst.field_list(root, "declarations")?;
+    // Fixity declarations are syntax metadata. Keep them out of the semantic
+    // module extent so adding or editing a header cannot perturb backend IDs.
+    let span = Span {
+        start: match (header, statements.first().copied()) {
+            (Some(header), _) => cst.span(header)?.start,
+            (None, Some(first)) => cst.span(first)?.start,
+            (None, None) => root_span.end,
+        },
+        end: root_span.end,
+    };
     let mut result = arena.expression(Expression::Unit { span });
     let mut result_effects = ResultEffects::Pure;
     if let Some(last) = statements.last().copied()

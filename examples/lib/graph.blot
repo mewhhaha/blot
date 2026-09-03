@@ -5,4 +5,4 @@ const outgoing = fn (&graph, &vertex) => Array.expect_get ((&graph), (&vertex))
 
 return {
   .outgoing = outgoing;
-}
+  }

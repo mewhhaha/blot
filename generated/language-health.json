@@ -729,7 +729,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14112
+      "lines": 14269
     },
     {
       "path": "compiler/src/session.rs",
@@ -749,23 +749,23 @@
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 4368
+      "lines": 4379
     },
     {
       "path": "compiler/src/frontend_plan.rs",
       "lines": 3516
     },
     {
-      "path": "src/prelude/prelude.blot",
-      "lines": 3384
-    },
-    {
       "path": "compiler/src/value_capsule.rs",
       "lines": 3376
     },
     {
+      "path": "src/prelude/prelude.blot",
+      "lines": 3363
+    },
+    {
       "path": "src/syntax/lower.ts",
-      "lines": 3211
+      "lines": 3218
     },
     {
       "path": "compiler/src/value.rs",

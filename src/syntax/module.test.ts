@@ -66,6 +66,17 @@ return !!(1 <++> 2 <++> 3)
   assertEquals(nested.right.tag, "int");
 });
 
+Deno.test("fixity headers do not change the semantic module extent", async () => {
+  const source = `infixl 60 (<++>) = combine
+return 1 <++> 2
+`;
+  const parsed = await parse(source);
+  assert(parsed.ok);
+  if (!parsed.ok) return;
+  assertEquals(parsed.module.span.start, source.indexOf("return"));
+  assertEquals(parsed.module.result.span.start, source.indexOf("return 1") + 7);
+});
+
 Deno.test("a source fixity overrides the standard source prelude", async () => {
   const parsed = await parse(`infixl 60 (+) = Custom.add
 return 20 + 22
