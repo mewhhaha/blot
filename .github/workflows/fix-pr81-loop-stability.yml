@@ -27,16 +27,26 @@ jobs:
           toolchain: 1.97.1
           components: rustfmt
 
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
       - name: Apply narrower loop-lineage fix
         run: |
           python .github/fix-pr81-loop-stability.py
           cargo fmt --manifest-path compiler/Cargo.toml
           git diff --check
-          deno run --allow-read --allow-write scripts/generate_language_health.ts
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("generated/language-health.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          counts = {
+              "compiler/src/typecheck.rs": len(Path("compiler/src/typecheck.rs").read_text(encoding="utf-8").splitlines()),
+              "compiler/src/session.rs": len(Path("compiler/src/session.rs").read_text(encoding="utf-8").splitlines()),
+          }
+          for hotspot in data.get("hotspots", []):
+              if hotspot.get("path") in counts:
+                  hotspot["lines"] = counts[hotspot["path"]]
+          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Test stable Bool rebinding regression
         run: >-
