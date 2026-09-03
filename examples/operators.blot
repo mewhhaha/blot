@@ -1,5 +1,7 @@
-// Fixed operators. Their small precedence table is part of the language;
-// domains without a fixed spelling use named functions.
+// Operators are ordinary source declarations. This module adds one spelling
+// while the prelude supplies the conventional standard header.
+
+infixr 55 (<++>) = Text.append
 
 open import "blot:prelude"
 
@@ -15,8 +17,9 @@ let chained = 1 + 2 * 3 - 4 / 2
 let compared = 1 + 2 == 3
 let distinct = remainder != 0
 
-// Associativity and precedence are fixed and visible in LANGUAGE.md.
+// Associativity and precedence come from source and are visible in LANGUAGE.md.
 let joined = "a" <> "b" <> "c"
+let custom_joined = "a" <++> "b" <++> "c"
 let piped = 20 |> Int.add 2 |> Int.mul 2
 let applied = Int.add 20 $ 22
 let call = fn callback => callback 40 2
@@ -25,7 +28,7 @@ let block_applied = call $ fn left => fn right => do:
 let bounded = Int.le 3 4
 let negated = -7 + 10
 
-// --- what the default levels mean -------------------------------------------
+// --- what the standard source levels mean -----------------------------------
 //
 // Precedence is grouped by what an operator does, and each of these pins a
 // relationship that was wrong once. The parenthesised form is what the bare
@@ -72,6 +75,7 @@ return {
   .compared = compared;
   .distinct = distinct;
   .joined = joined;
+  .custom_joined = custom_joined;
   .piped = piped;
   .applied = applied;
   .block_applied = block_applied;

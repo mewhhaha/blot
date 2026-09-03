@@ -44,8 +44,9 @@ Source effects and public host capabilities are unavailable. An import or
 include is not an ambient filesystem read: dependency resolution supplies an
 explicit revisioned input before evaluation begins.
 
-Operator spelling and precedence are not staged values. They are fixed by the
-generated language plan before elaboration.
+Operator spelling and precedence are not staged values. They are collected from
+the source syntax prelude and the module's bounded fixity header before
+elaboration.
 
 ## 3. Checked bridges
 

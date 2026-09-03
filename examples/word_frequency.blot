@@ -6,14 +6,16 @@ const FrequencyEntries = [OrderedTextMap.entry Int]
 let count_words :: Text -> Frequencies
 let count_words = fn text => do:
   let parts = Text.split (Text.trim text, " ")
-  let words = filter (
-    (&parts),
-    fn word => Text.length word > 0
-  )
-  let sorted = Array.merge_sort (
-    words,
-    fn (left, right) => not (is_greater (@text.cmp left right))
-  )
+  let words =
+    filter (
+      (&parts),
+      fn word => Text.length word > 0
+    )
+  let sorted =
+    Array.merge_sort (
+      words,
+      fn (left, right) => not (is_greater (@text.cmp left right))
+    )
   let length = Array.length (&sorted)
   if length == 0:
     let entries :: FrequencyEntries

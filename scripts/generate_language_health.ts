@@ -1,3 +1,5 @@
+import { readSourceFixities } from "./source_fixities.ts";
+
 const sourceRoots = ["compiler/src", "src"];
 const sourceFiles: string[] = [];
 for (const root of sourceRoots) await collect(root, sourceFiles);
@@ -19,9 +21,7 @@ const intrinsics = await tokens(
   intrinsicFiles,
   /@[a-z_][A-Za-z0-9_]*(?:\.[a-z_][A-Za-z0-9_]*)*/g,
 );
-const language = JSON.parse(
-  await Deno.readTextFile("compiler/language.json"),
-) as { readonly operators: readonly unknown[] };
+const operators = await readSourceFixities();
 const protocol = JSON.parse(
   await Deno.readTextFile("compiler/protocol.json"),
 ) as Record<string, number>;
@@ -49,7 +49,7 @@ const health = `${
   JSON.stringify(
     {
       protocol,
-      operators: language.operators,
+      operators,
       diagnostics: diagnosticCodes,
       intrinsics,
       preludeExports,

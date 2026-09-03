@@ -21,22 +21,22 @@ let rec summarize :: ([Int], Int, [Int], [Text]) -> Summary
 let rec summarize = fn (&values, index, accepted, errors) => case Array.get (
   (&values),
   index
-) of
-    #None => { .accepted = accepted; .errors = errors; }
-    #Some value => case validate value of
-      #Accepted accepted_value => summarize (
-        (&values),
-        index + 1,
-        @array.push accepted accepted_value,
-        !errors
-      )
+  ) of
+  #None => { .accepted = accepted; .errors = errors; }
+  #Some value => case validate value of
+    #Accepted accepted_value => summarize (
+      (&values),
+      index + 1,
+      @array.push accepted accepted_value,
+      !errors
+    )
 
-      #Rejected reason => summarize (
-        (&values),
-        index + 1,
-        !accepted,
-        @array.push errors reason
-      )
+    #Rejected reason => summarize (
+      (&values),
+      index + 1,
+      !accepted,
+      @array.push errors reason
+)
 
 let values = [-2, 3, 4, 10]
 return summarize ((&values), 0, [], [])

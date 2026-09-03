@@ -1,8 +1,8 @@
-// The smallest legal module: no header, no operators, one result.
+// The smallest legal module: no module or fixity header, one result.
 //
 // Even this opens the prelude. It has no privilege — a module that does not
-// open it does not have `+`, because the fixed operator table names
-// `Int.add` and nothing would be in scope to answer.
+// open it has no `Int.add` binding in scope to answer the standard source
+// declaration for `+`.
 
 open import "blot:prelude"
 

@@ -1,0 +1,7 @@
+// The whole fixity table is collected before flat expression chains fold, so
+// source fixities form a bounded header before executable declarations.
+let x = 1
+
+infixl 60 (+) = Int.add
+
+return x

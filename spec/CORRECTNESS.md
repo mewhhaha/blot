@@ -71,8 +71,8 @@ The frontend owes:
 
 1. deterministic lexing and compact parsing for fixed source and language plan;
 2. equivalence between incremental and fresh frontend results;
-3. deterministic folding under the generated fixed operator table;
-4. rejection of removed custom fixity declarations;
+3. deterministic folding under the source syntax-prelude and module overlay;
+4. rejection of duplicate fixities and coherent source overrides;
 5. hygienic resolution and generated binders;
 6. explicit `do:` control-target preservation, with declaration-directed phase;
 7. source-origin preservation; and
@@ -384,10 +384,10 @@ compiler results rather than extra source observations.
 
 ## 15. Determinism and incremental reuse
 
-For fixed source graph, generated language plan, dependency revisions, compiler
-and certificate schema, primitive catalog, target policy, and documented
-resource bounds, compilation is deterministic, including ordered diagnostics and
-artifact bytes.
+For fixed source graph, source syntax-prelude revision, dependency revisions,
+compiler and certificate schema, primitive catalog, target policy, and
+documented resource bounds, compilation is deterministic, including ordered
+diagnostics and artifact bytes.
 
 Incremental compilation is memoization of this same judgment. A cached artifact
 may be reused only when every input observed by its phase is equal and its

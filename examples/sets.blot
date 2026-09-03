@@ -1,11 +1,11 @@
 // Set algebra, and what "overloading an operator" means here.
 //
-// `|`, `&`, and `\` are not syntax. The fixity table binds each spelling to a
+// `|`, `&`, and `\` are generic operators. The source fixity table binds each spelling to a
 // field of a record named `Type`, exactly the way `+` is bound to `Int.add`:
 //
-//   infixl 45 (|)  = Type.union;
-//   infixl 45 (&)  = Type.intersect;
-//   infixl 45 (\)  = Type.diff;
+//   infixl 40 (|) = Type.union
+//   infixl 45 (&) = Type.intersect
+//   infixl 40 (\) = Type.diff
 //
 // `Type` provides set algebra because types denote sets. The value-level `Set`
 // below is an ordinary polymorphic collection factory with explicit equality.

@@ -1,4 +1,4 @@
-// Generated from compiler/language.json. Do not edit.
+// Generated from source fixities in src/prelude/prelude.blot. Do not edit.
 
 #[rustfmt::skip]
 const GENERATED_FIXITIES: &[GeneratedFixity] = &[

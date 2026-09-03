@@ -3,25 +3,11 @@ open import "blot:prelude"
 const topological_sort = import "./lib/topological_sort.blot"
 
 let vertices = ["shop", "design", "cook", "code", "eat", "test", "deploy"]
-let graph = [
-  [2],
-  [3],
-  [4],
-  [5],
-  [],
-  [6],
-  []
-]
+let graph =
+  [[2], [3], [4], [5], [], [6], []]
 
-let cyclic = [
-  [2],
-  [3],
-  [4],
-  [5],
-  [],
-  [6],
-  [1]
-]
+let cyclic =
+  [[2], [3], [4], [5], [], [6], [1]]
 let { .order = dag_order; .acyclic = dag_acyclic; } = topological_sort (&graph)
 let dag_names = []
 for index in Iter.range (0, Array.length (&dag_order)):

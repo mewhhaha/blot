@@ -654,14 +654,21 @@ const Named = { .name = Text; }
 let item = @satisfies value Named
 ```
 
-## Use the fixed operators for algebra and composition
+## Use source-defined operators for algebra and composition
 
-Blot deliberately has one small operator vocabulary. Use it where the reading is
-conventional: `account |> validate |> save` is composition, integer arithmetic
-uses the numeric operators, and `<>` appends text. Domain-specific operations
-stay named, such as `Document.append left right` or `Decoder.then decoder next`.
-This keeps precedence and punctuation identical in the compiler, formatter,
-editor, and every module.
+The prelude declares the conventional operators in source. A module may add a
+spelling when an operation has a natural algebraic or pipeline reading:
+
+```blot
+infixr 55 (<++>) = Document.append
+infixl 20 (|>>) = Decoder.then
+```
+
+Put fixity declarations after the optional module header and before ordinary
+declarations. Targets are ordinary qualified values and should be curried so
+partial application remains useful. Keep named calls for actions whose arguments
+have different roles; `account |> validate |> save` is composition, while
+`transfer { .from; .to; .amount; }` reads better as a domain command.
 
 ## Prefer public operations to primitives
 
@@ -935,9 +942,9 @@ just test
 ```
 
 In Helix, hover values to see their inferred signature and compact definition.
-Hover syntax and operators for documentation and fixed precedence. Prefer the
-language server's code action when a lint offers one; actions that require
-compiler evidence are validated before they are published.
+Hover syntax and operators for documentation and the active source precedence.
+Prefer the language server's code action when a lint offers one; actions that
+require compiler evidence are validated before they are published.
 
 The executable catalog in [examples/](examples/) is the next source of idioms.
 Start with [examples/tour.blot](examples/tour.blot), then read the focused file
