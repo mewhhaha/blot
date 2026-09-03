@@ -1234,17 +1234,18 @@ impl StaticOperationWriter<'_> {
                         self.module.source, expected_type
                     ));
                 };
-                for ((field, operand), memory_field) in fields
-                    .iter()
-                    .zip(&operation.operands)
-                    .zip(record_layout(&memory_fields))
-                {
-                    if field.name != memory_field.name {
-                        return Err(format!(
-                            "{}: static product field `{}` maps to `{}`",
-                            self.module.source, field.name, memory_field.name
-                        ));
-                    }
+                let memory_fields = record_layout(&memory_fields)
+                    .into_iter()
+                    .map(|field| (field.name.clone(), field))
+                    .collect::<BTreeMap<_, _>>();
+
+                for (field, operand) in fields.iter().zip(&operation.operands) {
+                    let memory_field = memory_fields.get(&field.name).ok_or_else(|| {
+                        format!(
+                            "{}: static product field `{}` has no record layout",
+                            self.module.source, field.name
+                        )
+                    })?;
                     if !self.write(
                         field.type_id,
                         *operand,
