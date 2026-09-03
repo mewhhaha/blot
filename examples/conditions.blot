@@ -6,7 +6,7 @@
 // arm — and the one in the fallback branch would be *rejected* if it named only
 // `2`.
 //
-// Nothing in the checker knows what `==` is. The fixity table names the binding
+// Nothing in the checker knows what `==` is. The source fixity table names the binding
 // `Int.eq`, the checker reads the compile-time function that name is bound to,
 // and it derives what that function proves by interrogating the value: a
 // comparison factors through `@int.cmp`, whose three answers determine it on

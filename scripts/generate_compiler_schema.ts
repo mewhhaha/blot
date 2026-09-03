@@ -1,3 +1,4 @@
+import { readSourceFixities } from "./source_fixities.ts";
 import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import {
   compactFieldNames,
@@ -141,34 +142,12 @@ function protocolVersion(
   return value as number;
 }
 
-interface OperatorEntry {
-  readonly operator: string;
-  readonly associativity: "left" | "right" | "none" | "prefix";
-  readonly precedence: number;
-  readonly target: string;
-}
-
 async function languageOutputs(): Promise<
   readonly (readonly [string, string])[]
 > {
-  const language = JSON.parse(
-    await Deno.readTextFile("compiler/language.json"),
-  ) as { readonly operators?: readonly OperatorEntry[] };
-  const operators = language.operators;
-  if (!Array.isArray(operators) || operators.length === 0) {
-    throw new Error("compiler language vocabulary must declare operators");
-  }
-  const keys = new Set<string>();
-  for (const entry of operators) {
-    const key = `${entry.associativity}:${entry.operator}`;
-    if (keys.has(key)) throw new Error(`duplicate operator ${key}`);
-    keys.add(key);
-    if (!Number.isSafeInteger(entry.precedence) || entry.precedence < 0) {
-      throw new Error(`invalid precedence for ${key}`);
-    }
-  }
+  const operators = await readSourceFixities();
   const typescript =
-    `// Generated from compiler/language.json. Do not edit.\n\n` +
+    `// Generated from source fixities in src/prelude/prelude.blot. Do not edit.\n\n` +
     `export const generatedFixities = ${
       JSON.stringify(operators, null, 2)
     } as const;\n`;
@@ -181,7 +160,8 @@ async function languageOutputs(): Promise<
       JSON.stringify(entry.target)
     } },`;
   }).join("\n");
-  const rust = `// Generated from compiler/language.json. Do not edit.\n\n` +
+  const rust =
+    `// Generated from source fixities in src/prelude/prelude.blot. Do not edit.\n\n` +
     `#[rustfmt::skip]\n` +
     `const GENERATED_FIXITIES: &[GeneratedFixity] = &[\n${rustEntries}\n];\n`;
   return [

@@ -511,16 +511,19 @@ return Namespace
   );
 });
 
-Deno.test("formatting reports the removed operator section", async () => {
-  const formatted = await formatSource(`operators {
-  infix 30 (!=) = Int.ne;
-}
+Deno.test("formatting preserves source fixity headers", async () => {
+  await assertStableFormatting(
+    `infix 30 (!=) = Int.ne
 
 open import "blot:prelude"
 return 1 != 2
-`);
-  if (formatted.ok) throw new Error("removed syntax formatted successfully");
-  assertEquals(formatted.diagnostics[0]?.code, "BLOT_REMOVED_OPERATOR_SECTION");
+`,
+    `infix 30 (!=) = Int.ne
+
+open import "blot:prelude"
+return 1 != 2
+`,
+  );
 });
 
 Deno.test("formatting separates a completed statement suite", async () => {

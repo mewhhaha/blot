@@ -25,7 +25,7 @@ observe:
 ```text
 Revision(G,tau) = hash(
   compiler and certificate schema,
-  generated parser and operator plan,
+  generated parser and source syntax-prelude revision,
   root and dependency source bytes,
   resolved import occurrence graph,
   included bytes and transforms,
@@ -204,8 +204,10 @@ semantic token spellings and positions are unchanged may retain the immutable
 lowered AST. Every reuse decision remains subordinate to fresh-frontend
 equivalence.
 
-Operator identity uses the generated fixed language-plan revision. Source
-modules have no custom fixity environment to preserve or compare.
+Operator identity uses the source syntax-prelude revision plus the normalized
+fixity header of the current module. Changing a spelling, target, precedence, or
+associativity invalidates lowering for that module even when its ordinary
+declarations are unchanged.
 
 ## 5. Demand reuse
 
@@ -418,7 +420,7 @@ manifest names the exact:
 
 - prelude source and dependency closure;
 - compiler and certificate schema;
-- generated parser and operator plan;
+- generated parser and source syntax-prelude revision;
 - primitive catalog; and
 - target/ABI policy.
 

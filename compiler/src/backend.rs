@@ -1234,21 +1234,21 @@ impl StaticOperationWriter<'_> {
                         self.module.source, expected_type
                     ));
                 };
-                let memory_fields = record_layout(&memory_fields)
-                    .into_iter()
-                    .map(|field| (field.name.clone(), field))
-                    .collect::<BTreeMap<_, _>>();
-
-                for (field, operand) in fields.iter().zip(&operation.operands) {
-                    let memory_field = memory_fields.get(&field.name).ok_or_else(|| {
-                        format!(
-                            "{}: static product field `{}` has no record layout",
-                            self.module.source, field.name
-                        )
-                    })?;
+                for memory_field in record_layout(&memory_fields) {
+                    let (field_index, field) = fields
+                        .iter()
+                        .enumerate()
+                        .find(|(_, field)| field.name == memory_field.name)
+                        .ok_or_else(|| {
+                            format!(
+                                "{}: static product memory field `{}` has no runtime field",
+                                self.module.source, memory_field.name
+                            )
+                        })?;
+                    let operand = operation.operands[field_index];
                     if !self.write(
                         field.type_id,
-                        *operand,
+                        operand,
                         destination,
                         offset + memory_field.offset as usize,
                     )? {
@@ -7536,12 +7536,12 @@ mod tests {
                     name: "Pair".to_owned(),
                     fields: vec![
                         crate::hir::RuntimeField {
-                            name: "a".to_owned(),
-                            type_id: 1,
-                        },
-                        crate::hir::RuntimeField {
                             name: "b".to_owned(),
                             type_id: 2,
+                        },
+                        crate::hir::RuntimeField {
+                            name: "a".to_owned(),
+                            type_id: 1,
                         },
                     ],
                 },
@@ -7562,7 +7562,7 @@ mod tests {
         right.kind = "constant";
         right.type_id = 2;
         right.value = Some(WireConstant::SignedInteger64("7".to_owned()));
-        let mut pair = plain_operation(3, vec![1, 2]);
+        let mut pair = plain_operation(3, vec![2, 1]);
         pair.kind = "product.make";
         pair.type_id = 3;
         let mut store = plain_operation(4, vec![3]);

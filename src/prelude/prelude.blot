@@ -1,25 +1,38 @@
 // The prelude.
 //
-// Nothing here is built into the compiler. `Bool`, `Int`, `+`, `struct`, and
-// `fold` are ordinary blot declarations over the `@` primitives, which is what
-// "few primitives" has to mean if it means anything.
-//
-// Two calling conventions, and the line between them is deliberate:
-//
-//   * anything an operator dispatches to is curried, because sections are the
-//     point of an operator — `Int.add 2` is what makes `20 |> Int.add 2` work;
-//   * every other multi-argument function takes one shape, because naming beats
-//     position and a tuple is still one parameter.
+// Conventional operators are ordinary source metadata. This bounded header is
+// the single bootstrap source and modules may override it. Targets are ordinary
+// bindings, so polymorphic source functions work without compiler dispatch.
 
-// --- types ------------------------------------------------------------------
-//
-// `|` names `Type.union` exactly the way `+` names `Int.add`: the operator
-// points at prelude source, and the prelude decides which primitive answers.
-// Nothing about `|` is privileged. This initial namespace has to precede the
-// declarations that use it; the complete namespace is assembled after its
-// remaining operations have been defined.
+infixr 10 ($) = Fn.apply
+infixl 20 (|>) = Fn.pipe
+infixl 21 (~) = @type.performs
+infixr 22 (||) = Logic.or
+infixr 24 (&&) = Logic.and
+infixr 25 (->) = @type.arrow
+infixr 25 (~>) = @type.deferred_arrow
+infix 30 (==) = Int.eq
+infix 30 (!=) = Int.ne
+infix 30 (<) = Int.lt
+infix 30 (<=) = Int.le
+infix 30 (>) = Int.gt
+infix 30 (>=) = Int.ge
+infixl 40 (|) = Type.union
+infixl 40 (\) = Type.diff
+infixl 45 (&) = Type.intersect
+infixl 50 (<+) = attach
+infixr 55 (<>) = Text.append
+infixl 60 (+) = Int.add
+infixl 60 (-) = Int.sub
+infixl 70 (*) = Int.mul
+infixl 70 (/) = Int.div
+infixl 70 (%) = Int.rem
+prefix 90 (-) = Int.negate
+prefix 90 (!) = @linear.own
+prefix 90 (?) = @linear.maybe
+prefix 90 (&) = @linear.borrow
 
-
+// --------------------------------------------------------------
 const Type =
   {
     .union = @type.union;
@@ -193,7 +206,7 @@ const IntArithmetic =
     .pred = fn value => @int.sub value 1;
   }
 
-// The fixed operator table resolves against this early namespace. The complete
+// The source fixity header resolves against this early namespace. The complete
 // type value is attached later, after the ordinary `attach` helper exists.
 const Int = { ...IntOrder; ...IntArithmetic; }
 

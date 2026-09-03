@@ -25,7 +25,7 @@ token LAYOUT_DEDENT = // ;
 
 // One operator class rather than an enumerated set. Custom operators are
 // therefore lexically ordinary; precedence and meaning come from the
-// `operators` header and are resolved semantically by fold-fixity, never by
+// source declarations and are resolved semantically by fold-fixity, never by
 // grammar recursion.
 //
 // An operator may contain `/` anywhere except as a doubled prefix, which is
@@ -48,7 +48,7 @@ skip COMMENT = /\/\/[^\r\n]*/ ;
 // supplies unit.
 program = (
   header:module_header?
-  operators:operator_section?
+  operators:fixity_declaration*
   declarations:declaration*
 ) ;
 
@@ -59,16 +59,8 @@ module_header = (
   LAYOUT_NEWLINE
 ) ;
 
-// Retained as a recognisable removed form so the compiler can issue one
-// migration diagnostic instead of a cascade of syntax errors.
-operator_section = (
-  "operators"
-  "{"
-  declarations:fixity_declaration*
-  "}"
-  LAYOUT_NEWLINE
-) ;
-
+// Fixities are a bounded source header. They precede executable declarations
+// because the whole table must be known before flat expression chains fold.
 fixity_declaration = (
   associativity:("infixl" | "infixr" | "infix" | "prefix")
   precedence:INTEGER
@@ -77,7 +69,8 @@ fixity_declaration = (
   ")"
   "="
   target:qualified_name
-  ";"
+  ";"?
+  LAYOUT_NEWLINE
 ) ;
 
 // `type`, `interface`, `effect`, `duck`, and every other binder in the
@@ -199,7 +192,7 @@ breaking = (
 
 // Spreading a module's exports into scope. Selective binding and renaming use
 // an ordinary record pattern instead. The prelude is an ordinary module with
-// no privilege, so this is how `+` finds `Int.add` — a default fixity whose
+// no privilege, so this is how `+` finds `Int.add` — a source fixity whose
 // target is not in scope is useless, and `open` is what puts it there.
 opening = (
   "open"
@@ -374,7 +367,7 @@ field_name = (IDENT | TYPE_IDENT | INTEGER | keyword) ;
 
 keyword = (
   "module" | "with" | "import"
-  | "operators" | "infixl" | "infixr" | "infix" | "prefix"
+  | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "return" | "use"
   | "if" | "else" | "case" | "of" | "rec" | "open"
   | "for" | "in" | "break" | "do" | "fn"

@@ -1,4 +1,8 @@
-import { DEFAULT_FIXITIES } from "../../../syntax/fixity.ts";
+import {
+  declaredFixities,
+  type Fixity,
+  resolveFixities,
+} from "../../../syntax/fixity.ts";
 import type { Expr } from "../../../syntax/ast.ts";
 import { binaryCall, calleePath } from "../syntax.ts";
 import type { LintRule, LintRuleContext } from "../types.ts";
@@ -8,8 +12,9 @@ export const operatorSpelling: LintRule = {
   code: "BLOT_LINT_OPERATOR_SPELLING",
   severity: "hint",
   create(context) {
-    const infix = activeOperators("infix");
-    const prefix = activeOperators("prefix");
+    const fixities = resolveFixities(declaredFixities(context.cst));
+    const infix = activeOperators("infix", fixities);
+    const prefix = activeOperators("prefix", fixities);
     return {
       expression(path) {
         const binary = binaryCall(path.node);
@@ -40,9 +45,10 @@ export const operatorSpelling: LintRule = {
 
 function activeOperators(
   kind: "infix" | "prefix",
+  fixities: readonly Fixity[],
 ): ReadonlyMap<string, string> {
-  const byOperator = new Map<string, (typeof DEFAULT_FIXITIES)[number]>();
-  for (const fixity of DEFAULT_FIXITIES) {
+  const byOperator = new Map<string, Fixity>();
+  for (const fixity of fixities) {
     if ((fixity.associativity === "prefix") === (kind === "prefix")) {
       byOperator.set(fixity.operator, fixity);
     }
