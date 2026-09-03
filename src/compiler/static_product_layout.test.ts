@@ -3,7 +3,7 @@ import test from "node:test";
 import { Compiler } from "./session.ts";
 
 // storage.blot exercises attached layout APIs whose runtime product order can
-// differ from the name-sorted record layout used for static memory.
+// differ from record_layout's alignment/name order for static memory.
 test("static product fields are written by name, not runtime order", async () => {
   const compiler = await Compiler.create();
   try {
