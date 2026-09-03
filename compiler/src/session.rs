@@ -7052,6 +7052,40 @@ return F32.add (-1) 2.5
                     "{checked}"
                 );
             }
+
+            for (index, text) in [concat!(
+                "open import \"blot:prelude\"\n",
+                "let original :: { .count = Int; }\n",
+                "let original = { .count = 1; }\n",
+                "return Shape.update (original, { .id = 2; })\n",
+            )]
+            .into_iter()
+            .enumerate()
+            {
+                let path = format!("numeric-literal-predicate-{index}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(path.clone(), source(text))
+                    .expect("predicate numeric source should load");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("predicate numeric source should configure");
+
+                let checked = session.check_module(&path);
+
+                assert_eq!(checked["ok"], false, "{checked}");
+                assert_eq!(
+                    checked["diagnostic"]["code"], "BLOT_DOES_NOT_SATISFY",
+                    "{checked}"
+                );
+            }
         });
     }
 

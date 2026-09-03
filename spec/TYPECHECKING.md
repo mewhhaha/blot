@@ -87,9 +87,11 @@ undo journal as other transactional solver choices. It commits the first viable
 candidate, so an unconstrained integer keeps its singleton type and an
 unconstrained float defaults to `F64`, then records the chosen runtime
 representation as an expression-type fact. Failed probes leave no bounds or
-fresh variables behind. This elaboration rule adds no cross-domain subtype edge:
-a value already bound in one numeric domain still needs an explicit conversion
-to another.
+fresh variables behind. A compile-time predicate over a subject that mentions an
+unresolved literal resolves those literals before deciding, so the predicate
+observes the committed types rather than an uninformative bottom. This
+elaboration rule adds no cross-domain subtype edge: a value already bound in one
+numeric domain still needs an explicit conversion to another.
 
 ## 1. Type algebra
 

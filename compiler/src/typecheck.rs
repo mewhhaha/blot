@@ -6722,7 +6722,13 @@ impl Checker {
                 Ok(subject)
             }
             Requirement::Predicate(predicate) => {
-                let settled = self.settle(subject.type_.clone(), true);
+                let mut settled = self.settle(subject.type_.clone(), true);
+                if contains_bottom(&settled)
+                    && self.mentions_pending_numeric_literal(&subject.type_)
+                {
+                    self.resolve_numeric_literals()?;
+                    settled = self.settle(subject.type_.clone(), true);
+                }
                 if contains_bottom(&settled) && self.active_closure_contains_computed_field() {
                     self.defer_current_closure();
                     return Ok(subject);
@@ -7118,6 +7124,62 @@ impl Checker {
             );
         }
         Ok(())
+    }
+
+    fn mentions_pending_numeric_literal(&self, type_: &Type) -> bool {
+        let literals = self.numeric_literals.borrow();
+        if literals.is_empty() {
+            return false;
+        }
+        let mut pending = vec![type_];
+        while let Some(type_) = pending.pop() {
+            match type_ {
+                Type::Variable(variable) => {
+                    if literals.contains_key(variable) {
+                        return true;
+                    }
+                }
+                Type::Forall { body, .. } => pending.push(body.as_ref()),
+                Type::Function {
+                    parameter,
+                    effects,
+                    result,
+                    ..
+                } => {
+                    pending.push(parameter.as_ref());
+                    pending.push(effects.as_ref());
+                    pending.push(result.as_ref());
+                }
+                Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                    for (_, field) in fields.iter() {
+                        pending.push(field);
+                    }
+                }
+                Type::RecordUpdate { base, fields } => {
+                    pending.push(base.as_ref());
+                    for (_, field) in fields.iter() {
+                        pending.push(field);
+                    }
+                }
+                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                    pending.push(element.as_ref())
+                }
+                Type::OpenEffects { tail, .. } => pending.push(tail.as_ref()),
+                Type::Union(members) => {
+                    for member in members.iter() {
+                        pending.push(member);
+                    }
+                }
+                Type::Bottom
+                | Type::Rigid(_)
+                | Type::Range { .. }
+                | Type::Unit
+                | Type::Effects(_)
+                | Type::Opaque(_)
+                | Type::Top => {}
+            }
+        }
+        false
     }
 
     fn instantiate(&self, typing: Typing) -> Type {
