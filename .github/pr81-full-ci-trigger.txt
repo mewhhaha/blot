@@ -1,0 +1,1 @@
+Trigger full PR CI after applying the formatter-only spec change.
