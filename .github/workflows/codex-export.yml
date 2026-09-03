@@ -47,12 +47,44 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
-      - name: Format candidate
+      - name: Format candidate and accepted source corpus
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --manifest-path compiler/Cargo.toml
           deno fmt src/syntax/lower.ts src/syntax/module.test.ts
+          cat > .codex-format-corpus.ts <<'TS'
+          import { formatSource } from "./src/tooling/formatter.ts";
+
+          const pendingDirectories = ["examples", "src/prelude", "case-studies"];
+          const sources: string[] = [];
+          while (pendingDirectories.length > 0) {
+            const directory = pendingDirectories.pop();
+            if (directory === undefined) break;
+            for await (const entry of Deno.readDir(directory)) {
+              const path = `${directory}/${entry.name}`;
+              if (entry.isDirectory) {
+                if (path !== "examples/rejected") pendingDirectories.push(path);
+                continue;
+              }
+              if (entry.isFile && path.endsWith(".blot")) sources.push(path);
+            }
+          }
+
+          for (const path of sources.sort()) {
+            const source = await Deno.readTextFile(path);
+            const formatted = await formatSource(source);
+            if (!formatted.ok) {
+              const codes = formatted.diagnostics.map((diagnostic) => diagnostic.code);
+              throw new Error(`${path} did not format: ${codes.join(", ")}`);
+            }
+            if (formatted.source !== source) {
+              await Deno.writeTextFile(path, formatted.source);
+            }
+          }
+          TS
+          deno run --allow-read --allow-write .codex-format-corpus.ts
+          rm .codex-format-corpus.ts
       - name: Rebuild compiler and prelude snapshot
         run: >-
           deno run
@@ -102,7 +134,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Fix residual sum ordering and retag exported sums"
+          git commit -m "Fix residual sum coercion and format source corpus"
           git push origin HEAD:codex/source-defined-operators
       - name: Pack validated workspace
         if: always()
