@@ -36,10 +36,14 @@ integer and text literals widen to their domains at that boundary, so
 requires another `let value = ...`. The existing binding's scheme is retained,
 so rebinding a polymorphic function does not accidentally make it monomorphic.
 
-A lowered `for` keeps its generated recursive accumulator monomorphic. The first
-call therefore contributes the enclosing bindings' stable types to the same
-inference variables used by every back edge, instead of generalizing a loop body
-from a narrower replacement before the initial state is seen.
+Stable rebinding uses subsumption once the existing stable type is closed. While
+a generated loop accumulator is still an open inference variable, the checker
+keeps the previous bidirectional constraints so its initial value and recursive
+back edges can settle that type together. `for` lowering also retains an
+already-wider closed constructor type from the source binding as stable-lineage
+context when it destructures the accumulator. This keeps an explicitly `Bool`
+binding Boolean without freezing an unannotated `#False` accumulator before its
+back edges are inferred.
 
 The one place subtyping is strictly _more_ general than Hindley-Milner is worth
 seeing:

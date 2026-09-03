@@ -264,14 +264,16 @@ sets, extrusion links, and fresh-identity counters exactly as they were at the
 candidate's entry. The first successful candidate commits. A left-hand union is
 conjunction and does not introduce choice.
 
-Stable rebinding checks its replacement against the binding lineage's existing
-type and retains that existing type in the environment. This is subsumption, not
-symmetric unification: a constructor such as `#True` may inhabit the stable
-`#True | #False` type without narrowing the lineage. Lowered `for` recursion is
-monomorphic so its initial accumulator and every back edge constrain one shared
-type graph; generalizing the generated recursive function before its initial
-call would lose that context and incorrectly narrow the accumulator to a single
-replacement.
+Stable rebinding checks a replacement by subsumption once the lineage's stable
+type is closed, and retains that existing type in the environment. A constructor
+such as `#True` may therefore inhabit the stable `#True | #False` type without
+narrowing the lineage. If the stable type is still an inference variable, the
+checker retains the existing bidirectional constraints until that variable is
+settled; this is required for generated loop accumulators whose initial value and
+recursive back edges jointly determine the stable type. When `for` lowering
+introduces its unspellable `loop$` accumulator binding, a closed
+multi-constructor variant already established for a carried source name is also
+retained separately as that name's stable lineage.
 
 The implementation uses an undo journal and a variable-arena checkpoint. It must
 not clone the whole solver graph for a candidate. This is both a semantic
