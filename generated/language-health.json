@@ -729,7 +729,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14269
+      "lines": 14288
     },
     {
       "path": "compiler/src/session.rs",

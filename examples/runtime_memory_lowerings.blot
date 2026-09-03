@@ -41,6 +41,8 @@ let build_map = fn count => do:
 
   return entries
 
+// Keep the success constructor first so this fixture also verifies that
+// residual sum layout is independent of source branch order.
 let take_at :: ([Int], Int) -> Option (Int, [Int])
 let take_at = fn (values, index) => do:
   if index >= 0 && index < Array.length (&values):
