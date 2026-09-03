@@ -11,7 +11,7 @@
 import type { Expr, Span } from "./ast.ts";
 import { fail } from "../diagnostic.ts";
 import { generatedFixities } from "./fixities.generated.ts";
-import { type Associativity, type Fixity } from "./source_fixity.ts";
+import type { Associativity, Fixity } from "./source_fixity.ts";
 export {
   type Associativity,
   declaredFixities,
