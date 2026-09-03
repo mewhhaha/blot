@@ -27,7 +27,10 @@ jobs:
           components: rustfmt
 
       - name: Apply source, test, and documentation changes
-        run: python .github/apply-stable-rebinding-fix.py
+        shell: bash
+        run: |
+          sed -i 's/closure_module\.to_owned()/closure_module.to_string()/' .github/apply-stable-rebinding-fix.py
+          python .github/apply-stable-rebinding-fix.py
 
       - name: Format Rust
         run: cargo fmt --manifest-path compiler/Cargo.toml
