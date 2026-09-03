@@ -16,8 +16,8 @@ memoize that judgment; it cannot define a weaker semantic mode.
 
 Let:
 
-- `Sigma` be compiler schema, generated language plan, primitive catalog, and
-  certificate versions;
+- `Sigma` be compiler schema, source syntax-prelude revision, primitive catalog,
+  and certificate versions;
 - `G` be a complete resolved source graph, including import and include inputs;
 - `tau` be target and ABI policy;
 - `W` be a WebAssembly module;
@@ -59,7 +59,7 @@ A compilation revision includes every input any selected phase may observe:
 ```text
 Revision(G, tau) = hash(
   compiler and certificate schema,
-  generated parser and operator plan,
+  generated parser and source syntax-prelude revision,
   root and dependency source bytes,
   resolved import occurrence graph,
   included bytes and transforms,
@@ -184,11 +184,12 @@ ImportOccurrenceId
 SourceOrigin
 ```
 
-`grammar.baba` is the only parse authority. Operator grouping uses the generated
-fixed language plan; source modules cannot create a fixity environment. Layout
-continues expressions but creates a statement value only through `do:` or
-through a module body. A surrounding `const` declaration determines that its
-initializer, including a `do:` block, must resolve at compile time.
+`grammar.baba` is the only parse authority. Operator grouping uses the standard
+header authored in the prelude source overlaid by the current module's bounded
+fixity declarations. Layout continues expressions but creates a statement value
+only through `do:` or through a module body. A surrounding `const` declaration
+determines that its initializer, including a `do:` block, must resolve at
+compile time.
 
 Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
@@ -395,7 +396,8 @@ revisioned inputs. Source and host effects are unavailable.
 
 Checked bridges interpret compile-time values as types, effect descriptors,
 layouts, declaration tags, or reflection data. Operator fixity is not a staged
-value; it comes from the generated language plan.
+value; it is collected from the source syntax prelude and the current module's
+bounded header before expression lowering.
 
 Identity policy is explicit:
 

@@ -1,4 +1,31 @@
 {
+  "name": "@mewhhaha/blot",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./mod.ts",
+    "./compiler": "./src/compiler.ts"
+  },
+  "publish": {
+    "include": [
+      "LICENSE",
+      "README.md",
+      "mod.ts",
+      "src/**/*.ts",
+      "src/prelude/**/*.blot",
+      "generated/wasm/*.ts",
+      "generated/wasm/*.json",
+      "generated/wasm/parser.plan",
+      "generated/wasm/parser.wasm",
+      "generated/compiler/compiler.wasm",
+      "generated/compiler/compiler-artifact.json",
+      "generated/compiler/prelude.snapshot"
+    ],
+    "exclude": [
+      "**/*.test.ts",
+      "src/node/**"
+    ]
+  },
   "exclude": [
     ".*",
     "case-studies/engine/desktop.ts",
@@ -13,6 +40,7 @@
     "generate:compiler-schema": "deno run --allow-read --allow-write scripts/generate_compiler_schema.ts",
     "generate:qcore": "deno run --allow-read --allow-write scripts/generate_qcore.ts",
     "generate": "deno task generate:parser && deno task generate:compiler-schema && deno task generate:qcore",
+    "prepare:publish": "deno run --allow-run=deno,pnpm scripts/prepare_publish.ts",
     "check:qcore": "deno task generate:qcore --check && deno test --allow-read scripts/generate_qcore.test.ts",
     "check:generated": "deno task generate:parser && git diff --exit-code -- generated/wasm generated/queries generated/.baba-manifest.json && deno task generate:compiler-schema --check && deno task check:qcore && deno run --allow-read scripts/generate_language_health.ts --check",
     "inspect": "deno run --allow-read scripts/inspect_plan.ts",

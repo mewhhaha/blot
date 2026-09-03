@@ -187,10 +187,11 @@ opened fields actually won name resolution. The host renders only those
 certified candidates and rechecks every replacement; it does not infer these
 properties from names or printed types.
 
-Operator spelling is checked against the complete fixed operator table. The
-default-rule test enumerates every infix and prefix target, including function
-arrows, effect rows, numeric and comparison operations, set algebra, and
-ownership prefixes, and requires a parseable action for each.
+Operator spelling is checked against the active source fixity overlay. Tooling
+reads module declarations before offering a replacement, so overriding `+` does
+not cause a named `Int.add` call to be rewritten to the wrong target. The
+standard-rule test still enumerates every prelude infix and prefix target and
+requires a parseable action for each.
 
 Effects and structural interfaces need no parallel lint AST. An effect, its
 written row, and `Empty`, `Length`, `Semigroup`, or `Monoid` are ordinary

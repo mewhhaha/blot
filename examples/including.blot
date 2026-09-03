@@ -1,5 +1,7 @@
 open import "blot:prelude"
 
+const Include = import "./lib/include_transforms.blot"
+
 const inspect = fn source => {
   .specifier = source.specifier;
   .path = source.path;
@@ -7,11 +9,13 @@ const inspect = fn source => {
 }
 
 const included = @include "./assets/greeting.txt" inspect
-const normal_json = @include "./assets/config.json" as_json
-const exact_json = @include "./assets/config.json" as_const_json
+const raw = @include "./assets/greeting.txt" Include.as_raw
+const normal_json = @include "./assets/config.json" Include.as_json
+const exact_json = @include "./assets/config.json" Include.as_const_json
 
 return {
   .included = included;
+  .raw = raw;
   .normal_json = normal_json;
   .exact_json = exact_json;
   }

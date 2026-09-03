@@ -33,6 +33,14 @@ After installing or building the matching compiler artifact, run
 Node before publishing. Runtime exports resolve to generated JavaScript, and
 their generated declarations are checked from a TypeScript consumer.
 
+To prepare a local JSR release, regenerate the checked-in parser outputs and
+build the compiler artifact, then publish from the repository root:
+
+```bash
+deno task prepare:publish
+deno publish
+```
+
 ## Direct definitions should stay viable
 
 Blot's performance goal is not to make programmers translate the clear version
@@ -446,9 +454,11 @@ tracked compiler dependencies, and the result is compile-time-only: bind it with
 widens JSON leaves to `Text`, `Int`, `Bool`, and `F64` while preserving object
 fields. `as_const_json` retains literal compile-time values instead.
 
-That line is what makes `+` work: the fixed operator table names `Int.add`, and
-an operator whose target is not in scope is useless. A module that skips it does
-not have `+`.
+That line is what makes the standard `+` useful: the source fixity header names
+`Int.add`, and an operator whose target is not in scope is useless. A module
+that skips the prelude does not have the target that answers `+`. Modules may
+also declare generic fixities before ordinary declarations, for example
+`infixr 55 (<++>) = Document.append`.
 
 A module's input is checked, and nothing separately declares it. The demand is
 whatever its body reaches for: the record an importer hands over must carry

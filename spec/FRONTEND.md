@@ -77,17 +77,18 @@ replacement are equivalent. A renderer may impose stricter source conditions;
 for example, collapsing an equality ladder requires one repeated immutable
 variable or field path so the rewrite does not change how often a subject runs.
 
-## 3. Fixed operator folding
+## 3. Source fixity folding
 
-The grammar emits flat operator chains. Folding uses the generated table derived
-from `compiler/language.json`. Source modules cannot add a spelling or change
-its precedence or associativity.
+The grammar emits flat operator chains. Folding uses the standard fixities
+derived from `src/prelude/prelude.blot`, overlaid by the current module's
+bounded source fixity header. A module may add a spelling or override its
+target, precedence, or associativity before ordinary declarations.
 
-For a fixed language-plan revision:
+For a fixed syntax-prelude revision and source header:
 
 ```text
-LanguagePlan |- chain => e_1
-LanguagePlan |- chain => e_2
+Fixities |- chain => e_1
+Fixities |- chain => e_2
 --------------------------------
 e_1 = e_2
 ```
@@ -99,17 +100,14 @@ Each table entry contains:
 ```
 
 Folding determines grouping and inserts ordinary applications to the qualified
-binding path. Lexical resolution may change the value reached by that path when
-source deliberately shadows a component, but it cannot change punctuation or
-grouping.
+binding path. The active source header chooses punctuation and grouping; lexical
+resolution may still change the value reached by the selected path when source
+deliberately shadows a component.
 
-An unknown operator, a forbidden non-associative chain, or an unavailable target
-binding is diagnosed. The removed `operators` header is recognized only far
-enough to report `BLOT_REMOVED_OPERATOR_SECTION`; it never contributes a source
-fixity environment.
-
-The generated language-plan revision is part of frontend, incremental, package,
-and artifact identities.
+An unknown operator, a duplicate source fixity, a forbidden non-associative
+chain, or an unavailable target binding is diagnosed. The standard source header
+revision and each module's declared fixities are part of frontend, incremental,
+package, and artifact identities.
 
 ## 4. Explicit statement values
 
@@ -162,7 +160,7 @@ an expression-shaped value is reclassified as a binding pattern.
 Most pattern syntax is unambiguous in the CST. A `for` head remains
 expression-shaped until `in` establishes the pattern context. At that boundary,
 frontend elaboration reclassifies admitted pattern forms, including a pinned
-`^name`, before fixed operator folding.
+`^name`, before source fixity folding.
 
 This contextual interpretation:
 
@@ -273,7 +271,7 @@ The frontend owes:
 1. **lexing determinism** for a fixed plan and source revision;
 2. **parse determinism** for a fixed token stream;
 3. **incremental equivalence** with fresh lexing and parsing;
-4. **fixed-operator determinism** and rejection of removed custom fixities;
+4. **source-fixity determinism**, duplicate rejection, and override coherence;
 5. **hygiene** for every generated binder;
 6. **scope preservation** for reads, rebinding, recursive groups, and imports;
 7. **control-target preservation** for explicit blocks, loops, cases, and

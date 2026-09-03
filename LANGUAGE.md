@@ -202,23 +202,26 @@ An operator is a non-empty sequence drawn from:
 `=>`, `:=`, `<-`, `...`, `:`, and `;` are recognized by their grammar position.
 
 The parser does not encode precedence. It produces a flat chain, and semantic
-lowering folds that chain using the fixed table in §7. Operator vocabulary is
-part of the language contract rather than mutable module state.
+lowering folds that chain using the complete source fixity header in §7. The
+standard header lives in the prelude source, and a module may add or override
+entries before its executable declarations.
 
 ## 3. Programs and modules
 
 A file has this order:
 
 ```blot
-module with parameter    // optional
+module with parameter       // optional
+infixl 60 (+) = Number.add  // optional source fixity header
 
 declarations
-return result             // optional
+return result                // optional
 ```
 
-The `module` header, when present, must be first. Zero or more declarations
-follow. The removed `operators` header is still recognized only so the compiler
-can report `BLOT_REMOVED_OPERATOR_SECTION`; it never changes accepted syntax.
+The `module` header, when present, must be first. Zero or more `infixl`,
+`infixr`, `infix`, and `prefix` declarations may follow it. They form one
+bounded header before ordinary declarations because the complete table must be
+known before any flat expression chain is folded.
 
 A module is an implicit `do` computation from an optional input to one result.
 Its declarations execute in source order. `return value` exits the module with
@@ -1259,12 +1262,30 @@ non-deterministically hanging the compiler.
 
 ## 7. Operators and fixity
 
-Blot has one fixed operator table. Programs cannot declare punctuation or alter
-precedence. A target is still an ordinary qualified binding: using an operator
-requires that target to be in scope, and the table does not implicitly import
-the prelude.
+Operator fixity is source-defined:
 
-Fixed operators, from loosest to tightest:
+```blot
+infixl 60 (+) = Int.add
+infix 30 (==) = Int.eq
+infixr 10 ($) = Fn.apply
+prefix 90 (!) = @linear.own
+```
+
+A declaration gives one punctuation spelling its associativity, precedence, and
+ordinary qualified target. The target may be any source binding or intrinsic;
+the mechanism is not specialized by type or operator name. Using an operator
+still requires its target to be in scope, and a fixity declaration does not
+import or bind that target.
+
+Fixity declarations must precede ordinary declarations. A module may add a new
+spelling or override a standard entry. Prefix and infix entries are independent,
+so `-` may have both forms; declaring the same form and spelling twice is an
+error.
+
+The standard source header is declared at the top of `src/prelude/prelude.blot`.
+Build generation derives the bootstrap index needed before imports can be
+elaborated; the compiler contains no separately authored operator vocabulary.
+Standard entries, from loosest to tightest:
 
 | level | spelling                    | associativity   | target                          |
 | ----- | --------------------------- | --------------- | ------------------------------- |
@@ -3459,9 +3480,9 @@ implementation borrows the array, while its `append` is prelude source over
 `fold` and `@array.push`. `Arena` supplies `singleton`, affine `insert`,
 borrowed `length`, and safe `get` over the same array representation. Ownership
 remains a separate flow property rather than part of the structural interface
-type. The fixed `<>` is the concrete text operation `Text.append`; arrays use
-the named `Array.append` operation. Fixed vocabulary keeps parsing, formatting,
-tooling, and review independent of a module-local operator environment.
+type. The standard `<>` declaration names the concrete text operation
+`Text.append`; arrays use the named `Array.append` operation. A module may add a
+domain spelling explicitly when that vocabulary improves the local algebra.
 
 Collection interfaces are structural too:
 

@@ -25,6 +25,7 @@ language rather than studying one compiler feature at a time.
 | [`inventory_restock.blot`](inventory_restock.blot)       | derive a purchase order with typed records and a map/filter pipeline        |
 | [`invoice_report.blot`](invoice_report.blot)             | calculate line totals, tax, and invoice aggregates in integer minor units   |
 | [`log_report.blot`](log_report.blot)                     | split, clean, redact, filter, and summarize application logs                |
+| [`shader_metadata.blot`](shader_metadata.blot)           | read WGSL at compile time and project filename plus struct metadata         |
 | [`retry_policy.blot`](retry_policy.blot)                 | carry retry state through a bounded loop and stop on the first final result |
 | [`shopping_cart.blot`](shopping_cart.blot)               | calculate checkout totals from immutable tuples and collection operations   |
 | [`validation_pipeline.blot`](validation_pipeline.blot)   | accumulate accepted values and typed rejection reasons                      |

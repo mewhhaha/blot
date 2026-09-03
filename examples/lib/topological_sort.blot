@@ -37,29 +37,29 @@ const sort = fn &graph => do:
   let rec visit = fn (ready, cursor, incoming, order) => case Array.get (
     (&ready),
     cursor
-  ) of
+    ) of
     #None => order
     #Some vertex => do:
       let vertex = vertex + 0
       let neighbors = Graph.outgoing ((&graph), (&vertex))
-      let rec decrease_incoming ::
-        (Int, [Int], [Int]) -> ([Int], [Int])
-      let rec decrease_incoming = fn (index, incoming, ready) => case Array.get (
-        (&neighbors),
-        index
-      ) of
-        #None => (incoming, ready)
-        #Some neighbor => do:
-          let count = Array.expect_get ((&incoming), neighbor) - 1
-          let incoming = Array.expect_set (incoming, neighbor, count)
-          if count == 0:
-            return decrease_incoming (
-              index + 1,
-              incoming,
-              @array.push ready neighbor
-            )
-          else:
-            return decrease_incoming (index + 1, incoming, !ready)
+      let rec decrease_incoming :: (Int, [Int], [Int]) -> ([Int], [Int])
+      let rec decrease_incoming =
+        fn (index, incoming, ready) => case Array.get (
+          (&neighbors),
+          index
+          ) of
+          #None => (incoming, ready)
+          #Some neighbor => do:
+            let count = Array.expect_get ((&incoming), neighbor) - 1
+            let incoming = Array.expect_set (incoming, neighbor, count)
+            if count == 0:
+              return decrease_incoming (
+                index + 1,
+                incoming,
+                @array.push ready neighbor
+                )
+            else:
+              return decrease_incoming (index + 1, incoming, !ready)
 
       let (incoming, ready) = decrease_incoming (0, incoming, ready)
       return visit (
@@ -67,12 +67,12 @@ const sort = fn &graph => do:
         cursor + 1,
         incoming,
         @array.push order vertex
-      )
+        )
 
   let order = visit (ready, 0, incoming, [])
   return {
     .order = order;
     .acyclic = Array.length (&order) == vertex_count;
-  }
+    }
 
 return sort

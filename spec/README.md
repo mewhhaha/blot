@@ -35,7 +35,7 @@ semantics.
 | [`TYPECHECKING.md`](TYPECHECKING.md)                            | Declarative subtyping, inference, staging facts, and solver invariants |
 | [`PREDICATE_REFINEMENTS.md`](PREDICATE_REFINEMENTS.md)          | Implemented pure predicates normalized into canonical types            |
 | [`AFFINE_ITERATION.md`](AFFINE_ITERATION.md)                    | Affine iterator semantics, Store identity, and lowering acceptance     |
-| [`FRONTEND.md`](FRONTEND.md)                                    | Source, compact-CST, fixed-operator, and elaboration contracts         |
+| [`FRONTEND.md`](FRONTEND.md)                                    | Source, compact-CST, source-fixity, and elaboration contracts          |
 | [`EXPLICIT_DO_BLOCKS.md`](EXPLICIT_DO_BLOCKS.md)                | Explicit statement-block and return-scope surface contract             |
 | [`STAGING.md`](STAGING.md)                                      | Compile-time evaluation, specialization, and representation closure    |
 | [`SAFETY.md`](SAFETY.md)                                        | Coverage, relational proofs, and ownership certificates                |

@@ -16,11 +16,12 @@ const shortest_paths = fn (&graph, source) => do:
 
     let (distance, vertex) = PriorityQueue.minimum (&queue)
     let queue = PriorityQueue.pop (?queue)
-    let (accepted, distances) = DistanceTable.accept_candidate (
-      ?distances,
-      (&vertex),
-      (&distance)
-    )
+    let (accepted, distances) =
+      DistanceTable.accept_candidate (
+        ?distances,
+        (&vertex),
+        (&distance)
+      )
 
     return case accepted of
       #False => search (distances, queue)
@@ -34,11 +35,12 @@ const shortest_paths = fn (&graph, source) => do:
 
           let (neighbor, weight) = Array.expect_get ((&edges), index)
           let candidate = distance + weight
-          let (improved, distances) = DistanceTable.improve (
-            ?distances,
-            (&neighbor),
-            (&candidate)
-          )
+          let (improved, distances) =
+            DistanceTable.improve (
+              ?distances,
+              (&neighbor),
+              (&candidate)
+            )
           let queue = case improved of
             #True => PriorityQueue.push (?queue, (candidate, neighbor))
             #False => !queue

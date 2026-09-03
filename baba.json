@@ -24,16 +24,10 @@
         }
       },
       {
-        "rule": "operator_section",
+        "rule": "fixity_declaration",
         "boundary": {
           "kind": "terminated",
           "terminal": "LAYOUT_NEWLINE"
-        }
-      },
-      {
-        "rule": "fixity_declaration",
-        "boundary": {
-          "kind": "root"
         }
       },
       {
@@ -492,7 +486,6 @@
       "operators": {},
       "scopes": [
         "program",
-        "operator_section",
         "lambda",
         "do_block",
         "case_arm"

@@ -23,7 +23,7 @@ const push = fn (?stack, value) => do:
     return {
       .values = Array.expect_set (values, length, value);
       .length = length + 1;
-    }
+      }
   else:
     return {
       .values = @array.push values value;
@@ -45,4 +45,4 @@ return {
   .top = top;
   .push = push;
   .pop = pop;
-}
+  }

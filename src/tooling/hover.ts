@@ -7,7 +7,7 @@ import type {
   ShapeMember,
   Span,
 } from "../syntax/ast.ts";
-import { buildFixityTable } from "../syntax/fixity.ts";
+import { buildFixityTable, declaredFixities } from "../syntax/fixity.ts";
 import type { Rule, TokenCursor } from "../syntax/cursor.ts";
 import { definitionAt, identifierSpan } from "./definition.ts";
 
@@ -43,7 +43,7 @@ export function hoverAt(
   if (token === null) return null;
 
   const binding = bindingAt(module, source, token, offset, checked);
-  const tokenDocs = tokenDocumentation(token);
+  const tokenDocs = tokenDocumentation(token, cst);
   if (binding === null) {
     if (tokenDocs === null) return null;
     return { markdown: tokenDocs, span: token.span };
@@ -625,12 +625,10 @@ const KEYWORD_DOCUMENTATION: Readonly<Record<string, string>> = {
   module: "Introduces the single explicit input pattern accepted by a module.",
   with: "Separates a module or import from its explicit input.",
   import: "Instantiates a module once with unit or the value following `with`.",
-  operators:
-    "This retired keyword begins an operator section, which is rejected because Blot's operators are fixed.",
-  infixl: "This retired keyword described a left-associative operator.",
-  infixr: "This retired keyword described a right-associative operator.",
-  infix: "This retired keyword described a non-associative operator.",
-  prefix: "This retired keyword described a prefix operator.",
+  infixl: "Declares a left-associative infix operator in the module header.",
+  infixr: "Declares a right-associative infix operator in the module header.",
+  infix: "Declares a non-associative infix operator in the module header.",
+  prefix: "Declares a prefix operator in the module header.",
   let: "Binds a runtime value in the current scope.",
   const: "Evaluates and binds a compile-time value.",
   use:
@@ -683,7 +681,7 @@ const OPERATOR_EXAMPLES: Readonly<Record<string, string>> = {
   "<+": "Type <+ { .member = value; }",
 };
 
-function tokenDocumentation(token: TokenCursor): string | null {
+function tokenDocumentation(token: TokenCursor, cst: Rule): string | null {
   if (token.kind === "ELSE_IF") {
     return "Continues an `if` with another condition after every earlier condition failed.";
   }
@@ -703,7 +701,7 @@ function tokenDocumentation(token: TokenCursor): string | null {
   if (token.kind === "INTRINSIC") {
     return "An `@` name is a compiler primitive. Public conveniences normally live in the ordinary prelude instead.";
   }
-  const table = buildFixityTable();
+  const table = buildFixityTable(declaredFixities(cst));
   const fixities = [table.infix(token.text), table.prefix(token.text)].filter(
     (fixity): fixity is NonNullable<typeof fixity> => fixity !== undefined,
   );

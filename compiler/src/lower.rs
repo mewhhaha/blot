@@ -10,7 +10,7 @@ use crate::ast::{
 };
 use crate::cst::{CompactCst, Cursor};
 use crate::diagnostic::Diagnostic;
-use crate::fixity::{ChainStep, FixityTable, target_expression};
+use crate::fixity::{Associativity, ChainStep, Fixity, FixityTable, target_expression};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EscapeBoundary {
@@ -68,9 +68,10 @@ impl<'a> LoweringContext<'a> {
 pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
     let root = as_rule(cst.root())?;
     require_rule(cst, root, "program")?;
-    let span = cst.span(Cursor::Rule(root))?;
+    let root_span = cst.span(Cursor::Rule(root))?;
     let mut arena = AstArena::default();
-    let parameter = match cst.field(root, "header")? {
+    let header = cst.field(root, "header")?;
+    let parameter = match header {
         Some(header) => {
             let header = as_rule(header)?;
             Some(lower_pattern(
@@ -81,15 +82,24 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         }
         None => None,
     };
-    if cst.field(root, "operators")?.is_some() {
-        return Err(
-            "BLOT_REMOVED_OPERATOR_SECTION: operator precedence and targets are fixed; use a named function for another operation"
-                .to_owned(),
-        );
-    }
-    let table = FixityTable::new();
+    let fixities = cst
+        .field_list(root, "operators")?
+        .into_iter()
+        .map(|cursor| lower_fixity(cst, cursor))
+        .collect::<Result<Vec<_>, _>>()?;
+    let table = FixityTable::new(&fixities)?;
     let context = LoweringContext::root(&table);
     let mut statements = cst.field_list(root, "declarations")?;
+    // Fixity declarations are syntax metadata. Keep them out of the semantic
+    // module extent so adding or editing a header cannot perturb backend IDs.
+    let span = Span {
+        start: match (header, statements.first().copied()) {
+            (Some(header), _) => cst.span(header)?.start,
+            (None, Some(first)) => cst.span(first)?.start,
+            (None, None) => root_span.end,
+        },
+        end: root_span.end,
+    };
     let mut result = arena.expression(Expression::Unit { span });
     let mut result_effects = ResultEffects::Pure;
     if let Some(last) = statements.last().copied()
@@ -206,6 +216,33 @@ fn distribute_immediate_choice_applications(arena: &mut AstArena) {
             _ => {}
         }
     }
+}
+
+fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {
+    let rule = as_rule(cursor)?;
+    let associativity = match token_text(cst, required(cst, rule, "associativity")?)?.as_str() {
+        "infixl" => Associativity::Left,
+        "infixr" => Associativity::Right,
+        "infix" => Associativity::None,
+        "prefix" => Associativity::Prefix,
+        value => return Err(format!("BLOT_BAD_FIXITY: unknown declaration `{value}`")),
+    };
+    let precedence = token_text(cst, required(cst, rule, "precedence")?)?
+        .parse::<u32>()
+        .map_err(|error| format!("BLOT_BAD_FIXITY: invalid precedence: {error}"))?;
+    let target_rule = as_rule(required(cst, rule, "target")?)?;
+    let root = token_text(cst, required(cst, target_rule, "root")?)?;
+    let mut target = vec![root];
+    for part in cst.field_list(target_rule, "rest")? {
+        target.push(token_text(cst, required(cst, as_rule(part)?, "name")?)?);
+    }
+    Ok(Fixity {
+        operator: token_text(cst, required(cst, rule, "operator")?)?,
+        associativity,
+        precedence,
+        target,
+        span: cst.span(Cursor::Rule(rule))?,
+    })
 }
 
 /// Mirrors the handler rules source elaboration applies in

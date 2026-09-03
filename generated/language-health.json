@@ -179,6 +179,7 @@
     "BLOT_BAD_DEFERRED_PARAMETER",
     "BLOT_BAD_ESCAPE",
     "BLOT_BAD_EXPRESSION",
+    "BLOT_BAD_FIXITY",
     "BLOT_BAD_NEGATION",
     "BLOT_BAD_PATTERN",
     "BLOT_BAD_PATTERN_QUALIFIER",
@@ -200,6 +201,7 @@
     "BLOT_DIVIDE_BY_ZERO",
     "BLOT_DOES_NOT_SATISFY",
     "BLOT_DUPLICATE_FIELD",
+    "BLOT_DUPLICATE_FIXITY",
     "BLOT_DUPLICATE_MEMBER",
     "BLOT_DUPLICATE_RECURSIVE_BINDING",
     "BLOT_DYNAMIC_HOST_RESULT",
@@ -303,7 +305,6 @@
     "BLOT_REGION_PARTIAL_FREEZE",
     "BLOT_REGION_REASSOCIATE_UNPROVED",
     "BLOT_REGION_SPLIT_NOT_OWNED",
-    "BLOT_REMOVED_OPERATOR_SECTION",
     "BLOT_REQUIREMENT_NOT_COMPTIME",
     "BLOT_RESERVED_LAYOUT_CHARACTER",
     "BLOT_RESUME_TWICE",
@@ -728,7 +729,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14132
+      "lines": 14308
     },
     {
       "path": "compiler/src/session.rs",
@@ -736,7 +737,7 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8038
+      "lines": 8039
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -748,11 +749,11 @@
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 4342
+      "lines": 4379
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3600
+      "lines": 3516
     },
     {
       "path": "compiler/src/value_capsule.rs",
@@ -760,11 +761,11 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3350
+      "lines": 3363
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 3219
+      "lines": 3218
     },
     {
       "path": "compiler/src/value.rs",

@@ -12,7 +12,6 @@
   (array_pattern)
   (parenthesized_or_tuple)
   (tuple_pattern)
-  (operator_section)
 ] @indent
 
 [
