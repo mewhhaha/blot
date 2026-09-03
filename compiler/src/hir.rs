@@ -4656,13 +4656,27 @@ impl ResidualTrace {
             } = &alternate
             && consequent_name != alternate_name
         {
-            let cases = vec![consequent_name.clone(), alternate_name.clone()];
             let consequent_payload = compiler_tag_payload(consequent_payload.as_deref());
             let alternate_payload = compiler_tag_payload(alternate_payload.as_deref());
-            let consequent_payload_type = self.value_type(&consequent_payload)?;
-            let alternate_payload_type = self.value_type(&alternate_payload)?;
-            let sum_type =
-                self.sum_type(&cases, &[consequent_payload_type, alternate_payload_type]);
+            let mut payload_types = BTreeMap::new();
+            payload_types.insert(
+                consequent_name.clone(),
+                self.value_type(&consequent_payload)?,
+            );
+            payload_types.insert(alternate_name.clone(), self.value_type(&alternate_payload)?);
+            // Checked variants are keyed by constructor name. Canonicalize the
+            // residual representation too so branch order cannot change its ABI.
+            let cases = payload_types.keys().cloned().collect::<Vec<_>>();
+            let payload_types = payload_types.values().copied().collect::<Vec<_>>();
+            let sum_type = self.sum_type(&cases, &payload_types);
+            let consequent_case = cases
+                .iter()
+                .position(|case_| case_ == consequent_name)
+                .expect("consequent constructor is present in its joined sum");
+            let alternate_case = cases
+                .iter()
+                .position(|case_| case_ == alternate_name)
+                .expect("alternate constructor is present in its joined sum");
             self.current_block = consequent_block;
             let consequent_payload = self.lower_value(&consequent_payload, span)?;
             let consequent = self.operation_with_case(
@@ -4670,12 +4684,17 @@ impl ResidualTrace {
                 sum_type,
                 vec![consequent_payload.id],
                 span,
-                0,
+                consequent_case,
             );
             self.current_block = alternate_block;
             let alternate_payload = self.lower_value(&alternate_payload, span)?;
-            let alternate =
-                self.operation_with_case("sum.make", sum_type, vec![alternate_payload.id], span, 1);
+            let alternate = self.operation_with_case(
+                "sum.make",
+                sum_type,
+                vec![alternate_payload.id],
+                span,
+                alternate_case,
+            );
             let meaning = RuntimeMeaning::Sum { cases };
             return Ok((
                 RuntimeValue {
