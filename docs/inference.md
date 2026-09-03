@@ -28,11 +28,22 @@ Subtyping is not decoration. It is what makes three separate features into one:
 does. A function that performs nothing gets an empty row without being told.
 
 `:=` is deliberately stricter than `let`. It introduces a new binding for an
-existing name, but the old and new types must flow into one another. Singleton
+existing name and infers the replacement against that binding's stable type. A
+replacement may be narrower, so assigning `#True` to a `Bool` binding preserves
+`#True | #False`; a value outside the stable type is still rejected. Singleton
 integer and text literals widen to their domains at that boundary, so
 `value := value + 1` preserves `Int`; changing an integer binding to text
 requires another `let value = ...`. The existing binding's scheme is retained,
 so rebinding a polymorphic function does not accidentally make it monomorphic.
+
+Stable rebinding uses subsumption once the existing stable type is closed. While
+a generated loop accumulator is still an open inference variable, the checker
+keeps the previous bidirectional constraints so its initial value and recursive
+back edges can settle that type together. `for` lowering also retains an
+already-wider closed constructor type from the source binding as stable-lineage
+context when it destructures the accumulator. This keeps an explicitly `Bool`
+binding Boolean without freezing an unannotated `#False` accumulator before its
+back edges are inferred.
 
 The one place subtyping is strictly _more_ general than Hindley-Milner is worth
 seeing:

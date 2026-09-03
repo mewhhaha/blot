@@ -4538,6 +4538,29 @@ impl Checker {
                     }
                 }
                 let names = pattern_names(module, pattern);
+                let loop_stable_names = if matches!(
+                    &module.arena.expressions[value.0 as usize],
+                    Expression::Var { name, .. } if name == "loop$"
+                ) {
+                    names
+                        .iter()
+                        .filter_map(|name| {
+                            let typing = types.lookup_stable(name, self)?;
+                            let type_ = match &typing {
+                                Typing::Mono(type_) => type_,
+                                Typing::Scheme { body, .. } => body,
+                            };
+                            match self.settle(type_.clone(), true) {
+                                Type::Variant { cases, open: false } if cases.len() > 1 => {
+                                    Some((name.clone(), typing))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 let recursive_name = recursive.then(|| {
                     names
                         .first()
@@ -4819,6 +4842,9 @@ impl Checker {
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
                 self.bind_pattern(module, pattern, inferred.type_.clone(), types);
+                for (name, typing) in loop_stable_names {
+                    Rc::make_mut(&mut types.stable_names).insert(name, typing);
+                }
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize] {
                     if exact_record {
                         Rc::make_mut(&mut types.exact_records).insert(name.clone());
@@ -4919,7 +4945,6 @@ impl Checker {
                         span,
                     )
                 })?;
-                let inferred = self.infer(path, module, value, types, values, dependencies)?;
                 let previous = self.instantiate(previous);
                 let previous = match self.settle(previous.clone(), true) {
                     Type::Range {
@@ -4934,9 +4959,24 @@ impl Checker {
                     } if low == high => text_type(),
                     _ => previous,
                 };
-                let inferred_type = stable_rebinding_type(inferred.type_.clone());
-                self.constrain(inferred_type.clone(), previous.clone(), span)?;
-                self.constrain(previous.clone(), inferred_type, span)?;
+                let inferred = if closed_checked_type(&previous, &mut HashSet::new()) {
+                    self.infer_against(
+                        path,
+                        module,
+                        value,
+                        previous.clone(),
+                        types,
+                        values,
+                        dependencies,
+                        span,
+                    )?
+                } else {
+                    let inferred = self.infer(path, module, value, types, values, dependencies)?;
+                    let inferred_type = stable_rebinding_type(inferred.type_.clone());
+                    self.constrain(inferred_type.clone(), previous.clone(), span)?;
+                    self.constrain(previous.clone(), inferred_type, span)?;
+                    inferred
+                };
                 self.resolve_numeric_literals()?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
