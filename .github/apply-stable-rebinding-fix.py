@@ -93,20 +93,103 @@ fn stable_variant_rebinding_type(replacement: Type, previous: &Type) -> Type {
 
 replace_once(
     "compiler/src/typecheck.rs",
-    """            format!(
-                "{} does not flow into {}.",
-                self.show(&left),
-                self.show(&right)
-            ),
+    """                let statically_known = statically_known_callee(module, function, environment);
+                let contextual_argument = if self.specialization_depth.get() == 0
+                    && statically_known
+                {
+                    Some(self.infer(path, module, argument, environment, values, dependencies)?)
+                } else {
+                    None
+                };
+                let evaluated_function = if statically_known {
+                    self.evaluate(path, function, values, Phase::Comptime).ok()
+                } else {
+                    None
+                };
 """,
-    """            {
-                let shown_left = self.show(&left);
-                let shown_right = self.show(&right);
-                if shown_left == "#True | #False" && shown_right == "#True" {
-                    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    """                let synthetic_loop_callee = self.specialization_depth.get() == 0
+                    && matches!(
+                        &module.arena.expressions[function.0 as usize],
+                        Expression::Var { name, .. } if name == \"go$\"
+                    );
+                let statically_known = synthetic_loop_callee
+                    || statically_known_callee(module, function, environment);
+                let contextual_argument = if self.specialization_depth.get() == 0
+                    && statically_known
+                {
+                    Some(self.infer(path, module, argument, environment, values, dependencies)?)
+                } else {
+                    None
+                };
+                let evaluated_function = if synthetic_loop_callee {
+                    self.evaluate(path, function, values, Phase::Runtime).ok()
+                } else if statically_known {
+                    self.evaluate(path, function, values, Phase::Comptime).ok()
+                } else {
+                    None
+                };
+""",
+)
+
+replace_once(
+    "compiler/src/typecheck.rs",
+    """                let synthetic_expression =
+                    module.arena.synthetic_expressions.contains(&expression_id);
+                if let Some(Value::Closure {
+""",
+    """                let synthetic_expression =
+                    module.arena.synthetic_expressions.contains(&expression_id);
+                if synthetic_loop_callee
+                    && let Some(Value::Closure {
+                        module: closure_module,
+                        parameter,
+                        body,
+                        environment: closure_values,
+                        self_name: Some(self_name),
+                        deferred,
+                        ..
+                    }) = evaluated_function.as_ref()
+                    && let Some(argument) = contextual_argument.as_ref()
+                {
+                    let function = self.infer_evaluated_closure(
+                        path,
+                        module,
+                        EvaluatedClosure {
+                            module_path: closure_module,
+                            parameter: *parameter,
+                            body: *body,
+                            captures: closure_values,
+                            self_name: Some(self_name.as_str()),
+                            deferred: *deferred,
+                        },
+                        environment,
+                        dependencies,
+                        Some(argument.type_.clone()),
+                    )?;
+                    self.closure_types.borrow_mut().insert(
+                        closure_module.to_owned(),
+                        *body,
+                        function.clone(),
+                    );
+                    let result = self.fresh();
+                    let performed = self.fresh();
+                    let deferred = self.deferred_call(&function);
+                    self.constrain(
+                        function,
+                        Type::Function {
+                            deferred,
+                            parameter: Rc::new(argument.type_.clone()),
+                            effects: Rc::new(performed.clone()),
+                            result: Rc::new(result.clone()),
+                        },
+                        span,
+                    )?;
+                    return Ok(Inferred {
+                        type_: result,
+                        effects: self.join_effects(argument.effects.clone(), performed)?,
+                    });
                 }
-                format!("{shown_left} does not flow into {shown_right}.")
-            },
+                if let Some(Value::Closure {
 """,
 )
 
