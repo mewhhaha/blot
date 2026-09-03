@@ -1,0 +1,269 @@
+diff --git a/compiler/src/hir.rs b/compiler/src/hir.rs
+index d367fb6..faf862d 100644
+--- a/compiler/src/hir.rs
++++ b/compiler/src/hir.rs
+@@ -1145,8 +1145,15 @@ impl ResidualTrace {
+         reuse: bool,
+         function_span: RuntimeSpan,
+     ) -> Result<(), Diagnostic> {
+-        let result = self.lower_value(&value, crate::ast::Span { start: 0, end: 0 })?;
++        let span = crate::ast::Span { start: 0, end: 0 };
++        let mut result = self.lower_value(&value, span)?;
+         let expected = self.runtime_type_from_checked_type(result_type)?;
++        if result.type_id != expected
++            && self.sum_representation(result.type_id).is_some()
++            && self.sum_representation(expected).is_some()
++        {
++            result = self.coerce_runtime_value(&result, expected, span)?;
++        }
+         if result.type_id != expected {
+             return Err(hir_error(
+                 "A function export result does not match its checked type.",
+@@ -5097,46 +5104,8 @@ impl ResidualTrace {
+                 }
+                 Ok(self.operation("product.make", expected_type, operands, span, None))
+             }
+-            (RuntimeType::Sum { cases, .. }, _) if cases.len() == 1 => {
+-                let (expected_sum, expected_cases) = self
+-                    .sum_representation(expected_type)
+-                    .map(|(type_id, cases)| (type_id, cases.to_vec()))
+-                    .ok_or_else(|| {
+-                        hir_error("A checked sum representation was joined with a non-sum type.")
+-                    })?;
+-                let source_case = &cases[0];
+-                let expected_case = expected_cases
+-                    .iter()
+-                    .position(|case_| case_.name == source_case.name)
+-                    .ok_or_else(|| {
+-                        hir_error(&format!(
+-                            "Constructor `#{}` is absent from its joined runtime type.",
+-                            source_case.name
+-                        ))
+-                    })?;
+-                let payload = self.sum_payload(value, 0, span)?;
+-                let payload = self.lower_value_as(
+-                    &payload,
+-                    expected_cases[expected_case].payload_type,
+-                    span,
+-                )?;
+-                let mut widened = self.operation_with_case(
+-                    "sum.make",
+-                    expected_sum,
+-                    vec![payload.id],
+-                    span,
+-                    expected_case,
+-                );
+-                if expected_sum != expected_type {
+-                    widened = self.operation(
+-                        "indirect.make",
+-                        expected_type,
+-                        vec![widened.id],
+-                        span,
+-                        None,
+-                    );
+-                }
+-                Ok(widened)
++            (RuntimeType::Sum { cases, .. }, _) if !cases.is_empty() => {
++                self.coerce_runtime_sum(value, &cases, expected_type, span)
+             }
+             _ => Err(Diagnostic::new(
+                 "BLOT_RUST_INVARIANT",
+@@ -5152,6 +5121,145 @@ impl ResidualTrace {
+         }
+     }
+ 
++    fn coerce_runtime_sum(
++        &mut self,
++        value: &RuntimeValue,
++        source_cases: &[RuntimeCase],
++        expected_type: usize,
++        span: crate::ast::Span,
++    ) -> Result<RuntimeValue, Diagnostic> {
++        let (expected_sum, expected_cases) = self
++            .sum_representation(expected_type)
++            .map(|(type_id, cases)| (type_id, cases.to_vec()))
++            .ok_or_else(|| {
++                hir_error("A checked sum representation was joined with a non-sum type.")
++            })?;
++        if source_cases.len() == 1 {
++            return self.coerce_runtime_sum_case(
++                value,
++                source_cases,
++                0,
++                expected_type,
++                expected_sum,
++                &expected_cases,
++                span,
++            );
++        }
++
++        let tag = self.sum_tag(value, span)?;
++        let explicit_cases = source_cases
++            .len()
++            .checked_sub(1)
++            .expect("a residual sum has at least one case");
++        let values = (0..explicit_cases)
++            .map(|case| {
++                i32::try_from(case)
++                    .map(WireConstant::SignedInteger32)
++                    .map_err(|_| hir_error("A residual sum has too many constructors."))
++            })
++            .collect::<Result<Vec<_>, Diagnostic>>()?;
++        let switch = self.begin_switch(&tag, values, span)?;
++        let mut branch_blocks = switch.arms.clone();
++        branch_blocks.push(switch.fallback);
++        let mut branches = Vec::with_capacity(source_cases.len());
++        for (source_case, block) in branch_blocks.into_iter().enumerate() {
++            self.current_block = block;
++            let result = self.coerce_runtime_sum_case(
++                value,
++                source_cases,
++                source_case,
++                expected_type,
++                expected_sum,
++                &expected_cases,
++                span,
++            )?;
++            branches.push((self.current_block, result));
++        }
++        for (end, result) in &branches {
++            self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
++                target: switch.join,
++                arguments: vec![result.id],
++                span: self.span(span),
++            });
++        }
++        let joined = self.next_value();
++        let ownership = self.ownership(expected_type);
++        let runtime_span = self.span(span);
++        self.blocks[switch.join]
++            .parameters
++            .push(RuntimeBlockParameter {
++                value: joined,
++                type_id: expected_type,
++                ownership,
++                span: runtime_span,
++            });
++        self.current_block = switch.join;
++        Ok(RuntimeValue {
++            id: joined,
++            type_id: expected_type,
++            meaning: RuntimeMeaning::Sum {
++                cases: expected_cases
++                    .iter()
++                    .map(|case_| case_.name.clone())
++                    .collect(),
++            },
++        })
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    fn coerce_runtime_sum_case(
++        &mut self,
++        value: &RuntimeValue,
++        source_cases: &[RuntimeCase],
++        source_case_index: usize,
++        expected_type: usize,
++        expected_sum: usize,
++        expected_cases: &[RuntimeCase],
++        span: crate::ast::Span,
++    ) -> Result<RuntimeValue, Diagnostic> {
++        let source_case = source_cases
++            .get(source_case_index)
++            .ok_or_else(|| hir_error("A residual sum case is outside its runtime type."))?;
++        let expected_case = expected_cases
++            .iter()
++            .position(|case_| case_.name == source_case.name)
++            .ok_or_else(|| {
++                hir_error(&format!(
++                    "Constructor `#{}` is absent from its joined runtime type.",
++                    source_case.name
++                ))
++            })?;
++        let payload = self.sum_payload(value, source_case_index, span)?;
++        let payload = self.lower_value_as(
++            &payload,
++            expected_cases[expected_case].payload_type,
++            span,
++        )?;
++        let mut widened = self.operation_with_case(
++            "sum.make",
++            expected_sum,
++            vec![payload.id],
++            span,
++            expected_case,
++        );
++        if expected_sum != expected_type {
++            widened = self.operation(
++                "indirect.make",
++                expected_type,
++                vec![widened.id],
++                span,
++                None,
++            );
++        }
++        widened.meaning = RuntimeMeaning::Sum {
++            cases: expected_cases
++                .iter()
++                .map(|case_| case_.name.clone())
++                .collect(),
++        };
++        Ok(widened)
++    }
++
+     fn lower_value(
+         &mut self,
+         value: &Value,
+@@ -12579,6 +12687,52 @@ mod tests {
+         assert_eq!(cases[1].payload_type, 0);
+     }
+ 
++    #[test]
++    fn reordered_residual_sums_are_retagged_by_constructor_name() {
++        let mut trace = ResidualTrace::new("sum-retag-test.blot");
++        let span = crate::ast::Span { start: 0, end: 0 };
++        let payload_type =
++            trace.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
++        let source_type = trace.sum_type(
++            &["Some".to_owned(), "None".to_owned()],
++            &[payload_type, 0],
++        );
++        let expected_type = trace.sum_type(
++            &["None".to_owned(), "Some".to_owned()],
++            &[0, payload_type],
++        );
++        let source = trace.next_value();
++        let ownership = trace.ownership(source_type);
++        let runtime_span = trace.span(span);
++        trace.blocks[0].parameters.push(RuntimeBlockParameter {
++            value: source,
++            type_id: source_type,
++            ownership,
++            span: runtime_span,
++        });
++        let value = RuntimeValue {
++            id: source,
++            type_id: source_type,
++            meaning: RuntimeMeaning::Sum {
++                cases: vec!["Some".to_owned(), "None".to_owned()],
++            },
++        };
++
++        let coerced = trace
++            .coerce_runtime_value(&value, expected_type, span)
++            .expect("equivalent residual sums should be retagged");
++
++        assert_eq!(coerced.type_id, expected_type);
++        let emitted_cases = trace
++            .blocks
++            .iter()
++            .flat_map(|block| &block.operations)
++            .filter(|operation| operation.kind == "sum.make")
++            .map(|operation| operation.case)
++            .collect::<Vec<_>>();
++        assert_eq!(emitted_cases, vec![Some(1), Some(0)]);
++    }
++
+     #[test]
+     fn online_aggregate_representations_distinguish_runtime_leaf_types() {
+         let store_then_integer = Value::Shape(OrderedFields::from([
