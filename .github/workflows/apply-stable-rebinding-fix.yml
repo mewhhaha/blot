@@ -27,10 +27,7 @@ jobs:
           components: rustfmt
 
       - name: Apply source, test, and documentation changes
-        shell: bash
-        run: |
-          sed -i 's/closure_module\.to_owned()/closure_module.to_string()/' .github/apply-stable-rebinding-fix.py
-          python .github/apply-stable-rebinding-fix.py
+        run: python .github/apply-stable-rebinding-fix.py
 
       - name: Format Rust
         run: cargo fmt --manifest-path compiler/Cargo.toml
@@ -40,3 +37,17 @@ jobs:
           cargo test --manifest-path compiler/Cargo.toml
           session::tests::stable_rebinding_preserves_a_declared_variant_inside_a_loop
           -- --exact --nocapture
+
+      - name: Archive patched source
+        if: always()
+        shell: bash
+        run: |
+          git ls-files -z | tar --null --files-from=- --create --gzip --file=/tmp/blot-source.tgz
+
+      - name: Upload patched source
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-patched-source
+          path: /tmp/blot-source.tgz
+          retention-days: 1
