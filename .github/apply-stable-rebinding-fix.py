@@ -132,7 +132,7 @@ replace_once(
     "compiler/src/session.rs",
     """    fn source(value: &str) -> Vec<u16> {
 """,
-    """    #[test]
+    r'''    #[test]
     fn stable_rebinding_preserves_a_declared_variant_inside_a_loop() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(
@@ -147,18 +147,15 @@ replace_once(
                 .add_source(
                     "main.blot".to_owned(),
                     source(concat!(
-                        "open import \\\"blot:prelude\\\"\\
-",
-                        "let flag :: Bool\\
-",
-                        "let flag = #False\\
-",
-                        "for _ in Iter.items [()]:\\
-",
-                        "  flag := #True\\
-",
-                        "return flag\\
-",
+                        "open import \"blot:prelude\"\n",
+                        "\n",
+                        "let flag :: Bool\n",
+                        "let flag = #False\n",
+                        "\n",
+                        "for _ in Iter.items [()]:\n",
+                        "  flag := #True\n",
+                        "\n",
+                        "return flag\n",
                     )),
                 )
                 .expect("stable variant rebinding source should load");
@@ -180,5 +177,5 @@ replace_once(
     }
 
     fn source(value: &str) -> Vec<u16> {
-""",
+''',
 )
