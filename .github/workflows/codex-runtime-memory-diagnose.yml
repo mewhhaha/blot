@@ -7,43 +7,74 @@ permissions:
   contents: read
 
 jobs:
-  isolate-export:
-    name: isolate ${{ matrix.export }}
+  take-at-shape:
+    name: take_at ${{ matrix.shape }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        export:
-          - collect_range
-          - map_range
-          - filter_range
-          - partition_range
-          - split_text
-          - replace_text
-          - build_map
-          - take_at
+        shape:
+          - array_then_option
+          - flagged_tuple
+          - sentinel_tuple
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - name: Isolate one function export
+      - name: Replace take_at with candidate representation
         env:
-          EXPORT_NAME: ${{ matrix.export }}
+          SHAPE: ${{ matrix.shape }}
         run: |
           python3 - <<'PY'
           import os
           import re
           from pathlib import Path
 
+          candidates = {
+              "array_then_option": '''let take_at :: ([Int], Int) -> ([Int], Option Int)
+          let take_at = fn (values, index) => do:
+            if index >= 0 && index < Array.length (&values):
+              let (selected, remainder) = @array.take values index
+              return (remainder, Some selected)
+
+            return (values, None)
+          ''',
+              "flagged_tuple": '''let take_at :: ([Int], Int) -> (Bool, Int, [Int])
+          let take_at = fn (values, index) => do:
+            if index >= 0 && index < Array.length (&values):
+              let (selected, remainder) = @array.take values index
+              return (True, selected, remainder)
+
+            return (False, 0, values)
+          ''',
+              "sentinel_tuple": '''let take_at :: ([Int], Int) -> (Int, [Int])
+          let take_at = fn (values, index) => do:
+            if index >= 0 && index < Array.length (&values):
+              return @array.take values index
+
+            return (0, values)
+          ''',
+          }
+
           fixture = Path("examples/runtime_memory_lowerings.blot")
           source = fixture.read_text()
           source, count = re.subn(
-              r"return \{\n(?:  \.[^\n]+\n)+\}\n\Z",
-              f"return {{\n  .{os.environ['EXPORT_NAME']} = {os.environ['EXPORT_NAME']};\n}}\n",
+              r"let take_at :: \(\[Int\], Int\) -> Option \(Int, \[Int\]\)\n"
+              r"let take_at = fn \(values, index\) => do:\n"
+              r"  if index >= 0 && index < Array.length \(&values\):\n"
+              r"    return Some \(@array.take values index\)\n\n"
+              r"  return None\n",
+              candidates[os.environ["SHAPE"]],
               source,
           )
-          assert count == 1, "could not isolate fixture export"
+          assert count == 1, "could not replace take_at"
+          source, count = re.subn(
+              r"return \{\n(?:  \.[^\n]+\n)+\}\n\Z",
+              "return {\n  .take_at = take_at;\n}\n",
+              source,
+          )
+          assert count == 1, "could not isolate take_at export"
           fixture.write_text(source)
 
           session = Path("compiler/src/session.rs")
@@ -58,8 +89,14 @@ jobs:
           test = source[start:end]
           assertion = '            assert_eq!(prepared["ok"], true, "{prepared}");'
           keep = test.index(assertion) + len(assertion)
-          test = test[:keep] + "\n        });\n    }\n"
+          test = test[:keep] + '''
+            session
+                .compile_module("main.blot")
+                .expect("candidate take_at should emit Wasm");
+        });
+    }
+          '''
           session.write_text(source[:start] + test + source[end:])
           PY
-      - name: Prepare isolated export
+      - name: Prepare and compile candidate
         run: cargo test --manifest-path compiler/Cargo.toml runtime_memory_lowering_fixture_prepares_and_emits_all_builders -- --nocapture
