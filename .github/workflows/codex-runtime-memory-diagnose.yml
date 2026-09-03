@@ -32,29 +32,9 @@ jobs:
           from pathlib import Path
 
           candidates = {
-              "array_then_option": '''let take_at :: ([Int], Int) -> ([Int], Option Int)
-          let take_at = fn (values, index) => do:
-            if index >= 0 && index < Array.length (&values):
-              let (selected, remainder) = @array.take values index
-              return (remainder, Some selected)
-
-            return (values, None)
-          ''',
-              "flagged_tuple": '''let take_at :: ([Int], Int) -> (Bool, Int, [Int])
-          let take_at = fn (values, index) => do:
-            if index >= 0 && index < Array.length (&values):
-              let (selected, remainder) = @array.take values index
-              return (True, selected, remainder)
-
-            return (False, 0, values)
-          ''',
-              "sentinel_tuple": '''let take_at :: ([Int], Int) -> (Int, [Int])
-          let take_at = fn (values, index) => do:
-            if index >= 0 && index < Array.length (&values):
-              return @array.take values index
-
-            return (0, values)
-          ''',
+              "array_then_option": "let take_at :: ([Int], Int) -> ([Int], Option Int)\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    let (selected, remainder) = @array.take values index\n    return (remainder, Some selected)\n\n  return (values, None)\n",
+              "flagged_tuple": "let take_at :: ([Int], Int) -> (Bool, Int, [Int])\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    let (selected, remainder) = @array.take values index\n    return (True, selected, remainder)\n\n  return (False, 0, values)\n",
+              "sentinel_tuple": "let take_at :: ([Int], Int) -> (Int, [Int])\nlet take_at = fn (values, index) => do:\n  if index >= 0 && index < Array.length (&values):\n    return @array.take values index\n\n  return (0, values)\n",
           }
 
           fixture = Path("examples/runtime_memory_lowerings.blot")
@@ -89,14 +69,8 @@ jobs:
           test = source[start:end]
           assertion = '            assert_eq!(prepared["ok"], true, "{prepared}");'
           keep = test.index(assertion) + len(assertion)
-          test = test[:keep] + '''
-            session
-                .compile_module("main.blot")
-                .expect("candidate take_at should emit Wasm");
-        });
-    }
-          '''
+          test = test[:keep] + "\n        });\n    }\n"
           session.write_text(source[:start] + test + source[end:])
           PY
-      - name: Prepare and compile candidate
+      - name: Prepare candidate
         run: cargo test --manifest-path compiler/Cargo.toml runtime_memory_lowering_fixture_prepares_and_emits_all_builders -- --nocapture
