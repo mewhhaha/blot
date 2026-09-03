@@ -5930,6 +5930,9 @@ impl Checker {
                                 values,
                                 dependencies,
                             )?;
+                            if self.mentions_pending_numeric_literal(&inferred_name.type_) {
+                                self.resolve_numeric_literals()?;
+                            }
                             self.constrain(inferred_name.type_, text_type(), span)?;
                             let inferred =
                                 self.infer(path, module, value, environment, values, dependencies)?;

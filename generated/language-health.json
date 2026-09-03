@@ -724,7 +724,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 15116
+      "lines": 15119
     },
     {
       "path": "compiler/src/hir.rs",
