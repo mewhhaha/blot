@@ -32,37 +32,43 @@ jobs:
       - name: Match static product memory fields by name
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path("compiler/src/backend.rs")
           source = path.read_text()
-          old = '''                for ((field, operand), memory_field) in fields
-                      .iter()
-                      .zip(&operation.operands)
-                      .zip(record_layout(&memory_fields))
-                  {
-                      if field.name != memory_field.name {
-                          return Err(format!(
-                              "{}: static product field `{}` maps to `{}`",
-                              self.module.source, field.name, memory_field.name
-                          ));
-                      }
-          '''
-          new = '''                let memory_fields = record_layout(&memory_fields)
-                      .into_iter()
-                      .map(|field| (field.name.clone(), field))
-                      .collect::<BTreeMap<_, _>>();
-                  for (field, operand) in fields.iter().zip(&operation.operands) {
-                      let memory_field = memory_fields.get(&field.name).ok_or_else(|| {
-                          format!(
-                              "{}: static product field `{}` has no record layout",
-                              self.module.source, field.name
-                          )
-                      })?;
-          '''
-          if old not in source:
+          pattern = re.compile(
+              r"(?P<indent>\s*)for \(\(field, operand\), memory_field\) in fields\n"
+              r"\s*\.iter\(\)\n"
+              r"\s*\.zip\(&operation\.operands\)\n"
+              r"\s*\.zip\(record_layout\(&memory_fields\)\)\n"
+              r"\s*\{\n"
+              r"\s*if field\.name != memory_field\.name \{\n"
+              r"\s*return Err\(format!\(\n"
+              r"\s*\"\{\}: static product field `\{\}` maps to `\{\}`\",\n"
+              r"\s*self\.module\.source, field\.name, memory_field\.name\n"
+              r"\s*\)\);\n"
+              r"\s*\}\n",
+          )
+          match = pattern.search(source)
+          if match is None:
               raise SystemExit("static product write block did not match")
-          path.write_text(source.replace(old, new, 1))
+          indent = match.group("indent")
+          continuation = indent + "    "
+          replacement = (
+              f"{indent}let memory_fields = record_layout(&memory_fields)\n"
+              f"{continuation}.into_iter()\n"
+              f"{continuation}.map(|field| (field.name.clone(), field))\n"
+              f"{continuation}.collect::<BTreeMap<_, _>>();\n"
+              f"{indent}for (field, operand) in fields.iter().zip(&operation.operands) {{\n"
+              f"{continuation}let memory_field = memory_fields.get(&field.name).ok_or_else(|| {{\n"
+              f"{continuation}    format!(\n"
+              f"{continuation}        \"{{}}: static product field `{{}}` has no record layout\",\n"
+              f"{continuation}        self.module.source, field.name\n"
+              f"{continuation}    )\n"
+              f"{continuation}}})?;\n"
+          )
+          path.write_text(source[: match.start()] + replacement + source[match.end() :])
           PY
       - name: Format and run compiler tests
         run: |
