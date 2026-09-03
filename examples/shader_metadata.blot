@@ -6,9 +6,10 @@
 
 open import "blot:prelude"
 
-const required_slice = fn (text, start, end) => case Text.slice (text, start, end) of
-  #Some value => value
-  #None => @panic "shader metadata parser used invalid text bounds"
+const required_slice =
+  fn (text, start, end) => case Text.slice (text, start, end) of
+    #Some value => value
+    #None => @panic "shader metadata parser used invalid text bounds"
 
 const required_find = fn (text, needle) => case Text.find (text, needle) of
   #Some index => index
@@ -21,7 +22,7 @@ const parse_field = fn field => do:
     .field_type = Text.trim (
       required_slice (field, colon + 1, Text.length field)
     );
-    }
+  }
 
 const parse_struct = fn declaration => do:
   let opening = required_find (declaration, "{")
@@ -34,30 +35,33 @@ const parse_struct = fn declaration => do:
       ),
       fn field => Text.trim field
     )
-  let fields = filter (
-    raw_fields,
-    fn field => Text.length field > 0
-  )
+  let fields =
+    filter (
+      raw_fields,
+      fn field => Text.length field > 0
+    )
   return {
     .members = map (fields, parse_field);
     .struct_name = Text.trim (required_slice (declaration, 7, opening));
-    }
+  }
 
 const shader_metadata = fn source => do:
   let lines = map (Text.lines source.text, fn line => Text.trim line)
-  let declarations = filter (
-    lines,
-    fn line => Text.starts_with (line, "struct ")
-  )
-  let filename = fold (
-    Text.split (source.specifier, "/"),
-    source.specifier,
-    fn (_, part) => part
-  )
+  let declarations =
+    filter (
+      lines,
+      fn line => Text.starts_with (line, "struct ")
+    )
+  let filename =
+    fold (
+      Text.split (source.specifier, "/"),
+      source.specifier,
+      fn (_, part) => part
+    )
   return {
     .filename = filename;
     .structs = map (declarations, parse_struct);
-    }
+  }
 
 const metadata = @include "./assets/material.wgsl" shader_metadata
 return metadata

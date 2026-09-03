@@ -8,45 +8,45 @@ const search = fn (&graph, start) => do:
   let vertex_count = Array.length (&graph)
   let discovered = VertexMarks.create vertex_count
   let (_, discovered) = VertexMarks.mark (?discovered, (&start))
-  let rec visit ::
-    ([(Int, Int)], Int, [Bool], [(Int, Int)]) -> [(Int, Int)]
+  let rec visit :: ([(Int, Int)], Int, [Bool], [(Int, Int)]) -> [(Int, Int)]
   let rec visit = fn (queue, cursor, discovered, traversal) => case Array.get (
     (&queue),
     cursor
-  ) of
-      #None => traversal
-      #Some (vertex, depth) => do:
-        let neighbors = Graph.outgoing ((&graph), (&vertex))
-        let rec enqueue_neighbors ::
-          (Int, [Bool], [(Int, Int)]) -> ([Bool], [(Int, Int)])
-        let rec enqueue_neighbors = fn (index, discovered, queue) => case Array.get (
+    ) of
+    #None => traversal
+    #Some (vertex, depth) => do:
+      let neighbors = Graph.outgoing ((&graph), (&vertex))
+      let rec enqueue_neighbors ::
+        (Int, [Bool], [(Int, Int)]) -> ([Bool], [(Int, Int)])
+      let rec enqueue_neighbors =
+        fn (index, discovered, queue) => case Array.get (
           (&neighbors),
           index
-        ) of
-            #None => (discovered, queue)
-            #Some neighbor => do:
-              let (was_discovered, discovered) =
-                VertexMarks.mark (?discovered, (&neighbor))
-              if was_discovered:
-                return enqueue_neighbors (
-                  index + 1,
-                  !discovered,
-                  !queue
-                )
-
+          ) of
+          #None => (discovered, queue)
+          #Some neighbor => do:
+            let (was_discovered, discovered) =
+              VertexMarks.mark (?discovered, (&neighbor))
+            if was_discovered:
               return enqueue_neighbors (
                 index + 1,
-                discovered,
-                @array.push queue (neighbor, depth + 1)
+                !discovered,
+                !queue
+                )
+
+            return enqueue_neighbors (
+              index + 1,
+              discovered,
+              @array.push queue (neighbor, depth + 1)
               )
 
-        let (discovered, queue) = enqueue_neighbors (0, discovered, queue)
+      let (discovered, queue) = enqueue_neighbors (0, discovered, queue)
 
-        return visit (
-          queue,
-          cursor + 1,
-          discovered,
-          @array.push traversal (vertex, depth)
+      return visit (
+        queue,
+        cursor + 1,
+        discovered,
+        @array.push traversal (vertex, depth)
         )
 
   return visit ([(start, 0)], 0, discovered, [])

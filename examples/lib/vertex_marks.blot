@@ -22,4 +22,4 @@ const mark = fn (?marks, &vertex) => do:
 return {
   .create = create;
   .mark = mark;
-}
+  }
