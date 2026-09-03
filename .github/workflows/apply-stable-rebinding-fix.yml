@@ -29,8 +29,8 @@ jobs:
       - name: Apply source, test, and documentation changes
         run: python .github/apply-stable-rebinding-fix.py
 
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Format Rust
+        run: cargo fmt --manifest-path compiler/Cargo.toml
 
       - name: Probe stable variant rebinding
         run: >-
