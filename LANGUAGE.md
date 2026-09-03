@@ -105,10 +105,19 @@ required. That is what keeps `1.5` a float while `pair.0` stays a projection:
 the field after a dot has no digit before it and a float always does. There is
 no exponent form and no negative literal; negation is the prefix operator.
 
-Floats are IEEE 754 doubles. They do not trap: an operation that overflows
-produces an infinity and one with no defined answer produces a NaN, both of
-which are values a program may go on to use. This is the difference from integer
-arithmetic, where the result would be a number the machine cannot hold.
+Numeric literals select a numeric domain from their immediate type context. An
+integer literal can keep its singleton `Int` type, flow into any integer range
+that contains it, or select `F64` or `F32`. A float literal can select `F64` or
+`F32`. When no context chooses between them, an integer literal keeps its
+singleton type and a float literal defaults to `F64`. This applies only while
+checking the literal expression: once a value has been bound as `Int`, `F64`, or
+`F32`, crossing to another numeric domain still requires an explicit conversion.
+
+Floats are IEEE 754 values: `F64` is double precision and `F32` is single
+precision. They do not trap: an operation that overflows produces an infinity
+and one with no defined answer produces a NaN, both of which are values a
+program may go on to use. This is the difference from integer arithmetic, where
+the result would be a number the machine cannot hold.
 
 `F64.cmp` refuses NaN rather than answering, because no ordering accepts it: a
 diagnostic while compiling and a trap while running, the two shapes `@int.div`
@@ -119,10 +128,10 @@ an equality that answers `#False` to a question the format says has no answer.
 comparing is precisely what refuses.
 
 `F32` is the narrower float, and a distinct type rather than a precision `F64`
-sometimes has. There is no f32 literal — the grammar has one float token, and
-`F32.of_float` is what makes the narrowing a step the program takes rather than
-one performed on it. `F32.widen` goes back, exactly, because every `F32` is an
-`F64`.
+sometimes has. The grammar has one float token, and an `F32` context selects
+that token's single-precision representation. `F32.of_float` remains the
+explicit narrowing operation for a value already bound as `F64`. `F32.widen`
+goes back exactly because every `F32` is representable as an `F64`.
 
 `F32x4`, `I32x4`, `I16x8`, and `I8x16` are 128-bit SIMD values. Their lane width
 and count are part of the type; none is a tuple or record that can be projected
