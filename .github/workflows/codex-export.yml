@@ -5,6 +5,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: validate-source-defined-operators-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -18,12 +22,15 @@ jobs:
         with:
           ref: codex/source-defined-operators
           fetch-depth: 0
-      - name: Apply semantic-span fix
+      - name: Apply candidate fix
         shell: bash
         run: |
           set -euo pipefail
           git apply .github/codex-source-fixity.patch
           rm .github/codex-source-fixity.patch
+          rm .github/workflows/codex-export.yml
+          cargo fmt --manifest-path compiler/Cargo.toml
+          deno fmt compiler/src/lower.rs src/syntax/lower.ts src/syntax/module.test.ts
           git diff --check
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
@@ -48,19 +55,38 @@ jobs:
           --allow-run=cargo,git,rustc
           --allow-env
           scripts/build_compiler.ts
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Check generated artifacts
+        run: deno task check:generated
+      - name: Check Rust formatting and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+          cargo clippy \
+            --manifest-path compiler/Cargo.toml \
+            --target wasm32-unknown-unknown \
+            -- -D warnings
       - name: Test Rust compiler
         shell: bash
         run: |
           set -o pipefail
           cargo test --manifest-path compiler/Cargo.toml -- --nocapture 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
-      - name: Check TypeScript
-        run: deno check .
-      - name: Check formatting
-        run: deno fmt --check
-      - name: Verify generated frontend artifacts
-        run: deno task check:generated
+      - name: Check TypeScript, formatting, and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno check .
+          deno fmt --check
+          deno lint
+      - name: Check implementation manifest
+        run: pnpm current:check
+      - name: Run regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm test
+          pnpm run check
+          pnpm run smoke
       - name: Commit validated source and snapshot
         shell: bash
         run: |
@@ -68,7 +94,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Stabilize source fixity module spans"
+          git commit -m "Fix residual sum ordering and source fixity spans"
           git push origin HEAD:codex/source-defined-operators
       - name: Pack validated workspace
         if: always()
