@@ -728,7 +728,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14112
+      "lines": 14131
     },
     {
       "path": "compiler/src/session.rs",
