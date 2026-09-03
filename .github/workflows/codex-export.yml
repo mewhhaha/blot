@@ -27,7 +27,9 @@ jobs:
         run: |
           set -euo pipefail
           git apply .github/codex-source-fixity.patch
+          git apply .github/codex-sum-retag.patch
           rm .github/codex-source-fixity.patch
+          rm .github/codex-sum-retag.patch
           rm .github/workflows/codex-export.yml
           git diff --check
       - uses: pnpm/action-setup@v6
@@ -100,7 +102,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Fix residual sum ordering and source fixity spans"
+          git commit -m "Fix residual sum ordering and retag exported sums"
           git push origin HEAD:codex/source-defined-operators
       - name: Pack validated workspace
         if: always()
