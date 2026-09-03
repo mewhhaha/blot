@@ -1,0 +1,41 @@
+name: Regenerate language health
+
+on:
+  push:
+    branches:
+      - codex/source-defined-operators
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: pnpm install --frozen-lockfile
+      - name: Regenerate language health
+        run: pnpm generate:health
+      - name: Publish cleaned generated artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/codex-regenerate-health.yml
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Regenerate language health"
+          git push origin HEAD:codex/source-defined-operators
