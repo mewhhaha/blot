@@ -1,0 +1,168 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    file = Path(path)
+    text = file.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one replacement site, found {count}")
+    file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+replace_once(
+    "compiler/src/typecheck.rs",
+    """                let inferred = self.infer(path, module, value, types, values, dependencies)?;
+                let previous = stable_rebinding_type(self.instantiate(previous));
+                let inferred_type = stable_rebinding_type(inferred.type_.clone());
+                self.constrain(inferred_type.clone(), previous.clone(), span)?;
+                self.constrain(previous.clone(), inferred_type, span)?;
+""",
+    """                let previous = stable_rebinding_type(self.instantiate(previous));
+                let inferred = self.infer_against(
+                    path,
+                    module,
+                    value,
+                    previous.clone(),
+                    types,
+                    values,
+                    dependencies,
+                    span,
+                )?;
+""",
+)
+
+replace_once(
+    "compiler/src/typecheck.rs",
+    """                let generalized = kind != DeclarationKind::Effect
+                    && names
+                        .iter()
+                        .all(|name| !name.starts_with(FIXITY_INTERMEDIATE_PREFIX));
+""",
+    """                let synthetic_loop = recursive
+                    && names.len() == 1
+                    && names[0] == "go$"
+                    && module.arena.synthetic_expressions.contains(&value);
+                let generalized = !synthetic_loop
+                    && kind != DeclarationKind::Effect
+                    && names
+                        .iter()
+                        .all(|name| !name.starts_with(FIXITY_INTERMEDIATE_PREFIX));
+""",
+)
+
+replace_once(
+    "LANGUAGE.md",
+    """The old and new types must constrain each other after singleton integer and text
+literals are widened to their stable domains. The previous polymorphic scheme is
+retained. Use another `let` or `const` to shadow a name with a different type.
+""",
+    """The replacement is inferred against the existing binding's stable type. It may
+therefore have a narrower inferred type, while the rebound name keeps the stable
+type already assigned to its lineage. For example, rebinding a value of type
+`#True | #False` with `#True` preserves the Boolean type. Singleton integer and
+text literals are widened to their stable domains at this boundary. The previous
+polymorphic scheme is retained. Use another `let` or `const` to shadow a name
+with a different type.
+""",
+)
+
+replace_once(
+    "docs/inference.md",
+    """`:=` is deliberately stricter than `let`. It introduces a new binding for an
+existing name, but the old and new types must flow into one another. Singleton
+integer and text literals widen to their domains at that boundary, so
+`value := value + 1` preserves `Int`; changing an integer binding to text
+requires another `let value = ...`. The existing binding's scheme is retained,
+so rebinding a polymorphic function does not accidentally make it monomorphic.
+""",
+    """`:=` is deliberately stricter than `let`. It introduces a new binding for an
+existing name and infers the replacement against that binding's stable type. A
+replacement may be narrower, so assigning `#True` to a `Bool` binding preserves
+`#True | #False`; a value outside the stable type is still rejected. Singleton
+integer and text literals widen to their domains at that boundary, so
+`value := value + 1` preserves `Int`; changing an integer binding to text
+requires another `let value = ...`. The existing binding's scheme is retained,
+so rebinding a polymorphic function does not accidentally make it monomorphic.
+
+A lowered `for` keeps its generated recursive accumulator monomorphic. The first
+call therefore contributes the enclosing bindings' stable types to the same
+inference variables used by every back edge, instead of generalizing a loop body
+from a narrower replacement before the initial state is seen.
+""",
+)
+
+replace_once(
+    "spec/TYPECHECKING.md",
+    """candidate's entry. The first successful candidate commits. A left-hand union is
+conjunction and does not introduce choice.
+
+The implementation uses an undo journal and a variable-arena checkpoint. It must
+""",
+    """candidate's entry. The first successful candidate commits. A left-hand union is
+conjunction and does not introduce choice.
+
+Stable rebinding checks its replacement against the binding lineage's existing
+type and retains that existing type in the environment. This is subsumption, not
+symmetric unification: a constructor such as `#True` may inhabit the stable
+`#True | #False` type without narrowing the lineage. Lowered `for` recursion is
+monomorphic so its initial accumulator and every back edge constrain one shared
+type graph; generalizing the generated recursive function before its initial
+call would lose that context and incorrectly narrow the accumulator to a single
+replacement.
+
+The implementation uses an undo journal and a variable-arena checkpoint. It must
+""",
+)
+
+replace_once(
+    "compiler/src/session.rs",
+    """    fn source(value: &str) -> Vec<u16> {
+""",
+    r'''    #[test]
+    fn stable_rebinding_preserves_a_declared_variant_inside_a_loop() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "\n",
+                        "let flag :: Bool\n",
+                        "let flag = #False\n",
+                        "\n",
+                        "for _ in Iter.items [()]:\n",
+                        "  flag := #True\n",
+                        "\n",
+                        "return flag\n",
+                    )),
+                )
+                .expect("stable variant rebinding source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("stable variant rebinding source should configure");
+
+            let checked = session.check_module("main.blot");
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(checked["ok"], true, "{checked}");
+            assert_eq!(checked["type"], "#True | #False", "{checked}");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    fn source(value: &str) -> Vec<u16> {
+''',
+)
