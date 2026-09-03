@@ -269,8 +269,8 @@ type is closed, and retains that existing type in the environment. A constructor
 such as `#True` may therefore inhabit the stable `#True | #False` type without
 narrowing the lineage. If the stable type is still an inference variable, the
 checker retains the existing bidirectional constraints until that variable is
-settled; this is required for generated loop accumulators whose initial value and
-recursive back edges jointly determine the stable type. When `for` lowering
+settled; this is required for generated loop accumulators whose initial value
+and recursive back edges jointly determine the stable type. When `for` lowering
 introduces its unspellable `loop$` accumulator binding, a closed
 multi-constructor variant already established for a carried source name is also
 retained separately as that name's stable lineage.
