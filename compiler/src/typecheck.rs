@@ -6723,6 +6723,14 @@ impl Checker {
             }
             Requirement::Predicate(predicate) => {
                 let mut settled = self.settle(subject.type_.clone(), true);
+                eprintln!(
+                    "PRED-DBG bottom={} mentions={} pending={} subject={} settled={}",
+                    contains_bottom(&settled),
+                    self.mentions_pending_numeric_literal(&subject.type_),
+                    self.numeric_literals.borrow().len(),
+                    self.show(&subject.type_),
+                    self.show(&settled),
+                );
                 if contains_bottom(&settled)
                     && self.mentions_pending_numeric_literal(&subject.type_)
                 {
