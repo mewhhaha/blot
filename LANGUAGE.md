@@ -662,9 +662,13 @@ should be rebound. In a curried function every arrow is a closure boundary, so
 an inner closure must likewise start a local lineage before rebinding an outer
 parameter.
 
-The old and new types must constrain each other after singleton integer and text
-literals are widened to their stable domains. The previous polymorphic scheme is
-retained. Use another `let` or `const` to shadow a name with a different type.
+The replacement is inferred against the existing binding's stable type. It may
+therefore have a narrower inferred type, while the rebound name keeps the stable
+type already assigned to its lineage. For example, rebinding a value of type
+`#True | #False` with `#True` preserves the Boolean type. Singleton integer and
+text literals are widened to their stable domains at this boundary. The previous
+polymorphic scheme is retained. Use another `let` or `const` to shadow a name
+with a different type.
 
 Only a single name may appear to the left of `:=`. A `:=` in a `for` body
 defines one of that loop's accumulator fields only when the target comes from

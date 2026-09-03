@@ -4778,7 +4778,12 @@ impl Checker {
                 for bound in recursive_bounds {
                     self.constrain(inferred.type_.clone(), bound, span)?;
                 }
-                let generalized = kind != DeclarationKind::Effect
+                let synthetic_loop = recursive
+                    && names.len() == 1
+                    && names[0] == "go$"
+                    && module.arena.synthetic_expressions.contains(&value);
+                let generalized = !synthetic_loop
+                    && kind != DeclarationKind::Effect
                     && names
                         .iter()
                         .all(|name| !name.starts_with(FIXITY_INTERMEDIATE_PREFIX));
@@ -4891,11 +4896,17 @@ impl Checker {
                         span,
                     )
                 })?;
-                let inferred = self.infer(path, module, value, types, values, dependencies)?;
                 let previous = stable_rebinding_type(self.instantiate(previous));
-                let inferred_type = stable_rebinding_type(inferred.type_.clone());
-                self.constrain(inferred_type.clone(), previous.clone(), span)?;
-                self.constrain(previous.clone(), inferred_type, span)?;
+                let inferred = self.infer_against(
+                    path,
+                    module,
+                    value,
+                    previous.clone(),
+                    types,
+                    values,
+                    dependencies,
+                    span,
+                )?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);

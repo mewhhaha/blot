@@ -9810,6 +9810,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stable_rebinding_preserves_a_declared_variant_inside_a_loop() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "\n",
+                        "let flag :: Bool\n",
+                        "let flag = #False\n",
+                        "\n",
+                        "for _ in Iter.items [()]:\n",
+                        "  flag := #True\n",
+                        "\n",
+                        "return flag\n",
+                    )),
+                )
+                .expect("stable variant rebinding source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("stable variant rebinding source should configure");
+
+            let checked = session.check_module("main.blot");
+            let prepared = session.prepare_runtime_hir("main.blot");
+
+            assert_eq!(checked["ok"], true, "{checked}");
+            assert_eq!(checked["type"], "#True | #False", "{checked}");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
     fn source(value: &str) -> Vec<u16> {
         let mut raw = String::with_capacity(value.len());
         for character in value.chars() {

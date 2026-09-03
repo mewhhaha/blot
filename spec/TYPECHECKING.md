@@ -247,6 +247,15 @@ sets, extrusion links, and fresh-identity counters exactly as they were at the
 candidate's entry. The first successful candidate commits. A left-hand union is
 conjunction and does not introduce choice.
 
+Stable rebinding checks its replacement against the binding lineage's existing
+type and retains that existing type in the environment. This is subsumption, not
+symmetric unification: a constructor such as `#True` may inhabit the stable
+`#True | #False` type without narrowing the lineage. Lowered `for` recursion is
+monomorphic so its initial accumulator and every back edge constrain one shared
+type graph; generalizing the generated recursive function before its initial
+call would lose that context and incorrectly narrow the accumulator to a single
+replacement.
+
 The implementation uses an undo journal and a variable-arena checkpoint. It must
 not clone the whole solver graph for a candidate. This is both a semantic
 requirement and the first performance invariant.
