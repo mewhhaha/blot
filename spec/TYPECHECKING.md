@@ -77,6 +77,20 @@ attaches requirements to evaluator closures. The map is scoped to the source
 module and expression identities of `R`, so `_` in any other value remains an
 unbound name.
 
+Numeric literal elaboration also assigns a fresh inference variable, with the
+literal's admissible domains held as checker metadata rather than as a new type
+constructor. An integer literal admits its singleton `Int` range, `F64`, and
+`F32`; its singleton may satisfy any wider integer-range constraint. A float
+literal admits `F64` and `F32`. At a declaration or module-result boundary, the
+checker probes those candidates against all accumulated bounds using the same
+undo journal as other transactional solver choices. It commits the first viable
+candidate, so an unconstrained integer keeps its singleton type and an
+unconstrained float defaults to `F64`, then records the chosen runtime
+representation as an expression-type fact. Failed probes leave no bounds or
+fresh variables behind. This elaboration rule adds no cross-domain subtype edge:
+a value already bound in one numeric domain still needs an explicit conversion
+to another.
+
 ## 1. Type algebra
 
 Let labels range over interned field, constructor, and effect names. Let scalar

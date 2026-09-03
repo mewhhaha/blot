@@ -1701,10 +1701,10 @@ const F64Operations =
 
 // --- single precision -------------------------------------------------------
 //
-// The narrower float, reached by conversion rather than by a literal: there is
-// one float token in the grammar and `F32.of_float` is what makes the loss of
-// precision a step the program takes. It is also the lane type a four-wide
-// vector wants, which is the other reason to have it at all.
+// The narrower float. The grammar has one float token; literal inference uses
+// an `F32` context directly, while `F32.of_float` remains the explicit narrowing
+// step for an already-bound `F64`. It is also the lane type a four-wide vector
+// wants, which is the other reason to have it at all.
 
 const F32Operations =
   {

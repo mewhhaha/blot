@@ -692,10 +692,10 @@ function tokenDocumentation(token: TokenCursor): string | null {
   const punctuation = PUNCTUATION_DOCUMENTATION[token.text];
   if (punctuation !== undefined) return punctuation;
   if (token.kind === "INTEGER") {
-    return "An integer literal has a singleton integer type.";
+    return "An integer literal defaults to its singleton integer type and can infer a compatible integer range, `F64`, or `F32` from context.";
   }
   if (token.kind === "FLOAT") {
-    return "A decimal floating-point literal has type `F64`.";
+    return "A decimal floating-point literal defaults to `F64` and can infer `F32` from context.";
   }
   if (token.kind === "TEXT") {
     return "A UTF-8 text literal has a singleton text type.";

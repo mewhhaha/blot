@@ -6377,6 +6377,24 @@ impl ResidualTrace {
         }
     }
 
+    fn existing_sum_type(&self, cases: &[String], payload_types: &[usize]) -> Option<usize> {
+        self.types.iter().enumerate().find_map(|(type_id, type_)| {
+            let RuntimeType::Sum {
+                cases: existing, ..
+            } = type_
+            else {
+                return None;
+            };
+            (existing.len() == cases.len()
+                && cases.iter().zip(payload_types).all(|(name, payload_type)| {
+                    existing
+                        .iter()
+                        .any(|case_| case_.name == *name && case_.payload_type == *payload_type)
+                }))
+            .then_some(type_id)
+        })
+    }
+
     fn runtime_type_from_checked_type(&mut self, type_: &Type) -> Result<usize, Diagnostic> {
         match type_ {
             Type::Unit => Ok(0),
@@ -6437,7 +6455,9 @@ impl ResidualTrace {
                     .iter()
                     .map(|(_, payload)| self.runtime_type_from_checked_type(payload))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(self.sum_type(&names, &payloads))
+                Ok(self
+                    .existing_sum_type(&names, &payloads)
+                    .unwrap_or_else(|| self.sum_type(&names, &payloads)))
             }
             Type::Opaque(name) if simd_layout(name).is_some() => {
                 let layout = simd_layout(name).expect("matched SIMD type");

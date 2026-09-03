@@ -2250,6 +2250,26 @@ struct SyntheticCallFact {
     result: Type,
 }
 
+#[derive(Clone)]
+enum NumericLiteralKind {
+    Integer(BigInt),
+    Float,
+}
+
+#[derive(Clone)]
+struct NumericLiteralFact {
+    kind: NumericLiteralKind,
+    path: String,
+    expression: ExpressionId,
+    span: Span,
+}
+
+struct NumericLiteralCandidate {
+    lower: Type,
+    upper: Type,
+    representation: Type,
+}
+
 type StructuralReadabilityCandidates =
     ModuleFacts<(ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
 
@@ -2272,6 +2292,7 @@ pub struct Checker {
     solver_worklist_peak: Cell<u64>,
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
+    numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
     level: Cell<u32>,
@@ -2359,6 +2380,7 @@ impl Checker {
             solver_worklist_peak: Cell::new(0),
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
+            numeric_literals: RefCell::new(BTreeMap::new()),
             next_skolem: Rc::new(Cell::new(0x8000_0000)),
             next_representation_hole: Rc::new(Cell::new(u32::MAX)),
             level: Cell::new(0),
@@ -2717,6 +2739,7 @@ impl Checker {
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().clear();
+        self.numeric_literals.borrow_mut().clear();
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
         self.deferred_predicate_closures.borrow_mut().clear();
@@ -2754,6 +2777,9 @@ impl Checker {
         self.closure_types.borrow_mut().remove_modules(paths);
         self.signed_closure_types.borrow_mut().remove_modules(paths);
         self.expression_types.borrow_mut().remove_modules(paths);
+        self.numeric_literals
+            .borrow_mut()
+            .retain(|_, literal| !paths.contains(&literal.path));
         self.analysis_expression_types
             .borrow_mut()
             .remove_modules(paths);
@@ -3400,6 +3426,7 @@ impl Checker {
             &dependency_types,
         )?;
         effects = self.join_effects(effects, inferred.effects)?;
+        self.resolve_numeric_literals()?;
         let effects = self.settle(effects, true);
         if let Type::Effects(labels) = &effects
             && labels.iter().any(|label| !label.starts_with("host:"))
@@ -4620,6 +4647,7 @@ impl Checker {
                     })?;
                     inferred.effects = Type::Effects(BTreeSet::new());
                 }
+                self.resolve_numeric_literals()?;
                 let evaluated = if kind == DeclarationKind::Const {
                     match self.evaluate_binding(
                         path,
@@ -4896,6 +4924,7 @@ impl Checker {
                 let inferred_type = stable_rebinding_type(inferred.type_.clone());
                 self.constrain(inferred_type.clone(), previous.clone(), span)?;
                 self.constrain(previous.clone(), inferred_type, span)?;
+                self.resolve_numeric_literals()?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
@@ -4928,6 +4957,7 @@ impl Checker {
             Declaration::Open { value, span } => {
                 *recursive_bindings = None;
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
+                self.resolve_numeric_literals()?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Some(fields) = opened_members(&opened) else {
                     return Err(Diagnostic::new(
@@ -5108,12 +5138,18 @@ impl Checker {
         let span = expression_span(&expression);
         let pure = || Type::Effects(BTreeSet::new());
         match expression {
-            Expression::Int { value, .. } => Ok(Inferred::pure(Type::Range {
-                domain: Domain::Int,
-                low: Some(Scalar::Int(value.clone())),
-                high: Some(Scalar::Int(value)),
-            })),
-            Expression::Float { .. } => Ok(Inferred::pure(float_type())),
+            Expression::Int { value, .. } => Ok(Inferred::pure(self.fresh_numeric_literal(
+                path,
+                expression_id,
+                span,
+                NumericLiteralKind::Integer(value),
+            ))),
+            Expression::Float { .. } => Ok(Inferred::pure(self.fresh_numeric_literal(
+                path,
+                expression_id,
+                span,
+                NumericLiteralKind::Float,
+            ))),
             Expression::Text { value, .. } => Ok(Inferred::pure(Type::Range {
                 domain: Domain::Text,
                 low: Some(Scalar::Text(value.clone())),
@@ -6937,6 +6973,153 @@ impl Checker {
         })
     }
 
+    fn fresh_numeric_literal(
+        &self,
+        path: &str,
+        expression: ExpressionId,
+        span: Span,
+        kind: NumericLiteralKind,
+    ) -> Type {
+        let type_ = self.fresh();
+        let Type::Variable(variable) = type_ else {
+            unreachable!("fresh always returns a variable")
+        };
+        self.numeric_literals.borrow_mut().insert(
+            variable,
+            NumericLiteralFact {
+                kind,
+                path: path.to_owned(),
+                expression,
+                span,
+            },
+        );
+        let type_ = Type::Variable(variable);
+        self.expression_types
+            .borrow_mut()
+            .insert(path.to_owned(), expression, type_.clone());
+        type_
+    }
+
+    fn numeric_literal_candidates(kind: &NumericLiteralKind) -> Vec<NumericLiteralCandidate> {
+        match kind {
+            NumericLiteralKind::Integer(value) => {
+                let singleton = Type::Range {
+                    domain: Domain::Int,
+                    low: Some(Scalar::Int(value.clone())),
+                    high: Some(Scalar::Int(value.clone())),
+                };
+                vec![
+                    NumericLiteralCandidate {
+                        lower: singleton,
+                        upper: int_type(),
+                        representation: int_type(),
+                    },
+                    NumericLiteralCandidate {
+                        lower: float_type(),
+                        upper: float_type(),
+                        representation: float_type(),
+                    },
+                    NumericLiteralCandidate {
+                        lower: float32_type(),
+                        upper: float32_type(),
+                        representation: float32_type(),
+                    },
+                ]
+            }
+            NumericLiteralKind::Float => vec![
+                NumericLiteralCandidate {
+                    lower: float_type(),
+                    upper: float_type(),
+                    representation: float_type(),
+                },
+                NumericLiteralCandidate {
+                    lower: float32_type(),
+                    upper: float32_type(),
+                    representation: float32_type(),
+                },
+            ],
+        }
+    }
+
+    fn constrain_numeric_literal_candidate(
+        &self,
+        variable: VariableId,
+        candidate: &NumericLiteralCandidate,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let variable = self.constraint_type(&Type::Variable(variable));
+        let lower = self.constraint_type(&candidate.lower);
+        let upper = self.constraint_type(&candidate.upper);
+        self.constrain_ids(lower, variable, span, &mut HashSet::new())?;
+        self.constrain_ids(variable, upper, span, &mut HashSet::new())
+    }
+
+    fn numeric_literal_candidate_fits(
+        &self,
+        variable: VariableId,
+        candidate: &NumericLiteralCandidate,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let insertion_count = self.bound_insertions.borrow().len();
+        let variable_count = self.variables.borrow().len();
+        let next_skolem = self.next_skolem.get();
+        let result = self.constrain_numeric_literal_candidate(variable, candidate, span);
+        self.rollback_bounds(insertion_count, variable_count, next_skolem);
+        result
+    }
+
+    fn resolve_numeric_literals(&self) -> Result<(), Diagnostic> {
+        debug_assert!(self.bound_insertions.borrow().is_empty());
+        let literals = self
+            .numeric_literals
+            .borrow()
+            .iter()
+            .map(|(variable, literal)| (*variable, literal.clone()))
+            .collect::<Vec<_>>();
+        for (variable, literal) in literals {
+            if variable as usize >= self.variables.borrow().len() {
+                self.numeric_literals.borrow_mut().remove(&variable);
+                continue;
+            }
+            let candidates = Self::numeric_literal_candidates(&literal.kind);
+            let mut selected = None;
+            let mut error = None;
+            for candidate in candidates {
+                match self.numeric_literal_candidate_fits(variable, &candidate, literal.span) {
+                    Ok(()) => {
+                        selected = Some(candidate);
+                        break;
+                    }
+                    Err(candidate_error) => {
+                        if error.is_none() {
+                            error = Some(candidate_error);
+                        }
+                    }
+                }
+            }
+            let Some(candidate) = selected else {
+                return Err(error.expect("numeric literals have at least one candidate"));
+            };
+            self.constrain_numeric_literal_candidate(variable, &candidate, literal.span)?;
+            self.bound_insertions.borrow_mut().clear();
+            self.numeric_literals.borrow_mut().remove(&variable);
+            self.expression_types.borrow_mut().insert(
+                literal.path.clone(),
+                literal.expression,
+                candidate.representation.clone(),
+            );
+            let representation = self
+                .reify_runtime_type(&candidate.representation)
+                .expect("numeric literal candidates have runtime representations");
+            self.context.expression_types.borrow_mut().insert(
+                literal.path,
+                literal.expression,
+                representation,
+            );
+        }
+        Ok(())
+    }
+
     fn instantiate(&self, typing: Typing) -> Type {
         match typing {
             Typing::Mono(type_) => type_,
@@ -7460,6 +7643,9 @@ impl Checker {
         self.empty_array_elements
             .borrow_mut()
             .retain(|variable| (*variable as usize) < variable_count);
+        self.numeric_literals
+            .borrow_mut()
+            .retain(|variable, _| (*variable as usize) < variable_count);
         self.next_skolem.set(next_skolem);
     }
 

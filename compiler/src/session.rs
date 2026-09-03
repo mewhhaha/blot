@@ -6930,6 +6930,132 @@ mod tests {
     }
 
     #[test]
+    fn numeric_literals_select_integer_and_float_representations_from_context() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let accepted = [
+                (
+                    "return 42
+",
+                    "42",
+                    "42",
+                ),
+                (
+                    "return 1.5
+",
+                    "F64",
+                    "1.5",
+                ),
+                (
+                    "open import \"blot:prelude\"
+return F64.add 1 2.5
+",
+                    "F64",
+                    "3.5",
+                ),
+                (
+                    "open import \"blot:prelude\"
+return F32.add (-1) 2.5
+",
+                    "F32",
+                    "1.5f32",
+                ),
+                (
+                    concat!(
+                        "open import \"blot:prelude\"
+",
+                        "let value :: F32
+",
+                        "let value = 1.25
+",
+                        "return F32.add value 0.5
+",
+                    ),
+                    "F32",
+                    "1.75f32",
+                ),
+            ];
+            for (index, (text, expected_type, expected_display)) in accepted.into_iter().enumerate()
+            {
+                let path = format!("numeric-literal-{index}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(path.clone(), source(text))
+                    .expect("numeric-literal source should load");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("numeric-literal source should configure");
+
+                let checked = session.check_module(&path);
+                let evaluated = session.evaluate_module(&path);
+                let prepared = session.prepare_runtime_hir(&path);
+
+                assert_eq!(checked["ok"], true, "{checked}");
+                assert_eq!(checked["type"], expected_type, "{checked}");
+                assert_eq!(evaluated["ok"], true, "{evaluated}");
+                assert_eq!(evaluated["display"], expected_display, "{evaluated}");
+                assert_eq!(prepared["ok"], true, "{prepared}");
+            }
+
+            for (index, text) in [
+                concat!(
+                    "open import \"blot:prelude\"
+",
+                    "let value = 1
+",
+                    "return F64.add value 2.0
+",
+                ),
+                concat!(
+                    "open import \"blot:prelude\"
+",
+                    "let value = 1.5
+",
+                    "return F32.add value 2.0
+",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let path = format!("numeric-literal-bound-{index}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .expect("prelude snapshot should install");
+                session
+                    .add_source(path.clone(), source(text))
+                    .expect("bound numeric source should load");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("bound numeric source should configure");
+
+                let checked = session.check_module(&path);
+
+                assert_eq!(checked["ok"], false, "{checked}");
+                assert_eq!(
+                    checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                    "{checked}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn recursive_empty_array_accumulator_closes_from_pushed_elements() {
         run_with_compiler_test_stack(|| {
             let mut session = CompilerSession::default();
