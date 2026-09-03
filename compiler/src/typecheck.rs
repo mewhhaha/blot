@@ -6723,14 +6723,6 @@ impl Checker {
             }
             Requirement::Predicate(predicate) => {
                 let mut settled = self.settle(subject.type_.clone(), true);
-                eprintln!(
-                    "PRED-DBG bottom={} mentions={} pending={} subject={} settled={}",
-                    contains_bottom(&settled),
-                    self.mentions_pending_numeric_literal(&subject.type_),
-                    self.numeric_literals.borrow().len(),
-                    self.show(&subject.type_),
-                    self.show(&settled),
-                );
                 if contains_bottom(&settled)
                     && self.mentions_pending_numeric_literal(&subject.type_)
                 {
@@ -7135,48 +7127,54 @@ impl Checker {
     }
 
     fn mentions_pending_numeric_literal(&self, type_: &Type) -> bool {
-        let literals = self.numeric_literals.borrow();
-        if literals.is_empty() {
+        if self.numeric_literals.borrow().is_empty() {
             return false;
         }
-        let mut pending = vec![type_];
+        let literals = self.numeric_literals.borrow();
+        let mut seen_variables = HashSet::new();
+        let mut pending = vec![type_.clone()];
         while let Some(type_) = pending.pop() {
             match type_ {
                 Type::Variable(variable) => {
-                    if literals.contains_key(variable) {
+                    if literals.contains_key(&variable) {
                         return true;
                     }
+                    if seen_variables.insert(variable) {
+                        if let Some(variable) = self.variables.borrow().get(variable as usize) {
+                            pending.extend(
+                                variable
+                                    .lower
+                                    .iter()
+                                    .chain(variable.upper.iter())
+                                    .map(|bound| self.expand_constraint(*bound)),
+                            );
+                        }
+                    }
                 }
-                Type::Forall { body, .. } => pending.push(body.as_ref()),
+                Type::Forall { body, .. } => pending.push(Rc::unwrap_or_clone(body)),
                 Type::Function {
                     parameter,
                     effects,
                     result,
                     ..
                 } => {
-                    pending.push(parameter.as_ref());
-                    pending.push(effects.as_ref());
-                    pending.push(result.as_ref());
+                    pending.push(Rc::unwrap_or_clone(parameter));
+                    pending.push(Rc::unwrap_or_clone(effects));
+                    pending.push(Rc::unwrap_or_clone(result));
                 }
                 Type::Record(fields) | Type::Variant { cases: fields, .. } => {
-                    for (_, field) in fields.iter() {
-                        pending.push(field);
-                    }
+                    pending.extend(fields.iter().map(|(_, field)| field.clone()));
                 }
                 Type::RecordUpdate { base, fields } => {
-                    pending.push(base.as_ref());
-                    for (_, field) in fields.iter() {
-                        pending.push(field);
-                    }
+                    pending.push(Rc::unwrap_or_clone(base));
+                    pending.extend(fields.iter().map(|(_, field)| field.clone()));
                 }
                 Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-                    pending.push(element.as_ref())
+                    pending.push(Rc::unwrap_or_clone(element))
                 }
-                Type::OpenEffects { tail, .. } => pending.push(tail.as_ref()),
+                Type::OpenEffects { tail, .. } => pending.push(Rc::unwrap_or_clone(tail)),
                 Type::Union(members) => {
-                    for member in members.iter() {
-                        pending.push(member);
-                    }
+                    pending.extend(members.iter().cloned());
                 }
                 Type::Bottom
                 | Type::Rigid(_)
