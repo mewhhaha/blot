@@ -88,6 +88,41 @@ fn stable_variant_rebinding_type(replacement: Type, previous: &Type) -> Type {
     }
     previous.clone()
 }
+
+fn join_loop_parameter_types(inferred: Type, initial: Type) -> Type {
+    if same_type(&inferred, &initial) {
+        return inferred;
+    }
+    match (inferred, initial) {
+        (Type::Record(inferred), Type::Record(initial)) => {
+            let mut initial = initial.into_iter().collect::<Vec<_>>();
+            let mut fields = Vec::with_capacity(inferred.len().max(initial.len()));
+            for (name, inferred) in inferred {
+                if let Some(index) = initial
+                    .iter()
+                    .position(|(candidate, _)| candidate == &name)
+                {
+                    let (_, initial) = initial.remove(index);
+                    fields.push((name, join_loop_parameter_types(inferred, initial)));
+                } else {
+                    fields.push((name, inferred));
+                }
+            }
+            fields.extend(initial);
+            Type::Record(fields.into())
+        }
+        (Type::Array(inferred), Type::Array(initial)) => Type::Array(Rc::new(
+            join_loop_parameter_types(Rc::unwrap_or_clone(inferred), Rc::unwrap_or_clone(initial)),
+        )),
+        (Type::Region(inferred), Type::Region(initial)) => Type::Region(Rc::new(
+            join_loop_parameter_types(Rc::unwrap_or_clone(inferred), Rc::unwrap_or_clone(initial)),
+        )),
+        (Type::Scratch(inferred), Type::Scratch(initial)) => Type::Scratch(Rc::new(
+            join_loop_parameter_types(Rc::unwrap_or_clone(inferred), Rc::unwrap_or_clone(initial)),
+        )),
+        (inferred, initial) => join_types(vec![inferred, initial]),
+    }
+}
 """,
 )
 
@@ -151,6 +186,29 @@ replace_once(
                     }) = evaluated_function.as_ref()
                     && let Some(argument) = contextual_argument.as_ref()
                 {
+                    let inferred_function = self.infer(
+                        path,
+                        module,
+                        function,
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let initial_parameter =
+                        stable_loop_signature(self.settle(argument.type_.clone(), true));
+                    let contextual_parameter =
+                        match self.settle(inferred_function.type_, true) {
+                            Type::Function { parameter, .. } => join_loop_parameter_types(
+                                stable_loop_signature(Rc::unwrap_or_clone(parameter)),
+                                initial_parameter,
+                            ),
+                            _ => initial_parameter,
+                        };
+                    self.constrain(
+                        argument.type_.clone(),
+                        contextual_parameter.clone(),
+                        span,
+                    )?;
                     let function = self.infer_evaluated_closure(
                         path,
                         module,
@@ -164,10 +222,10 @@ replace_once(
                         },
                         environment,
                         dependencies,
-                        Some(argument.type_.clone()),
+                        Some(contextual_parameter.clone()),
                     )?;
                     self.closure_types.borrow_mut().insert(
-                        closure_module.to_owned(),
+                        closure_module.to_string(),
                         *body,
                         function.clone(),
                     );
@@ -178,7 +236,7 @@ replace_once(
                         function,
                         Type::Function {
                             deferred,
-                            parameter: Rc::new(argument.type_.clone()),
+                            parameter: Rc::new(contextual_parameter),
                             effects: Rc::new(performed.clone()),
                             result: Rc::new(result.clone()),
                         },
