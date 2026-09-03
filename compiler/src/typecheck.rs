@@ -7139,16 +7139,16 @@ impl Checker {
                     if literals.contains_key(&variable) {
                         return true;
                     }
-                    if seen_variables.insert(variable) {
-                        if let Some(variable) = self.variables.borrow().get(variable as usize) {
-                            pending.extend(
-                                variable
-                                    .lower
-                                    .iter()
-                                    .chain(variable.upper.iter())
-                                    .map(|bound| self.expand_constraint(*bound)),
-                            );
-                        }
+                    if seen_variables.insert(variable)
+                        && let Some(variable) = self.variables.borrow().get(variable as usize)
+                    {
+                        pending.extend(
+                            variable
+                                .lower
+                                .iter()
+                                .chain(variable.upper.iter())
+                                .map(|bound| self.expand_constraint(*bound)),
+                        );
                     }
                 }
                 Type::Forall { body, .. } => pending.push(Rc::unwrap_or_clone(body)),
