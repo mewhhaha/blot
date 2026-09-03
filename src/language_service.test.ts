@@ -667,6 +667,30 @@ return count
   }
 });
 
+Deno.test("operator hover uses the active source fixity", async () => {
+  const directory = await Deno.makeTempDir();
+  const path = join(directory, "hover-source-fixity.blot");
+  const source = `infixl 60 (+) = Int.sub
+open import "blot:prelude"
+return 20 + 22
+`;
+  await Deno.writeTextFile(path, source);
+  const uri = toFileUrl(path).href;
+  const service = new LanguageService();
+  try {
+    service.open(uri, source, 1);
+    const operator = await service.hover(uri, { line: 2, character: 10 });
+    assert(operator !== null);
+    assertStringIncludes(operator.contents.value, "precedence 60");
+    assertStringIncludes(
+      operator.contents.value,
+      "**Related value:** `Int.sub`",
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("shape and attached member hover keeps the selected member", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "hover-member.blot");

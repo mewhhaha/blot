@@ -1,5 +1,0 @@
-operators {
-  infixl 65 (++) = Text.append;
-}
-
-return ()

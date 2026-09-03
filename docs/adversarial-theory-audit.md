@@ -12,7 +12,7 @@ authority. Current precedence is defined in
 
 The audit treated every duplicated rule as hostile input. It compared:
 
-- the generated Baba grammar and operator plan;
+- the generated Baba grammar and source syntax-prelude revision;
 - `LANGUAGE.md` and explicit-block migration rules;
 - the integrated paper and each focused specification;
 - executable examples and current production-target claims;
@@ -42,16 +42,17 @@ The corrected contract is:
 - a surrounding `const` determines compile-time resolution; and
 - statement `if` is not a value expression.
 
-### 2. Source fixities contradicted the generated language plan
+### 2. The generated language plan duplicated source fixities
 
-The current surface has one generated operator table. Older frontend and
-incremental prose still referred to a source-provided fixity environment and to
-fixities in module prefix identity.
+The current surface has one source-authored standard fixity header and permits a
+bounded per-module overlay. The old generated language plan duplicated that
+vocabulary and prevented generic source declarations.
 
-The corrected contract makes operator spelling, precedence, and associativity
-part of the generated language-plan revision. Source resolves the ordinary
-qualified target binding but cannot change punctuation or grouping. The removed
-`operators` section only produces its migration diagnostic.
+The corrected contract makes the prelude source the standard authority, records
+the module overlay in frontend identity, and treats compiler tables only as
+derived bootstrap artifacts. A module declaration chooses punctuation, grouping,
+and target before lowering; ordinary lexical resolution chooses the value
+reached by that target.
 
 ### 3. Empty-row application had two incompatible Core meanings
 

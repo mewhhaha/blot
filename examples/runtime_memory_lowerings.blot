@@ -57,4 +57,4 @@ return {
   .replace_text = replace_text;
   .build_map = build_map;
   .take_at = take_at;
-}
+  }

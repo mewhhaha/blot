@@ -9,7 +9,8 @@ const Inventory = @effect { .reserve = Text -> Bool; }
 const Payment = @effect { .charge = Int -> Bool; }
 
 const CheckoutDetails = { .sku = Text; .total = Int; }
-const Checkout = #Confirmed CheckoutDetails | #OutOfStock CheckoutDetails | #PaymentDeclined CheckoutDetails
+const Checkout =
+  #Confirmed CheckoutDetails | #OutOfStock CheckoutDetails | #PaymentDeclined CheckoutDetails
 
 let checkout :: (Text, Int) -> Checkout ~ { Inventory, Payment }
 let checkout = fn (sku, total) => do:
@@ -46,4 +47,4 @@ return {
   .confirmed = simulate_checkout ("notebook", 3600);
   .missing = simulate_checkout ("camera", 4000);
   .declined = simulate_checkout ("notebook", 9000);
-  }
+}

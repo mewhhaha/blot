@@ -67,9 +67,10 @@ planning and emission.
 
 **Nothing is implicitly in scope.** The prelude is an ordinary module reached
 through `import` and spread with `open`; it gets no seeding, no privileged
-scope, and no exemption from its own type system. A default fixity names a
-binding by string, so `+` works only because something opened `Num` — do not
-reintroduce an implicit scope to make that line disappear.
+scope, and no exemption from its own type system. A source fixity names a
+binding by string, so `+` works only because something opened the record that
+provides its target. The standard fixity header is ordinary prelude source, not
+an implicit binding scope; do not seed values to make that dependency disappear.
 
 **A loop is a fold, not an assignment.** `for` desugars during CST lowering:
 the names its body rebinds with `:=` become the accumulator record, and nothing

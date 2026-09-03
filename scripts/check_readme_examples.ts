@@ -1,7 +1,8 @@
 import { toFileUrl } from "@std/path";
 import { babaRuntime } from "../src/syntax/baba_runtime.ts";
 import { elaborateLayout } from "../src/syntax/layout.ts";
-import { dispose, ingestCpuSource } from "../src/syntax/parse.ts";
+import { ingestCpuSource } from "../src/syntax/cpu_ingest.ts";
+import { dispose } from "../src/syntax/parse.ts";
 
 type ExampleLanguage = "bash" | "blot" | "json" | "ts";
 

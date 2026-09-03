@@ -7,11 +7,12 @@ const VertexMarks = import "./vertex_marks.blot"
 const search :: ([[Int]], Int) -> [Int]
 const search = fn (&graph, start) => do:
   let vertex_count = Array.length (&graph)
-  let rec visit :: (
-    { .values = [Int]; .length = Int; },
-    [Bool],
-    [Int]
-  ) -> [Int]
+  let rec visit ::
+    (
+      { .values = [Int]; .length = Int; },
+      [Bool],
+      [Int]
+    ) -> [Int]
   let rec visit = fn (stack, visited, traversal) => do:
     if IntStack.is_empty (&stack):
       return traversal
@@ -25,10 +26,11 @@ const search = fn (&graph, start) => do:
         let neighbors = Graph.outgoing ((&graph), (&vertex))
         let neighbor_count = Array.length (&neighbors)
         for offset in Iter.range (0, neighbor_count):
-          let neighbor = Array.expect_get (
-            (&neighbors),
-            neighbor_count - offset - 1
-          )
+          let neighbor =
+            Array.expect_get (
+              (&neighbors),
+              neighbor_count - offset - 1
+            )
           stack := IntStack.push (?stack, neighbor)
 
         return visit (stack, visited, @array.push traversal vertex)

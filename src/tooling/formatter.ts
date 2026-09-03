@@ -67,7 +67,6 @@ const INDENTED_RULES = new Set([
   "continued_expression",
   "effect_row",
   "lambda",
-  "operator_section",
   "parenthesized_or_tuple",
   "shape",
   "shape_pattern",
@@ -1184,8 +1183,7 @@ function collectIndentRegions(
     ) {
       startsAtLine -= 1;
     }
-    const contentEnd = node.name === "lambda" || node.name === "block" ||
-        node.name === "operator_section"
+    const contentEnd = node.name === "lambda" || node.name === "block"
       ? ruleContentSpan(node).end
       : node.span.end;
     // A suite's span runs to the dedent, so it can cover the blank line and
