@@ -1,4 +1,4 @@
-import { type CheckedModule, Compiler } from "../compiler.ts";
+import type { CheckedModule, Compiler } from "../compiler.ts";
 import type { LintDiagnostic, LintFix } from "./lint.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import {
