@@ -1,0 +1,63 @@
+--- a/compiler/src/backend.rs
++++ b/compiler/src/backend.rs
+@@ -1234,20 +1234,21 @@
+                         self.module.source, expected_type
+                     ));
+                 };
+-                for ((field, operand), memory_field) in fields
+-                    .iter()
+-                    .zip(&operation.operands)
+-                    .zip(record_layout(&memory_fields))
+-                {
+-                    if field.name != memory_field.name {
+-                        return Err(format!(
+-                            "{}: static product field `{}` maps to `{}`",
+-                            self.module.source, field.name, memory_field.name
+-                        ));
+-                    }
++                for memory_field in record_layout(&memory_fields) {
++                    let (field_index, field) = fields
++                        .iter()
++                        .enumerate()
++                        .find(|(_, field)| field.name == memory_field.name)
++                        .ok_or_else(|| {
++                            format!(
++                                "{}: static product memory field `{}` has no runtime field",
++                                self.module.source, memory_field.name
++                            )
++                        })?;
++                    let operand = operation.operands[field_index];
+                     if !self.write(
+                         field.type_id,
+-                        *operand,
++                        operand,
+                         destination,
+                         offset + memory_field.offset as usize,
+                     )? {
+@@ -7535,13 +7536,13 @@
+                     name: "Pair".to_owned(),
+                     fields: vec![
+                         crate::hir::RuntimeField {
+-                            name: "a".to_owned(),
+-                            type_id: 1,
+-                        },
+-                        crate::hir::RuntimeField {
+                             name: "b".to_owned(),
+                             type_id: 2,
+                         },
++                        crate::hir::RuntimeField {
++                            name: "a".to_owned(),
++                            type_id: 1,
++                        },
+                     ],
+                 },
+                 RuntimeType::Store { element_type: 3 },
+@@ -7561,7 +7562,7 @@
+         right.kind = "constant";
+         right.type_id = 2;
+         right.value = Some(WireConstant::SignedInteger64("7".to_owned()));
+-        let mut pair = plain_operation(3, vec![1, 2]);
++        let mut pair = plain_operation(3, vec![2, 1]);
+         pair.kind = "product.make";
+         pair.type_id = 3;
+         let mut store = plain_operation(4, vec![3]);
