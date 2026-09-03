@@ -5,6 +5,10 @@ on:
     branches:
       - fix/stable-rebinding-union-context
 
+concurrency:
+  group: stable-rebinding-probe
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -28,18 +32,8 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
 
-      - name: Test Rust compiler
-        run: cargo test --manifest-path compiler/Cargo.toml
-
-      - name: Commit the fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm .github/apply-stable-rebinding-fix.py
-          rm .github/workflows/apply-stable-rebinding-fix.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "Infer stable rebindings against their existing type"
-          git push origin HEAD:fix/stable-rebinding-union-context
+      - name: Probe stable variant rebinding
+        run: >-
+          cargo test --manifest-path compiler/Cargo.toml
+          session::tests::stable_rebinding_preserves_a_declared_variant_inside_a_loop
+          -- --exact --nocapture
