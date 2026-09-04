@@ -638,12 +638,12 @@ return count
     assertStringIncludes(operator.contents.value, "precedence 60");
     assertStringIncludes(
       operator.contents.value,
-      "**Related value:** `Int.add`",
+      "**Related value:** `Op.add`",
     );
     assertStringIncludes(operator.contents.value, "left + right");
     const overloaded = await service.hover(uri, { line: 2, character: 15 });
     assert(overloaded !== null);
-    assertStringIncludes(overloaded.contents.value, "`Int.sub`");
+    assertStringIncludes(overloaded.contents.value, "`Op.sub`");
     assertStringIncludes(overloaded.contents.value, "left - right");
     assertStringIncludes(overloaded.contents.value, "`Int.negate`");
     assertStringIncludes(overloaded.contents.value, "-value");

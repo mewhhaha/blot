@@ -47,37 +47,37 @@ export const generatedFixities = [
     "operator": "==",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.eq"
+    "target": "Op.eq"
   },
   {
     "operator": "!=",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.ne"
+    "target": "Op.ne"
   },
   {
     "operator": "<",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.lt"
+    "target": "Op.lt"
   },
   {
     "operator": "<=",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.le"
+    "target": "Op.le"
   },
   {
     "operator": ">",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.gt"
+    "target": "Op.gt"
   },
   {
     "operator": ">=",
     "associativity": "none",
     "precedence": 30,
-    "target": "Int.ge"
+    "target": "Op.ge"
   },
   {
     "operator": "|",
@@ -113,31 +113,31 @@ export const generatedFixities = [
     "operator": "+",
     "associativity": "left",
     "precedence": 60,
-    "target": "Int.add"
+    "target": "Op.add"
   },
   {
     "operator": "-",
     "associativity": "left",
     "precedence": 60,
-    "target": "Int.sub"
+    "target": "Op.sub"
   },
   {
     "operator": "*",
     "associativity": "left",
     "precedence": 70,
-    "target": "Int.mul"
+    "target": "Op.mul"
   },
   {
     "operator": "/",
     "associativity": "left",
     "precedence": 70,
-    "target": "Int.div"
+    "target": "Op.div"
   },
   {
     "operator": "%",
     "associativity": "left",
     "precedence": 70,
-    "target": "Int.rem"
+    "target": "Op.rem"
   },
   {
     "operator": "-",

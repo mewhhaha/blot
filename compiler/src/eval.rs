@@ -559,6 +559,168 @@ struct ResidentEffectValue {
     attachments: Vec<(String, Value)>,
 }
 
+const OPERATOR_MEMBER_NAMES: &[&str] = &[
+    "or", "and", "eq", "ne", "lt", "le", "gt", "ge", "append", "add", "sub", "mul", "div", "rem",
+    "negate",
+];
+
+fn operator_member_name(name: &str) -> bool {
+    OPERATOR_MEMBER_NAMES.contains(&name)
+}
+
+#[derive(Clone)]
+struct ResidentOperatorExtension {
+    owner: String,
+    key: String,
+    members: BTreeMap<String, ResidentOperatorMember>,
+}
+
+#[derive(Clone)]
+enum ResidentOperatorMember {
+    Primitive {
+        name: String,
+        arity: usize,
+        applied: Vec<Value>,
+    },
+    Closure {
+        module: String,
+        module_instances: Weak<ModuleInstanceScope>,
+        effect_scope: Weak<EffectScope>,
+        parameter: PatternId,
+        body: ExpressionId,
+        environment: Weak<Env>,
+        self_name: Option<String>,
+        imports: Option<BTreeMap<String, String>>,
+        reuse_assertion: Option<Span>,
+        deferred: bool,
+    },
+}
+
+impl ResidentOperatorMember {
+    fn capture(value: &Value) -> Option<Self> {
+        match value {
+            Value::Primitive {
+                name,
+                arity,
+                applied,
+            } if applied.is_empty() => Some(Self::Primitive {
+                name: name.clone(),
+                arity: *arity,
+                applied: applied.clone(),
+            }),
+            Value::Closure {
+                module,
+                module_instances,
+                effect_scope,
+                parameter,
+                body,
+                environment,
+                self_name,
+                imports,
+                reuse_assertion,
+                deferred,
+                ..
+            } => Some(Self::Closure {
+                module: module.as_str().to_owned(),
+                module_instances: Rc::downgrade(module_instances),
+                effect_scope: Rc::downgrade(effect_scope),
+                parameter: *parameter,
+                body: *body,
+                environment: Rc::downgrade(environment),
+                self_name: self_name.clone(),
+                imports: imports.clone(),
+                reuse_assertion: *reuse_assertion,
+                deferred: *deferred,
+            }),
+            _ => None,
+        }
+    }
+
+    fn materialize(&self) -> Option<Value> {
+        match self {
+            Self::Primitive {
+                name,
+                arity,
+                applied,
+            } => Some(Value::Primitive {
+                name: name.clone(),
+                arity: *arity,
+                applied: applied.clone(),
+            }),
+            Self::Closure {
+                module,
+                module_instances,
+                effect_scope,
+                parameter,
+                body,
+                environment,
+                self_name,
+                imports,
+                reuse_assertion,
+                deferred,
+            } => Some(Value::Closure {
+                module: Rc::new(module.clone()),
+                module_instances: module_instances.upgrade()?,
+                effect_scope: effect_scope.upgrade()?,
+                parameter: *parameter,
+                body: *body,
+                environment: environment.upgrade()?,
+                self_name: self_name.clone(),
+                imports: imports.clone(),
+                signature: None,
+                reuse_assertion: *reuse_assertion,
+                deferred: *deferred,
+            }),
+        }
+    }
+}
+
+impl ResidentOperatorExtension {
+    fn capture(owner: &str, value: &Value) -> Option<Self> {
+        let mut current = value;
+        let mut combined = BTreeMap::new();
+        while let Value::Extended { inner, members } = current {
+            for (name, value) in members.iter() {
+                if !operator_member_name(name) || combined.contains_key(name) {
+                    continue;
+                }
+                if let Some(member) = ResidentOperatorMember::capture(value) {
+                    combined.insert(name.clone(), member);
+                }
+            }
+            current = inner;
+        }
+        (!combined.is_empty()).then(|| Self {
+            owner: owner.to_owned(),
+            key: operator_type_key(current),
+            members: combined,
+        })
+    }
+}
+
+fn operator_type_key(value: &Value) -> String {
+    match value {
+        Value::Extended { inner, .. } => operator_type_key(inner),
+        Value::Range {
+            domain: Some(ValueDomain::Int),
+            ..
+        } => "domain:Int".to_owned(),
+        Value::Range {
+            domain: Some(ValueDomain::Text),
+            ..
+        } => "domain:Text".to_owned(),
+        Value::Range {
+            domain: Some(ValueDomain::Float),
+            ..
+        } => "domain:F64".to_owned(),
+        Value::Range {
+            domain: Some(ValueDomain::Float32),
+            ..
+        } => "domain:F32".to_owned(),
+        value => show(value),
+    }
+}
+
 impl ResidentEffectValue {
     fn remove_module(&mut self, path: &str) {
         if self
@@ -618,6 +780,7 @@ pub struct Context {
     next_effect: Cell<u32>,
     effect_ids: RefCell<HashMap<EffectIdentity, EffectSignatures>>,
     effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
+    operator_extensions: RefCell<Vec<ResidentOperatorExtension>>,
     next_type_variable: Cell<u32>,
 }
 
@@ -686,6 +849,14 @@ impl Context {
                     })
                     .collect(),
             ),
+            operator_extensions: RefCell::new(
+                self.operator_extensions
+                    .borrow()
+                    .iter()
+                    .filter(|extension| extension.owner != path)
+                    .cloned()
+                    .collect(),
+            ),
             next_type_variable: Cell::new(self.next_type_variable.get()),
             ..Self::default()
         }
@@ -710,6 +881,17 @@ impl Context {
                 .map(|(identity, signatures)| (identity.clone(), signatures.clone())),
         );
         *self.effect_values.borrow_mut() = staged.effect_values.borrow().clone();
+        self.operator_extensions
+            .borrow_mut()
+            .retain(|extension| extension.owner != path);
+        self.operator_extensions.borrow_mut().extend(
+            staged
+                .operator_extensions
+                .borrow()
+                .iter()
+                .filter(|extension| extension.owner == path)
+                .cloned(),
+        );
 
         let live_declarations = staged.live_declarations.borrow_mut().remove_module(path);
         self.live_declarations.borrow_mut().remove_module(path);
@@ -803,6 +985,9 @@ impl Context {
         self.recursive_closures.borrow_mut().remove_module(path);
         self.ownership_contracts.borrow_mut().remove_module(path);
         self.remove_effect_state(&HashSet::from([path.to_owned()]));
+        self.operator_extensions
+            .borrow_mut()
+            .retain(|extension| extension.owner != path);
         if self
             .module_cache
             .borrow()
@@ -887,6 +1072,64 @@ impl Context {
                 .attachments
                 .push((module.to_owned(), value.clone()));
         }
+    }
+
+    fn register_operator_attachment(&self, module: &str, value: &Value) {
+        let Some(extension) = ResidentOperatorExtension::capture(module, value) else {
+            return;
+        };
+        let mut extensions = self.operator_extensions.borrow_mut();
+        extensions.retain(|existing| existing.owner != module || existing.key != extension.key);
+        extensions.push(extension);
+    }
+
+    pub(crate) fn register_operator_attachments_from_environment(
+        &self,
+        module: &str,
+        environment: &Environment,
+    ) {
+        for value in environment.names.borrow().values() {
+            self.register_operator_attachments_from_value(module, value);
+        }
+    }
+
+    pub(crate) fn register_operator_attachments_from_value(&self, module: &str, value: &Value) {
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Extended { members, .. } => {
+                    self.register_operator_attachment(module, value);
+                    pending.extend(members.iter().map(|(_, value)| value));
+                }
+                Value::Shape(fields) => pending.extend(fields.iter().map(|(_, value)| value)),
+                Value::Array(values) => pending.extend(values.iter()),
+                Value::Union(values) => pending.extend(values.iter()),
+                Value::Tag {
+                    payload: Some(payload),
+                    ..
+                }
+                | Value::Sealed { inner: payload, .. }
+                | Value::RegionType(payload)
+                | Value::ScratchType(payload)
+                | Value::EmptyArray { element: payload } => pending.push(payload),
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn decorate_operator_type(&self, value: Value) -> Value {
+        let key = operator_type_key(&value);
+        let extensions = self.operator_extensions.borrow();
+        let extension = extensions
+            .iter()
+            .rev()
+            .find(|extension| extension.key == key)
+            .cloned();
+        drop(extensions);
+        if let Some(extension) = extension {
+            return overlay_operator_extension(value, &extension);
+        }
+        bootstrap_operator_type(value)
     }
 
     pub(crate) fn effect_value(&self, label: &str) -> Option<Value> {
@@ -1245,6 +1488,96 @@ fn effect_ownership_error(operation: &str, path: &str, evidence: String, span: S
         format!("Effect operation `.{operation}` has an invalid `{path}` contract: {evidence}."),
         span,
     )
+}
+
+fn overlay_operator_extension(base: Value, extension: &ResidentOperatorExtension) -> Value {
+    let (inner, mut combined) = match base {
+        Value::Extended { inner, members } => (inner, members),
+        value => (Box::new(value), OrderedFields::default()),
+    };
+    for (name, member) in &extension.members {
+        if let Some(value) = member.materialize() {
+            combined.insert(name.clone(), value);
+        }
+    }
+    Value::Extended {
+        inner,
+        members: combined,
+    }
+}
+
+fn bootstrap_operator_type(value: Value) -> Value {
+    let supported = matches!(
+        value,
+        Value::Range {
+            domain: Some(
+                ValueDomain::Int | ValueDomain::Text | ValueDomain::Float | ValueDomain::Float32,
+            ),
+            ..
+        }
+    );
+    if !supported {
+        return value;
+    }
+    let members = OPERATOR_MEMBER_NAMES
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_owned(),
+                Value::Primitive {
+                    name: "@type.resolve_member".to_owned(),
+                    arity: 3,
+                    applied: vec![Value::Text((*name).to_owned())],
+                },
+            )
+        })
+        .collect();
+    Value::Extended {
+        inner: Box::new(value),
+        members,
+    }
+}
+
+fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
+    let probe = runtime
+        .effect_scope
+        .last()?
+        .application
+        .compiler_steps
+        .last()?;
+    let CompilerApplication::RecognitionArgument { probe, .. } = probe else {
+        return None;
+    };
+    match probe {
+        RecognitionProbe::Integer { .. } => constant("@type.int"),
+        RecognitionProbe::Boolean { .. } | RecognitionProbe::BooleanUnary { .. } => run_primitive(
+            "@type.union",
+            vec![crate::value::boolean(true), crate::value::boolean(false)],
+            span,
+            Phase::Comptime,
+        )
+        .ok(),
+    }
+}
+
+fn runtime_value_type(value: Value) -> Option<Value> {
+    let constant = |name| crate::primitives::constant(name);
+    match value {
+        Value::Int(_) => constant("@type.int"),
+        Value::Text(_) => constant("@type.text"),
+        Value::Float(_) => constant("@type.float"),
+        Value::Float32(_) => constant("@type.float32"),
+        Value::Vector(_) => constant("@type.f32x4"),
+        Value::VectorMask(_) => constant("@type.f32x4_mask"),
+        Value::IntegerVector { bits: 32, .. } => constant("@type.i32x4"),
+        Value::IntegerVectorMask { bits: 32, .. } => constant("@type.i32x4_mask"),
+        Value::IntegerVector { bits: 16, .. } => constant("@type.i16x8"),
+        Value::IntegerVectorMask { bits: 16, .. } => constant("@type.i16x8_mask"),
+        Value::IntegerVector { bits: 8, .. } => constant("@type.i8x16"),
+        Value::IntegerVectorMask { bits: 8, .. } => constant("@type.i8x16_mask"),
+        Value::Unit => Some(Value::Unit),
+        _ => None,
+    }
 }
 
 fn effect_value_id(value: &Value) -> Option<u32> {
@@ -2010,7 +2343,30 @@ pub fn evaluate_expression(
             let argument = *argument;
             let expected_argument = context
                 .expression_type(module_path.as_str(), argument)
-                .map(|type_| substitute_signature(&type_, &environment));
+                .map(|type_| substitute_signature(&type_, &environment))
+                .filter(|type_| !contains_type_variables(type_))
+                .or_else(|| recognition_argument_type(&runtime, span))
+                .or_else(
+                    || match &loaded_module.arena.expressions[argument.0 as usize] {
+                        Expression::Var { name, .. } => {
+                            lookup(&environment, name).and_then(runtime_value_type)
+                        }
+                        _ => None,
+                    },
+                );
+            if matches!(
+                &loaded_module.arena.expressions[function.0 as usize],
+                Expression::Intrinsic { name, .. } if name == "@type.inferred"
+            ) {
+                let Some(expected_argument) = expected_argument else {
+                    return Computation::error(Diagnostic::new(
+                        "BLOT_RUST_INVARIANT",
+                        "The inferred-type primitive has no checked argument type.",
+                        span,
+                    ));
+                };
+                return Computation::value(context.decorate_operator_type(expected_argument));
+            }
             if let Some(expected_argument) = &expected_argument {
                 runtime
                     .checked_arguments
@@ -3967,7 +4323,13 @@ fn apply_with_expected(
                         module_runtime.module_instances.as_ref(),
                         &module_runtime.effect_scope,
                     ) {
-                        Ok(environment) => environment,
+                        Ok(environment) => {
+                            context.register_operator_attachments_from_environment(
+                                &module,
+                                &environment,
+                            );
+                            environment
+                        }
                         Err(error) => {
                             return Computation::error(Diagnostic::new(
                                 "BLOT_RUST_INVARIANT",
@@ -4125,7 +4487,8 @@ fn apply_with_expected(
                 domain, codomain, ..
             }) = signature.as_deref().map(signature_body)
             {
-                record_signature_substitutions(&scope, domain, &argument);
+                let signature_argument = expected_argument.as_ref().unwrap_or(&argument);
+                record_signature_substitutions(&scope, domain, signature_argument);
                 if let Some(expected_result) = &expected_result {
                     record_signature_substitutions(&scope, codomain, expected_result);
                 }
@@ -4635,6 +4998,7 @@ fn run_special_or_primitive(
             Ok(Some(value)) => {
                 if name == "@type.attach" {
                     context.register_effect_attachment(&runtime.module, &value);
+                    context.register_operator_attachment(&runtime.module, &value);
                 }
                 return Computation::value(value);
             }
@@ -4646,6 +5010,7 @@ fn run_special_or_primitive(
         Ok(value) => {
             if name == "@type.attach" {
                 context.register_effect_attachment(&runtime.module, &value);
+                context.register_operator_attachment(&runtime.module, &value);
             }
             Computation::value(value)
         }
@@ -4902,11 +5267,19 @@ fn project(target: Value, name: &str, span: Span) -> Computation {
                 name: name.to_owned(),
             })
         }
-        value => Computation::error(Diagnostic::new(
-            "BLOT_NO_FIELD",
-            format!("{} has no field `.{name}`.", show(&value)),
-            span,
-        )),
+        value => {
+            if operator_member_name(name) {
+                let decorated = bootstrap_operator_type(value.clone());
+                if !matches!(decorated, Value::Range { .. }) {
+                    return project(decorated, name, span);
+                }
+            }
+            Computation::error(Diagnostic::new(
+                "BLOT_NO_FIELD",
+                format!("{} has no field `.{name}`.", show(&value)),
+                span,
+            ))
+        }
     }
 }
 

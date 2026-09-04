@@ -11,22 +11,22 @@ infixr 22 (||) = Logic.or
 infixr 24 (&&) = Logic.and
 infixr 25 (->) = @type.arrow
 infixr 25 (~>) = @type.deferred_arrow
-infix 30 (==) = Int.eq
-infix 30 (!=) = Int.ne
-infix 30 (<) = Int.lt
-infix 30 (<=) = Int.le
-infix 30 (>) = Int.gt
-infix 30 (>=) = Int.ge
+infix 30 (==) = Op.eq
+infix 30 (!=) = Op.ne
+infix 30 (<) = Op.lt
+infix 30 (<=) = Op.le
+infix 30 (>) = Op.gt
+infix 30 (>=) = Op.ge
 infixl 40 (|) = Type.union
 infixl 40 (\) = Type.diff
 infixl 45 (&) = Type.intersect
 infixl 50 (<+) = attach
 infixr 55 (<>) = Text.append
-infixl 60 (+) = Int.add
-infixl 60 (-) = Int.sub
-infixl 70 (*) = Int.mul
-infixl 70 (/) = Int.div
-infixl 70 (%) = Int.rem
+infixl 60 (+) = Op.add
+infixl 60 (-) = Op.sub
+infixl 70 (*) = Op.mul
+infixl 70 (/) = Op.div
+infixl 70 (%) = Op.rem
 prefix 90 (-) = Int.negate
 prefix 90 (!) = @linear.own
 prefix 90 (?) = @linear.maybe
@@ -39,6 +39,29 @@ const Type =
     .intersect = @type.intersect;
     .diff = @type.diff;
   }
+
+// --- generic operators ------------------------------------------------------
+
+const OpOrder =
+  {
+    .eq = fn left => fn right => (@type.inferred left).eq left right;
+    .ne = fn left => fn right => (@type.inferred left).ne left right;
+    .lt = fn left => fn right => (@type.inferred left).lt left right;
+    .le = fn left => fn right => (@type.inferred left).le left right;
+    .gt = fn left => fn right => (@type.inferred left).gt left right;
+    .ge = fn left => fn right => (@type.inferred left).ge left right;
+  }
+
+const OpArithmetic =
+  {
+    .add = fn left => fn right => (@type.inferred left).add left right;
+    .sub = fn left => fn right => (@type.inferred left).sub left right;
+    .mul = fn left => fn right => (@type.inferred left).mul left right;
+    .div = fn left => fn right => (@type.inferred left).div left right;
+    .rem = fn left => fn right => (@type.inferred left).rem left right;
+  }
+
+const Op = { ...OpOrder; ...OpArithmetic; }
 
 // --- functions --------------------------------------------------------------
 
@@ -402,6 +425,12 @@ const TextOperations =
     .append = @text.concat;
     .length = @text.len;
     .cmp = @text.cmp;
+    .eq = fn left => fn right => is_equal (@text.cmp left right);
+    .ne = fn left => fn right => not (is_equal (@text.cmp left right));
+    .lt = fn left => fn right => is_less (@text.cmp left right);
+    .le = fn left => fn right => not (is_greater (@text.cmp left right));
+    .gt = fn left => fn right => is_greater (@text.cmp left right);
+    .ge = fn left => fn right => not (is_less (@text.cmp left right));
     .contains = @text.contains;
     .of_int = @text.of_int;
     .scalar_at = text_scalar_at;
@@ -955,7 +984,7 @@ const array_merge_sort = fn (values, before_or_equal) => do:
           width,
           before_or_equal
         )
-      let next_width = width * 2
+      let next_width = @int.mul width 2
       if next_width >= length:
         return (next, output)
       else:
@@ -3359,4 +3388,7 @@ return {
   .Nat = Nat;
   .Int = Int;
   .Unit = Unit;
+  .Op = Op;
+  .OpOrder = OpOrder;
+  .OpArithmetic = OpArithmetic;
 }

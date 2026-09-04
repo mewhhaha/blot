@@ -1,9 +1,0 @@
-// NOT IMPLEMENTED YET (SUGGESTION.md §9): `==` currently resolves to the
-// integer equality binding opened from the prelude. The intended future design
-// performs compile-time lookup on an attached type interface; it is not runtime
-// dispatch and has not been added. This plausible text program therefore
-// remains a type error today.
-
-open import "blot:prelude"
-
-return "same" == "same"

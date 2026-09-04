@@ -111,6 +111,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@branch.likely"
         | "@branch.unlikely"
         | "@type.probe"
+        | "@type.inferred"
         | "@panic" => 1,
         "@type.range"
         | "@type.union"
@@ -164,8 +165,16 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@f32x4.div"
         | "@f32x4.eq"
         | "@f32x4.less" => 2,
-        "@type.attach" | "@array.set" | "@region.set" | "@region.replace" | "@region.swap"
-        | "@region.join" | "@text.slice" | "@text.find_from" | "@f32x4.select" => 3,
+        "@type.resolve_member"
+        | "@type.attach"
+        | "@array.set"
+        | "@region.set"
+        | "@region.replace"
+        | "@region.swap"
+        | "@region.join"
+        | "@text.slice"
+        | "@text.find_from"
+        | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
         "@f32x4.shuffle" => 6,
         _ => return None,
@@ -301,6 +310,11 @@ pub fn run_primitive(
         }),
         "@type.performs" => performs(&arguments[0], &arguments[1], span),
         "@type.of" => Ok(type_of(&arguments[0])),
+        "@type.inferred" => Err(Diagnostic::new(
+            "BLOT_INFERRED_TYPE_DIRECT",
+            "`@type.inferred` must be applied directly so the checker can supply the argument type without evaluating the argument.",
+            span,
+        )),
         "@type.seal" => Ok(Value::Sealed {
             name: text(&arguments[0], span, name)?.to_owned(),
             inner: Box::new(arguments[1].clone()),
@@ -367,6 +381,7 @@ pub fn run_primitive(
                     )
                 })
         }
+        "@type.resolve_member" => resolve_member(arguments, span, phase),
         "@type.attach" => attach(arguments, span),
         "@type.members" => match &arguments[0] {
             Value::Extended { members, .. } => Ok(Value::Shape(members.clone())),
@@ -1945,6 +1960,117 @@ fn attach(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
     }
     members.insert(key, arguments[2].clone());
     Ok(Value::Extended { inner, members })
+}
+
+fn resolve_member(arguments: Vec<Value>, span: Span, phase: Phase) -> Result<Value, Diagnostic> {
+    if arguments.len() != 3 {
+        return Err(Diagnostic::new(
+            "BLOT_TYPE_ERROR",
+            "@type.resolve_member requires 3 arguments",
+            span,
+        ));
+    }
+    let member = text(&arguments[0], span, "@type.resolve_member")?;
+    let left = &arguments[1];
+    let right = &arguments[2];
+    match (left, right) {
+        (Value::Int(a), Value::Int(b)) => match member {
+            "eq" => Ok(boolean(a == b)),
+            "ne" => Ok(boolean(a != b)),
+            "lt" => Ok(boolean(a < b)),
+            "le" => Ok(boolean(a <= b)),
+            "gt" => Ok(boolean(a > b)),
+            "ge" => Ok(boolean(a >= b)),
+            "add" => integer_result(a + b, span, phase, "add"),
+            "sub" => integer_result(a - b, span, phase, "sub"),
+            "mul" => integer_result(a * b, span, phase, "mul"),
+            "div" => {
+                if b.is_zero() {
+                    return Err(Diagnostic::new(
+                        "BLOT_DIVIDE_BY_ZERO",
+                        "Division by zero.",
+                        span,
+                    ));
+                }
+                integer_result(a / b, span, phase, "div")
+            }
+            "rem" => {
+                if b.is_zero() {
+                    return Err(Diagnostic::new(
+                        "BLOT_DIVIDE_BY_ZERO",
+                        "Remainder by zero.",
+                        span,
+                    ));
+                }
+                integer_result(a % b, span, phase, "rem")
+            }
+            _ => Err(Diagnostic::new(
+                "BLOT_UNKNOWN_MEMBER",
+                format!("Int has no member `{member}`"),
+                span,
+            )),
+        },
+        (Value::Text(a), Value::Text(b)) => match member {
+            "eq" => Ok(boolean(a == b)),
+            "ne" => Ok(boolean(a != b)),
+            "lt" => Ok(boolean(a < b)),
+            "le" => Ok(boolean(a <= b)),
+            "gt" => Ok(boolean(a > b)),
+            "ge" => Ok(boolean(a >= b)),
+            "add" => Ok(Value::Text(format!("{a}{b}"))),
+            _ => Err(Diagnostic::new(
+                "BLOT_UNKNOWN_MEMBER",
+                format!("Text has no member `{member}`"),
+                span,
+            )),
+        },
+        (Value::Float(a), Value::Float(b)) => match member {
+            "add" => Ok(Value::Float(a + b)),
+            "sub" => Ok(Value::Float(a - b)),
+            "mul" => Ok(Value::Float(a * b)),
+            "div" => Ok(Value::Float(a / b)),
+            "rem" => Ok(Value::Float(a % b)),
+            "lt" => Ok(boolean(a < b)),
+            "le" => Ok(boolean(a <= b)),
+            "gt" => Ok(boolean(a > b)),
+            "ge" => Ok(boolean(a >= b)),
+            "eq" | "ne" => Err(Diagnostic::new(
+                "BLOT_NO_EQUALITY",
+                "Floating-point types do not support equality. Use `F64.cmp` to compare explicitly.",
+                span,
+            )),
+            _ => Err(Diagnostic::new(
+                "BLOT_UNKNOWN_MEMBER",
+                format!("Float has no member `{member}`"),
+                span,
+            )),
+        },
+        (Value::Float32(a), Value::Float32(b)) => match member {
+            "add" => Ok(Value::Float32(a + b)),
+            "sub" => Ok(Value::Float32(a - b)),
+            "mul" => Ok(Value::Float32(a * b)),
+            "div" => Ok(Value::Float32(a / b)),
+            "lt" => Ok(boolean(a < b)),
+            "le" => Ok(boolean(a <= b)),
+            "gt" => Ok(boolean(a > b)),
+            "ge" => Ok(boolean(a >= b)),
+            "eq" | "ne" => Err(Diagnostic::new(
+                "BLOT_NO_EQUALITY",
+                "Floating-point types do not support equality. Use `F32.cmp` to compare explicitly.",
+                span,
+            )),
+            _ => Err(Diagnostic::new(
+                "BLOT_UNKNOWN_MEMBER",
+                format!("Float32 has no member `{member}`"),
+                span,
+            )),
+        },
+        _ => Err(Diagnostic::new(
+            "BLOT_TYPE_ERROR",
+            format!("Mismatched types or unsupported operation `{member}`"),
+            span,
+        )),
+    }
 }
 
 fn cancel(value: &Value, span: Span) -> Result<Value, Diagnostic> {

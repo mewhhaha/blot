@@ -1691,6 +1691,139 @@ impl ResidualTrace {
                     Some(operator),
                 )
             }
+            "@type.resolve_member" => {
+                let member = match arguments.first() {
+                    Some(Value::Text(s)) => s.as_str(),
+                    _ => return Err(hir_error("@type.resolve_member expected text member")),
+                };
+                let left = self.lower_value(&arguments[1], span)?;
+                let right = self.lower_value(&arguments[2], span)?;
+                let operand_type = &self.types[left.type_id];
+                match operand_type {
+                    RuntimeType::SignedInteger64 | RuntimeType::Integer32 => match member {
+                        "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                            let op = match member {
+                                "eq" => "equal",
+                                "ne" => "not-equal",
+                                "lt" => "less-than",
+                                "le" => "less-than-or-equal",
+                                "gt" => "greater-than",
+                                "ge" => "greater-than-or-equal",
+                                _ => unreachable!(),
+                            };
+                            self.operation("scalar", 1, vec![left.id, right.id], span, Some(op))
+                        }
+                        "add" | "sub" | "mul" | "div" | "rem" => {
+                            let op = match member {
+                                "add" => "add",
+                                "sub" => "subtract",
+                                "mul" => "multiply",
+                                "div" => "divide",
+                                "rem" => "remainder",
+                                _ => unreachable!(),
+                            };
+                            self.operation(
+                                "scalar",
+                                left.type_id,
+                                vec![left.id, right.id],
+                                span,
+                                Some(op),
+                            )
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "BLOT_UNKNOWN_MEMBER",
+                                format!("Int has no member `{member}`"),
+                                span,
+                            ));
+                        }
+                    },
+                    RuntimeType::Float64 | RuntimeType::Float32 => match member {
+                        "eq" | "ne" => {
+                            return Err(Diagnostic::new(
+                                "BLOT_NO_EQUALITY",
+                                "Floating-point types do not support equality. Use `F64.cmp` to compare explicitly.",
+                                span,
+                            ));
+                        }
+                        "lt" | "le" | "gt" | "ge" => {
+                            let op = match member {
+                                "lt" => "less-than",
+                                "le" => "less-than-or-equal",
+                                "gt" => "greater-than",
+                                "ge" => "greater-than-or-equal",
+                                _ => unreachable!(),
+                            };
+                            self.operation("scalar", 1, vec![left.id, right.id], span, Some(op))
+                        }
+                        "add" | "sub" | "mul" | "div" | "rem" => {
+                            let op = match member {
+                                "add" => "add",
+                                "sub" => "subtract",
+                                "mul" => "multiply",
+                                "div" => "divide",
+                                "rem" => "remainder",
+                                _ => unreachable!(),
+                            };
+                            self.operation(
+                                "scalar",
+                                left.type_id,
+                                vec![left.id, right.id],
+                                span,
+                                Some(op),
+                            )
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "BLOT_UNKNOWN_MEMBER",
+                                format!("Float has no member `{member}`"),
+                                span,
+                            ));
+                        }
+                    },
+                    RuntimeType::Text => match member {
+                        "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                            let cmp = self.operation(
+                                "text.compare",
+                                2,
+                                vec![left.id, right.id],
+                                span,
+                                None,
+                            );
+                            let zero = self.constant(WireConstant::SignedInteger32(0), 2, span);
+                            let op = match member {
+                                "eq" => "equal",
+                                "ne" => "not-equal",
+                                "lt" => "less-than",
+                                "le" => "less-than-or-equal",
+                                "gt" => "greater-than",
+                                "ge" => "greater-than-or-equal",
+                                _ => unreachable!(),
+                            };
+                            self.operation("scalar", 1, vec![cmp.id, zero.id], span, Some(op))
+                        }
+                        "add" => {
+                            self.operation("text.append", 3, vec![left.id, right.id], span, None)
+                        }
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "BLOT_UNKNOWN_MEMBER",
+                                format!("Text has no member `{member}`"),
+                                span,
+                            ));
+                        }
+                    },
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "BLOT_UNSUPPORTED_LOWERING",
+                            format!(
+                                "Unsupported @type.resolve_member on runtime type {operand_type:?}"
+                            ),
+                            span,
+                        ));
+                    }
+                }
+            }
             "@region.copy" if arguments.len() == 1 => {
                 let original = &arguments[0];
                 let lowered = self.lower_value(original, span)?;
@@ -3825,6 +3958,33 @@ impl ResidualTrace {
         )
     }
 
+    fn is_resolve_member_body(
+        context: &Context,
+        module: &str,
+        body: crate::ast::ExpressionId,
+    ) -> bool {
+        let modules = context.modules.borrow();
+        let Some(loaded) = modules.get(module) else {
+            return false;
+        };
+        let mut current = body;
+        while let crate::ast::Expression::Lambda {
+            body: next_body, ..
+        } = &loaded.module.arena.expressions[current.0 as usize]
+        {
+            current = *next_body;
+        }
+        while let crate::ast::Expression::Apply { function, .. } =
+            &loaded.module.arena.expressions[current.0 as usize]
+        {
+            current = *function;
+        }
+        matches!(
+            &loaded.module.arena.expressions[current.0 as usize],
+            crate::ast::Expression::Intrinsic { name, .. } if name == "@type.resolve_member"
+        )
+    }
+
     pub(crate) fn begin_residual_function(
         &mut self,
         closure: ResidualClosure<'_>,
@@ -3846,7 +4006,7 @@ impl ResidualTrace {
             root_application,
             crosses_development_boundary,
         } = closure;
-        if root_application {
+        if root_application || Self::is_resolve_member_body(context, module, body) {
             return Ok(ResidualFunctionCall::Static);
         }
         let lexical_closure = LexicalClosure {

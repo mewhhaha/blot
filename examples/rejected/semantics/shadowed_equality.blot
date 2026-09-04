@@ -17,7 +17,7 @@
 
 open import "blot:prelude"
 
-let Int = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
+let Op = { .eq = fn a => fn b => True; .ne = fn a => fn b => False; }
 
 let name :: 1 | 2 | 3 -> Text
 let name = fn n => do:

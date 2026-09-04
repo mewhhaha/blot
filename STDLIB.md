@@ -124,3 +124,6 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | `Nat` | `blot:prelude` |
 | `Int` | `blot:prelude` |
 | `Unit` | `blot:prelude` |
+| `Op` | `blot:prelude` |
+| `OpOrder` | `blot:prelude` |
+| `OpArithmetic` | `blot:prelude` |

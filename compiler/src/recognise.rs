@@ -24,13 +24,153 @@ pub enum Junction {
 }
 
 pub fn comparison(context: &Rc<Context>, value: &Value) -> Option<BTreeSet<Ordering>> {
-    if !factored(context, value) {
-        return None;
+    if factored(context, value) {
+        return comparison_answers(context, value);
     }
+    let member_name = inferred_operator_member_name(context, value)?;
+    if let Some(member) = inferred_integer_comparison_member(context, &member_name)
+        && factored(context, &member)
+    {
+        return comparison_answers(context, &member);
+    }
+    integer_comparison_orderings(&member_name)
+}
+
+fn comparison_answers(context: &Rc<Context>, value: &Value) -> Option<BTreeSet<Ordering>> {
     let less = probe_int(context, value, 0, 1)?;
     let equal = probe_int(context, value, 1, 1)?;
     let greater = probe_int(context, value, 1, 0)?;
     Some(orderings_from_answers(less, equal, greater))
+}
+
+fn inferred_integer_comparison_member(context: &Rc<Context>, member: &str) -> Option<Value> {
+    let integer = crate::primitives::constant("@type.int")?;
+    attached_member(&context.decorate_operator_type(integer), member)
+}
+
+fn integer_comparison_orderings(member: &str) -> Option<BTreeSet<Ordering>> {
+    let mut orderings = BTreeSet::new();
+    match member {
+        "eq" => {
+            orderings.insert(Ordering::Equal);
+        }
+        "ne" => {
+            orderings.insert(Ordering::Less);
+            orderings.insert(Ordering::Greater);
+        }
+        "lt" => {
+            orderings.insert(Ordering::Less);
+        }
+        "le" => {
+            orderings.insert(Ordering::Less);
+            orderings.insert(Ordering::Equal);
+        }
+        "gt" => {
+            orderings.insert(Ordering::Greater);
+        }
+        "ge" => {
+            orderings.insert(Ordering::Equal);
+            orderings.insert(Ordering::Greater);
+        }
+        _ => return None,
+    }
+    Some(orderings)
+}
+
+fn inferred_boolean_junction_member(context: &Rc<Context>, value: &Value) -> Option<Value> {
+    let member = inferred_operator_member_name(context, value)?;
+    if !matches!(member.as_str(), "and" | "or") {
+        return None;
+    }
+    let boolean = Value::Union(vec![boolean_value(true), boolean_value(false)].into());
+    attached_member(&context.decorate_operator_type(boolean), &member)
+}
+
+fn inferred_operator_member_name(context: &Context, value: &Value) -> Option<String> {
+    let Value::Closure {
+        module,
+        parameter,
+        body,
+        self_name: None,
+        ..
+    } = value
+    else {
+        return None;
+    };
+    let module = context
+        .modules
+        .borrow()
+        .get(module.as_str())?
+        .module
+        .clone();
+    let first = pattern_name(&module, *parameter)?;
+    let Expression::Lambda {
+        parameter, body, ..
+    } = &module.arena.expressions[body.0 as usize]
+    else {
+        return None;
+    };
+    let second = pattern_name(&module, *parameter)?;
+    let Expression::Apply {
+        function,
+        argument: right,
+        ..
+    } = &module.arena.expressions[body.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Apply {
+        function: member,
+        argument: left,
+        ..
+    } = &module.arena.expressions[function.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Field { target, name, .. } = &module.arena.expressions[member.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Apply {
+        function: inferred,
+        argument: inferred_subject,
+        ..
+    } = &module.arena.expressions[target.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Intrinsic {
+        name: intrinsic, ..
+    } = &module.arena.expressions[inferred.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Var {
+        name: inferred_name,
+        ..
+    } = &module.arena.expressions[inferred_subject.0 as usize]
+    else {
+        return None;
+    };
+    let Expression::Var { name: left, .. } = &module.arena.expressions[left.0 as usize] else {
+        return None;
+    };
+    let Expression::Var { name: right, .. } = &module.arena.expressions[right.0 as usize] else {
+        return None;
+    };
+    (intrinsic == "@type.inferred" && inferred_name == first && left == first && right == second)
+        .then(|| name.clone())
+}
+
+fn attached_member(value: &Value, name: &str) -> Option<Value> {
+    match value {
+        Value::Extended { inner, members } => members
+            .get(name)
+            .cloned()
+            .or_else(|| attached_member(inner, name)),
+        Value::Shape(fields) => fields.get(name).cloned(),
+        _ => None,
+    }
 }
 
 fn orderings_from_answers(less: bool, equal: bool, greater: bool) -> BTreeSet<Ordering> {
@@ -48,6 +188,16 @@ fn orderings_from_answers(less: bool, equal: bool, greater: bool) -> BTreeSet<Or
 }
 
 pub fn junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
+    let resolved;
+    let value = if let Some(member) = inferred_operator_member_name(context, value) {
+        if !matches!(member.as_str(), "and" | "or") {
+            return None;
+        }
+        resolved = inferred_boolean_junction_member(context, value)?;
+        &resolved
+    } else {
+        value
+    };
     let true_true = probe_bool(context, value, true, true)?;
     let true_false = probe_bool(context, value, true, false)?;
     let false_true = probe_bool(context, value, false, true)?;
@@ -60,6 +210,16 @@ pub fn junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
 }
 
 pub fn short_circuit_junction(context: &Rc<Context>, value: &Value) -> Option<Junction> {
+    let resolved;
+    let value = if let Some(member) = inferred_operator_member_name(context, value) {
+        if !matches!(member.as_str(), "and" | "or") {
+            return None;
+        }
+        resolved = inferred_boolean_junction_member(context, value)?;
+        &resolved
+    } else {
+        value
+    };
     if !has_deferred_second(context, value) {
         return None;
     }
@@ -289,19 +449,34 @@ impl FactorScan<'_> {
 
     fn int_comparison(&mut self, function: ExpressionId, right: ExpressionId) -> bool {
         let Expression::Apply {
-            function,
+            function: inner_fn,
             argument: left,
             ..
         } = &self.module.arena.expressions[function.0 as usize]
         else {
             return false;
         };
-        let Expression::Intrinsic { name, .. } =
-            &self.module.arena.expressions[function.0 as usize]
-        else {
-            return false;
+        let is_cmp = match &self.module.arena.expressions[inner_fn.0 as usize] {
+            Expression::Intrinsic { name, .. } => name == "@int.cmp",
+            Expression::Apply {
+                function: root_fn,
+                argument: member_arg,
+                ..
+            } => {
+                if let Expression::Intrinsic { name, .. } =
+                    &self.module.arena.expressions[root_fn.0 as usize]
+                    && name == "@type.resolve_member"
+                    && let Expression::Text { value: member, .. } =
+                        &self.module.arena.expressions[member_arg.0 as usize]
+                {
+                    matches!(member.as_str(), "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                } else {
+                    false
+                }
+            }
+            _ => false,
         };
-        if name != "@int.cmp" {
+        if !is_cmp {
             return false;
         }
         let Expression::Var { name: left, .. } = &self.module.arena.expressions[left.0 as usize]

@@ -655,6 +655,46 @@ fn result_measure(
             }
             return None;
         }
+        if name == "@type.resolve_member"
+            && arguments.len() == 3
+            && let Expression::Text { value: member, .. } =
+                &module.arena.expressions[arguments[0].0 as usize]
+            && (member == "add" || member == "sub")
+        {
+            if let Some(mut left) = result_measure(
+                summaries,
+                module,
+                arguments[1],
+                parameters.clone(),
+                environment,
+                context,
+                active,
+            ) && let Some(right) = integer(module, arguments[2], environment)
+            {
+                if member == "sub" {
+                    left.offset -= right;
+                } else {
+                    left.offset += right;
+                }
+                return Some(left);
+            }
+            if member == "add"
+                && let Some(mut right) = result_measure(
+                    summaries,
+                    module,
+                    arguments[2],
+                    parameters.clone(),
+                    environment,
+                    context,
+                    active,
+                )
+                && let Some(left) = integer(module, arguments[1], environment)
+            {
+                right.offset += left;
+                return Some(right);
+            }
+            return None;
+        }
     }
 
     let callee = value_at(module, callee, environment)?;
