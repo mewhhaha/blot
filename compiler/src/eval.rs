@@ -1519,6 +1519,10 @@ fn bootstrap_operator_type(value: Value) -> Value {
     if !supported {
         return value;
     }
+    operator_type_with_members(value)
+}
+
+fn operator_type_with_members(value: Value) -> Value {
     let members = OPERATOR_MEMBER_NAMES
         .iter()
         .map(|name| {
@@ -2341,9 +2345,11 @@ pub fn evaluate_expression(
                 .map(|type_| substitute_signature(&type_, &environment));
             let function = *function;
             let argument = *argument;
-            let expected_argument = context
+            let inferred_argument = context
                 .expression_type(module_path.as_str(), argument)
-                .map(|type_| substitute_signature(&type_, &environment))
+                .map(|type_| substitute_signature(&type_, &environment));
+            let expected_argument = inferred_argument
+                .clone()
                 .filter(|type_| !contains_type_variables(type_))
                 .or_else(|| recognition_argument_type(&runtime, span))
                 .or_else(
@@ -2359,6 +2365,11 @@ pub fn evaluate_expression(
                 Expression::Intrinsic { name, .. } if name == "@type.inferred"
             ) {
                 let Some(expected_argument) = expected_argument else {
+                    if runtime.residual.is_some() {
+                        return Computation::value(operator_type_with_members(
+                            inferred_argument.unwrap_or(Value::TypeVariable(0)),
+                        ));
+                    }
                     return Computation::error(Diagnostic::new(
                         "BLOT_RUST_INVARIANT",
                         "The inferred-type primitive has no checked argument type.",

@@ -9718,29 +9718,11 @@ impl Checker {
     fn expression_has_unresolved_operator_dispatch(
         &self,
         path: &str,
-        module: &Module,
-        expression: ExpressionId,
+        arguments: &[ExpressionId],
     ) -> bool {
-        expression_contains(module, expression, &|candidate| {
-            let Expression::Apply {
-                function, argument, ..
-            } = candidate
-            else {
-                return false;
-            };
-            let Expression::Intrinsic { name, .. } = &module.arena.expressions[function.0 as usize]
-            else {
-                return false;
-            };
-            if name != "@type.inferred" {
-                return false;
-            }
-            let Some(type_) = self
-                .analysis_expression_types
-                .borrow()
-                .get(path, argument)
-                .cloned()
-            else {
+        let inferred = self.analysis_expression_types.borrow();
+        arguments.iter().any(|argument| {
+            let Some(type_) = inferred.get(path, argument).cloned() else {
                 return true;
             };
             let settled = self.settle(type_, true);
@@ -9748,14 +9730,10 @@ impl Checker {
         })
     }
 
-    fn publish_evaluation_expression_types(&self, path: &str) {
-        let inferred = self
-            .analysis_expression_types
-            .borrow()
-            .module(path)
-            .cloned()
-            .unwrap_or_default();
-        let reified = inferred.into_iter().filter_map(|(expression, type_)| {
+    fn publish_evaluation_expression_types(&self, path: &str, expression_types: &[ExpressionId]) {
+        let inferred = self.analysis_expression_types.borrow();
+        let reified = expression_types.iter().filter_map(|expression| {
+            let type_ = inferred.get(path, expression).cloned()?;
             let settled = self.settle(type_, true);
             if !closed_checked_type(&settled, &mut HashSet::new())
                 || !operator_dispatch_type_is_concrete(&settled)
@@ -9763,7 +9741,7 @@ impl Checker {
                 return None;
             }
             self.reify_runtime_type(&settled)
-                .map(|type_| (expression, type_))
+                .map(|type_| (*expression, type_))
         });
         let mut expression_types = self.context.expression_types.borrow_mut();
         for (expression, type_) in reified {
@@ -9791,14 +9769,15 @@ impl Checker {
                     Span { start: 0, end: 0 },
                 )
             })?;
-        if self.expression_has_unresolved_operator_dispatch(path, &module, expression) {
+        let operator_arguments = operator_dispatch_arguments(&module, expression);
+        if self.expression_has_unresolved_operator_dispatch(path, &operator_arguments) {
             return Err(Diagnostic::new(
                 "BLOT_NOT_COMPTIME",
                 "Attached operator lookup remains generic until specialization.",
                 module.arena.expression_span(expression),
             ));
         }
-        self.publish_evaluation_expression_types(path);
+        self.publish_evaluation_expression_types(path, &operator_arguments);
         run(evaluate_expression(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -9817,7 +9796,8 @@ impl Checker {
         environment: &ValueEnvironment,
         phase: Phase,
     ) -> Result<Value, Diagnostic> {
-        if self.expression_has_unresolved_operator_dispatch(path, module, expression) {
+        let operator_arguments = operator_dispatch_arguments(module, expression);
+        if self.expression_has_unresolved_operator_dispatch(path, &operator_arguments) {
             return Err(Diagnostic::new(
                 "BLOT_NOT_COMPTIME",
                 "Attached operator lookup remains generic until specialization.",
@@ -9844,7 +9824,7 @@ impl Checker {
         if let Some(value) = cached {
             return Ok(value);
         }
-        self.publish_evaluation_expression_types(path);
+        self.publish_evaluation_expression_types(path, &operator_arguments);
         let evaluated = run(evaluate_binding(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -13853,6 +13833,97 @@ fn expression_contains_computed_field(module: &Module, expression: ExpressionId)
                     .any(|member| matches!(member, ShapeMember::Computed { .. }))
         )
     })
+}
+
+fn operator_dispatch_arguments(module: &Module, expression: ExpressionId) -> Vec<ExpressionId> {
+    let mut arguments = Vec::new();
+    collect_operator_dispatch_arguments(module, expression, &mut arguments);
+    arguments
+}
+
+fn collect_operator_dispatch_arguments(
+    module: &Module,
+    expression: ExpressionId,
+    arguments: &mut Vec<ExpressionId>,
+) {
+    let expression = &module.arena.expressions[expression.0 as usize];
+    match expression {
+        Expression::Apply {
+            function, argument, ..
+        } => {
+            if matches!(
+                &module.arena.expressions[function.0 as usize],
+                Expression::Intrinsic { name, .. } if name == "@type.inferred"
+            ) {
+                arguments.push(*argument);
+            }
+            collect_operator_dispatch_arguments(module, *function, arguments);
+            collect_operator_dispatch_arguments(module, *argument, arguments);
+        }
+        Expression::Field { target, .. } => {
+            collect_operator_dispatch_arguments(module, *target, arguments);
+        }
+        Expression::Lambda { body, .. } | Expression::Rec { lambda: body, .. } => {
+            collect_operator_dispatch_arguments(module, *body, arguments);
+        }
+        Expression::Array { elements, .. } => {
+            for element in elements {
+                collect_operator_dispatch_arguments(module, element.value, arguments);
+            }
+        }
+        Expression::Tuple { elements, .. } => {
+            for element in elements {
+                collect_operator_dispatch_arguments(module, *element, arguments);
+            }
+        }
+        Expression::Shape { members, .. } => {
+            for member in members {
+                match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                        collect_operator_dispatch_arguments(module, *value, arguments);
+                    }
+                    ShapeMember::Computed { name, value } => {
+                        collect_operator_dispatch_arguments(module, *name, arguments);
+                        collect_operator_dispatch_arguments(module, *value, arguments);
+                    }
+                }
+            }
+        }
+        Expression::If {
+            branches, fallback, ..
+        } => {
+            for branch in branches {
+                collect_operator_dispatch_arguments(module, branch.condition, arguments);
+                collect_operator_dispatch_arguments(module, branch.consequence, arguments);
+            }
+            if let Some(fallback) = fallback {
+                collect_operator_dispatch_arguments(module, *fallback, arguments);
+            }
+        }
+        Expression::Case { target, arms, .. } => {
+            collect_operator_dispatch_arguments(module, *target, arguments);
+            for arm in arms {
+                collect_operator_dispatch_arguments(module, arm.body, arguments);
+            }
+        }
+        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+            for declaration in declarations {
+                let value = match &module.arena.declarations[declaration.0 as usize] {
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
+                    | Declaration::Shadow { value, .. }
+                    | Declaration::Open { value, .. } => *value,
+                };
+                collect_operator_dispatch_arguments(module, value, arguments);
+            }
+            collect_operator_dispatch_arguments(module, *result, arguments);
+        }
+        _ => {}
+    }
 }
 
 fn expression_contains(
