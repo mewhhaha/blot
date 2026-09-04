@@ -2711,7 +2711,13 @@ impl ResidualTrace {
             }
         }
         let expected_sum = checked_result_type
-            .filter(|type_id| self.sum_representation(*type_id).is_some())
+            .filter(|type_id| {
+                self.sum_representation(*type_id).is_some_and(|(_, cases)| {
+                    required_cases
+                        .iter()
+                        .all(|required| cases.iter().any(|case_| case_.name == *required))
+                })
+            })
             .or_else(|| {
                 candidate_sums.iter().copied().find(|type_id| {
                     self.sum_representation(*type_id).is_some_and(|(_, cases)| {
@@ -4496,16 +4502,37 @@ impl ResidualTrace {
             self.settled_recursive_types
                 .remove(&compilation.result_type);
         } else if result.type_id != compilation.result_type {
-            return Err(hir_error(&format!(
-                "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
-                compilation.name,
-                compilation.function,
-                result.type_id,
-                self.types[result.type_id],
-                compilation.signature,
+            let RuntimeType::Indirect { target_type } = self.types[result.type_id] else {
+                return Err(hir_error(&format!(
+                    "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
+                    compilation.name,
+                    compilation.function,
+                    result.type_id,
+                    self.types[result.type_id],
+                    compilation.signature,
+                    compilation.result_type,
+                    self.types[compilation.result_type],
+                )));
+            };
+            if target_type != compilation.result_type {
+                return Err(hir_error(&format!(
+                    "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
+                    compilation.name,
+                    compilation.function,
+                    result.type_id,
+                    self.types[result.type_id],
+                    compilation.signature,
+                    compilation.result_type,
+                    self.types[compilation.result_type],
+                )));
+            }
+            result = self.operation(
+                "indirect.load",
                 compilation.result_type,
-                self.types[compilation.result_type],
-            )));
+                vec![result.id],
+                compilation.span,
+                None,
+            );
         }
         let end = self.current_block;
         self.blocks[end].terminator = Some(RuntimeTerminator::Return {

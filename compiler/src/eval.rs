@@ -2371,8 +2371,11 @@ pub fn evaluate_expression(
                         ));
                     }
                     return Computation::error(Diagnostic::new(
-                        "BLOT_RUST_INVARIANT",
-                        "The inferred-type primitive has no checked argument type.",
+                        "BLOT_NOT_COMPTIME",
+                        format!(
+                            "The inferred-type primitive has no checked argument type in module `{}` for expression {} argument {} at {}..{}.",
+                            module_path, expression_id.0, argument.0, span.start, span.end,
+                        ),
                         span,
                     ));
                 };

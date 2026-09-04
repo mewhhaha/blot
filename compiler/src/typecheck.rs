@@ -5250,13 +5250,64 @@ impl Checker {
                         Ok(Value::Primitive { name, .. }) if name == "@type.resolve_member"
                     ))
                 {
+                    let member_name = match self.evaluate(
+                        path,
+                        member_arguments[0],
+                        values,
+                        Phase::Comptime,
+                    ) {
+                        Ok(Value::Text(name)) => name,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "BLOT_TYPE_ERROR",
+                                "The operation name in `@type.resolve_member` must be a compile-time text literal.",
+                                span,
+                            ));
+                        }
+                    };
                     return self.infer_resolve_member(
                         path,
                         module,
                         expression_id,
-                        member_arguments[0],
+                        member_name,
                         member_arguments[1],
                         member_arguments[2],
+                        environment,
+                        values,
+                        dependencies,
+                        span,
+                    );
+                }
+                if member_arguments.len() == 2
+                    && let Expression::Field { target, name, .. } =
+                        &module.arena.expressions[member_callee.0 as usize]
+                    && (inferred_type_subject(module, *target).is_some()
+                        || self
+                            .evaluate(path, *target, values, Phase::Comptime)
+                            .ok()
+                            .and_then(|value| static_member(&value, name))
+                            .is_some_and(|value| is_operator_member_closure(&self.context, &value)))
+                    && matches!(
+                        name.as_str(),
+                        "eq" | "ne"
+                            | "lt"
+                            | "le"
+                            | "gt"
+                            | "ge"
+                            | "add"
+                            | "sub"
+                            | "mul"
+                            | "div"
+                            | "rem"
+                    )
+                {
+                    return self.infer_resolve_member(
+                        path,
+                        module,
+                        expression_id,
+                        name.clone(),
+                        member_arguments[0],
+                        member_arguments[1],
                         environment,
                         values,
                         dependencies,
@@ -5299,7 +5350,7 @@ impl Checker {
                     && (matches!(target_value, Value::Extended { .. })
                         || static_member(&target_value, name)
                             .as_ref()
-                            .is_some_and(|val| is_resolve_member_closure(&self.context, val)))
+                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -5324,13 +5375,29 @@ impl Checker {
                         && !matches!(value, Value::Closure { .. })
                     {
                         return Ok(Inferred {
-                            type_: self.bridge_runtime_value(&value),
+                            type_: if arguments.len() >= 2 {
+                                let operator_type = match name.as_str() {
+                                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Some(bool_type()),
+                                    "add" | "sub" | "mul" | "div" | "rem" => self
+                                        .resolve_operand_domain(&arguments[0], &arguments[1])
+                                        .map(|domain| match domain {
+                                            Domain::Int => int_type(),
+                                            Domain::Text => text_type(),
+                                            Domain::Float => float_type(),
+                                            Domain::Float32 => float32_type(),
+                                        }),
+                                    _ => None,
+                                };
+                                operator_type.unwrap_or_else(|| self.bridge_runtime_value(&value))
+                            } else {
+                                self.bridge_runtime_value(&value)
+                            },
                             effects,
                         });
                     }
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
-                        .is_some_and(|val| is_resolve_member_closure(&self.context, val));
+                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
                     if is_resolve_op && arguments.len() >= 2 {
                         let domain = self.resolve_operand_domain(&arguments[0], &arguments[1]);
                         if let Some(domain) = domain {
@@ -7206,7 +7273,7 @@ impl Checker {
         path: &str,
         module: &Module,
         _expression_id: ExpressionId,
-        member_arg: ExpressionId,
+        member_name: String,
         left_arg: ExpressionId,
         right_arg: ExpressionId,
         environment: &TypeEnvironment,
@@ -7214,16 +7281,6 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         span: Span,
     ) -> Result<Inferred, Diagnostic> {
-        let member_name = match self.evaluate(path, member_arg, values, Phase::Comptime) {
-            Ok(Value::Text(s)) => s,
-            _ => {
-                return Err(Diagnostic::new(
-                    "BLOT_TYPE_ERROR",
-                    "The operation name in `@type.resolve_member` must be a compile-time text literal.",
-                    span,
-                ));
-            }
-        };
         let left = self.infer(path, module, left_arg, environment, values, dependencies)?;
         let right = self.infer(path, module, right_arg, environment, values, dependencies)?;
         let effects = self.join_effects(left.effects, right.effects)?;
@@ -12671,6 +12728,35 @@ fn is_resolve_member_closure(context: &Context, closure: &Value) -> bool {
     )
 }
 
+fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
+    if is_resolve_member_closure(context, closure) {
+        return true;
+    }
+    let Value::Closure { module, body, .. } = closure else {
+        return false;
+    };
+    let Some(loaded) = context.modules.borrow().get(module.as_str()).cloned() else {
+        return false;
+    };
+    let mut current = *body;
+    while let Expression::Lambda {
+        body: next_body, ..
+    } = &loaded.module.arena.expressions[current.0 as usize]
+    {
+        current = *next_body;
+    }
+    let (callee, _) = application_spine_ids(&loaded.module, current);
+    let Expression::Field { target, name, .. } =
+        &loaded.module.arena.expressions[callee.0 as usize]
+    else {
+        return false;
+    };
+    matches!(
+        name.as_str(),
+        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
+    ) && inferred_type_subject(&loaded.module, *target).is_some()
+}
+
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
     let Value::Shape(fields) = value else {
         return Err(Diagnostic::new(
@@ -13863,9 +13949,7 @@ fn collect_operator_dispatch_arguments(
         Expression::Field { target, .. } => {
             collect_operator_dispatch_arguments(module, *target, arguments);
         }
-        Expression::Lambda { body, .. } | Expression::Rec { lambda: body, .. } => {
-            collect_operator_dispatch_arguments(module, *body, arguments);
-        }
+        Expression::Lambda { .. } | Expression::Rec { .. } => {}
         Expression::Array { elements, .. } => {
             for element in elements {
                 collect_operator_dispatch_arguments(module, element.value, arguments);
