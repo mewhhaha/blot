@@ -1,9 +1,9 @@
 # Language and syntax review implementation
 
-This draft implements part of the review and preserves explicit acceptance
-criteria for the rest. A test or a design sketch is not an implemented compiler
-feature. The PR must remain a draft until the open compiler/specification work
-and integration validation are complete.
+This change ships the bounded library and editor additions listed below. The
+broader review remains a research roadmap, not a claim of completed compiler
+features. `LANGUAGE.md` specifies the optional module contracts and their
+restrictions; unfinished compiler work is separate from this library change.
 
 ## Implemented changes
 
@@ -28,7 +28,7 @@ and integration validation are complete.
       real Rust/Wasm checker. All markers must be replaced before checking. This
       is not native typed-hole inference, obligation display, or a sandbox.
 
-## Remaining implementation
+## Deferred compiler and tooling roadmap
 
 - [ ] Stable operator owner identity, coherent selection across phases/imports,
       and an explicit generic-operation defaulting contract.
@@ -44,8 +44,8 @@ and integration validation are complete.
       refinement obligations while refusing incomplete production artifacts.
 - [ ] LSP document highlights for control-flow targets and effect-polymorphic
       variants of the pipeline adapters.
-- [ ] Integrate new public module contracts and corrected existing behavior into
-      normative `LANGUAGE.md`; reconcile implemented history in `SUGGESTION.md`.
+- [x] Specify the optional module contracts in normative `LANGUAGE.md` and
+      record their bounded implementation status in `SUGGESTION.md`.
 - [ ] Complete broader cancellation/host-exit auditing and research evaluations.
 
 The research acceptance criteria and two opt-in failing correctness probes live
@@ -77,6 +77,11 @@ The first implementation commit's CI rebuilt the compiler, passed 402 Rust unit
 tests, formal checks, Rust lint/formatting, performance gates, and TypeScript
 checking, then failed at formatting. Its later integration steps did not run.
 The current PR checks, not that earlier run, determine readiness.
+
+The hover and canonical-formatting repairs in #91 passed the complete standard
+Rust/Wasm CI in run 33975519182. The subsequent documentation and integration
+changes are subject to their own unchanged CI checks. Neither result establishes
+that the deferred compiler roadmap is implemented.
 
 ## Constraints retained
 
