@@ -20,6 +20,11 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -28,6 +33,8 @@ jobs:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
+      - name: Install locked generator dependencies
+        run: pnpm install --frozen-lockfile
       - name: Apply and generate incremental source changes
         run: |
           if test -f scripts/operator-next.py; then
@@ -45,6 +52,7 @@ jobs:
             deno task generate:compiler-schema
             cargo fmt --manifest-path compiler/Cargo.toml
             deno fmt LANGUAGE.md spec/TYPECHECKING.md spec/QCORE.md qcore/schema.json
+            pnpm generate:health
             git diff --check
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -59,18 +67,3 @@ jobs:
         run: cargo test --manifest-path compiler/Cargo.toml --quiet
       - name: Check Rust lint
         run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-      - name: Prepare an isolated reproduction workspace
-        if: always()
-        run: |
-          mkdir -p /tmp/operator-repro
-          git ls-files -z | tar --null --ignore-failed-read -T - -czf /tmp/operator-repro/source.tar.gz
-          cargo fetch --manifest-path compiler/Cargo.toml
-          tar -C "$HOME/.cargo" -czf /tmp/operator-repro/registry.tar.gz registry
-          toolchain=$(rustc --print sysroot)
-          tar -C "$toolchain" -czf /tmp/operator-repro/toolchain.tar.gz bin lib libexec
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: operator-reproduction
-          path: /tmp/operator-repro
-          retention-days: 1
