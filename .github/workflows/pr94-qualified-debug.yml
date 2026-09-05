@@ -24,6 +24,10 @@ jobs:
           from pathlib import Path
           path = Path('compiler/src/typecheck.rs')
           source = path.read_text()
+          marker = 'fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -> Option<Value> {'
+          if source.count(marker) != 1:
+              raise SystemExit(f'expected one reify function, found {source.count(marker)}')
+          prefix, tail = source.split(marker, 1)
           needle = '        Type::Range { domain, low, high } => {\n'
           replacement = (
               '        // Qualified requirements remain part of the checked type and serialized boundary.\n'
@@ -32,9 +36,10 @@ jobs:
               '        Type::Qualified { body, .. } => reify_type_with_holes(context, body, next_hole),\n'
               + needle
           )
-          if source.count(needle) != 1:
-              raise SystemExit(f'expected one reify Range arm, found {source.count(needle)}')
-          path.write_text(source.replace(needle, replacement))
+          if tail.count(needle) < 1:
+              raise SystemExit('reify Range arm not found')
+          tail = tail.replace(needle, replacement, 1)
+          path.write_text(prefix + marker + tail)
           PY
           cargo fmt --manifest-path compiler/Cargo.toml -- --check
       - name: Run targeted integration regressions
