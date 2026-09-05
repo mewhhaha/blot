@@ -6877,27 +6877,26 @@ impl Checker {
             arity,
         } = member
         {
-            if name == "@type.resolve_member" && *arity == 3 {
-                if let [Value::Text(operation)] = applied.as_slice() {
-                    let domain = type_domain(subject?)?;
-                    let operand = match domain {
-                        Domain::Int => int_type(),
-                        Domain::Text => text_type(),
-                        Domain::Float => float_type(),
-                        Domain::Float32 => float32_type(),
-                    };
-                    let result = match (domain, operation.as_str()) {
-                        (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
-                        | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => {
-                            bool_type()
-                        }
-                        (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
-                        | (Domain::Float32, "add" | "sub" | "mul" | "div")
-                        | (Domain::Text, "add") => operand.clone(),
-                        _ => return None,
-                    };
-                    return Some(curried(vec![operand.clone(), operand], result));
-                }
+            if name == "@type.resolve_member"
+                && *arity == 3
+                && let [Value::Text(operation)] = applied.as_slice()
+            {
+                let domain = type_domain(subject?)?;
+                let operand = match domain {
+                    Domain::Int => int_type(),
+                    Domain::Text => text_type(),
+                    Domain::Float => float_type(),
+                    Domain::Float32 => float32_type(),
+                };
+                let result = match (domain, operation.as_str()) {
+                    (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                    | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => bool_type(),
+                    (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
+                    | (Domain::Float32, "add" | "sub" | "mul" | "div")
+                    | (Domain::Text, "add") => operand.clone(),
+                    _ => return None,
+                };
+                return Some(curried(vec![operand.clone(), operand], result));
             }
             let mut type_ = primitive_type(self, name)?;
             for _ in applied {
