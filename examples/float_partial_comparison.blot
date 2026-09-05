@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Float = import "blot:float"
+let zero = F64.of_int 0
+let nan = F64.div zero zero
+return case Float.F64.partial_cmp nan (F64.of_int 1) of
+  #Equal => 0
+  #Greater => 1
+  #Less => 2
+  #Unordered => 3

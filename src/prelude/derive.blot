@@ -1,0 +1,51 @@
+// Read-only evidence for a deliberately small, unrestricted schema fragment.
+// A field name is not authority to duplicate an owned value.
+open import "blot:prelude"
+
+const readable_scalar = fn field_type => case Reflect.of field_type of
+  #Int _ => field_type
+  #Text _ => field_type
+  #Range info => case info.domain of
+    #Int => field_type
+    #Text => field_type
+    _ => @fail "derive.fields supports only integer and text scalar fields"
+  _ => @fail "derive.fields refuses owned, opaque, compound, and effectful fields"
+
+const fields = fn schema => case Reflect.of schema of
+  #Shape shape => do:
+    let descriptors = @shape.empty
+    for name in Iter.items (@shape.names shape):
+      let field_type = readable_scalar (@shape.get shape name)
+      // Keep field-name evidence staged. Residual closures with different static
+      // capture values are not yet reliably distinguished by the backend cache.
+      // A deferred getter is not a general first-class runtime projection.
+      let read = fn ~value => @satisfies (@shape.get (@satisfies value schema) name) field_type
+      descriptors := {
+        ...descriptors;
+        .[name] = { .type = field_type; .read = read; };
+      }
+
+    return schema <+ { .fields = descriptors; }
+  _ => @fail "derive.fields requires a structural record schema"
+
+// Integer-only product derivation. Length-framed names make punctuation in a
+// computed field name unambiguous. This is not JSON and is not a decoder API.
+const integer_record = fn schema => case Reflect.of schema of
+  #Shape shape => do:
+    if Int.eq (@array.len (@shape.names shape)) 0:
+      return @fail "derive.integer_record requires at least one field"
+    let evidence = fields schema
+    let encode = fn value => ""
+    for name in Iter.items (@shape.names shape):
+      let field_type = @shape.get shape name
+      let read = case Reflect.refines (field_type, Int) of
+        #True => (@shape.get evidence.fields name).read
+        #False => @fail "derive.integer_record requires integer scalar fields"
+      let previous = encode
+      let label = Text.of_int (Text.length name) <> ":" <> name <> "="
+      encode := fn value => previous value <> label <> Text.of_int (read value) <> ";"
+
+    return evidence <+ { .encode = fn value => encode (@satisfies value schema); }
+  _ => @fail "derive.integer_record requires a structural record schema"
+
+return { .fields = fields; .integer_record = integer_record; }
