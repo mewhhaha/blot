@@ -1,0 +1,38 @@
+name: Apply unified integration CI patch
+
+on:
+  push:
+    branches:
+      - integration/unified-language-review
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/integration/unified-language-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply exact Clippy repair and remove this workflow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('compiler/src/typecheck.rs')
+          source = path.read_text()
+          old = 'member_constraints::map_type_children(qualified, |child| stable_loop_signature(child))'
+          new = 'member_constraints::map_type_children(qualified, stable_loop_signature)'
+          if source.count(old) != 1:
+              raise SystemExit(f'expected exactly one redundant closure, found {source.count(old)}')
+          path.write_text(source.replace(old, new))
+          Path('.github/workflows/integration-ci-patch.yml').unlink()
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add compiler/src/typecheck.rs .github/workflows/integration-ci-patch.yml
+          git commit -m 'Fix qualified loop signature lint'
+          git push origin HEAD:refs/heads/integration/unified-language-review
