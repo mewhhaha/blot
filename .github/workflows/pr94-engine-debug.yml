@@ -36,14 +36,7 @@ jobs:
           source = path.read_text()
           start = source.index('    pub(super) fn qualify_type(&self, type_: Type) -> Type {')
           end = source.index('    /// A qualifier is activated only after its enclosing forall', start)
-          replacement = '''    pub(super) fn qualify_type(&self, type_: Type) -> Type {
-        match type_ {
-            Type::Qualified { body, .. } => Rc::unwrap_or_clone(body),
-            other => other,
-        }
-    }
-
-'''
+          replacement = "    pub(super) fn qualify_type(&self, type_: Type) -> Type {\n        match type_ {\n            Type::Qualified { body, .. } => Rc::unwrap_or_clone(body),\n            other => other,\n        }\n    }\n\n"
           path.write_text(source[:start] + replacement + source[end:])
           PY
           cargo fmt --manifest-path compiler/Cargo.toml
