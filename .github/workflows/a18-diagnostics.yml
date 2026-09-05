@@ -1,0 +1,26 @@
+name: A18 operator diagnostics
+
+on:
+  push:
+    branches:
+      - diagnostics/operator-a18
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Operator dispatch tests
+        run: timeout 180 cargo test --manifest-path compiler/Cargo.toml operator_dispatch_tests -- --nocapture
+      - name: Loop regressions
+        shell: bash
+        run: |
+          timeout 120 cargo test --manifest-path compiler/Cargo.toml a_rebound_loop_element_stays_local_to_each_iteration -- --nocapture
+          timeout 120 cargo test --manifest-path compiler/Cargo.toml a_conditionally_rebound_loop_element_stays_local_to_each_iteration -- --nocapture
