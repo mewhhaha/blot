@@ -1,0 +1,39 @@
+name: Unified hover expectation repair
+
+on:
+  push:
+    branches:
+      - codex/unify-operator-language-review
+    paths:
+      - .github/workflows/unify-hover-test-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/unify-operator-language-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Update operator hover expectation and remove helper workflow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/language_service.test.ts')
+          source = path.read_text()
+          old = 'assertStringIncludes(overloaded.contents.value, "`Int.negate`");'
+          new = 'assertStringIncludes(overloaded.contents.value, "`Op.negate`");'
+          if source.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale negate assertion, found {source.count(old)}')
+          path.write_text(source.replace(old, new))
+          PY
+          git rm .github/workflows/unify-hover-test-fix.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/language_service.test.ts
+          git commit -m 'Align operator hover test with Op.negate'
+          git push origin HEAD:refs/heads/codex/unify-operator-language-review
