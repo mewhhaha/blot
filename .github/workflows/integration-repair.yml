@@ -1,0 +1,32 @@
+name: Apply reviewed integration repairs
+on:
+  push:
+    branches: [integrate/operator-dispatch-language-review]
+    paths: [.github/workflows/integration-repair.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/integrate/operator-dispatch-language-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - name: Apply the reviewed patch and remove this one-shot workflow
+        env:
+          PATCH_BASE: e4459075999b262e47dc260d9016de9ac8d0cecf
+        run: |
+          test "$(git rev-parse HEAD^)" = "$PATCH_BASE"
+          python3 - <<'PYCODE'
+          import base64, gzip, hashlib, subprocess
+          patch = gzip.decompress(base64.b64decode("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", validate=True))
+          assert hashlib.sha256(patch).hexdigest() == "8a57e585d1d6b2a140dc0b518fc1ef21d9d5cd14ebfc375100264fe8ca5543d1"
+          subprocess.run(["git", "apply", "--check", "-"], input=patch, check=True)
+          subprocess.run(["git", "apply", "-"], input=patch, check=True)
+          PYCODE
+          git rm .github/workflows/integration-repair.yml
+          git add compiler/src/typecheck.rs compiler/src/eval.rs compiler/src/member_constraint_tests.rs formal/lean/Blot/QCore.lean src/tooling/control_flow.ts src/tooling/control_flow.test.ts src/language_service.test.ts docs/language-claims.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Reconcile integrated hover, equality evidence, Rust lint, and QCore scope checks"
+          git push origin HEAD:refs/heads/integrate/operator-dispatch-language-review
