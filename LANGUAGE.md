@@ -3578,6 +3578,51 @@ constructor, accessors, and metadata attached to the type value.
 Changing the prelude's public record is a language-library change and must
 update this specification.
 
+### 14.1 Optional source libraries
+
+These modules require explicit imports. They are ordinary Blot source, not
+implicit prelude bindings, new primitives, or alternate semantic authorities.
+
+`import "blot:float"` exports `PartialOrdering` and extended `F64` and `F32`
+namespaces. Each namespace provides `partial_cmp` and `cmp_exn`. For its own
+precision, `partial_cmp` takes two values and returns
+`#Equal | #Greater | #Less | #Unordered`. Either NaN yields `#Unordered`; equal
+signed zeroes and equal infinities yield `#Equal`. This reports a partial order,
+not a total ordering of all floating-point values. `cmp_exn` is an alias for the
+existing comparison that traps on NaN. The module does not change the base
+comparison or implicitly convert already-bound numeric values.
+
+`import "blot:pipeline"` exports pure, configuration-first, data-last adapters:
+
+- `map_with`: `(T -> U) -> [T] -> [U]`;
+- `filter_with`: `(T -> Bool) -> [T] -> [T]`;
+- `fold_with`: `((S, T) -> S) -> S -> [T] -> S`.
+
+The type parameters are independently universally quantified. The final array
+argument is borrowed, as in the corresponding tuple-taking prelude operations.
+Callbacks must be pure. These are ordinary functions used with ordinary `|>`;
+they do not alter application, saturation, or effect handling. The original
+prelude operations remain available.
+
+`import "blot:derive"` exports the restricted `fields` and `integer_record`
+operations. `fields` requires a structural record schema whose fields are
+integer or text scalars, including their supported refinements. It returns the
+schema with attached `.fields` descriptors carrying `.type` and a checked
+`.read` operation. The enclosing schema and the selected field type are checked
+when reading. The read argument is deferred: field-name evidence remains staged,
+not an unrestricted first-class runtime getter. Arrays, functions, opaque,
+owned, and other unsupported field shapes are refused rather than assigned
+unsafe accessors. Reading supported fields does not discharge obligations for
+other owned fields in an input admitted by record width subtyping.
+
+`integer_record` requires a nonempty structural record schema containing only
+integer fields. It adds `.encode`, which checks its input against that schema
+and encodes each field as `N:name=value;`, in reflected declaration order. `N`
+is the Unicode-scalar length of the field name. This is a restricted product
+encoder, not JSON, a decoder, a sum codec, or a general ownership-aware
+reflection facility. These restrictions do not claim to repair general
+static-capture-sensitive runtime specialization.
+
 ## 15. Runtime and compilation
 
 The Rust evaluator gives runtime and compile-time code the same semantics, apart

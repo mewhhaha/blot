@@ -281,6 +281,12 @@ the loop shape programs actually write, not that it approaches a general solver.
 
 ## 12. Answer float comparison totally
 
+Implemented as an explicit optional library: `blot:float` provides F32/F64
+`partial_cmp` and the existing trapping comparison as `cmp_exn`. The base
+comparison is unchanged. See `LANGUAGE.md` section 14.1 for the contract. The
+following records the motivation, not an outstanding promise to change the
+primitive comparison.
+
 `F64.cmp` refuses NaN — a diagnostic while compiling and a trap while running —
 so every runtime float comparison is a potential fault and numeric code pays an
 `is_nan` pre-check per comparison. IEEE 754 defines the total answer, and
@@ -299,6 +305,12 @@ under a name that says so for code that has already proved its inputs — the sa
 split `Array.get` and `@array.get` already make.
 
 ## 13. Return evidence from reflection, not descriptions
+
+A restricted source prototype now exists in `blot:derive`: checked scalar-field
+evidence and a nonempty integer-record encoder, with deferred reads and explicit
+refusal of unsupported ownership shapes. See `LANGUAGE.md` section 14.1. General
+consuming extraction, reconstruction, sum derivation, and static-capture-safe
+runtime getters below remain open work; the prototype does not complete them.
 
 The reflection surface is already the easy kind: `@type.reflect` describes a
 type the way a `@typeInfo` does, the shape primitives are field access and field
