@@ -1,0 +1,174 @@
+diff --git a/compiler/src/member_constraints.rs b/compiler/src/member_constraints.rs
+--- a/compiler/src/member_constraints.rs
++++ b/compiler/src/member_constraints.rs
+@@ -61,17 +61,38 @@
+     /// In particular, an unconstrained upper Top is never a lookup subject.
+     pub(super) fn member_lookup_subject(&self, type_: &Type) -> Option<Type> {
+         let mut subject = self.settle(type_.clone(), true);
+-        if matches!(subject, Type::Bottom | Type::Top) {
+-            let upper = self.settle(type_.clone(), false);
+-            if type_domain(&upper).is_some() || matches!(upper, Type::Opaque(_)) {
+-                subject = upper;
+-            }
++        if matches!(subject, Type::Bottom | Type::Top)
++            && let Some(upper) = self.member_upper_subject(type_)
++        {
++            subject = upper;
+         }
+         (!matches!(subject, Type::Top)
+             && !contains_bottom(&subject)
+             && closed_checked_type(&subject, &mut HashSet::new())
+             && operator_dispatch_type_is_concrete(&subject))
+         .then_some(subject)
++    }
++
++    /// A checked upper edge is evidence even when negative settlement has
++    /// conservatively widened several bounds to Top. Follow only upper aliases:
++    /// a lower bound or a type nested inside a container is not receiver evidence.
++    fn member_upper_subject(&self, type_: &Type) -> Option<Type> {
++        let mut pending = vec![self.constraint_type(type_)];
++        let mut visited = HashSet::new();
++        while let Some(id) = pending.pop() {
++            if !visited.insert(id) {
++                continue;
++            }
++            if let Some(variable) = self.constraint_variable(id) {
++                pending.extend(self.variables.borrow()[variable as usize].upper.clone());
++                continue;
++            }
++            let upper = self.settle(self.expand_constraint(id), false);
++            if type_domain(&upper).is_some() || matches!(upper, Type::Opaque(_)) {
++                return Some(upper);
++            }
++        }
++        None
+     }
+ 
+     /// Include graph edges as well as syntactic occurrences. A member's result
+ diff --git a/compiler/src/hir.rs b/compiler/src/hir.rs
+--- a/compiler/src/hir.rs
++++ b/compiler/src/hir.rs
+@@ -4093,6 +4093,13 @@
+             },
+         ) = signature
+         else {
++            // A nonrecursive source helper can stay in the ordinary staged
++            // evaluator until its actual arguments discharge member lookups.
++            // Do not invent a runtime signature, and do not inline across a
++            // development boundary or turn recursive calls into host recursion.
++            if signature.is_none() && self_name.is_none() && !crosses_development_boundary {
++                return Ok(ResidualFunctionCall::Static);
++            }
+             return Err(Diagnostic::new(
+                 "BLOT_UNSUPPORTED_LOWERING",
+                 format!(
+ diff --git a/compiler/src/member_constraint_tests.rs b/compiler/src/member_constraint_tests.rs
+--- a/compiler/src/member_constraint_tests.rs
++++ b/compiler/src/member_constraint_tests.rs
+@@ -201,3 +201,53 @@
+         assert!(refined_original_integer_type(&checker, &environment, "value").is_none());
+     }
+ }
++
++#[test]
++fn member_upper_evidence_survives_repeated_bounds_and_alias_cycles() {
++    for domain in [int_type(), float_type(), float32_type()] {
++        let checker = Checker::new(Rc::new(Context::default()));
++        let subject = checker.fresh();
++        let alias = checker.fresh();
++        let result = checker.fresh();
++        let span = Span { start: 1, end: 4 };
++        checker
++            .constrain(subject.clone(), alias.clone(), span)
++            .unwrap();
++        checker.constrain(alias, subject.clone(), span).unwrap();
++        checker.register_member_requirement(MemberRequirement {
++            name: "add".to_owned(),
++            subject: subject.clone(),
++            member: curried(vec![subject.clone(), domain.clone()], result.clone()),
++        });
++        assert!(checker.member_lookup_subject(&subject).is_none());
++        checker
++            .constrain(subject.clone(), domain.clone(), span)
++            .unwrap();
++        checker
++            .constrain(subject.clone(), domain.clone(), span)
++            .unwrap();
++        assert!(same_type(
++            &checker.member_lookup_subject(&subject).unwrap(),
++            &domain
++        ));
++        assert!(same_type(&checker.settle(result, true), &domain));
++        assert!(!checker.has_member_requirements(&subject));
++    }
++}
++
++#[test]
++fn member_upper_evidence_does_not_default_cycles_or_project_container_elements() {
++    let checker = Checker::new(Rc::new(Context::default()));
++    let subject = checker.fresh();
++    let alias = checker.fresh();
++    let span = Span { start: 1, end: 4 };
++    checker
++        .constrain(subject.clone(), alias.clone(), span)
++        .unwrap();
++    checker.constrain(alias, subject.clone(), span).unwrap();
++    assert!(checker.member_lookup_subject(&subject).is_none());
++    checker
++        .constrain(subject.clone(), Type::Array(Rc::new(int_type())), span)
++        .unwrap();
++    assert!(checker.member_lookup_subject(&subject).is_none());
++}
+ diff --git a/LANGUAGE.md b/LANGUAGE.md
+--- a/LANGUAGE.md
++++ b/LANGUAGE.md
+@@ -1364,6 +1364,15 @@
+ reachable runtime instance must have a resolved member and representation.
+ Missing members are not filled in from their spelling, and unresolved
+ requirements cannot be erased to an arbitrary runtime representation.
++
++A numeric domain proved by an upper subtype bound remains usable through alias
++cycles and repeated bounds; this is not an integer default. A cycle without such
++evidence does not resolve a member, and the element type of a container does not
++establish the container's own numeric domain. Ordinary nonrecursive helpers
++without an outlineable interface may remain staged at a known application until
++their concrete arguments resolve the operations. This does not create a runtime
++dictionary, bypass checking, or permit an unresolved recursive or development
++boundary to be emitted.
+ 
+ ## 8. Conditional control flow
+ 
+ diff --git a/spec/TYPECHECKING.md b/spec/TYPECHECKING.md
+--- a/spec/TYPECHECKING.md
++++ b/spec/TYPECHECKING.md
+@@ -1558,3 +1558,10 @@
+ turn an unknown or floating-point receiver into Int. Otherwise branch-local
+ refinements would disconnect later constraints from the original parameter.
+ Attached callable names are ordinary source names, not a compiler allow-list.
++
++Receiver lookup follows upper-variable aliases with a visited set. Repeated
++bounds and cycle edges cannot discard a concrete domain already established by
++another upper edge. Only the receiver's upper edges provide this evidence:
++lookup does not project a numeric element or field out of a container, nor use
++an unconstrained cycle as a default. The chosen member's complete signature is
++still constrained against the pending requirement.
+ diff --git a/spec/STAGING.md b/spec/STAGING.md
+--- a/spec/STAGING.md
++++ b/spec/STAGING.md
+@@ -245,6 +245,16 @@
+ An unresolved deferred closure that escapes known application is a stated target
+ refusal, not an implicit new ABI object.
+ 
++An ordinary nonrecursive source helper whose checked interface is not yet
++reifiable may stay in the existing staged evaluator at a known application. This
++is specialization of its checked body with actual arguments, not invention of a
++runtime function signature or erasure of qualified member requirements. Every
++operation and aggregate that reaches Runtime HIR still requires its resolved
++member, checked ownership facts, and closed representation. A recursive helper
++or a development boundary does not receive this fallback: outlining it still
++requires the corresponding settled interface. A present but malformed interface
++is not treated as a missing one.
++
+ ## 9. Representation closure
+ 
+ Write:
