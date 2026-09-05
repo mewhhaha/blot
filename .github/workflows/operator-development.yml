@@ -1,0 +1,40 @@
+name: Temporary operator development tools
+
+on:
+  push:
+    branches:
+      - codex/complete-operator-dispatch-20260905
+    paths:
+      - .github/workflows/operator-development.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Fetch locked compiler dependencies
+        run: cargo fetch --locked --manifest-path compiler/Cargo.toml
+      - name: Package compiler tools without credentials
+        run: |
+          mkdir -p "$RUNNER_TEMP/operator-tools/toolchain" "$RUNNER_TEMP/operator-tools/cargo"
+          SYSROOT="$(rustc --print sysroot)"
+          cp -a "$SYSROOT/bin" "$SYSROOT/lib" "$RUNNER_TEMP/operator-tools/toolchain/"
+          cp -a "$HOME/.cargo/registry" "$RUNNER_TEMP/operator-tools/cargo/"
+          tar -C "$RUNNER_TEMP/operator-tools" -cf - toolchain cargo | xz -T0 -3 > "$RUNNER_TEMP/operator-tools.tar.xz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operator-development-tools
+          path: ${{ runner.temp }}/operator-tools.tar.xz
+          retention-days: 1
+          compression-level: 0
