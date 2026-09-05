@@ -1,0 +1,37 @@
+name: Bisect residual regressions
+
+on:
+  push:
+    branches:
+      - codex/bisect-e9dea76
+    paths:
+      - .github/workflows/bisect-residual.yml
+
+permissions:
+  contents: read
+
+jobs:
+  residuals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Compile tests once
+        run: cargo test --manifest-path compiler/Cargo.toml --no-run
+      - name: Run regression boundary tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            an_empty_scratch_argument_uses_the_contextual_result_representation
+            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
+            development_provider_boolean_result_remains_a_reload_boundary
+            engine_entry_points_prepare_and_the_game_loop_emits_wasm
+          )
+          for test_name in "${tests[@]}"; do
+            echo "===== $test_name ====="
+            timeout 45s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --test-threads=1 --nocapture
+          done
