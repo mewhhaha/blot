@@ -1,0 +1,27 @@
+name: Confirm current loop regressions v2
+
+on:
+  push:
+    branches:
+      - codex/unify-rust-diagnose
+    paths:
+      - .github/workflows/loop-regression-current-v2.yml
+
+permissions:
+  contents: read
+
+jobs:
+  loops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Run current loop regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path compiler/Cargo.toml a_rebound_loop_element_stays_local_to_each_iteration -- --test-threads=1 --nocapture
+          cargo test --manifest-path compiler/Cargo.toml a_conditionally_rebound_loop_element_stays_local_to_each_iteration -- --test-threads=1 --nocapture
