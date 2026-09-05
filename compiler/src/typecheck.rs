@@ -706,6 +706,24 @@ impl ConstraintTypeArena {
             return true;
         }
         match (&self.nodes[left.0 as usize], &self.nodes[right.0 as usize]) {
+            (
+                ConstraintTypeNode::Qualified {
+                    requirements: left,
+                    body: left_body,
+                },
+                ConstraintTypeNode::Qualified {
+                    requirements: right,
+                    body: right_body,
+                },
+            ) => {
+                left.len() == right.len()
+                    && self.same_with_rigids(*left_body, *right_body, rigids)
+                    && left.iter().zip(right).all(|(left, right)| {
+                        left.name == right.name
+                            && self.same_with_rigids(left.subject, right.subject, rigids)
+                            && self.same_with_rigids(left.member, right.member, rigids)
+                    })
+            }
             (ConstraintTypeNode::Variable(left), ConstraintTypeNode::Variable(right)) => {
                 left == right
             }
@@ -1813,6 +1831,20 @@ fn closed_boundary_type_key(
                 let first_child = keys.len().checked_sub(child_count)?;
                 let mut children = keys.split_off(first_child).into_iter();
                 let key = match node {
+                    FlatTypeNode::Qualified { requirements, .. } => {
+                        let body = children.next()?;
+                        let mut keys = Vec::with_capacity(requirements.len());
+                        for requirement in requirements {
+                            keys.push(format!(
+                                "{}({},{})",
+                                text(&requirement.name),
+                                children.next()?,
+                                children.next()?
+                            ));
+                        }
+                        keys.sort();
+                        format!("qualified({body};{})", keys.join(","))
+                    }
                     FlatTypeNode::Function { deferred, .. } => format!(
                         "fun({deferred},{},{},{})",
                         children.next()?,
@@ -1977,7 +2009,8 @@ fn copy_boundary_type(
                         copied.push(target.intern(node));
                         continue;
                     }
-                    FlatTypeNode::Function { .. }
+                    FlatTypeNode::Qualified { .. }
+                    | FlatTypeNode::Function { .. }
                     | FlatTypeNode::Array(_)
                     | FlatTypeNode::Region(_)
                     | FlatTypeNode::Scratch(_)
@@ -1997,6 +2030,17 @@ fn copy_boundary_type(
                     .expect("sealed boundary assembly must receive every child");
                 let mut children = copied.split_off(first_child).into_iter();
                 let node = match node {
+                    FlatTypeNode::Qualified { requirements, .. } => FlatTypeNode::Qualified {
+                        body: children.next().expect("qualified body"),
+                        requirements: requirements
+                            .into_iter()
+                            .map(|requirement| MemberRequirement {
+                                name: requirement.name,
+                                subject: children.next().expect("requirement subject"),
+                                member: children.next().expect("requirement member"),
+                            })
+                            .collect(),
+                    },
                     FlatTypeNode::Function { deferred, .. } => FlatTypeNode::Function {
                         deferred,
                         parameter: children.next().expect("function parameter"),
@@ -4089,6 +4133,17 @@ impl Checker {
                         .expect("flat type assembly must receive every child");
                     let mut children = inflated.split_off(first_child).into_iter();
                     let type_ = match arena.node(type_) {
+                        FlatTypeNode::Qualified { requirements, .. } => Type::Qualified {
+                            body: Rc::new(children.next().expect("qualified body")),
+                            requirements: requirements
+                                .iter()
+                                .map(|requirement| MemberRequirement {
+                                    name: requirement.name.clone(),
+                                    subject: children.next().expect("requirement subject"),
+                                    member: children.next().expect("requirement member"),
+                                })
+                                .collect(),
+                        },
                         FlatTypeNode::Function { deferred, .. } => Type::Function {
                             deferred: *deferred,
                             parameter: Rc::new(children.next().expect("function parameter")),
@@ -7655,6 +7710,12 @@ impl Checker {
         let mut pending = vec![type_.clone()];
         while let Some(type_) = pending.pop() {
             match type_ {
+                Type::Qualified { requirements, body } => {
+                    pending.push(Rc::unwrap_or_clone(body));
+                    for requirement in requirements {
+                        pending.extend([requirement.subject, requirement.member]);
+                    }
+                }
                 Type::Variable(variable) => {
                     if literals.contains_key(&variable) {
                         return true;
@@ -7718,6 +7779,12 @@ impl Checker {
         let mut found = None;
         while let Some(type_) = pending.pop() {
             match type_ {
+                Type::Qualified { requirements, body } => {
+                    pending.push(Rc::unwrap_or_clone(body));
+                    for requirement in requirements {
+                        pending.extend([requirement.subject, requirement.member]);
+                    }
+                }
                 Type::Variable(variable) => {
                     if let Some(fact) = literals.get(&variable) {
                         match fact.kind {
@@ -10244,6 +10311,20 @@ impl Checker {
 
     fn show_settled(&self, type_: &Type) -> String {
         match type_ {
+            Type::Qualified { requirements, body } => format!(
+                "({}) => {}",
+                requirements
+                    .iter()
+                    .map(|requirement| format!(
+                        "{}.{} :: {}",
+                        self.show_settled(&requirement.subject),
+                        requirement.name,
+                        self.show_settled(&requirement.member)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self.show_settled(body),
+            ),
             Type::Variable(id) => format!("'t{id}"),
             Type::Rigid(id) => format!("'s{id}"),
             Type::Forall { variables, body } => {
@@ -10444,6 +10525,7 @@ fn quantify_settlement_holes(
     variables: &mut Vec<VariableId>,
 ) -> Option<Type> {
     match type_ {
+        Type::Qualified { .. } => None,
         Type::Variable(_) => None,
         Type::Top | Type::Bottom => {
             let variable = next_skolem.get();
@@ -10563,6 +10645,7 @@ fn quantify_settlement_holes(
 
 fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { .. } => false,
         Type::Variable(_) | Type::Rigid(_) | Type::Forall { .. } => false,
         Type::Function {
             parameter,
@@ -10600,6 +10683,12 @@ fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
 
 fn contains_bottom(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            contains_bottom(body)
+                || requirements.iter().any(|requirement| {
+                    contains_bottom(&requirement.subject) || contains_bottom(&requirement.member)
+                })
+        }
         Type::Bottom => true,
         Type::Forall { body, .. } => contains_bottom(body),
         Type::Function {
@@ -10683,6 +10772,22 @@ fn closed_type_key(type_: &Type) -> Option<String> {
 
     fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> Option<String> {
         match type_ {
+            Type::Qualified { requirements, body } => {
+                let body = visit(body, binders)?;
+                let mut keys = requirements
+                    .iter()
+                    .map(|requirement| {
+                        Some(format!(
+                            "{}({},{})",
+                            text(&requirement.name),
+                            visit(&requirement.subject, binders)?,
+                            visit(&requirement.member, binders)?
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                keys.sort();
+                Some(format!("qualified({body};{})", keys.join(",")))
+            }
             Type::Variable(_) => None,
             Type::Rigid(id) => binders.get(id).map(|index| format!("^{index}")),
             Type::Forall { variables, body } => {
@@ -10775,6 +10880,13 @@ fn free_rigid_variables(
     free: &mut BTreeSet<VariableId>,
 ) {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            free_rigid_variables(body, bound, free);
+            for requirement in requirements {
+                free_rigid_variables(&requirement.subject, bound, free);
+                free_rigid_variables(&requirement.member, bound, free);
+            }
+        }
         Type::Rigid(variable) => {
             if !bound.contains(variable) {
                 free.insert(*variable);
@@ -11632,6 +11744,7 @@ fn function_body(mut type_: &Type) -> &Type {
 
 fn contains_function(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => contains_function(body),
         Type::Function { .. } => true,
         Type::Forall { body, .. }
         | Type::Array(body)
@@ -11648,6 +11761,7 @@ fn contains_function(type_: &Type) -> bool {
 
 fn ownership_uses_expression_type(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => ownership_uses_expression_type(body),
         Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Forall { body, .. } => ownership_uses_expression_type(body),
         Type::Function { .. } | Type::Array(_) => true,
@@ -11668,6 +11782,7 @@ fn ownership_uses_expression_type(type_: &Type) -> bool {
 
 fn function_result_contains_embedded_function(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => function_result_contains_embedded_function(body),
         Type::Forall { body, .. } => function_result_contains_embedded_function(body),
         Type::Function { result, .. } => match result.as_ref() {
             Type::Function { .. } => false,
@@ -12372,6 +12487,11 @@ fn coverage_matrix(rows: &[CoverageRow], types: &[Type]) -> bool {
     }
     let rest = &types[1..];
     match &types[0] {
+        Type::Qualified { body, .. } => {
+            let mut unqualified = vec![body.as_ref().clone()];
+            unqualified.extend_from_slice(rest);
+            coverage_matrix(rows, &unqualified)
+        }
         Type::Bottom => true,
         Type::Unit => coverage_matrix(&specialize_unit(rows), rest),
         Type::Range {
@@ -13556,6 +13676,24 @@ fn same_type_with_rigids(
     rigids: &mut Vec<(VariableId, VariableId)>,
 ) -> bool {
     match (left, right) {
+        (
+            Type::Qualified {
+                requirements: left,
+                body: left_body,
+            },
+            Type::Qualified {
+                requirements: right,
+                body: right_body,
+            },
+        ) => {
+            left.len() == right.len()
+                && same_type_with_rigids(left_body, right_body, rigids)
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.name == right.name
+                        && same_type_with_rigids(&left.subject, &right.subject, rigids)
+                        && same_type_with_rigids(&left.member, &right.member, rigids)
+                })
+        }
         (Type::Variable(left), Type::Variable(right)) => left == right,
         (Type::Rigid(left), Type::Rigid(right)) => {
             if let Some(bound_left) = rigids
@@ -14681,6 +14819,13 @@ fn nullary_unit_type(type_: &Type) -> bool {
 
 pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            type_exposes_generative_effect(body)
+                || requirements.iter().any(|requirement| {
+                    type_exposes_generative_effect(&requirement.subject)
+                        || type_exposes_generative_effect(&requirement.member)
+                })
+        }
         Type::Forall { body, .. }
         | Type::Array(body)
         | Type::Region(body)
@@ -14721,6 +14866,13 @@ pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
 
 fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            closed_checked_type(body, bound)
+                && requirements.iter().all(|requirement| {
+                    closed_checked_type(&requirement.subject, bound)
+                        && closed_checked_type(&requirement.member, bound)
+                })
+        }
         Type::Variable(_) => false,
         Type::Rigid(variable) => bound.contains(variable),
         Type::Forall { variables, body } => {
@@ -14776,6 +14928,19 @@ fn flatten_interface_type(
     types: &mut FlatTypeBuilder,
 ) -> Option<FlatTypeId> {
     let node = match type_ {
+        Type::Qualified { requirements, body } => FlatTypeNode::Qualified {
+            body: flatten_interface_type(body, bound, types)?,
+            requirements: requirements
+                .iter()
+                .map(|requirement| {
+                    Some(MemberRequirement {
+                        name: requirement.name.clone(),
+                        subject: flatten_interface_type(&requirement.subject, bound, types)?,
+                        member: flatten_interface_type(&requirement.member, bound, types)?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+        },
         Type::Variable(_) => return None,
         Type::Rigid(id) => {
             if !bound.contains(id) {

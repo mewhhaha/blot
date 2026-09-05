@@ -1,7 +1,7 @@
 // Generated from compiler/protocol.json. Do not edit.
 
 export const compilerHostAbiVersion = 6 as const;
-export const checkedModuleCertificateSchema = 16 as const;
+export const checkedModuleCertificateSchema = 17 as const;
 export const moduleSnapshotSchema = 2 as const;
 export const valueCapsuleSchema = 4 as const;
 export const runtimeHirSchema = 10 as const;

@@ -3321,6 +3321,7 @@ fn array_parameter_elements_shareable(expression: ExpressionId, analysis: &Analy
 
 fn type_may_carry_ownership(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => type_may_carry_ownership(body),
         Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Forall { body, .. } => type_may_carry_ownership(body),
         Type::Function { .. } | Type::Array(_) | Type::Region(_) | Type::Scratch(_) => true,
@@ -3348,6 +3349,7 @@ fn type_may_carry_ownership(type_: &Type) -> bool {
 
 fn contains_type_value(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => contains_type_value(body),
         Type::Opaque(name) => name == "Type",
         Type::Forall { body, .. }
         | Type::Array(body)

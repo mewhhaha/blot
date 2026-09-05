@@ -11901,6 +11901,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
 
 fn type_value(type_: &Type) -> Value {
     match type_ {
+        Type::Qualified { .. } => Value::Unbounded,
         Type::Variable(_) | Type::Rigid(_) | Type::Top | Type::Bottom => Value::Unbounded,
         Type::Forall { variables, body } => {
             variables
@@ -12220,6 +12221,9 @@ impl HirBuilder {
 
     fn runtime_type(&mut self, type_: &Type, value: &Value) -> Result<usize, Diagnostic> {
         match type_ {
+            Type::Qualified { .. } => Err(hir_error(
+                "An attached-member requirement must be discharged before the runtime boundary.",
+            )),
             Type::Range { domain, .. } => match domain {
                 Domain::Int => {
                     Ok(self

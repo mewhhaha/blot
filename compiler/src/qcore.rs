@@ -394,6 +394,21 @@ fn intern_origin(
 
 fn translate_flat_type(type_: &FlatTypeNode) -> Value {
     match type_ {
+        FlatTypeNode::Qualified { requirements, body } => Value::StructuralQualified {
+            body: ValueId(body.0),
+            names: requirements
+                .iter()
+                .map(|requirement| requirement.name.clone())
+                .collect(),
+            subjects: requirements
+                .iter()
+                .map(|requirement| ValueId(requirement.subject.0))
+                .collect(),
+            members: requirements
+                .iter()
+                .map(|requirement| ValueId(requirement.member.0))
+                .collect(),
+        },
         FlatTypeNode::Rigid(variable) => Value::StructuralRigid {
             variable: *variable,
         },
@@ -776,6 +791,17 @@ impl<'module> ModuleValidator<'module> {
                         self.ensure_value(source, child)?;
                     }
                 }
+                Value::StructuralQualified {
+                    body,
+                    subjects,
+                    members,
+                    ..
+                } => {
+                    self.ensure_value(source, body)?;
+                    for child in subjects.into_iter().chain(members) {
+                        self.ensure_value(source, child)?;
+                    }
+                }
                 Value::StructuralRecordUpdate {
                     base, field_types, ..
                 } => {
@@ -959,6 +985,22 @@ impl<'module> ModuleValidator<'module> {
         for (index, node) in self.module.arena.values.iter().enumerate() {
             let value = ValueId(arena_index(index));
             match &node.term {
+                Value::StructuralQualified {
+                    names,
+                    subjects,
+                    members,
+                    ..
+                } => {
+                    for length in [subjects.len(), members.len()] {
+                        if names.len() != length {
+                            return Err(ValidationError::LabeledTypeLengthMismatch {
+                                value,
+                                labels: names.len(),
+                                types: length,
+                            });
+                        }
+                    }
+                }
                 Value::StructuralRecord {
                     labels,
                     field_types,
@@ -1212,6 +1254,17 @@ impl<'module> ModuleValidator<'module> {
                 members: field_types,
             } => {
                 for child in field_types {
+                    self.visit_value(child, depth, rigids)?;
+                }
+            }
+            Value::StructuralQualified {
+                body,
+                subjects,
+                members,
+                ..
+            } => {
+                self.visit_value(body, depth, rigids)?;
+                for child in subjects.into_iter().chain(members) {
                     self.visit_value(child, depth, rigids)?;
                 }
             }
