@@ -1,0 +1,83 @@
+name: Language review workbench
+
+on:
+  push:
+    branches: [codex/language-syntax-review-20260905]
+    paths: [.github/workflows/language-review-workbench.yml, '.review/**']
+
+concurrency:
+  group: language-review-workbench
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/language-syntax-review-20260905'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/language-syntax-review-20260905
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
+      - name: Fetch pinned compiler dependencies
+        run: cargo fetch --manifest-path compiler/Cargo.toml --locked
+      - name: Export offline toolchain for this review
+        if: hashFiles('.review/apply.py') == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/review-tools"
+          toolchain="$(rustc --print sysroot)"
+          cp -a "$toolchain" "$RUNNER_TEMP/review-tools/rust"
+          rm -rf "$RUNNER_TEMP/review-tools/rust/share/doc"
+          mkdir -p "$RUNNER_TEMP/review-tools/cargo"
+          cp -a "$HOME/.cargo/registry" "$RUNNER_TEMP/review-tools/cargo/registry"
+          cp "$(command -v deno)" "$RUNNER_TEMP/review-tools/deno"
+          tar -czf "$RUNNER_TEMP/review-tools.tar.gz" -C "$RUNNER_TEMP/review-tools" .
+      - name: Upload offline toolchain
+        if: hashFiles('.review/apply.py') == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: language-review-tools
+          path: ${{ runner.temp }}/review-tools.tar.gz
+          retention-days: 1
+      - name: Apply reviewed source edits and regenerate derived files
+        if: hashFiles('.review/apply.py') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .review/apply.py
+          deno task generate:parser
+          deno task generate:compiler-schema
+          deno task generate:qcore
+          cargo fmt --manifest-path compiler/Cargo.toml
+          pnpm compiler:build
+          pnpm current:generate
+          pnpm generate:health
+          deno fmt
+          git add --all
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat: apply language and syntax review implementation'
+            git push origin HEAD:refs/heads/codex/language-syntax-review-20260905
+          fi
+      - name: Validate compiler changes
+        if: hashFiles('.review/apply.py') != ''
+        run: |
+          cargo test --manifest-path compiler/Cargo.toml
+          pnpm test
+          pnpm conformance
