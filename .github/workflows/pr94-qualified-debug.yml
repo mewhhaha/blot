@@ -11,13 +11,13 @@ permissions:
 jobs:
   targeted:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - name: Apply candidate qualified-runtime reification repair
+      - name: Instrument failed residual signature reification
         shell: bash
         run: |
           python3 - <<'PY'
@@ -25,45 +25,17 @@ jobs:
           path = Path('compiler/src/typecheck.rs')
           source = path.read_text()
           marker = 'fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -> Option<Value> {'
-          if source.count(marker) != 1:
-              raise SystemExit(f'expected one reify function, found {source.count(marker)}')
           prefix, tail = source.split(marker, 1)
           needle = '        Type::Range { domain, low, high } => {\n'
-          replacement = (
-              '        // Qualified requirements remain part of the checked type and serialized boundary.\n'
-              '        // Runtime closure signatures are attached only after checking has established those\n'
-              '        // obligations, so the runtime Value form carries the reified body representation.\n'
-              '        Type::Qualified { body, .. } => reify_type_with_holes(context, body, next_hole),\n'
-              + needle
-          )
-          if tail.count(needle) < 1:
-              raise SystemExit('reify Range arm not found')
-          tail = tail.replace(needle, replacement, 1)
-          path.write_text(prefix + marker + tail)
+          tail = tail.replace(needle, '        Type::Qualified { body, .. } => reify_type_with_holes(context, body, next_hole),\n' + needle, 1)
+          source = prefix + marker + tail
+          needle2 = '            let inferred_signature = self.reify_runtime_type(&settled_signature);\n'
+          replacement2 = needle2 + '            if inferred_signature.is_none() {\n                eprintln!("UNREIFIED_RESIDUAL_SIGNATURE: {settled_signature:#?}");\n            }\n'
+          if source.count(needle2) != 1:
+              raise SystemExit(f'expected one inferred signature site, found {source.count(needle2)}')
+          path.write_text(source.replace(needle2, replacement2, 1))
           PY
-          cargo fmt --manifest-path compiler/Cargo.toml -- --check
-      - name: Run targeted integration regressions
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Run one failing regression
         shell: bash
-        run: |
-          set +e
-          failures=0
-          tests=(
-            an_empty_scratch_argument_uses_the_contextual_result_representation
-            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
-            development_provider_boolean_result_remains_a_reload_boundary
-            nested_surface_for_preserves_returned_array_authority
-            owned_merge_sort_prepares_and_emits_with_recursive_store_results
-            owned_radix_sorts_prepare_and_emit_with_recursive_store_results
-            recursive_list_prepares_with_a_runtime_recursive_variant_argument
-            runtime_memory_lowering_fixture_prepares_and_emits_all_builders
-            surface_iteration_erases_iterator_sum_dispatch
-            engine_entry_points_prepare_and_the_game_loop_emits_wasm
-          )
-          for test_name in "${tests[@]}"; do
-            echo "===== $test_name ====="
-            timeout 90s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --nocapture --test-threads=1
-            status=$?
-            echo "===== status $status: $test_name ====="
-            if [ "$status" -ne 0 ]; then failures=1; fi
-          done
-          exit "$failures"
+        run: timeout 90s cargo test --manifest-path compiler/Cargo.toml an_empty_scratch_argument_uses_the_contextual_result_representation -- --nocapture --test-threads=1
