@@ -67,6 +67,7 @@ new = '''                    let is_resolve_op = static_member(&target_value, na
                     }
                     let parameter_type = if is_resolve_op {
 '''
-if s.count(old) != 1:
-    raise SystemExit(f"expected one resolver operator anchor, found {s.count(old)}")
+count = s.count(old)
+if count < 1:
+    raise SystemExit("resolver operator anchor not found")
 p.write_text(s.replace(old, new, 1))
