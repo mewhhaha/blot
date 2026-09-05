@@ -2,8 +2,9 @@ open import "blot:prelude"
 open import "blot:pipeline"
 let original = [1, 2, 3, 4]
 let result :: Int
-let result = original
-  |> map_with (fn value => value + 1)
-  |> filter_with (fn value => value > 3)
-  |> fold_with (fn (total, value) => total + value) 0
+let result =
+  original
+    |> map_with (fn value => value + 1)
+    |> filter_with (fn value => value > 3)
+    |> fold_with (fn (total, value) => total + value) 0
 return result + sum original

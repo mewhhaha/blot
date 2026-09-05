@@ -9,6 +9,7 @@ const readable_scalar = fn field_type => case Reflect.of field_type of
     #Int => field_type
     #Text => field_type
     _ => @fail "derive.fields supports only integer and text scalar fields"
+
   _ => @fail "derive.fields refuses owned, opaque, compound, and effectful fields"
 
 const fields = fn schema => case Reflect.of schema of
@@ -26,6 +27,7 @@ const fields = fn schema => case Reflect.of schema of
       }
 
     return schema <+ { .fields = descriptors; }
+
   _ => @fail "derive.fields requires a structural record schema"
 
 // Integer-only product derivation. Length-framed names make punctuation in a
@@ -34,6 +36,7 @@ const integer_record = fn schema => case Reflect.of schema of
   #Shape shape => do:
     if Int.eq (@array.len (@shape.names shape)) 0:
       return @fail "derive.integer_record requires at least one field"
+
     let evidence = fields schema
     let encode = fn value => ""
     for name in Iter.items (@shape.names shape):
@@ -46,6 +49,7 @@ const integer_record = fn schema => case Reflect.of schema of
       encode := fn value => previous value <> label <> Text.of_int (read value) <> ";"
 
     return evidence <+ { .encode = fn value => encode (@satisfies value schema); }
+
   _ => @fail "derive.integer_record requires a structural record schema"
 
 return { .fields = fields; .integer_record = integer_record; }
