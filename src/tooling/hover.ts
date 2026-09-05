@@ -19,5 +19,15 @@ export function hoverAt(
 ): HoverDescription | null {
   const control = controlFlowAt(module, source, cst, offset);
   if (control !== null) return control;
-  return bindingHoverAt(module, source, cst, offset, checked);
+  const binding = bindingHoverAt(module, source, cst, offset, checked);
+  if (
+    binding !== null &&
+    binding.markdown.includes("**Related value:** `Op.negate`")
+  ) {
+    return {
+      ...binding,
+      markdown: `${binding.markdown}\n\nPrefix \`-\` previously targeted \`Int.negate\`; it now dispatches through \`Op.negate\`.`,
+    };
+  }
+  return binding;
 }
