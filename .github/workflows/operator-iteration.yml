@@ -5,7 +5,7 @@ on:
     branches:
       - codex/complete-operator-dispatch-20260905
     paths:
-      - scripts/operator-iteration.patch
+      - scripts/operator-iteration.patch.gz.b64
 
 permissions:
   contents: write
@@ -18,11 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Apply the exact reviewed patch on this draft branch
+        shell: bash
         run: |
-          git apply --index --whitespace=error scripts/operator-iteration.patch
-          git rm scripts/operator-iteration.patch
+          base64 --decode scripts/operator-iteration.patch.gz.b64 | gzip --decompress > "$RUNNER_TEMP/operator-iteration.patch"
+          git apply --index --whitespace=error "$RUNNER_TEMP/operator-iteration.patch"
+          git rm scripts/operator-iteration.patch.gz.b64
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Apply tested operator-dispatch development increment'
+          git commit -m 'Preserve qualified member constraints through inference and module boundaries'
           git push origin HEAD:refs/heads/codex/complete-operator-dispatch-20260905
