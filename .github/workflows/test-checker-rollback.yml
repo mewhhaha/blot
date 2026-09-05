@@ -1,0 +1,64 @@
+name: Test checker-only rollback
+
+on:
+  push:
+    branches:
+      - codex/unify-rust-diagnose
+    paths:
+      - .github/workflows/test-checker-rollback.yml
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Roll back checker core to last stable operator checkpoint
+        shell: bash
+        run: |
+          git checkout e319a3edefce7190a36a9819b947aafee848571b -- compiler/src/typecheck.rs compiler/src/member_constraints.rs
+          git diff --check
+      - name: Compile once
+        run: cargo test --manifest-path compiler/Cargo.toml --no-run
+      - name: Run critical regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            an_empty_scratch_argument_uses_the_contextual_result_representation
+            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
+            development_provider_boolean_result_remains_a_reload_boundary
+            engine_entry_points_prepare_and_the_game_loop_emits_wasm
+            a_rebound_loop_element_stays_local_to_each_iteration
+            a_conditionally_rebound_loop_element_stays_local_to_each_iteration
+            qualified_scheme_instantiates_independently_without_source_specialization
+            qualified_requirement_rejects_missing_or_mixed_members
+            qualified_interface_round_trip_keeps_requirements
+            failed_qualified_speculation_restores_pending_requirements
+            projected_scheme_keeps_intermediate_member_application_constraints
+            upper_domain_evidence_resolves_members_without_defaulting_unknowns
+            refinement_does_not_invent_an_integer_domain
+            source_member_result_is_not_replaced_by_operator_spelling
+            source_member_refined_result_survives_dispatch
+            source_member_parameter_signature_is_checked_even_when_body_ignores_it
+            partially_applied_primitive_member_retains_its_arguments
+            one_inferred_operator_function_is_reusable_across_numeric_domains
+            prefix_negation_uses_the_selected_numeric_member
+            generic_dispatch_keeps_call_site_domains_without_prelude
+            generic_dispatch_rejects_unsupported_operands_even_with_unused_result
+            generic_attached_members_select_each_call_site_domain
+            imported_dispatcher_does_not_reuse_an_earlier_specialization
+            inferred_members_are_not_limited_to_standard_operator_names
+          )
+          for test_name in "${tests[@]}"; do
+            echo "===== $test_name ====="
+            timeout 45s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --test-threads=1 --nocapture
+          done
