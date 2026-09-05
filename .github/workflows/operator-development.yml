@@ -31,6 +31,14 @@ jobs:
       - name: Apply and generate incremental source changes
         run: |
           if test -f scripts/operator-next.py; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/operator-next.py')
+          s = p.read_text()
+          if "section(h, 'runtime_type'" in s:
+              s = s.replace('    if not match:\n', "    if name == 'runtime_type':\n        match = list(re.finditer(r'(?m)^([ \\t]*)fn runtime_type\\(', text))[-1]\n    if not match:\n")
+              p.write_text(s)
+          PY
             python3 scripts/operator-next.py
             rm scripts/operator-next.py
             deno task generate:qcore
@@ -51,3 +59,18 @@ jobs:
         run: cargo test --manifest-path compiler/Cargo.toml --quiet
       - name: Check Rust lint
         run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+      - name: Prepare an isolated reproduction workspace
+        if: always()
+        run: |
+          mkdir -p /tmp/operator-repro
+          git ls-files -z | tar --null --ignore-failed-read -T - -czf /tmp/operator-repro/source.tar.gz
+          cargo fetch --manifest-path compiler/Cargo.toml
+          tar -C "$HOME/.cargo" -czf /tmp/operator-repro/registry.tar.gz registry
+          toolchain=$(rustc --print sysroot)
+          tar -C "$toolchain" -czf /tmp/operator-repro/toolchain.tar.gz bin lib libexec
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: operator-reproduction
+          path: /tmp/operator-repro
+          retention-days: 1
