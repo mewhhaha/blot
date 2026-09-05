@@ -20,37 +20,31 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
-      - name: Apply an incremental source patch when present
+      - name: Apply and generate incremental source changes
         run: |
           if test -f scripts/operator-next.py; then
-            python3 - <<'PY'
-          from pathlib import Path
-          p = Path('scripts/operator-next.py')
-          s = p.read_text()
-          if "def section(name, transform):" in s:
-              lines = s.splitlines()
-              lines = ["    following = re.search(r'(?m)^' + re.escape(match.group(1)) + r'(?:pub(?:\\([^)]*\\))?\\s+)?fn \\w+\\(', s[match.end():])" if line.strip().startswith('following = re.search(') else line for line in lines]
-              p.write_text('\n'.join(lines) + '\n')
-          PY
             python3 scripts/operator-next.py
             rm scripts/operator-next.py
+            deno task generate:qcore
+            deno task generate:compiler-schema
             cargo fmt --manifest-path compiler/Cargo.toml
+            deno fmt LANGUAGE.md spec/TYPECHECKING.md spec/QCORE.md qcore/schema.json
             git diff --check
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add -u
             git add compiler/src/*.rs
-            git commit -m 'Apply incremental generic operator implementation'
+            git commit -m 'Preserve qualified member requirements across compiler boundaries'
             git push origin HEAD:refs/heads/codex/complete-operator-dispatch-20260905
           fi
-      - name: Locate inference boundary helpers
-        if: always()
-        run: grep -nE 'fn (freshen|instantiate|constrain|settle|generalize|residual|flatten|inflate|closed|copy_boundary|reify|show)|struct Checker|enum Typing|struct ResidualVariable' compiler/src/typecheck.rs
       - name: Check compiler boundaries
         run: cargo check --manifest-path compiler/Cargo.toml --tests --message-format=short
       - name: Test the full Rust compiler
