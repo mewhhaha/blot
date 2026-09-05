@@ -1,4 +1,4 @@
-name: Integration source snapshot
+name: Integration validation tools
 
 on:
   push:
@@ -9,18 +9,32 @@ permissions:
   contents: read
 
 jobs:
-  source:
+  tools:
     if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/unify-operator-language-review-20260905'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
         with:
-          persist-credentials: false
-      - name: Archive tracked source without credentials or Git configuration
-        run: git archive HEAD | gzip > "${{ runner.temp }}/integration-source.tar.gz"
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Package compiler tools without repository credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$RUNNER_TEMP/integration-tools"
+          sysroot="$(rustc --print sysroot)"
+          mkdir -p "$destination/bin" "$destination/lib/rustlib"
+          cp "$(command -v deno)" "$destination/bin/deno"
+          cp "$sysroot/bin/cargo-clippy" "$sysroot/bin/clippy-driver" "$sysroot/bin/cargo-fmt" "$destination/bin/"
+          cp -a "$sysroot/lib/rustlib/wasm32-unknown-unknown" "$destination/lib/rustlib/"
+          tar -czf "$RUNNER_TEMP/integration-tools.tar.gz" -C "$destination" .
       - uses: actions/upload-artifact@v7
         with:
-          name: integration-source-${{ github.sha }}
-          path: ${{ runner.temp }}/integration-source.tar.gz
+          name: integration-validation-tools
+          path: ${{ runner.temp }}/integration-tools.tar.gz
           retention-days: 1
