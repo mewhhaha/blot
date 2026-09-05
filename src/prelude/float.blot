@@ -55,4 +55,4 @@ return {
     .partial_cmp = f32_partial_cmp;
     .cmp_exn = F32.cmp;
   };
-}
+  }
