@@ -17,6 +17,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - name: Apply candidate qualified-runtime reification repair
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/typecheck.rs')
+          source = path.read_text()
+          needle = '        Type::Range { domain, low, high } => {\n'
+          replacement = (
+              '        // Qualified requirements remain part of the checked type and serialized boundary.\n'
+              '        // Runtime closure signatures are attached only after checking has established those\n'
+              '        // obligations, so the runtime Value form carries the reified body representation.\n'
+              '        Type::Qualified { body, .. } => reify_type_with_holes(context, body, next_hole),\n'
+              + needle
+          )
+          if source.count(needle) != 1:
+              raise SystemExit(f'expected one reify Range arm, found {source.count(needle)}')
+          path.write_text(source.replace(needle, replacement))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
       - name: Run targeted integration regressions
         shell: bash
         run: |
