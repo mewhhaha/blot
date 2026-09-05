@@ -10096,3 +10096,7 @@ return F32.add (-1) 2.5
         raw.encode_utf16().collect()
     }
 }
+
+#[cfg(test)]
+#[path = "operator_dispatch_tests.rs"]
+mod operator_dispatch_tests;
