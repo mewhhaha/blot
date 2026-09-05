@@ -1,0 +1,50 @@
+name: Finalize operator repair metadata
+
+on:
+  push:
+    branches:
+      - integrate/operator-dispatch-language-review
+    paths:
+      - .github/workflows/operator-metadata-finalize.yml
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/integrate/operator-dispatch-language-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Regenerate from the actual integrated source and remove this helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+          deno run --allow-read scripts/generate_language_health.ts --check
+          deno fmt --check LANGUAGE.md spec/TYPECHECKING.md spec/STAGING.md src/tooling/control_flow.ts src/language_service.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          changes = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          allowed = {'generated/language-health.json', 'src/diagnostic_codes.generated.ts', 'STDLIB.md'}
+          assert changes <= allowed, f'Unexpected generated changes: {changes - allowed}'
+          assert subprocess.check_output(['git', 'show', 'e60b49dac2ae5100fb3e0b5ec46b343f9ff5a060:.github/workflows/ci.yml']) == Path('.github/workflows/ci.yml').read_bytes(), 'Standard CI changed'
+          Path('.github/workflows/operator-metadata-finalize.yml').unlink()
+          PY
+          git diff --check
+          git add generated/language-health.json src/diagnostic_codes.generated.ts STDLIB.md .github/workflows/operator-metadata-finalize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Refresh generated language health after compiler repair'
+          git push origin HEAD:refs/heads/integrate/operator-dispatch-language-review
