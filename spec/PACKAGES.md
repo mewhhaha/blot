@@ -45,6 +45,14 @@ meaning. A bare specifier selects `.`; a package subpath selects the
 corresponding `./subpath` export. Export targets are relative paths confined to
 the package directory.
 
+Package names, subpaths, and the portion of an export key after `./` consist of
+nonempty `/`-separated segments. A segment cannot be `.` or `..` and cannot
+contain a backslash or NUL. A scoped name requires a nonempty scope after `@`
+and a package-name segment. The root export key `.` remains valid. Malformed
+specifiers are rejected before looking for a manifest, so path normalization
+cannot turn a package name into a different package directory. This rule does
+not constrain ordinary relative source imports.
+
 ## 3. Reusable module capsules
 
 A reusable `.blotc` capsule is not final WebAssembly. Imported compile-time
@@ -70,10 +78,13 @@ share them and select their versions normally.
 Loading validates the schema, compression, canonical hash, arena references,
 spans, graph acyclicity, import uniqueness, include uniqueness, and agreement
 between AST dependency expressions and declared edges before any module closure
-is exposed. External edges then resolve as ordinary imports from the installed
-capsule's package location. Thus the capsule removes package-owned source reads,
-lexing, parsing, CST materialisation, fixity folding, and lowering. It does not
-claim to remove consumer checking or specialization.
+is exposed. Dependency agreement compares the number and complete text of the
+unique specifiers, not a delimiter-joined representation: a delimiter can itself
+occur in text and cannot certify equality of two sets. External edges then
+resolve as ordinary imports from the installed capsule's package location. Thus
+the capsule removes package-owned source reads, lexing, parsing, CST
+materialisation, fixity folding, and lowering. It does not claim to remove
+consumer checking or specialization.
 
 Later schemas may add a settled closed interface, specialization capsule, stable
 generative identities, and reusable safety or ownership certificates. Such a
@@ -124,9 +135,17 @@ they are distinct products and are not interchangeable.
 ## 6. Determinism and future certification
 
 Capsule modules, imports, includes, AST arenas, and JSON members have canonical
-order. The gzip encoding is deterministic. For a fixed checked graph, two builds
-emit byte-identical capsules. The content hash covers every compressed byte that
-can affect reconstructed source semantics.
+order. Host-owned module identifiers and import/include specifiers are ordered
+lexicographically by UTF-16 code units, independently of the host locale. Export
+and dependency traversal use the same order when assigning capsule identifiers.
+Rust retains ownership of the canonical AST bytes; host ordering does not
+reinterpret those bytes. The gzip encoding is deterministic. For a fixed checked
+graph, two builds emit byte-identical capsules. The content hash covers every
+compressed byte that can affect reconstructed source semantics.
+
+The decoder continues to accept valid existing capsules regardless of the
+producer's ordering. Canonicalizing future output does not change the capsule
+schema, the AST contract, or the meaning of an existing content hash.
 
 A future certificate-bearing capsule key additionally includes the compiler
 semantic schema, generated parser plan, primitive catalog, dependency logical

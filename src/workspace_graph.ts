@@ -37,6 +37,7 @@ interface WorkspaceState {
   overlays: Map<string, OverlayRevision>;
   dirty: Set<string>;
   roots: Set<string>;
+  packageRefreshRoots: Set<string>;
   overlaySequence: number;
 }
 
@@ -53,6 +54,7 @@ export class WorkspaceGraph {
     overlays: new Map(),
     dirty: new Set(),
     roots: new Set(),
+    packageRefreshRoots: new Set(),
     overlaySequence: 0,
   };
   readonly #pinnedPaths = new Set<string>();
@@ -77,6 +79,9 @@ export class WorkspaceGraph {
       staged.loaded,
       new Set([...staged.overlays.keys(), ...this.#pinnedPaths]),
     );
+    // Resolution inputs may have changed without changing any source bytes.
+    // Other roots must observe that possibility on their next request too.
+    staged.packageRefreshRoots = new Set(staged.roots);
     const loaded = await this.#loadCurrent(absolute, staged);
     this.#state = staged;
     return loaded;
@@ -157,6 +162,7 @@ export class WorkspaceGraph {
   releaseRoot(path: string): void {
     const absolute = resolve(path);
     if (!this.#state.roots.delete(absolute)) return;
+    this.#state.packageRefreshRoots.delete(absolute);
     const activePaths = workspaceActivePaths(this.#state);
     for (const [cachedPath, loaded] of this.#state.loaded) {
       if (this.#pinnedPaths.has(cachedPath)) continue;
@@ -232,20 +238,29 @@ export class WorkspaceGraph {
     path: string,
     state: WorkspaceState,
   ): Promise<Loaded> {
+    const refreshPackageImports = state.packageRefreshRoots.has(path);
     const cached = state.loaded.get(path);
-    if (cached !== undefined) {
-      return await load(path, state.loaded, [], this.#inspect);
-    }
     const overlay = state.overlays.get(path);
-    if (overlay !== undefined) {
-      return await loadSource(
+    let loaded: Loaded;
+    if (cached === undefined && overlay !== undefined) {
+      loaded = await loadSource(
         path,
         overlay.source,
         state.loaded,
         this.#inspect,
+        refreshPackageImports,
+      );
+    } else {
+      loaded = await load(
+        path,
+        state.loaded,
+        [],
+        this.#inspect,
+        refreshPackageImports,
       );
     }
-    return await load(path, state.loaded, [], this.#inspect);
+    state.packageRefreshRoots.delete(path);
+    return loaded;
   }
 
   async #refreshKnownChanges(
@@ -269,6 +284,9 @@ export class WorkspaceGraph {
     changedInputs: ReadonlySet<string>,
     state: WorkspaceState,
   ): Promise<void> {
+    // Consuming the file dirty set for one root must not hide a resolution
+    // change from another open root. Each clears its own pending refresh.
+    state.packageRefreshRoots = new Set(state.roots);
     const invalidatedModules = invalidateLoadedInputs(
       state.loaded,
       changedInputs,
@@ -291,6 +309,7 @@ export class WorkspaceGraph {
       overlays: new Map(this.#state.overlays),
       dirty: new Set(this.#state.dirty),
       roots: new Set(this.#state.roots),
+      packageRefreshRoots: new Set(this.#state.packageRefreshRoots),
       overlaySequence: this.#state.overlaySequence,
     };
   }

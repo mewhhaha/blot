@@ -107,7 +107,10 @@ pnpm compiler:download
 ```
 
 The download additionally validates the complete compiler-input digest before
-installing anything.
+installing anything. Compiler-input paths use locale-independent UTF-16
+code-unit order. Artifacts recorded with the older locale-sensitive ordering
+must be rebuilt or downloaded from a matching newer CI run; changing that
+ordering changes the recorded identity even when the Rust source is unchanged.
 
 ## Host ABI
 

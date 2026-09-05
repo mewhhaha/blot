@@ -51,7 +51,9 @@ key_P(m) = H(local_P(m), [(specifier_i, digest(key_P(dep_i)))])
 The digest algorithm and canonical encoding are part of the process-local
 implementation and the persistent cache namespace. Recursively embedding full
 child key material is unnecessary and would repeat transitive bytes at every
-edge.
+edge. Host-owned import/include configuration and transport entries use
+locale-independent UTF-16 code-unit ordering. Ambient collation settings cannot
+change the digest of the same graph or its transport order.
 
 An editor buffer supplies exact root-module bytes for another revision. Imports
 and includes retain their resolved revisions. In-memory checking uses the same
@@ -85,14 +87,15 @@ when formatting or editor tooling explicitly requests one. Its module handles
 and revision identities remain private to that inspection session.
 
 Node resolves the reported sites and checks them against its Baba-backed syntax
-view. The Rust result remains the source of semantic graph edges; parity failure
-rejects the candidate. After the complete source graph succeeds, the host
-installs an accepted source AST in the resident semantic session through shared
-immutable Rust ownership and verifies the same dependency sets before
-configuration. Portable-AST inputs remain independently decoded. Sharing an AST
-allocation does not share a module revision, frontend state, configuration,
-checked boundary, or semantic fact; no inspection-session identity authorizes
-semantic cache reuse.
+view. Dependency parity compares complete specifier sets by cardinality and
+string equality; joining text with a sentinel does not establish equality. The
+Rust result remains the source of semantic graph edges; parity failure rejects
+the candidate. After the complete source graph succeeds, the host installs an
+accepted source AST in the resident semantic session through shared immutable
+Rust ownership and verifies the same dependency sets before configuration.
+Portable-AST inputs remain independently decoded. Sharing an AST allocation does
+not share a module revision, frontend state, configuration, checked boundary, or
+semantic fact; no inspection-session identity authorizes semantic cache reuse.
 
 The resident host memoizes local payload and direct-configuration digests by
 immutable loaded-node identity. An unchanged node therefore does not serialize
@@ -100,6 +103,21 @@ its source or portable AST again during graph synchronization. Rebinding an
 importer creates a new loaded node, so its direct-edge digest is recomputed;
 replacing a payload likewise creates a new identity. This memoization changes
 work only and does not weaken exact payload or configuration comparison.
+
+A full workspace refresh re-resolves bare package edges even when the importing
+source and previously selected target bytes are unchanged. Manifest edits,
+changes to the nearest installed package, and availability of a preferred
+capsule can change the selected target independently of those bytes. A refresh
+with an explicitly nonempty set of changed inputs also re-resolves package
+edges, including transitive edges. An unchanged resolution retains the loaded
+node; a changed resolution replaces its graph wrapper without reparsing the
+unchanged importer. Pending package refreshes belong to each open root:
+refreshing one root must not consume another root's resolution invalidation.
+They are staged with the candidate graph and cleared only for a successfully
+loaded root. A known-change refresh with neither changed inputs nor a pending
+package refresh for its root trusts the committed resolution and performs no
+filesystem reads. Callers of that fast path are responsible for reporting
+package-resolution changes.
 
 If source inspection, dependency resolution, include loading, or syntax parity
 fails, the workspace retains its prior loaded graph, roots, overlays, dirty set,

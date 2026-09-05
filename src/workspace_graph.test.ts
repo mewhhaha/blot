@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { load, type Loaded } from "./load.ts";
+import { buildPackage } from "./package.ts";
+import { PACKAGE_FORMAT_VERSION } from "./package_format.ts";
+import { Compiler } from "./compiler/session.ts";
 import { WorkspaceGraph } from "./workspace_graph.ts";
 
 test("a pinned module is not reread from disk", async () => {
@@ -432,6 +435,232 @@ test("a failed known refresh leaves the previous graph active", async () => {
       "return 2\n",
     );
     assert.equal(graph.node(dependency)?.dirty, false);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("package manifest edits rebind cached imports without reparsing the importer", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-package-"));
+  const root = join(directory, "entry.blot");
+  const packageRoot = join(directory, "node_modules", "answer");
+  const manifest = join(packageRoot, "blot.json");
+  const graph = new WorkspaceGraph();
+  const describe = (source: string): string =>
+    JSON.stringify({
+      schema: "blot-package",
+      version: PACKAGE_FORMAT_VERSION,
+      exports: { ".": { source } },
+    });
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(root, 'return import "answer"\n');
+    await writeFile(join(packageRoot, "first.blot"), "return 1\n");
+    await writeFile(join(packageRoot, "second.blot"), "return 2\n");
+    await writeFile(manifest, describe("./first.blot"));
+    const first = await graph.refresh(root);
+
+    await writeFile(manifest, describe("./second.blot"));
+    const second = await graph.refresh(root);
+    assert.strictEqual(second.module, first.module);
+    assert.equal(second.dependencies.get("answer")?.source, "return 2\n");
+
+    await writeFile(manifest, describe("./first.blot"));
+    graph.markDirty(manifest);
+    const reverted = await graph.refreshAfterKnownChanges(root);
+    assert.equal(reverted.dependencies.get("answer")?.source, "return 1\n");
+
+    await rename(manifest, `${manifest}.unavailable`);
+    assert.strictEqual(await graph.refreshAfterKnownChanges(root), reverted);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("a warm compiler agrees with a fresh compiler after a package export moves", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-compiler-package-"));
+  const root = join(directory, "entry.blot");
+  const packageRoot = join(directory, "node_modules", "answer");
+  const manifest = join(packageRoot, "blot.json");
+  const compiler = await Compiler.create();
+  const describe = (source: string): string =>
+    JSON.stringify({
+      schema: "blot-package",
+      version: PACKAGE_FORMAT_VERSION,
+      exports: { ".": { source } },
+    });
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(root, 'return import "answer"\n');
+    await writeFile(join(packageRoot, "first.blot"), "return 1\n");
+    await writeFile(join(packageRoot, "second.blot"), "return 2\n");
+    await writeFile(manifest, describe("./first.blot"));
+    assert.equal((await compiler.evaluate(root)).display, "1");
+    await writeFile(manifest, describe("./second.blot"));
+    const fresh = await Compiler.create();
+    try {
+      const expected = await fresh.evaluate(root);
+      assert.equal(expected.display, "2");
+      assert.deepEqual(await compiler.evaluate(root), expected);
+    } finally {
+      fresh.destroy();
+    }
+  } finally {
+    compiler.destroy();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("a full refresh notices a newly available package capsule", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-workspace-capsule-"));
+  const root = join(directory, "entry.blot");
+  const packageRoot = join(directory, "node_modules", "answer");
+  const manifest = join(packageRoot, "blot.json");
+  const graph = new WorkspaceGraph();
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(root, 'return import "answer"\n');
+    await writeFile(join(packageRoot, "mod.blot"), "return 42\n");
+    await writeFile(
+      manifest,
+      JSON.stringify({
+        schema: "blot-package",
+        version: PACKAGE_FORMAT_VERSION,
+        exports: { ".": { source: "./mod.blot", built: "./mod.blotc" } },
+      }),
+    );
+    const first = await graph.refresh(root);
+    assert.equal(first.dependencies.get("answer")?.storage.tag, "source");
+    await buildPackage(manifest);
+    const second = await graph.refresh(root);
+    assert.strictEqual(second.module, first.module);
+    assert.equal(second.dependencies.get("answer")?.storage.tag, "capsule");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("a package resolution failure preserves the committed graph", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "blot-workspace-package-failure-"),
+  );
+  const root = join(directory, "entry.blot");
+  const packageRoot = join(directory, "node_modules", "answer");
+  const manifest = join(packageRoot, "blot.json");
+  const graph = new WorkspaceGraph();
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(root, 'return import "answer"\n');
+    await writeFile(join(packageRoot, "mod.blot"), "return 42\n");
+    const valid = JSON.stringify({
+      schema: "blot-package",
+      version: PACKAGE_FORMAT_VERSION,
+      exports: { ".": { source: "./mod.blot" } },
+    });
+    await writeFile(manifest, valid);
+    const first = await graph.refresh(root);
+    await writeFile(manifest, "{");
+    graph.markDirty(manifest);
+    await assert.rejects(() => graph.refreshAfterKnownChanges(root));
+    assert.strictEqual(graph.committedRevision(root), first);
+    await writeFile(manifest, valid);
+    assert.strictEqual(await graph.refreshAfterKnownChanges(root), first);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("cached capsule edges notice a nearer package installation", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "blot-capsule-package-refresh-"),
+  );
+  const root = join(directory, "entry.blot");
+  const wrapper = join(directory, "node_modules", "wrapper");
+  const graph = new WorkspaceGraph();
+  const manifest = JSON.stringify({
+    schema: "blot-package",
+    version: PACKAGE_FORMAT_VERSION,
+    exports: { ".": { source: "./mod.blot" } },
+  });
+  try {
+    const outer = join(directory, "node_modules", "answer");
+    await mkdir(outer, { recursive: true });
+    await writeFile(join(outer, "blot.json"), manifest);
+    await writeFile(join(outer, "mod.blot"), "return 1\n");
+    await mkdir(wrapper);
+    await writeFile(join(wrapper, "mod.blot"), 'return import "answer"\n');
+    const wrapperManifest = join(wrapper, "blot.json");
+    await writeFile(
+      wrapperManifest,
+      JSON.stringify({
+        schema: "blot-package",
+        version: PACKAGE_FORMAT_VERSION,
+        exports: { ".": { source: "./mod.blot", built: "./mod.blotc" } },
+      }),
+    );
+    await buildPackage(wrapperManifest);
+    await writeFile(root, 'return import "wrapper"\n');
+    const first = await graph.refresh(root);
+    const previous = first.dependencies.get("wrapper");
+    assert.equal(previous?.storage.tag, "capsule");
+    assert.equal(previous?.dependencies.get("answer")?.source, "return 1\n");
+
+    const nearer = join(wrapper, "node_modules", "answer");
+    await mkdir(nearer, { recursive: true });
+    await writeFile(join(nearer, "blot.json"), manifest);
+    await writeFile(join(nearer, "mod.blot"), "return 2\n");
+    const second = await graph.refresh(root);
+    const rebound = second.dependencies.get("wrapper");
+    assert.strictEqual(second.module, first.module);
+    assert.strictEqual(rebound?.module, previous?.module);
+    assert.equal(rebound?.storage.tag, "capsule");
+    assert.equal(rebound?.dependencies.get("answer")?.source, "return 2\n");
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("package changes remain pending for every open root", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "blot-package-multiple-roots-"),
+  );
+  const packageRoot = join(directory, "node_modules", "answer");
+  const firstRoot = join(directory, "first.blot");
+  const secondRoot = join(directory, "second.blot");
+  const manifest = join(packageRoot, "blot.json");
+  const graph = new WorkspaceGraph();
+  const describe = (source: string): string =>
+    JSON.stringify({
+      schema: "blot-package",
+      version: PACKAGE_FORMAT_VERSION,
+      exports: { ".": { source } },
+    });
+  try {
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(firstRoot, 'return import "answer"\n');
+    await writeFile(secondRoot, 'return import "answer"\n');
+    await writeFile(join(packageRoot, "old.blot"), "return 1\n");
+    await writeFile(join(packageRoot, "new.blot"), "return 2\n");
+    await writeFile(manifest, describe("./old.blot"));
+    await graph.refresh(firstRoot);
+    const previousSecond = await graph.refresh(secondRoot);
+    await writeFile(manifest, describe("./new.blot"));
+    graph.markDirty(manifest);
+    const first = await graph.refreshAfterKnownChanges(firstRoot);
+    assert.equal(first.dependencies.get("answer")?.source, "return 2\n");
+    const second = await graph.refreshAfterKnownChanges(secondRoot);
+    assert.strictEqual(second.module, previousSecond.module);
+    assert.equal(second.dependencies.get("answer")?.source, "return 2\n");
+
+    await writeFile(manifest, describe("./old.blot"));
+    await graph.refresh(firstRoot);
+    const reverted = await graph.refreshAfterKnownChanges(secondRoot);
+    assert.equal(reverted.dependencies.get("answer")?.source, "return 1\n");
+    await rename(manifest, `${manifest}.unavailable`);
+    assert.strictEqual(
+      await graph.refreshAfterKnownChanges(secondRoot),
+      reverted,
+    );
   } finally {
     await rm(directory, { recursive: true });
   }

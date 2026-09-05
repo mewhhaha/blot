@@ -88,11 +88,11 @@ export async function runLanguageServer(
     if (id === undefined) return;
     requestDocuments.set(id, uri);
     workTail = workTail.then(async () => {
-      if (cancelled.delete(id)) {
-        await reject(writer, id, -32800, "request cancelled");
-        return;
-      }
       try {
+        if (cancelled.delete(id)) {
+          await reject(writer, id, -32800, "request cancelled");
+          return;
+        }
         const result = await operation();
         await respondUnlessCancelled(writer, cancelled, id, result);
       } catch (error) {
@@ -101,6 +101,7 @@ export async function runLanguageServer(
         await reject(writer, id, -32603, messageText);
       } finally {
         requestDocuments.delete(id);
+        cancelled.delete(id);
       }
     });
   };

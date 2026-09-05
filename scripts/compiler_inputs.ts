@@ -1,4 +1,5 @@
 import { relative } from "@std/path";
+import { compareCodeUnits } from "../src/text_order.ts";
 import { sha256 } from "../src/compiler/artifact.ts";
 
 const repository = new URL("../", import.meta.url);
@@ -11,7 +12,7 @@ export async function compilerInputIdentity(): Promise<string> {
     new URL("../src/compiler/host_abi.ts", import.meta.url),
   ];
   await collectRustSources(new URL("../compiler/src/", import.meta.url), files);
-  files.sort((left, right) => left.pathname.localeCompare(right.pathname));
+  files.sort((left, right) => compareCodeUnits(left.pathname, right.pathname));
   const parts: Uint8Array[] = [];
   let length = 0;
   const encoder = new TextEncoder();

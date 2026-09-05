@@ -250,6 +250,12 @@ may name both ordinary source and a built `.blotc` module capsule. A valid built
 capsule is preferred; a missing, corrupt, or unsupported capsule falls back to
 the manifest's source target. Import cycles are rejected.
 
+Package names and subpaths use `/` separators. An export key is `.` or
+`./subpath`. Each segment in a package name or subpath must be nonempty, must
+not be `.` or `..`, and must not contain a backslash or NUL. A scoped package
+must contain both a nonempty `@scope` and a package name. These restrictions do
+not change ordinary relative file imports.
+
 Package export paths are relative to and confined within their package
 directory. Package JavaScript is not evaluated during Blot resolution. A
 `.blotc` library capsule bundles its already checked package-owned lowered AST

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
+import { compareCodeUnits } from "./text_order.ts";
 import { Compiler } from "./compiler/session.ts";
 import { load, type Loaded, refreshLoadedModules } from "./load.ts";
 import {
@@ -32,7 +33,7 @@ export async function buildPackage(
   try {
     for (
       const [name, exported] of [...manifest.exports].sort(([left], [right]) =>
-        left.localeCompare(right)
+        compareCodeUnits(left, right)
       )
     ) {
       if (exported.built === undefined) {
@@ -52,7 +53,7 @@ export async function buildPackage(
       builtTargets.add(exported.built);
       await compiler.check(exported.source);
       const asts = await compiler.portableGraph(exported.source);
-      const root = await load(exported.source);
+      const root = await load(exported.source, undefined, [], undefined, true);
       const payload = moduleCapsule(root, packageRoot, exported.source, asts);
       const source = await encodeModuleCapsule(payload);
       prepared.push({
@@ -97,7 +98,7 @@ function moduleCapsule(
     }
     for (
       const [specifier, dependency] of [...loaded.dependencies].sort(
-        ([left], [right]) => left.localeCompare(right),
+        ([left], [right]) => compareCodeUnits(left, right),
       )
     ) {
       if (isAbsolute(specifier)) {

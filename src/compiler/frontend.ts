@@ -13,7 +13,7 @@ export async function loadProgram(path: string): Promise<Loaded> {
 /** Refreshes disk-backed inputs, then returns the current root graph. */
 export async function refreshProgram(path: string): Promise<Loaded> {
   await refreshLoadedModules();
-  return await load(path);
+  return await load(path, undefined, [], undefined, true);
 }
 
 export type { Loaded };

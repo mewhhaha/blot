@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compareCodeUnits } from "../text_order.ts";
 import type { Loaded } from "./frontend.ts";
 import { encodePortableModule } from "../syntax/portable.ts";
 
@@ -54,7 +55,7 @@ export function loadedConfigurationDigest(loaded: Loaded): string {
 
   const imports = [...loaded.dependencies]
     .map(([specifier, dependency]) => [specifier, dependency.path] as const)
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) => compareCodeUnits(left, right));
   const includes = [...loaded.includedFiles]
     .map(([specifier, included]) =>
       [
@@ -63,7 +64,7 @@ export function loadedConfigurationDigest(loaded: Loaded): string {
         included.source,
       ] as const
     )
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) => compareCodeUnits(left, right));
   const configurationDigest = digest({ imports, includes });
   configurationDigestByLoaded.set(loaded, configurationDigest);
   return configurationDigest;

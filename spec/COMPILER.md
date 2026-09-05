@@ -696,6 +696,13 @@ A cache key contains every input observed by the phase. Reuse cannot merge
 separate import occurrences, module instances, generative effect atoms, Store
 roots, ownership lineages, or source revisions.
 
+The distribution's compiler-input identity hashes the normalized relative path,
+byte length, and exact bytes of each declared compiler input. Its host-side
+pathname traversal uses locale-independent UTF-16 code-unit order. Changing that
+canonical order changes the input identity and requires regenerating the derived
+compiler artifact manifest; it does not change the compiler-host ABI or
+authorize reuse under a mismatched identity.
+
 Closed interface decoding validates scopes and freshens quantified identities.
 Mutable bounds, worklists, AST object addresses, and fact sinks do not cross the
 cache boundary. A content hash proves transport integrity, not semantic
