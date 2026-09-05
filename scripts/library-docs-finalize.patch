@@ -1,0 +1,153 @@
+diff --git a/LANGUAGE.md b/LANGUAGE.md
+index f276294..3385d64 100644
+--- a/LANGUAGE.md
++++ b/LANGUAGE.md
+@@ -3578,6 +3578,51 @@ constructor, accessors, and metadata attached to the type value.
+ Changing the prelude's public record is a language-library change and must
+ update this specification.
+ 
++### 14.1 Optional source libraries
++
++These modules require explicit imports. They are ordinary Blot source, not
++implicit prelude bindings, new primitives, or alternate semantic authorities.
++
++`import "blot:float"` exports `PartialOrdering` and extended `F64` and `F32`
++namespaces. Each namespace provides `partial_cmp` and `cmp_exn`. For its own
++precision, `partial_cmp` takes two values and returns
++`#Equal | #Greater | #Less | #Unordered`. Either NaN yields `#Unordered`; equal
++signed zeroes and equal infinities yield `#Equal`. This reports a partial order,
++not a total ordering of all floating-point values. `cmp_exn` is an alias for the
++existing comparison that traps on NaN. The module does not change the base
++comparison or implicitly convert already-bound numeric values.
++
++`import "blot:pipeline"` exports pure, configuration-first, data-last adapters:
++
++- `map_with`: `(T -> U) -> [T] -> [U]`;
++- `filter_with`: `(T -> Bool) -> [T] -> [T]`;
++- `fold_with`: `((S, T) -> S) -> S -> [T] -> S`.
++
++The type parameters are independently universally quantified. The final array
++argument is borrowed, as in the corresponding tuple-taking prelude operations.
++Callbacks must be pure. These are ordinary functions used with ordinary `|>`;
++they do not alter application, saturation, or effect handling. The original
++prelude operations remain available.
++
++`import "blot:derive"` exports the restricted `fields` and `integer_record`
++operations. `fields` requires a structural record schema whose fields are
++integer or text scalars, including their supported refinements. It returns the
++schema with attached `.fields` descriptors carrying `.type` and a checked
++`.read` operation. The enclosing schema and the selected field type are checked
++when reading. The read argument is deferred: field-name evidence remains staged,
++not an unrestricted first-class runtime getter. Arrays, functions, opaque,
++owned, and other unsupported field shapes are refused rather than assigned
++unsafe accessors. Reading supported fields does not discharge obligations for
++other owned fields in an input admitted by record width subtyping.
++
++`integer_record` requires a nonempty structural record schema containing only
++integer fields. It adds `.encode`, which checks its input against that schema
++and encodes each field as `N:name=value;`, in reflected declaration order. `N`
++is the Unicode-scalar length of the field name. This is a restricted product
++encoder, not JSON, a decoder, a sum codec, or a general ownership-aware
++reflection facility. These restrictions do not claim to repair general
++static-capture-sensitive runtime specialization.
++
+ ## 15. Runtime and compilation
+ 
+ The Rust evaluator gives runtime and compile-time code the same semantics, apart
+diff --git a/LANGUAGE_REVIEW.md b/LANGUAGE_REVIEW.md
+index aaa3139..cdae03c 100644
+--- a/LANGUAGE_REVIEW.md
++++ b/LANGUAGE_REVIEW.md
+@@ -1,9 +1,9 @@
+ # Language and syntax review implementation
+ 
+-This draft implements part of the review and preserves explicit acceptance
+-criteria for the rest. A test or a design sketch is not an implemented compiler
+-feature. The PR must remain a draft until the open compiler/specification work
+-and integration validation are complete.
++This change ships the bounded library and editor additions listed below. The
++broader review remains a research roadmap, not a claim of completed compiler
++features. `LANGUAGE.md` specifies the optional module contracts and their
++restrictions; unfinished compiler work is separate from this library change.
+ 
+ ## Implemented changes
+ 
+@@ -28,7 +28,7 @@ and integration validation are complete.
+       real Rust/Wasm checker. All markers must be replaced before checking. This
+       is not native typed-hole inference, obligation display, or a sandbox.
+ 
+-## Remaining implementation
++## Deferred compiler and tooling roadmap
+ 
+ - [ ] Stable operator owner identity, coherent selection across phases/imports,
+       and an explicit generic-operation defaulting contract.
+@@ -44,8 +44,8 @@ and integration validation are complete.
+       refinement obligations while refusing incomplete production artifacts.
+ - [ ] LSP document highlights for control-flow targets and effect-polymorphic
+       variants of the pipeline adapters.
+-- [ ] Integrate new public module contracts and corrected existing behavior into
+-      normative `LANGUAGE.md`; reconcile implemented history in `SUGGESTION.md`.
++- [x] Specify the optional module contracts in normative `LANGUAGE.md` and
++      record their bounded implementation status in `SUGGESTION.md`.
+ - [ ] Complete broader cancellation/host-exit auditing and research evaluations.
+ 
+ The research acceptance criteria and two opt-in failing correctness probes live
+@@ -78,6 +78,11 @@ tests, formal checks, Rust lint/formatting, performance gates, and TypeScript
+ checking, then failed at formatting. Its later integration steps did not run.
+ The current PR checks, not that earlier run, determine readiness.
+ 
++The hover and canonical-formatting repairs in #91 passed the complete standard
++Rust/Wasm CI in run 33975519182. The subsequent documentation and integration
++changes are subject to their own unchanged CI checks. Neither result establishes
++that the deferred compiler roadmap is implemented.
++
+ ## Constraints retained
+ 
+ Baba remains the only lexer/parser. Rust/Wasm remains the semantic authority.
+diff --git a/SUGGESTION.md b/SUGGESTION.md
+index ad6906b..031d144 100644
+--- a/SUGGESTION.md
++++ b/SUGGESTION.md
+@@ -281,6 +281,12 @@ the loop shape programs actually write, not that it approaches a general solver.
+ 
+ ## 12. Answer float comparison totally
+ 
++Implemented as an explicit optional library: `blot:float` provides F32/F64
++`partial_cmp` and the existing trapping comparison as `cmp_exn`. The base
++comparison is unchanged. See `LANGUAGE.md` section 14.1 for the contract. The
++following records the motivation, not an outstanding promise to change the
++primitive comparison.
++
+ `F64.cmp` refuses NaN — a diagnostic while compiling and a trap while running —
+ so every runtime float comparison is a potential fault and numeric code pays an
+ `is_nan` pre-check per comparison. IEEE 754 defines the total answer, and
+@@ -300,6 +306,12 @@ split `Array.get` and `@array.get` already make.
+ 
+ ## 13. Return evidence from reflection, not descriptions
+ 
++A restricted source prototype now exists in `blot:derive`: checked scalar-field
++evidence and a nonempty integer-record encoder, with deferred reads and explicit
++refusal of unsupported ownership shapes. See `LANGUAGE.md` section 14.1. General
++consuming extraction, reconstruction, sum derivation, and static-capture-safe
++runtime getters below remain open work; the prototype does not complete them.
++
+ The reflection surface is already the easy kind: `@type.reflect` describes a
+ type the way a `@typeInfo` does, the shape primitives are field access and field
+ membership, a comptime fold partial-evaluating into direct projections (§15) is
+diff --git a/docs/language-review-extensions.md b/docs/language-review-extensions.md
+index aa503b5..31aef7e 100644
+--- a/docs/language-review-extensions.md
++++ b/docs/language-review-extensions.md
+@@ -1,9 +1,9 @@
+ # Language review: library extensions
+ 
+ These modules are ordinary Blot source. They add no primitives, grammar,
+-implicit imports, runtime reflection, or alternate semantic implementation.
+-Normative integration into `LANGUAGE.md` is still required before this draft is
+-ready for review.
++implicit imports, runtime reflection, or alternate semantic implementation. The
++normative contracts and their restrictions are specified in `LANGUAGE.md`
++section 14.1. The compiler research below remains outside this bounded change.
+ 
+ ## Floating-point partial comparison
+ 
