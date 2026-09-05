@@ -11,30 +11,21 @@ permissions:
   contents: read
 
 jobs:
-  compiler-tools:
+  formatter-tools:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
         with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.97.1
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
-      - name: Fetch locked compiler dependencies
-        run: cargo fetch --locked --manifest-path compiler/Cargo.toml
-      - name: Package compiler tools without credentials
+          deno-version: v2.x
+      - name: Package the formatter executable without credentials
         run: |
-          mkdir -p "$RUNNER_TEMP/operator-tools/toolchain" "$RUNNER_TEMP/operator-tools/cargo"
-          SYSROOT="$(rustc --print sysroot)"
-          cp -a "$SYSROOT/bin" "$SYSROOT/lib" "$RUNNER_TEMP/operator-tools/toolchain/"
-          cp -a "$HOME/.cargo/registry" "$RUNNER_TEMP/operator-tools/cargo/"
-          tar -C "$RUNNER_TEMP/operator-tools" -cf - toolchain cargo | xz -T0 -3 > "$RUNNER_TEMP/operator-tools.tar.xz"
+          mkdir -p "$RUNNER_TEMP/operator-format-tools"
+          cp "$(command -v deno)" "$RUNNER_TEMP/operator-format-tools/deno"
+          tar -C "$RUNNER_TEMP/operator-format-tools" -czf "$RUNNER_TEMP/operator-format-tools.tar.gz" deno
       - uses: actions/upload-artifact@v4
         with:
-          name: operator-development-tools
-          path: ${{ runner.temp }}/operator-tools.tar.xz
+          name: operator-format-tools
+          path: ${{ runner.temp }}/operator-format-tools.tar.gz
           retention-days: 1
           compression-level: 0
