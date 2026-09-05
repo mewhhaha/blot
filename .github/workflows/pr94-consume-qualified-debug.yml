@@ -1,0 +1,39 @@
+name: PR94 consume qualified requirements debug
+
+on:
+  push:
+    branches:
+      - debug/pr94-consume-qualified-requirements
+
+permissions:
+  contents: read
+
+jobs:
+  targeted:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Consume requirements copied into qualified types
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/member_constraints.rs')
+          source = path.read_text()
+          needle = "        if requirements.is_empty() {\n            return body;\n        }\n"
+          replacement = "        if !requirements.is_empty() {\n            let mut constraints = self.member_constraints.borrow_mut();\n            for entry in &mut constraints.entries {\n                if entry.discharged {\n                    continue;\n                }\n                if requirements.iter().any(|requirement| {\n                    entry.requirement.name == requirement.name\n                        && same_type(&entry.requirement.subject, &requirement.subject)\n                        && same_type(&entry.requirement.member, &requirement.member)\n                }) {\n                    entry.discharged = true;\n                }\n            }\n        }\n        if requirements.is_empty() {\n            return body;\n        }\n"
+          if source.count(needle) != 1:
+              raise SystemExit(f'qualify return site count: {source.count(needle)}')
+          path.write_text(source.replace(needle, replacement, 1))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Run first lowering regression
+        run: cargo test --manifest-path compiler/Cargo.toml an_empty_scratch_argument_uses_the_contextual_result_representation -- --nocapture --test-threads=1
+      - name: Run focused operator tests
+        run: cargo test --manifest-path compiler/Cargo.toml operator_dispatch_tests -- --nocapture --test-threads=1
+      - name: Run engine regression
+        run: timeout 90s cargo test --manifest-path compiler/Cargo.toml engine_entry_points_prepare_and_the_game_loop_emits_wasm -- --nocapture --test-threads=1
