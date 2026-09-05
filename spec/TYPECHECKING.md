@@ -1550,3 +1550,11 @@ never rediscovers requirements from an already-used source graph. Projection
 retains intermediate argument, result, and effect variables reachable through
 structural member bounds, while collapsing non-root alias chains as for ordinary
 schemes. Unqualified schemes retain the ordinary projection contract.
+
+Member lookup may use a closed numeric domain established by upper subtype
+bounds, not only a lower-bound witness. This is evidence about all possible
+inhabitants, not defaulting: an unconstrained receiver remains qualified.
+Integer branch refinement requires existing integer-domain evidence; it cannot
+turn an unknown or floating-point receiver into Int. Otherwise branch-local
+refinements would disconnect later constraints from the original parameter.
+Attached callable names are ordinary source names, not a compiler allow-list.

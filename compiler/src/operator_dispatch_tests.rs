@@ -214,3 +214,20 @@ fn imported_dispatcher_does_not_reuse_an_earlier_specialization() {
         assert_eq!(prepared["ok"], true, "{prepared}");
     });
 }
+
+#[test]
+fn inferred_members_are_not_limited_to_standard_operator_names() {
+    with_stack(|| {
+        let mut compiler = session(concat!(
+            "infixl 60 (+) = Op.combine\n",
+            "const Op = { .combine = fn left => fn right => (@type.inferred left).combine left right; }\n",
+            "const custom :: @type.int -> @type.int -> 7\n",
+            "const custom = fn left => fn right => 7\n",
+            "const Int = @type.attach @type.int \"combine\" custom\n",
+            "return 1 + 2\n",
+        ));
+        assert_result(&mut compiler, "7", "7");
+        let prepared = compiler.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+}

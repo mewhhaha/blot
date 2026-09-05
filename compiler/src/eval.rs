@@ -689,7 +689,7 @@ impl ResidentOperatorExtension {
         let mut combined = BTreeMap::new();
         while let Value::Extended { inner, members } = current {
             for (name, value) in members.iter() {
-                if !operator_member_name(name) || combined.contains_key(name) {
+                if combined.contains_key(name) {
                     continue;
                 }
                 if let Some(member) = ResidentOperatorMember::capture(value) {

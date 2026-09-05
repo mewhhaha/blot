@@ -5989,17 +5989,13 @@ impl Checker {
                         values,
                         dependencies,
                     )?;
-                    let mut settled = self.settle(subject.type_.clone(), true);
+                    let settled = self.settle(subject.type_.clone(), true);
                     if contains_bottom(&settled)
                         && self.mentions_pending_numeric_literal(&subject.type_)
                     {
                         self.resolve_numeric_literals()?;
-                        settled = self.settle(subject.type_.clone(), true);
                     }
-                    if contains_bottom(&settled)
-                        || !closed_checked_type(&settled, &mut HashSet::new())
-                        || !operator_dispatch_type_is_concrete(&settled)
-                    {
+                    let Some(settled) = self.member_lookup_subject(&subject.type_) else {
                         self.defer_current_closure();
                         let member = self.fresh();
                         self.register_member_requirement(MemberRequirement {
@@ -6011,7 +6007,7 @@ impl Checker {
                             type_: member,
                             effects: subject.effects,
                         });
-                    }
+                    };
                     let type_value = self.reify_runtime_type(&settled).ok_or_else(|| {
                         Diagnostic::new(
                             "BLOT_TYPE_NOT_REIFIABLE",
@@ -11989,7 +11985,10 @@ fn refined_original_integer_type(
         if integer_intervals(&settled_neg).is_some_and(|v| !v.is_empty()) {
             Some(settled_neg)
         } else {
-            Some(int_type())
+            // A generic comparison does not establish the receiver's domain.
+            // Inventing Int here would detach branch constraints from the
+            // original variable and could validate a non-integer array index.
+            None
         }
     }
 }

@@ -4012,17 +4012,11 @@ impl ResidualTrace {
         {
             current = *function;
         }
-        let crate::ast::Expression::Field { target, name, .. } =
+        let crate::ast::Expression::Field { target, .. } =
             &loaded.module.arena.expressions[current.0 as usize]
         else {
             return false;
         };
-        if !matches!(
-            name.as_str(),
-            "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-        ) {
-            return false;
-        }
         let crate::ast::Expression::Apply { function, .. } =
             &loaded.module.arena.expressions[target.0 as usize]
         else {

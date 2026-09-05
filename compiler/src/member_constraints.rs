@@ -54,6 +54,26 @@ impl MemberConstraints {
 }
 
 impl Checker {
+    /// Lookup needs evidence for the receiver, not a numeric default. Positive
+    /// evidence describes an actual value. A closed upper numeric domain (or
+    /// exact opaque type) also suffices: every possible inhabitant has that
+    /// domain, and subsequent applications still check the selected signature.
+    /// In particular, an unconstrained upper Top is never a lookup subject.
+    pub(super) fn member_lookup_subject(&self, type_: &Type) -> Option<Type> {
+        let mut subject = self.settle(type_.clone(), true);
+        if matches!(subject, Type::Bottom | Type::Top) {
+            let upper = self.settle(type_.clone(), false);
+            if type_domain(&upper).is_some() || matches!(upper, Type::Opaque(_)) {
+                subject = upper;
+            }
+        }
+        (!matches!(subject, Type::Top)
+            && !contains_bottom(&subject)
+            && closed_checked_type(&subject, &mut HashSet::new())
+            && operator_dispatch_type_is_concrete(&subject))
+        .then_some(subject)
+    }
+
     /// Include graph edges as well as syntactic occurrences. A member's result
     /// and effects can become connected to a function only after an application.
     fn member_variable_ids(&self, type_: &Type) -> BTreeSet<VariableId> {
@@ -244,13 +264,9 @@ impl Checker {
                 continue;
             }
             self.index_member_requirement(id, &entry.requirement);
-            let subject = self.settle(entry.requirement.subject.clone(), true);
-            if contains_bottom(&subject)
-                || !closed_checked_type(&subject, &mut HashSet::new())
-                || !operator_dispatch_type_is_concrete(&subject)
-            {
+            let Some(subject) = self.member_lookup_subject(&entry.requirement.subject) else {
                 continue;
-            }
+            };
             let value = self.reify_runtime_type(&subject).ok_or_else(|| {
                 Diagnostic::new(
                     "BLOT_TYPE_NOT_REIFIABLE",

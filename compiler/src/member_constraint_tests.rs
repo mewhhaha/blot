@@ -170,3 +170,35 @@ fn projected_scheme_keeps_intermediate_member_application_constraints() {
         );
     }
 }
+
+#[test]
+fn upper_domain_evidence_resolves_members_without_defaulting_unknowns() {
+    let checker = Checker::new(Rc::new(Context::default()));
+    let subject = checker.fresh();
+    let result = checker.fresh();
+    checker.register_member_requirement(MemberRequirement {
+        name: "add".to_owned(),
+        subject: subject.clone(),
+        member: curried(vec![subject.clone(), int_type()], result.clone()),
+    });
+    assert!(checker.member_lookup_subject(&subject).is_none());
+    checker
+        .constrain(subject.clone(), int_type(), Span { start: 1, end: 4 })
+        .unwrap();
+    assert!(same_type(
+        &checker.member_lookup_subject(&subject).unwrap(),
+        &int_type()
+    ));
+    assert!(same_type(&checker.settle(result, true), &int_type()));
+    assert!(!checker.has_member_requirements(&subject));
+}
+
+#[test]
+fn refinement_does_not_invent_an_integer_domain() {
+    let checker = Checker::new(Rc::new(Context::default()));
+    for type_ in [checker.fresh(), float_type(), float32_type()] {
+        let mut environment = TypeEnvironment::default();
+        Rc::make_mut(&mut environment.names).insert("value".to_owned(), Typing::Mono(type_));
+        assert!(refined_original_integer_type(&checker, &environment, "value").is_none());
+    }
+}
