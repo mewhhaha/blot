@@ -81,12 +81,15 @@ fn source_member_refined_result_survives_dispatch() {
 #[test]
 fn source_member_parameter_signature_is_checked_even_when_body_ignores_it() {
     with_stack(|| {
-        let mut compiler = session(&format!(
+        let compiler = session(&format!(
             "{DISPATCH}const custom :: @type.text -> @type.text -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
         ));
         let checked = compiler.check_module("main.blot");
         assert_eq!(checked["ok"], false, "{checked}");
-        assert_eq!(checked["diagnostic"]["code"], "BLOT_TYPE_ERROR", "{checked}");
+        assert_eq!(
+            checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+            "{checked}"
+        );
     });
 }
 
@@ -103,7 +106,7 @@ fn partially_applied_primitive_member_retains_its_arguments() {
 #[test]
 fn one_inferred_operator_function_is_reusable_across_numeric_domains() {
     with_stack(|| {
-        let mut compiler = with_prelude(concat!(
+        let compiler = with_prelude(concat!(
             "open import \"blot:prelude\"\n",
             "const sum = fn left => fn right => left + right\n",
             "let integer :: Int\nlet integer = sum 2 3\n",

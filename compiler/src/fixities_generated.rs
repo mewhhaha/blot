@@ -25,7 +25,7 @@ const GENERATED_FIXITIES: &[GeneratedFixity] = &[
     GeneratedFixity { operator: "*", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Op.mul" },
     GeneratedFixity { operator: "/", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Op.div" },
     GeneratedFixity { operator: "%", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Op.rem" },
-    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "Int.negate" },
+    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "Op.negate" },
     GeneratedFixity { operator: "!", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.own" },
     GeneratedFixity { operator: "?", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.maybe" },
     GeneratedFixity { operator: "&", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.borrow" },

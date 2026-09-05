@@ -5279,42 +5279,6 @@ impl Checker {
                     );
                 }
                 if member_arguments.len() == 2
-                    && let Expression::Field { target, name, .. } =
-                        &module.arena.expressions[member_callee.0 as usize]
-                    && (inferred_type_subject(module, *target).is_some()
-                        || self
-                            .evaluate(path, *target, values, Phase::Comptime)
-                            .ok()
-                            .and_then(|value| static_member(&value, name))
-                            .is_some_and(|value| is_operator_member_closure(&self.context, &value)))
-                    && matches!(
-                        name.as_str(),
-                        "eq" | "ne"
-                            | "lt"
-                            | "le"
-                            | "gt"
-                            | "ge"
-                            | "add"
-                            | "sub"
-                            | "mul"
-                            | "div"
-                            | "rem"
-                    )
-                {
-                    return self.infer_resolve_member(
-                        path,
-                        module,
-                        expression_id,
-                        name.clone(),
-                        member_arguments[0],
-                        member_arguments[1],
-                        environment,
-                        values,
-                        dependencies,
-                        span,
-                    );
-                }
-                if member_arguments.len() == 2
                     && let Ok(Value::Primitive { name, .. }) =
                         self.evaluate(path, member_callee, values, Phase::Comptime)
                     && name == "@i32x4.lane"
@@ -5369,87 +5333,37 @@ impl Checker {
                         effects = self.join_effects(effects, inferred.effects)?;
                         arguments.push(inferred.type_);
                     }
-                    if matches!(target_value, Value::Extended { .. })
-                        && let Ok(value) =
-                            self.evaluate(path, expression_id, values, Phase::Comptime)
-                        && !matches!(value, Value::Closure { .. })
-                    {
-                        return Ok(Inferred {
-                            type_: if arguments.len() >= 2 {
-                                let operator_type = match name.as_str() {
-                                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Some(bool_type()),
-                                    "add" | "sub" | "mul" | "div" | "rem" => self
-                                        .resolve_operand_domain(&arguments[0], &arguments[1])
-                                        .map(|domain| match domain {
-                                            Domain::Int => int_type(),
-                                            Domain::Text => text_type(),
-                                            Domain::Float => float_type(),
-                                            Domain::Float32 => float32_type(),
-                                        }),
-                                    _ => None,
-                                };
-                                operator_type.unwrap_or_else(|| self.bridge_runtime_value(&value))
-                            } else {
-                                self.bridge_runtime_value(&value)
-                            },
-                            effects,
-                        });
-                    }
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
                         .is_some_and(|val| is_operator_member_closure(&self.context, val));
-                    if is_resolve_op && arguments.len() >= 2 {
-                        let domain = self.resolve_operand_domain(&arguments[0], &arguments[1]);
-                        if let Some(domain) = domain {
-                            let span = module.arena.expression_span(expression_id);
-                            match domain {
-                                Domain::Int => {
-                                    let int = int_type();
-                                    self.constrain(arguments[0].clone(), int.clone(), span)?;
-                                    self.constrain(arguments[1].clone(), int, span)?;
-                                }
-                                Domain::Text => {
-                                    let text = text_type();
-                                    self.constrain(arguments[0].clone(), text.clone(), span)?;
-                                    self.constrain(arguments[1].clone(), text, span)?;
-                                }
-                                Domain::Float => {
-                                    if name != "eq" && name != "ne" {
-                                        let float = float_type();
-                                        self.constrain(arguments[0].clone(), float.clone(), span)?;
-                                        self.constrain(arguments[1].clone(), float, span)?;
-                                    }
-                                }
-                                Domain::Float32 => {
-                                    if name != "eq" && name != "ne" {
-                                        let f32_ = float32_type();
-                                        self.constrain(arguments[0].clone(), f32_.clone(), span)?;
-                                        self.constrain(arguments[1].clone(), f32_, span)?;
-                                    }
-                                }
-                            }
-                        }
-                    }
                     let parameter_type = if is_resolve_op {
                         arguments.first().cloned()
                     } else {
                         None
                     };
-                    let mut function_type = self.infer_evaluated_closure(
-                        path,
-                        module,
-                        EvaluatedClosure {
-                            module_path: &closure_module,
-                            parameter,
-                            body,
-                            captures: &closure_values,
-                            self_name: self_name.as_deref(),
-                            deferred,
-                        },
-                        environment,
-                        dependencies,
-                        parameter_type,
-                    )?;
+                    let attached_signature = static_member(&target_value, name)
+                        .as_ref()
+                        .filter(|_| !is_resolve_op)
+                        .and_then(|member| self.bridge_closed_attached_signature(member));
+                    let mut function_type = if let Some(signature) = attached_signature {
+                        signature
+                    } else {
+                        self.infer_evaluated_closure(
+                            path,
+                            module,
+                            EvaluatedClosure {
+                                module_path: &closure_module,
+                                parameter,
+                                body,
+                                captures: &closure_values,
+                                self_name: self_name.as_deref(),
+                                deferred,
+                            },
+                            environment,
+                            dependencies,
+                            parameter_type,
+                        )?
+                    };
                     for argument in arguments {
                         let result = self.fresh();
                         let performed = self.fresh();
@@ -5479,7 +5393,7 @@ impl Checker {
                         || name == "transform"
                         || static_member(&target_value, name)
                             .as_ref()
-                            .is_some_and(|val| is_resolve_member_closure(&self.context, val)))
+                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -5492,39 +5406,37 @@ impl Checker {
                 {
                     let argument_type =
                         self.infer(path, module, argument, environment, values, dependencies)?;
-                    if matches!(target_value, Value::Extended { .. })
-                        && let Ok(value) =
-                            self.evaluate(path, expression_id, values, Phase::Comptime)
-                        && !matches!(value, Value::Closure { .. })
-                    {
-                        return Ok(Inferred {
-                            type_: self.bridge_runtime_value(&value),
-                            effects: argument_type.effects,
-                        });
-                    }
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
-                        .is_some_and(|val| is_resolve_member_closure(&self.context, val));
+                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
                     let parameter_type = if is_resolve_op {
                         Some(argument_type.type_.clone())
                     } else {
                         None
                     };
-                    let function_type = self.infer_evaluated_closure(
-                        path,
-                        module,
-                        EvaluatedClosure {
-                            module_path: &closure_module,
-                            parameter,
-                            body,
-                            captures: &closure_values,
-                            self_name: self_name.as_deref(),
-                            deferred,
-                        },
-                        environment,
-                        dependencies,
-                        parameter_type,
-                    )?;
+                    let attached_signature = static_member(&target_value, name)
+                        .as_ref()
+                        .filter(|_| !is_resolve_op)
+                        .and_then(|member| self.bridge_closed_attached_signature(member));
+                    let function_type = if let Some(signature) = attached_signature {
+                        signature
+                    } else {
+                        self.infer_evaluated_closure(
+                            path,
+                            module,
+                            EvaluatedClosure {
+                                module_path: &closure_module,
+                                parameter,
+                                body,
+                                captures: &closure_values,
+                                self_name: self_name.as_deref(),
+                                deferred,
+                            },
+                            environment,
+                            dependencies,
+                            parameter_type,
+                        )?
+                    };
                     let result = self.fresh();
                     let performed = self.fresh();
                     let deferred = self.deferred_call(&function_type);
@@ -6008,7 +5920,7 @@ impl Checker {
                         )
                     })?;
                     let type_ = self
-                        .static_member_type(&member)
+                        .static_member_type(&member, Some(&settled))
                         .unwrap_or_else(|| self.fresh());
                     return Ok(Inferred {
                         type_,
@@ -6958,9 +6870,43 @@ impl Checker {
         inferred
     }
 
-    fn static_member_type(&self, member: &Value) -> Option<Type> {
-        if let Value::Primitive { name, .. } = member {
-            return primitive_type(self, name);
+    fn static_member_type(&self, member: &Value, subject: Option<&Type>) -> Option<Type> {
+        if let Value::Primitive {
+            name,
+            applied,
+            arity,
+        } = member
+        {
+            if name == "@type.resolve_member" && *arity == 3 {
+                if let [Value::Text(operation)] = applied.as_slice() {
+                    let domain = type_domain(subject?)?;
+                    let operand = match domain {
+                        Domain::Int => int_type(),
+                        Domain::Text => text_type(),
+                        Domain::Float => float_type(),
+                        Domain::Float32 => float32_type(),
+                    };
+                    let result = match (domain, operation.as_str()) {
+                        (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                        | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => {
+                            bool_type()
+                        }
+                        (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
+                        | (Domain::Float32, "add" | "sub" | "mul" | "div")
+                        | (Domain::Text, "add") => operand.clone(),
+                        _ => return None,
+                    };
+                    return Some(curried(vec![operand.clone(), operand], result));
+                }
+            }
+            let mut type_ = primitive_type(self, name)?;
+            for _ in applied {
+                let Type::Function { result, .. } = type_ else {
+                    return None;
+                };
+                type_ = Rc::unwrap_or_clone(result);
+            }
+            return Some(type_);
         }
         if let Some(type_) = self.bridge(member) {
             return Some(type_);
@@ -12756,15 +12702,11 @@ fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
         current = *next_body;
     }
     let (callee, _) = application_spine_ids(&loaded.module, current);
-    let Expression::Field { target, name, .. } =
-        &loaded.module.arena.expressions[callee.0 as usize]
+    let Expression::Field { target, .. } = &loaded.module.arena.expressions[callee.0 as usize]
     else {
         return false;
     };
-    matches!(
-        name.as_str(),
-        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-    ) && inferred_type_subject(&loaded.module, *target).is_some()
+    inferred_type_subject(&loaded.module, *target).is_some()
 }
 
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
