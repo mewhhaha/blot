@@ -413,6 +413,16 @@ is polarity-correct. Rank-N subsumption, ground union choice, omitted record
 fields, and compile-time type evaluation are extensions and require their own
 preservation tests. This document does not claim a mechanised proof.
 
+### Operator comparison evidence
+
+Recognition of `fn left => fn right => (@type.inferred left).member left right`
+requires distinct parameter bindings and evidence from the resolved integer
+member. A factored closure is probed for its ordering set. A built-in resolver
+is recognized only as `@type.resolve_member` with arity three and exactly one
+already-applied text member argument; that argument, not the wrapper's field
+name, determines the ordering set. An unrecognized attached implementation
+produces no comparison fact. Member spelling is never a fallback proof.
+
 ## 6. Flat implementation model
 
 Recursive owned type trees are a reference representation, not the target

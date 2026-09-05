@@ -1693,7 +1693,7 @@ return copy
   {
     name: "an explicit primitive function prefers its operator",
     code: "BLOT_LINT_OPERATOR_SPELLING",
-    source: `return Int.rem 5 2
+    source: `return Op.rem 5 2
 `,
   },
   {
@@ -2094,4 +2094,33 @@ return (
   ) {
     assert(seen.has(name), `${name} was not visited`);
   }
+});
+
+Deno.test("operator spelling does not invent an Int alias for an Op target", async () => {
+  const source =
+    `const Op = { .add = fn left => fn right => @int.sub left right; }
+return Int.add left right
+`;
+  const parsed = await parseConcrete(source);
+  if (!parsed.ok) {
+    throw new Error("distinct operator target fixture did not parse");
+  }
+  assertEquals(
+    lintModule(parsed.module, source, parsed.cst).filter((diagnostic) =>
+      diagnostic.code === "BLOT_LINT_OPERATOR_SPELLING"
+    ),
+    [],
+  );
+});
+
+Deno.test("operator spelling accepts an explicitly declared Int target", async () => {
+  const source = `infixl 60 (+) = Int.add
+return Int.add left right
+`;
+  assertEquals(
+    await applyLintFix(source, "BLOT_LINT_OPERATOR_SPELLING"),
+    `infixl 60 (+) = Int.add
+return (left + right)
+`,
+  );
 });

@@ -1010,7 +1010,17 @@ Field projection is postfix and may be chained:
 value.namespace.member
 ```
 
-Projecting a missing field is an error.
+Projecting a missing field is an error. This includes operator-named fields such
+as `.add` on a value that provides no such member. Bootstrapping attached
+operations may retry lookup only when it has actually added members; it does not
+make an unsupported projection recursive.
+
+An attached comparison's name alone does not prove an integer ordering.
+Comparison-based refinement requires evidence from the resolved implementation:
+a recognized factored comparison closure or the exact built-in comparison
+resolver. An unrecognized custom `.lt`, for example, supplies no less-than fact.
+A binary dispatcher must refer to two distinct parameter bindings; shadowing one
+parameter with the other does not establish a two-operand comparison.
 
 ### 6.2 Constructors
 

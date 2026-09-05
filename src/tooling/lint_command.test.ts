@@ -32,7 +32,7 @@ Deno.test("lint arguments select report, check, and fix modes", () => {
 Deno.test("lint fixes reach a compiler-checked fixed point", async () => {
   const path = resolve("lint-command-fixture.blot");
   const source = `open import "blot:prelude"
-return Int.rem 5 2
+return Op.rem 5 2
 `;
   const analysisCompiler = await Compiler.create();
   const validationCompiler = await Compiler.create();

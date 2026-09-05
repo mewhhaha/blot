@@ -10014,6 +10014,68 @@ return F32.add (-1) 2.5
         });
     }
 
+    #[test]
+    fn inferred_comparison_requires_evidence_from_the_resolved_member() {
+        run_with_compiler_test_stack(|| {
+            use crate::recognise::Ordering;
+            use std::collections::BTreeSet;
+
+            let cases = [
+                (
+                    "bootstrap",
+                    "return { .compare = fn left => fn right => (@type.inferred left).lt left right; }\n",
+                    Some(BTreeSet::from([Ordering::Less])),
+                ),
+                (
+                    "unproved-attachment",
+                    concat!(
+                        "const Int = @type.attach @type.int \"lt\" (fn left => fn right => #True)\n",
+                        "return { .type = Int; .compare = fn left => fn right => (@type.inferred left).lt left right; }\n",
+                    ),
+                    None,
+                ),
+                (
+                    "reversed-attachment",
+                    concat!(
+                        "const Int = @type.attach @type.int \"lt\" (fn left => fn right => @type.resolve_member \"ge\" left right)\n",
+                        "return { .type = Int; .compare = fn left => fn right => (@type.inferred left).lt left right; }\n",
+                    ),
+                    Some(BTreeSet::from([Ordering::Equal, Ordering::Greater])),
+                ),
+                (
+                    "shadowed-parameter",
+                    "return { .compare = fn value => fn value => (@type.inferred value).lt value value; }\n",
+                    None,
+                ),
+            ];
+            for (label, text, expected) in cases {
+                let path = format!("comparison-evidence-{label}.blot");
+                let mut session = CompilerSession::default();
+                session
+                    .add_source(path.clone(), source(text))
+                    .expect("comparison evidence fixture should parse");
+                // Exercise recognition on actual evaluator closures without asking
+                // the checker to assume the very comparison fact under test.
+                let value = run(evaluate_module(
+                    session.context.clone(),
+                    path.clone(),
+                    Value::Unit,
+                    Runtime::new(Phase::Comptime, path),
+                ))
+                .unwrap_or_else(|error| panic!("{label}: {}: {}", error.code, error.message));
+                let Value::Shape(fields) = &value else {
+                    panic!("{label}: fixture should return its comparison and attachment");
+                };
+                let comparison = fields.get("compare").expect("comparison field exists");
+                assert_eq!(
+                    crate::recognise::comparison(&session.context, comparison),
+                    expected,
+                    "{label}",
+                );
+            }
+        });
+    }
+
     fn source(value: &str) -> Vec<u16> {
         let mut raw = String::with_capacity(value.len());
         for character in value.chars() {
