@@ -1,0 +1,58 @@
+// Non-trapping floating-point comparison. This module extends the ordinary
+// numeric namespaces without changing the meaning of their existing operators.
+open import "blot:prelude"
+
+// Classify through a closed integer union before constructing the result. This
+// avoids widening nested dynamic sums in the current backend. Constructor arms
+// follow canonical ABI order; callers must consume the variant, not these codes.
+const PartialOrdering = #Equal | #Greater | #Less | #Unordered
+
+const f64_partial_cmp :: F64 -> F64 -> PartialOrdering
+const f64_partial_cmp = fn left => fn right => do:
+  let code :: 0 | 1 | 2 | 3
+  let code = case F64.is_nan left of
+    #True => 3
+    #False => case F64.is_nan right of
+      #True => 3
+      #False => case is_less (F64.cmp left right) of
+        #True => 2
+        #False => case is_greater (F64.cmp left right) of
+          #True => 1
+          #False => 0
+
+  return case code of
+    0 => #Equal
+    1 => #Greater
+    2 => #Less
+    _ => #Unordered
+
+const f32_partial_cmp :: F32 -> F32 -> PartialOrdering
+const f32_partial_cmp = fn left => fn right => do:
+  let code :: 0 | 1 | 2 | 3
+  let code = case F32.is_nan left of
+    #True => 3
+    #False => case F32.is_nan right of
+      #True => 3
+      #False => case is_less (F32.cmp left right) of
+        #True => 2
+        #False => case is_greater (F32.cmp left right) of
+          #True => 1
+          #False => 0
+
+  return case code of
+    0 => #Equal
+    1 => #Greater
+    2 => #Less
+    _ => #Unordered
+
+return {
+  .PartialOrdering = PartialOrdering;
+  .F64 = F64 <+ {
+    .partial_cmp = f64_partial_cmp;
+    .cmp_exn = F64.cmp;
+  };
+  .F32 = F32 <+ {
+    .partial_cmp = f32_partial_cmp;
+    .cmp_exn = F32.cmp;
+  };
+}
