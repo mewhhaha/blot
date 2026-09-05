@@ -18,7 +18,15 @@ export function hoverAt(
   checked: CompilerAnalysis | null,
 ): HoverDescription | null {
   const control = controlFlowAt(module, source, cst, offset);
-  if (control !== null) return control;
+  if (control !== null) {
+    if (control.markdown === "**return** — supplies the result of this module.") {
+      return {
+        ...control,
+        markdown: "**return** — supplies the result of the nearest module (this module).",
+      };
+    }
+    return control;
+  }
   const binding = bindingHoverAt(module, source, cst, offset, checked);
   if (binding === null) return null;
   if (binding.markdown.includes("**Related value:** `Op.negate`")) {
