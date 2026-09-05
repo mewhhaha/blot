@@ -1,0 +1,57 @@
+name: PR94 engine hang debug
+
+on:
+  push:
+    branches:
+      - debug/pr94-engine-hang
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Show engine regression source
+        shell: bash
+        run: grep -n -B25 -A100 'fn engine_entry_points_prepare_and_the_game_loop_emits_wasm' compiler/src/session.rs || true
+      - name: Baseline engine test with cutoff
+        shell: bash
+        run: |
+          set +e
+          timeout 45s cargo test --manifest-path compiler/Cargo.toml engine_entry_points_prepare_and_the_game_loop_emits_wasm -- --nocapture --test-threads=1
+          echo "BASELINE_STATUS=$?"
+          exit 0
+      - name: Disable qualified-type collection diagnostically
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/member_constraints.rs')
+          source = path.read_text()
+          start = source.index('    pub(super) fn qualify_type(&self, type_: Type) -> Type {')
+          end = source.index('    /// A qualifier is activated only after its enclosing forall', start)
+          replacement = '''    pub(super) fn qualify_type(&self, type_: Type) -> Type {
+        match type_ {
+            Type::Qualified { body, .. } => Rc::unwrap_or_clone(body),
+            other => other,
+        }
+    }
+
+'''
+          path.write_text(source[:start] + replacement + source[end:])
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Engine test without qualified collection
+        shell: bash
+        run: |
+          set +e
+          timeout 90s cargo test --manifest-path compiler/Cargo.toml engine_entry_points_prepare_and_the_game_loop_emits_wasm -- --nocapture --test-threads=1
+          status=$?
+          echo "NO_QUALIFY_STATUS=$status"
+          exit "$status"
