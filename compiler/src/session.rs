@@ -10076,6 +10076,102 @@ return F32.add (-1) 2.5
         });
     }
 
+    #[test]
+    fn source_operator_regressions() {
+        run_with_compiler_test_stack(|| {
+            let cases = [
+                (
+                    "generic-int-and-float",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Int = @type.attach @type.int \"add\" @int.add\n",
+                        "const Float = @type.attach @type.float \"add\" @float.add\n",
+                        "const add = fn left => fn right => left + right\n",
+                        "const integer = add 2 3\n",
+                        "const float = add 2.0 3.0\n",
+                        "return float\n",
+                    ),
+                    true,
+                ),
+                (
+                    "custom-result",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const answer :: @type.int -> @type.int -> @type.text\n",
+                        "const answer = fn left => fn right => \"custom\"\n",
+                        "const Int = @type.attach @type.int \"add\" answer\n",
+                        "return 2 + 3\n",
+                    ),
+                    true,
+                ),
+                (
+                    "refined-result",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Seven = @type.range 7 7\n",
+                        "const answer :: @type.int -> @type.int -> Seven\n",
+                        "const answer = fn left => fn right => 7\n",
+                        "const Int = @type.attach @type.int \"add\" answer\n",
+                        "let result :: Seven\n",
+                        "let result = 2 + 3\n",
+                        "return result\n",
+                    ),
+                    true,
+                ),
+                (
+                    "custom-argument-rejection",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const answer :: @type.int -> @type.text -> @type.text\n",
+                        "const answer = fn left => fn right => right\n",
+                        "const Int = @type.attach @type.int \"add\" answer\n",
+                        "return 2 + 3\n",
+                    ),
+                    false,
+                ),
+                (
+                    "mixed-bound-values-rejected",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Int = @type.attach @type.int \"add\" @int.add\n",
+                        "const Float = @type.attach @type.float \"add\" @float.add\n",
+                        "let integer = 2\n",
+                        "let float = 3.0\n",
+                        "return integer + float\n",
+                    ),
+                    false,
+                ),
+                (
+                    "generic-unary",
+                    concat!(
+                        "const Op = { .negate = fn value => (@type.inferred value).negate value; }\n",
+                        "const negate = fn value => -value\n",
+                        "const integer = negate 2\n",
+                        "const float = negate 2.0\n",
+                        "return float\n",
+                    ),
+                    true,
+                ),
+            ];
+            for (label, text, expected) in cases {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source("main.blot".to_owned(), source(text))
+                    .expect(label);
+                session
+                    .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                    .expect(label);
+                let checked = session.check_module("main.blot");
+                eprintln!("{label}: {checked}");
+                assert_eq!(checked["ok"], expected, "{label}: {checked}");
+                if expected {
+                    let prepared = session.prepare_runtime_hir("main.blot");
+                    assert_eq!(prepared["ok"], true, "{label}: {prepared}");
+                }
+            }
+        });
+    }
+
     fn source(value: &str) -> Vec<u16> {
         let mut raw = String::with_capacity(value.len());
         for character in value.chars() {

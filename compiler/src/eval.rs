@@ -1525,15 +1525,36 @@ fn bootstrap_operator_type(value: Value) -> Value {
 fn operator_type_with_members(value: Value) -> Value {
     let members = OPERATOR_MEMBER_NAMES
         .iter()
-        .map(|name| {
-            (
-                (*name).to_owned(),
+        .filter_map(|name| {
+            let implementation = if *name == "negate" {
+                let primitive = match &value {
+                    Value::Range {
+                        domain: Some(ValueDomain::Int),
+                        ..
+                    } => "@int.neg",
+                    Value::Range {
+                        domain: Some(ValueDomain::Float),
+                        ..
+                    } => "@float.neg",
+                    Value::Range {
+                        domain: Some(ValueDomain::Float32),
+                        ..
+                    } => "@f32.neg",
+                    _ => return None,
+                };
+                Value::Primitive {
+                    name: primitive.to_owned(),
+                    arity: 1,
+                    applied: Vec::new(),
+                }
+            } else {
                 Value::Primitive {
                     name: "@type.resolve_member".to_owned(),
                     arity: 3,
                     applied: vec![Value::Text((*name).to_owned())],
-                },
-            )
+                }
+            };
+            Some(((*name).to_owned(), implementation))
         })
         .collect();
     Value::Extended {

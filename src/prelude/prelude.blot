@@ -27,7 +27,7 @@ infixl 60 (-) = Op.sub
 infixl 70 (*) = Op.mul
 infixl 70 (/) = Op.div
 infixl 70 (%) = Op.rem
-prefix 90 (-) = Int.negate
+prefix 90 (-) = Op.negate
 prefix 90 (!) = @linear.own
 prefix 90 (?) = @linear.maybe
 prefix 90 (&) = @linear.borrow
@@ -59,6 +59,7 @@ const OpArithmetic =
     .mul = fn left => fn right => (@type.inferred left).mul left right;
     .div = fn left => fn right => (@type.inferred left).div left right;
     .rem = fn left => fn right => (@type.inferred left).rem left right;
+    .negate = fn value => (@type.inferred value).negate value;
   }
 
 const Op = { ...OpOrder; ...OpArithmetic; }

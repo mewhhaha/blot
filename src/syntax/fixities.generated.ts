@@ -143,7 +143,7 @@ export const generatedFixities = [
     "operator": "-",
     "associativity": "prefix",
     "precedence": 90,
-    "target": "Int.negate"
+    "target": "Op.negate"
   },
   {
     "operator": "!",

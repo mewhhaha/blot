@@ -149,7 +149,7 @@
       "operator": "-",
       "associativity": "prefix",
       "precedence": 90,
-      "target": "Int.negate"
+      "target": "Op.negate"
     },
     {
       "operator": "!",
@@ -734,7 +734,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 16010
+      "lines": 15764
     },
     {
       "path": "compiler/src/hir.rs",
@@ -742,7 +742,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10099
+      "lines": 10195
     },
     {
       "path": "compiler/src/backend.rs",
@@ -750,7 +750,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6762
+      "lines": 6783
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -766,7 +766,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3395
+      "lines": 3396
     },
     {
       "path": "compiler/src/value_capsule.rs",
