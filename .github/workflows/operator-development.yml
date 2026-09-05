@@ -1,0 +1,78 @@
+name: Branch-scoped operator development
+
+on:
+  push:
+    branches: [codex/source-defined-generic-operators]
+    paths:
+      - scripts/operator_dev.py
+      - compiler/src/typecheck/operators.rs
+      - .github/workflows/operator-development.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-operator-development
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: startsWith(github.event.head_commit.message, 'Validate operator')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            compiler/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-
+      - run: pnpm install --frozen-lockfile
+      - name: Apply source patch
+        run: python3 scripts/operator_dev.py
+      - name: Generate source fixities and health
+        run: |
+          deno task generate:compiler-schema
+          cargo fmt --manifest-path compiler/Cargo.toml
+          pnpm generate:health
+          git diff --check
+      - name: Commit generated source changes to the development branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add compiler/src/typecheck.rs compiler/src/typecheck/operators.rs compiler/src/eval.rs compiler/src/session.rs src/prelude/prelude.blot compiler/src/fixities_generated.rs src/syntax/fixities.generated.ts generated/language-health.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Apply source-defined operator implementation and generated fixities'
+            git push origin HEAD:refs/heads/codex/source-defined-generic-operators
+          fi
+      - name: Operator regression tests
+        run: cargo test --manifest-path compiler/Cargo.toml source_operator_regressions -- --nocapture
+      - name: Full Rust test suite
+        run: cargo test --manifest-path compiler/Cargo.toml
+      - name: Build compiler and regenerate prelude snapshot
+        run: pnpm compiler:build
+      - name: Validate source and Wasm execution agreement
+        run: pnpm conformance
+      - name: TypeScript and generated checks
+        run: |
+          deno check .
+          deno task generate:compiler-schema --check
+          pnpm health
