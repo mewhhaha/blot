@@ -6,11 +6,13 @@ const map_with :: @forall (fn T => @forall (fn U => (T -> U) -> [T] -> [U]))
 const map_with = fn transform => fn &values => map ((&values), transform)
 const filter_with :: @forall (fn T => (T -> Bool) -> [T] -> [T])
 const filter_with = fn keep => fn &values => filter ((&values), keep)
-const fold_with :: @forall (fn T => @forall (fn S => ((S, T) -> S) -> S -> [T] -> S))
-const fold_with = fn step => fn state => fn &values => fold ((&values), state, step)
+const fold_with ::
+  @forall (fn T => @forall (fn S => ((S, T) -> S) -> S -> [T] -> S))
+const fold_with =
+  fn step => fn state => fn &values => fold ((&values), state, step)
 
 return {
   .map_with = map_with;
   .filter_with = filter_with;
   .fold_with = fold_with;
-}
+  }
