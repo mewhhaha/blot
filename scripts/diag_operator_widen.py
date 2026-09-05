@@ -14,7 +14,7 @@ insert = '''                if member_arguments.len() == 2
                         self.evaluate(path, *target, values, Phase::Comptime)
                     && static_member(&target_value, name)
                         .as_ref()
-                        .is_some_and(|value| is_operator_member_closure(&self.context, value))
+                        .is_some_and(|value| is_resolve_member_closure(&self.context, value))
                     && matches!(
                         name.as_str(),
                         "eq" | "ne"
