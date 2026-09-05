@@ -1,0 +1,44 @@
+name: PR94 qualified lowering debug
+
+on:
+  push:
+    branches:
+      - debug/pr94-qualified-lowering
+
+permissions:
+  contents: read
+
+jobs:
+  targeted:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Run targeted integration regressions
+        shell: bash
+        run: |
+          set +e
+          failures=0
+          tests=(
+            an_empty_scratch_argument_uses_the_contextual_result_representation
+            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
+            development_provider_boolean_result_remains_a_reload_boundary
+            nested_surface_for_preserves_returned_array_authority
+            owned_merge_sort_prepares_and_emits_with_recursive_store_results
+            owned_radix_sorts_prepare_and_emit_with_recursive_store_results
+            recursive_list_prepares_with_a_runtime_recursive_variant_argument
+            runtime_memory_lowering_fixture_prepares_and_emits_all_builders
+            surface_iteration_erases_iterator_sum_dispatch
+            engine_entry_points_prepare_and_the_game_loop_emits_wasm
+          )
+          for test_name in "${tests[@]}"; do
+            echo "===== $test_name ====="
+            timeout 90s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --nocapture --test-threads=1
+            status=$?
+            echo "===== status $status: $test_name ====="
+            if [ "$status" -ne 0 ]; then failures=1; fi
+          done
+          exit "$failures"
