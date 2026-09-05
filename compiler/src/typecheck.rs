@@ -5001,7 +5001,10 @@ impl Checker {
                     } else {
                         Typing::Scheme {
                             level: self.level.get(),
-                            body: substitute_inference_variables(body, &scheme_replacements),
+                            body: substitute_inference_variables(
+                                self.qualify_type(body),
+                                &scheme_replacements,
+                            ),
                         }
                     };
                     Rc::make_mut(&mut types.names).insert(name.clone(), typing);
@@ -7051,6 +7054,7 @@ impl Checker {
             .borrow()
             .get(module.as_str(), body)
             .cloned()
+            .map(|type_| self.qualify_type(type_))
             .or_else(|| {
                 self.context
                     .closure_signature(module.as_str(), *body)
@@ -7876,7 +7880,6 @@ impl Checker {
         match typing {
             Typing::Mono(type_) => self.activate_qualified_type(type_),
             Typing::Scheme { level, body } => {
-                let body = self.qualify_type(body);
                 let body = self.freshen(body, level, &mut HashMap::new());
                 self.activate_qualified_type(body)
             }
@@ -7902,10 +7905,7 @@ impl Checker {
             .any(|candidate| types.same(*candidate, bound_id))
     }
 
-    fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
-        if let Some(replacements) = self.copy_qualified_scheme_constraints(type_, level) {
-            return replacements;
-        }
+    fn syntactic_type_variables(type_: &Type) -> BTreeSet<VariableId> {
         let mut roots = BTreeSet::new();
         let mut pending = vec![type_];
         while let Some(type_) = pending.pop() {
@@ -7949,6 +7949,37 @@ impl Checker {
                 | Type::Opaque(_)
                 | Type::Top
                 | Type::Bottom => {}
+            }
+        }
+        roots
+    }
+
+    fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
+        let qualified = self.qualify_type(type_.clone());
+        let type_ = &qualified;
+        let mut roots = Self::syntactic_type_variables(type_);
+        let mut pending_roots = if matches!(qualified, Type::Qualified { .. }) {
+            roots.clone()
+        } else {
+            BTreeSet::new()
+        };
+        while let Some(owner) = pending_roots.pop_first() {
+            let variable = self.variables.borrow()[owner as usize].clone();
+            if variable.level <= level {
+                continue;
+            }
+            for (bounds, direction) in [
+                (variable.lower, BoundDirection::Lower),
+                (variable.upper, BoundDirection::Upper),
+            ] {
+                for bound in self.project_scheme_bounds(owner, bounds, direction, &roots, level) {
+                    let type_ = self.expand_constraint(bound);
+                    for variable in Self::syntactic_type_variables(&type_) {
+                        if roots.insert(variable) {
+                            pending_roots.insert(variable);
+                        }
+                    }
+                }
             }
         }
         let snapshots = {
@@ -7997,6 +8028,9 @@ impl Checker {
             variables[replacement as usize].lower = lower;
             variables[replacement as usize].upper = upper;
         }
+        // Requirements and their type graph use the same replacement map.
+        // Keep the immutable qualified scheme independent of later uses of the
+        // source inference graph.
         replacements
     }
 
@@ -16293,3 +16327,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "member_constraint_tests.rs"]
+mod member_constraint_tests;

@@ -135,3 +135,32 @@ fn prefix_negation_uses_the_selected_numeric_member() {
         }
     });
 }
+
+#[test]
+fn generic_dispatch_keeps_call_site_domains_without_prelude() {
+    with_stack(|| {
+        let mut compiler = session(&format!(
+            "{DISPATCH}const sum = fn left => fn right => left + right\nreturn (sum 2 3, sum (@float.of_int 2) (@float.of_int 3), sum (@f32.of_int 2) (@f32.of_int 3))\n"
+        ));
+        assert_result(
+            &mut compiler,
+            "{ .0 = Int; .1 = F64; .2 = F32 }",
+            "(5, 5, 5f32)",
+        );
+        let prepared = compiler.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+}
+
+#[test]
+fn generic_dispatch_rejects_unsupported_operands_even_with_unused_result() {
+    with_stack(|| {
+        for call in ["sum () ()", "sum integer (@float.of_int 3)"] {
+            let compiler = session(&format!(
+                "{DISPATCH}const sum = fn left => fn right => left + right\nlet integer :: @type.int\nlet integer = 2\nlet unused = {call}\nreturn ()\n"
+            ));
+            let checked = compiler.check_module("main.blot");
+            assert_eq!(checked["ok"], false, "{call}: {checked}");
+        }
+    });
+}

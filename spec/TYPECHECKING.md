@@ -1544,3 +1544,9 @@ signature. Numeric candidate trials and failed union branches roll back
 requirement state as well as ordinary subtype bounds. Closed interfaces retain
 any requirements beneath their quantifiers; they must not be silently erased by
 serialization.
+
+Qualified schemes freeze their requirements at generalization. Freshening a use
+never rediscovers requirements from an already-used source graph. Projection
+retains intermediate argument, result, and effect variables reachable through
+structural member bounds, while collapsing non-root alias chains as for ordinary
+schemes. Unqualified schemes retain the ordinary projection contract.

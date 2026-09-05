@@ -182,13 +182,28 @@ impl Checker {
     }
 
     pub(super) fn qualify_type(&self, type_: Type) -> Type {
-        let requirements = self.reachable_member_requirements(&type_);
+        let (mut requirements, body) = match type_ {
+            Type::Qualified { requirements, body } => (
+                requirements.into_iter().collect::<Vec<_>>(),
+                Rc::unwrap_or_clone(body),
+            ),
+            other => (Vec::new(), other),
+        };
+        for requirement in self.reachable_member_requirements(&body) {
+            if !requirements.iter().any(|existing| {
+                existing.name == requirement.name
+                    && same_type(&existing.subject, &requirement.subject)
+                    && same_type(&existing.member, &requirement.member)
+            }) {
+                requirements.push(requirement);
+            }
+        }
         if requirements.is_empty() {
-            return type_;
+            return body;
         }
         Type::Qualified {
             requirements: requirements.into(),
-            body: Rc::new(type_),
+            body: Rc::new(body),
         }
     }
 
@@ -206,26 +221,6 @@ impl Checker {
             }
             other => map_type_children(other, |child| self.activate_qualified_type(child)),
         }
-    }
-
-    /// Keep the entire connected qualified graph when generalizing. The usual
-    /// root-only projection is not sufficient for an associated member's hidden
-    /// parameter, result, and effect variables.
-    pub(super) fn copy_qualified_scheme_constraints(
-        &self,
-        type_: &Type,
-        level: u32,
-    ) -> Option<HashMap<VariableId, Type>> {
-        let qualified = self.qualify_type(type_.clone());
-        if !matches!(qualified, Type::Qualified { .. }) {
-            return None;
-        }
-        let previous = self.level.replace(level + 1);
-        let mut replacements = HashMap::new();
-        let qualified = self.freshen(qualified, level, &mut replacements);
-        self.level.set(previous);
-        self.activate_qualified_type(qualified);
-        Some(replacements)
     }
 
     pub(super) fn has_member_requirements(&self, type_: &Type) -> bool {
