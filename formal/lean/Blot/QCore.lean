@@ -68,6 +68,12 @@ mutual
             | .StructuralForall variables body =>
                 rigidBindersValid rigids variables &&
                 scopedValue arena remaining depth (variables ++ rigids) body
+            | .StructuralQualified body names subjects members =>
+                decide (names.length = subjects.length) &&
+                decide (names.length = members.length) &&
+                scopedValue arena remaining depth rigids body &&
+                subjects.all (scopedValue arena remaining depth rigids) &&
+                members.all (scopedValue arena remaining depth rigids)
             | .StructuralRange _ _ _ | .StructuralUnit => true
             | .StructuralFunction _ parameter effects result =>
                 scopedValue arena remaining depth rigids parameter &&

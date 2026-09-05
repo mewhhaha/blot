@@ -70,8 +70,7 @@ fn qualified_requirement_rejects_missing_or_mixed_members() {
         let body = signature(&checker, true);
         let instance = checker.instantiate(Typing::Scheme { level: 0, body });
         let error = application(&checker, instance, left, right)
-            .err()
-            .expect("discarding the result must not discard requirements");
+            .expect_err("discarding the result must not discard requirements");
         assert_eq!(error.code, code, "{}", error.message);
     }
 }
