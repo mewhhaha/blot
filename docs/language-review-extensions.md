@@ -1,31 +1,30 @@
-# Language review: implemented library extensions
+# Language review: library extensions
 
-These modules are ordinary Blot source. They do not add primitives, grammar,
-implicit imports, or a second semantic implementation. Normative integration
-into `LANGUAGE.md` is still required before the draft is ready for review.
+These modules are ordinary Blot source. They add no primitives, grammar,
+implicit imports, runtime reflection, or alternate semantic implementation.
+Normative integration into `LANGUAGE.md` is still required before this draft is
+ready for review.
 
-## Non-trapping partial comparison
+## Floating-point partial comparison
 
-`const Float = import "blot:float"` provides `PartialOrdering` and extended `F64`
-and `F32` namespaces. Each namespace retains its original members and adds:
+`const Float = import "blot:float"` provides `PartialOrdering` and extended
+`F64` and `F32` namespaces. Each adds `partial_cmp` and `cmp_exn`.
 
-- `partial_cmp : F64 -> F64 -> PartialOrdering` (respectively `F32`).
-- `cmp_exn`, an explicitly named alias for the existing trapping `cmp` operation.
+`partial_cmp` takes two values of its precision and returns
+`#Equal | #Greater | #Less | #Unordered`. Either NaN produces `#Unordered`.
+Equal signed zeroes and equal infinities produce `#Equal`. This is a total API
+reporting a partial order, not a total ordering of floating-point values.
+`cmp_exn` explicitly names the existing NaN-trapping comparison.
 
-`PartialOrdering` is `#Equal | #Greater | #Less | #Unordered`. Either NaN operand
-produces `#Unordered`; equal signed zeroes and equal infinities produce `#Equal`.
-Other operands use the existing precision-specific ordering. This is a total API
-for reporting a partial order, not a total order on floating-point values.
+The implementation checks NaN before the trapping primitive. A closed integer
+intermediate avoids the current backend's nested dynamic-sum restriction.
+Internal codes are not a public API. Host callers use the emitted ABI manifest;
+exported comparators should carry a closed signature.
 
-The implementation tests NaN before invoking the trapping primitive. A closed
-integer intermediate avoids the backend's current nested dynamic-sum widening
-restriction. Internal codes are not a public API. Host callers use the emitted
-ABI manifest rather than assuming constructor tags. An exported comparator should
-carry an explicit closed signature, as in `src/node/language_review.test.ts`.
+## Pipelines
 
-## Pipeline adapters
-
-`open import "blot:pipeline"` exports configuration-first, data-last adapters:
+`open import "blot:pipeline"` provides configuration-first, data-last
+`map_with`, `filter_with`, and `fold_with`:
 
 ```blot
 values
@@ -34,25 +33,63 @@ values
   |> fold_with step initial
 ```
 
-`map_with` takes a transformation and then an array. `filter_with` takes a Boolean
-predicate and then an array. `fold_with` takes a tuple-argument step, an initial
-state, and then an array. The final data argument retains the underlying
-library's borrowing behavior. These initial adapters have pure callback
-signatures; effect-polymorphic variants are not claimed by this change.
+The final array argument retains the base library's borrowing behavior. These
+initial adapters have pure callback signatures. Effect-polymorphic variants are
+not claimed. The original tuple-taking APIs remain available; no special
+application or pipeline saturation rule was introduced.
 
-The tuple-oriented base APIs remain available. These adapters introduce no
-special partial-application or pipeline saturation rule.
+## Restricted derivation
+
+`const Derive = import "blot:derive"` exposes `fields` and `integer_record`.
+`fields` accepts structural schemas containing integer/text scalars and returns
+the schema with attached `.fields` evidence. Each descriptor has a `.type` and a
+checked `.read` operation. Arrays, functions, opaque nominal values, and other
+unsupported fields are refused, not given unsafe getters. The enclosing schema
+and selected field type remain checked at each use.
+
+The getter takes a deferred argument, keeping static field-name evidence staged.
+It is not an unrestricted first-class runtime projection. This restriction
+avoids a reproduced backend specialization problem described in
+`experiments/language-review/README.md`; the underlying cache is not fixed.
+
+`integer_record` accepts nonempty integer-only record schemas and attaches an
+`.encode` operation. It is a restricted product encoder, not JSON, not a sum
+codec, and not a decoder. Each field is encoded as `N:name=value;`, where `N` is
+the Unicode-scalar length of the field name. Field order follows the reflected
+schema's declaration order. Runtime code uses ordinary projections and text
+operations, not runtime reflection.
+
+```blot
+const Codec = Derive.integer_record { .count = Int; .code = Int; }
+let encode :: Int -> Text
+let encode = fn count => Codec.encode { .count = count; .code = 7; }
+```
+
+Ownership-aware consuming extraction, rebuilding evidence, sums, private
+construction authority, and a general derivation certificate are still research
+work. The tests include an extra owned field under width subtyping so a
+successful scalar getter cannot silently discard another obligation.
+
+## Editor and completion experiments
+
+Control-flow hovers show the nearest `do` or module result scope, the nearest
+loop for `break`, and the loop accumulator emitted by surface lowering.
+Accumulator discovery uses lowered syntax rather than duplicating shadowing
+rules. Highlight ranges are available internally, but LSP document-highlight
+integration is not part of this change.
+
+`experiments/language-review/completions.ts` recognizes experimental
+`@hole "name"` markers with Baba, substitutes bounded single-line expressions,
+and validates the complete result with the real Rust/Wasm checker. It does not
+implement native expression holes or expose all local obligations. Unresolved
+markers remain production errors. Candidate checking is not an untrusted-code
+sandbox and may execute ordinary compile-time code.
 
 ## Validation
 
-`node --import tsx --test src/node/language_review.test.ts` passes 12 tests against
-the Rust/Wasm compiler artifact from main commit
-`bbd33c00275189a45d22ad6c23cb231567d0d583` plus these ordinary source modules.
-Tests include runtime F32/F64 parameters, NaN in either position, infinities,
-signed zero, F32 rounding, trapping aliases, evaluator/Wasm agreement, borrowed
-pipeline inputs, Text mapping, empty arrays, and full-width i64 decimal values.
-
-The oversized-computed-Int test records an existing rejection, not an implemented
-arbitrary-precision language extension. Core operator inference, predicate
-certificates, numeric lexical extensions, and native expression holes are not
-implemented by these library changes.
+The implementation tracker records commands and results. Tests cover dynamic
+F32/F64 parameters, NaN, infinities, signed zero, F32 rounding, trapping
+aliases, evaluator/Wasm agreement, borrowed pipeline inputs, scalar evidence,
+negative ownership cases, canonical Text results, scope hovers, and completion
+rejection. Core overload coherence, predicate summaries, numeric lexical
+extensions, and native obligation-aware holes are not completed features.

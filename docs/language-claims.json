@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "claims": [
+    {
+      "id": "full-width-decimal",
+      "status": "accepted",
+      "source": "return 9223372036854775807\n",
+      "display": "9223372036854775807"
+    },
+    {
+      "id": "short-circuit-and",
+      "status": "accepted",
+      "source": "open import \"blot:prelude\"\nreturn False && ((1 / 0) == 0)\n",
+      "display": "false"
+    },
+    {
+      "id": "short-circuit-or",
+      "status": "accepted",
+      "source": "open import \"blot:prelude\"\nreturn True || ((1 / 0) == 0)\n",
+      "display": "true"
+    },
+    {
+      "id": "inferred-text-equality",
+      "status": "accepted",
+      "source": "open import \"blot:prelude\"\nreturn \"same\" == \"same\"\n",
+      "display": "true"
+    },
+    {
+      "id": "explicit-filtering-pattern",
+      "status": "accepted",
+      "source": "open import \"blot:prelude\"\nlet total = 0\nfor case #Some value in Iter.items [#Some 1, #None, #Some 2]:\n  total := total + value\nreturn total\n",
+      "display": "3"
+    },
+    {
+      "id": "named-equality-defaults-to-int",
+      "status": "current-limit",
+      "source": "open import \"blot:prelude\"\nlet same = fn left => fn right => left == right\nreturn same \"same\" \"same\"\n",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "id": "predicate-helper-loses-bounds",
+      "status": "current-limit",
+      "source": "open import \"blot:prelude\"\nlet in_bounds = fn (index, length) => index >= 0 && index < length\nlet at = fn (values, index) => do:\n  if in_bounds (index, @array.len values):\n    return #Some (@array.get values index)\n  return #None\nreturn at ([10, 20], 1)\n",
+      "code": "BLOT_UNPROVEN_INDEX"
+    },
+    {
+      "id": "unresolved-expression-hole",
+      "status": "rejected",
+      "source": "return @hole \"result\"\n",
+      "code": "BLOT_UNKNOWN_PRIMITIVE"
+    },
+    {
+      "id": "affine-continuation-twice",
+      "status": "rejected",
+      "file": "examples/rejected/semantics/affine_resumed_twice.blot",
+      "code": "BLOT_LINEAR_CONSUMED_TWICE"
+    },
+    {
+      "id": "linear-suspension-abort",
+      "status": "rejected",
+      "file": "examples/rejected/semantics/linear_handler_abort.blot",
+      "code": "BLOT_LINEAR_HANDLER_MAY_ABORT"
+    },
+    {
+      "id": "explicit-linear-cancellation",
+      "status": "accepted",
+      "file": "examples/handler_cancellation.blot",
+      "display": "7"
+    },
+    {
+      "id": "affine-handler-abort",
+      "status": "accepted",
+      "file": "examples/handler_aborts.blot",
+      "display": "0"
+    },
+    {
+      "id": "inline-bounds",
+      "status": "accepted",
+      "source": "open import \"blot:prelude\"\nlet at = fn (values, index) => do:\n  if index >= 0 && index < @array.len values:\n    return @array.get values index\n  return 0\nreturn at ([10, 20], 1)\n",
+      "display": "20"
+    }
+  ]
+}

@@ -33,7 +33,9 @@ return compare
 `,
       async (compiler, path) => {
         const artifact = await compiler.compile(path);
-        const manifest = JSON.parse(new TextDecoder().decode(artifact.manifestBytes));
+        const manifest = JSON.parse(
+          new TextDecoder().decode(artifact.manifestBytes),
+        );
         const exported = manifest.exports.find(
           (entry: { sourceName: string }) => entry.sourceName === "default",
         );
@@ -43,17 +45,28 @@ return compare
         const names: string[] = exported.function.result.cases
           .map((entry: { name: string }) => entry.name).sort();
         assert.deepEqual(names, ["Equal", "Greater", "Less", "Unordered"]);
-        const { instance } = await WebAssembly.instantiate(Uint8Array.from(artifact.wasm));
+        const { instance } = await WebAssembly.instantiate(
+          Uint8Array.from(artifact.wasm),
+        );
         const compare = instance.exports[exported.name];
         assert.equal(typeof compare, "function");
-        if (typeof compare !== "function") throw new Error("missing comparison export");
+        if (typeof compare !== "function") {
+          throw new Error("missing comparison export");
+        }
         const cases: readonly (readonly [number, number, string])[] = [
-          [1, 2, "Less"], [2, 1, "Greater"], [2, 2, "Equal"],
-          [0, -0, "Equal"], [-0, 0, "Equal"],
-          [Infinity, Infinity, "Equal"], [-Infinity, -Infinity, "Equal"],
-          [-Infinity, Infinity, "Less"], [Infinity, 1, "Greater"],
-          [NaN, 1, "Unordered"], [1, NaN, "Unordered"],
-          [NaN, NaN, "Unordered"], [NaN, Infinity, "Unordered"],
+          [1, 2, "Less"],
+          [2, 1, "Greater"],
+          [2, 2, "Equal"],
+          [0, -0, "Equal"],
+          [-0, 0, "Equal"],
+          [Infinity, Infinity, "Equal"],
+          [-Infinity, -Infinity, "Equal"],
+          [-Infinity, Infinity, "Less"],
+          [Infinity, 1, "Greater"],
+          [NaN, 1, "Unordered"],
+          [1, NaN, "Unordered"],
+          [NaN, NaN, "Unordered"],
+          [NaN, Infinity, "Unordered"],
         ];
         for (const [left, right, expected] of cases) {
           const tag: unknown = compare(left, right);
@@ -101,9 +114,13 @@ return less
 `,
       async (compiler, path) => {
         const artifact = await compiler.compile(path);
-        const { instance } = await WebAssembly.instantiate(Uint8Array.from(artifact.wasm));
+        const { instance } = await WebAssembly.instantiate(
+          Uint8Array.from(artifact.wasm),
+        );
         const less = instance.exports["blot:default"];
-        if (typeof less !== "function") throw new Error("missing comparison export");
+        if (typeof less !== "function") {
+          throw new Error("missing comparison export");
+        }
         assert.equal(less(1, 2), 1n);
         assert.throws(() => less(NaN, 1), WebAssembly.RuntimeError);
         assert.throws(() => less(1, NaN), WebAssembly.RuntimeError);
