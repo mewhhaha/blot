@@ -94,6 +94,33 @@ record names keep their text requirement instead of failing later as dynamic.
 This elaboration rule adds no cross-domain subtype edge: a value already bound
 in one numeric domain still needs an explicit conversion to another.
 
+### Source-member application requirements
+
+A fixity expands to an ordinary source call; its spelling contributes no type
+rule. For `(@type.inferred receiver).member`, elaboration settles the receiver,
+reifies its type value, and selects the actual attached member. A reified
+singleton keeps its bounds while using its underlying scalar domain for this
+lookup. Ordinary projection on a scalar value does not acquire type members.
+
+An unresolved receiver is a specialization requirement on its enclosing source
+closures, including every curried parameter stage. It is not an implicit `Int`
+constraint. Concrete calls check the captured source implementation with their
+own argument types. Explicit attached signatures remain obligations: source
+specialization may preserve a narrower result but cannot accept an argument or
+effect forbidden by that signature. A concrete missing member is rejected;
+member spelling never substitutes for the selected function's contract.
+
+Primitive interval transfer occurs only after ordinary primitive argument
+constraints succeed. It uses the identity of the selected integer primitive, not
+the dispatch field's name. Finite union operands may be conservatively replaced
+by their interval hull. Addition, subtraction, and negation transform known
+bounds; multiplication and zero-free division use finite endpoint extrema;
+remainder uses the numerator sign and divisor magnitude. A divisor interval
+containing zero or an interval crossing the signed runtime boundary supplies no
+extra refinement. Existing safety analyses remain responsible for trap
+obligations. These transfers introduce no new type constructor and never narrow
+a custom source operation merely because it is named `.add`.
+
 ## 1. Type algebra
 
 Let labels range over interned field, constructor, and effect names. Let scalar

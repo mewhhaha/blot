@@ -1118,6 +1118,22 @@ impl Context {
     }
 
     pub(crate) fn decorate_operator_type(&self, value: Value) -> Value {
+        // Reified singleton types use their scalar inhabitant as the canonical
+        // type value. Preserve those bounds while recovering the member domain.
+        // Ordinary scalar projection does not call this type-only entry point.
+        let value = match value {
+            Value::Int(integer) => Value::Range {
+                low: Box::new(Value::Int(integer.clone())),
+                high: Box::new(Value::Int(integer)),
+                domain: Some(ValueDomain::Int),
+            },
+            Value::Text(text) => Value::Range {
+                low: Box::new(Value::Text(text.clone())),
+                high: Box::new(Value::Text(text)),
+                domain: Some(ValueDomain::Text),
+            },
+            value => value,
+        };
         let key = operator_type_key(&value);
         let extensions = self.operator_extensions.borrow();
         let extension = extensions

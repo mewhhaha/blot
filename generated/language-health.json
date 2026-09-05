@@ -734,7 +734,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 15735
+      "lines": 15736
     },
     {
       "path": "compiler/src/hir.rs",
@@ -742,7 +742,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10202
+      "lines": 10225
     },
     {
       "path": "compiler/src/backend.rs",
@@ -750,7 +750,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6783
+      "lines": 6799
     },
     {
       "path": "compiler/src/ownership.rs",

@@ -16,7 +16,9 @@ pub(super) const ARITHMETIC: &[(&str, usize)] = &[
 ];
 
 pub(super) fn primitive_result(checker: &Checker, name: &str, arguments: &[Type]) -> Option<Type> {
-    let (_, arity) = ARITHMETIC.iter().find(|(primitive, _)| *primitive == name)?;
+    let (_, arity) = ARITHMETIC
+        .iter()
+        .find(|(primitive, _)| *primitive == name)?;
     if arguments.len() != *arity {
         return None;
     }
@@ -28,8 +30,15 @@ pub(super) fn primitive_result(checker: &Checker, name: &str, arguments: &[Type]
             Type::Variable(id) => checker.pending_numeric_literals.borrow().get(id).cloned(),
             _ => None,
         };
-        if let Some(NumericLiteralFact { kind: NumericLiteralKind::Integer(value), .. }) = literal {
-            inputs.push(IntegerInterval { low: Some(value.clone()), high: Some(value) });
+        if let Some(NumericLiteralFact {
+            kind: NumericLiteralKind::Integer(value),
+            ..
+        }) = literal
+        {
+            inputs.push(IntegerInterval {
+                low: Some(value.clone()),
+                high: Some(value),
+            });
             continue;
         }
         let positive = checker.settle(argument.clone(), true);
@@ -44,9 +53,15 @@ pub(super) fn primitive_result(checker: &Checker, name: &str, arguments: &[Type]
         }
         // A hull avoids a Cartesian explosion for unions. Losing a gap loses
         // precision, never inhabitants of a possible result.
-        let low = intervals.iter().map(|interval| interval.low.clone()).collect::<Option<Vec<_>>>()
+        let low = intervals
+            .iter()
+            .map(|interval| interval.low.clone())
+            .collect::<Option<Vec<_>>>()
             .and_then(|bounds| bounds.into_iter().min());
-        let high = intervals.iter().map(|interval| interval.high.clone()).collect::<Option<Vec<_>>>()
+        let high = intervals
+            .iter()
+            .map(|interval| interval.high.clone())
+            .collect::<Option<Vec<_>>>()
             .and_then(|bounds| bounds.into_iter().max());
         inputs.push(IntegerInterval { low, high });
     }
@@ -69,12 +84,28 @@ fn transfer(name: &str, inputs: &[IntegerInterval]) -> Option<IntegerInterval> {
         let right = inputs.get(1)?;
         match name {
             "@int.add" => IntegerInterval {
-                low: left.low.as_ref().zip(right.low.as_ref()).map(|(a, b)| a + b),
-                high: left.high.as_ref().zip(right.high.as_ref()).map(|(a, b)| a + b),
+                low: left
+                    .low
+                    .as_ref()
+                    .zip(right.low.as_ref())
+                    .map(|(a, b)| a + b),
+                high: left
+                    .high
+                    .as_ref()
+                    .zip(right.high.as_ref())
+                    .map(|(a, b)| a + b),
             },
             "@int.sub" => IntegerInterval {
-                low: left.low.as_ref().zip(right.high.as_ref()).map(|(a, b)| a - b),
-                high: left.high.as_ref().zip(right.low.as_ref()).map(|(a, b)| a - b),
+                low: left
+                    .low
+                    .as_ref()
+                    .zip(right.high.as_ref())
+                    .map(|(a, b)| a - b),
+                high: left
+                    .high
+                    .as_ref()
+                    .zip(right.low.as_ref())
+                    .map(|(a, b)| a - b),
             },
             "@int.mul" | "@int.div" | "@int.rem" => {
                 let (a, b) = (left.low.as_ref()?, left.high.as_ref()?);
@@ -85,12 +116,26 @@ fn transfer(name: &str, inputs: &[IntegerInterval]) -> Option<IntegerInterval> {
                 if name == "@int.rem" {
                     if a == b && c == d {
                         let value = a % c;
-                        IntegerInterval { low: Some(value.clone()), high: Some(value) }
+                        IntegerInterval {
+                            low: Some(value.clone()),
+                            high: Some(value),
+                        }
                     } else {
                         let magnitude = c.abs().max(d.abs()) - 1;
-                        let low = if a < &BigInt::from(0) { a.clone().max(-&magnitude) } else { BigInt::from(0) };
-                        let high = if b > &BigInt::from(0) { b.clone().min(magnitude) } else { BigInt::from(0) };
-                        IntegerInterval { low: Some(low), high: Some(high) }
+                        let low = if a < &BigInt::from(0) {
+                            a.clone().max(-&magnitude)
+                        } else {
+                            BigInt::from(0)
+                        };
+                        let high = if b > &BigInt::from(0) {
+                            b.clone().min(magnitude)
+                        } else {
+                            BigInt::from(0)
+                        };
+                        IntegerInterval {
+                            low: Some(low),
+                            high: Some(high),
+                        }
                     }
                 } else {
                     let values = if name == "@int.mul" {
@@ -112,8 +157,14 @@ fn transfer(name: &str, inputs: &[IntegerInterval]) -> Option<IntegerInterval> {
     // Int contract and overflow checks remain authoritative in that case.
     let minimum = BigInt::from(i64::MIN);
     let maximum = BigInt::from(i64::MAX);
-    if result.low.as_ref().is_some_and(|value| value < &minimum || value > &maximum)
-        || result.high.as_ref().is_some_and(|value| value < &minimum || value > &maximum)
+    if result
+        .low
+        .as_ref()
+        .is_some_and(|value| value < &minimum || value > &maximum)
+        || result
+            .high
+            .as_ref()
+            .is_some_and(|value| value < &minimum || value > &maximum)
     {
         return None;
     }
@@ -129,9 +180,13 @@ mod tests {
         for (name, arity) in ARITHMETIC {
             for low in -4..=4_i64 {
                 for high in low..=4_i64 {
-                    let left = IntegerInterval { low: Some(low.into()), high: Some(high.into()) };
+                    let left = IntegerInterval {
+                        low: Some(low.into()),
+                        high: Some(high.into()),
+                    };
                     if *arity == 1 {
-                        let result = transfer(name, &[left]).expect("small negation has an interval");
+                        let result =
+                            transfer(name, &[left]).expect("small negation has an interval");
                         assert_eq!(result.low, Some((-high).into()));
                         assert_eq!(result.high, Some((-low).into()));
                         continue;
@@ -139,11 +194,21 @@ mod tests {
                     for right_low in -4..=4_i64 {
                         for right_high in right_low..=4_i64 {
                             let inputs = [
-                                IntegerInterval { low: Some(low.into()), high: Some(high.into()) },
-                                IntegerInterval { low: Some(right_low.into()), high: Some(right_high.into()) },
+                                IntegerInterval {
+                                    low: Some(low.into()),
+                                    high: Some(high.into()),
+                                },
+                                IntegerInterval {
+                                    low: Some(right_low.into()),
+                                    high: Some(right_high.into()),
+                                },
                             ];
                             let Some(result) = transfer(name, &inputs) else {
-                                assert!(matches!(*name, "@int.div" | "@int.rem") && right_low <= 0 && right_high >= 0);
+                                assert!(
+                                    matches!(*name, "@int.div" | "@int.rem")
+                                        && right_low <= 0
+                                        && right_high >= 0
+                                );
                                 continue;
                             };
                             for a in low..=high {
@@ -156,8 +221,14 @@ mod tests {
                                         "@int.rem" => a % b,
                                         _ => unreachable!(),
                                     });
-                                    assert!(result.low.as_ref().is_none_or(|low| low <= &value), "{name}: lower bound");
-                                    assert!(result.high.as_ref().is_none_or(|high| &value <= high), "{name}: upper bound");
+                                    assert!(
+                                        result.low.as_ref().is_none_or(|low| low <= &value),
+                                        "{name}: lower bound"
+                                    );
+                                    assert!(
+                                        result.high.as_ref().is_none_or(|high| &value <= high),
+                                        "{name}: upper bound"
+                                    );
                                 }
                             }
                         }
@@ -169,10 +240,19 @@ mod tests {
 
     #[test]
     fn integer_result_overflow_does_not_create_a_wrapped_refinement() {
-        let maximum = IntegerInterval { low: Some(i64::MAX.into()), high: Some(i64::MAX.into()) };
-        let one = IntegerInterval { low: Some(1.into()), high: Some(1.into()) };
+        let maximum = IntegerInterval {
+            low: Some(i64::MAX.into()),
+            high: Some(i64::MAX.into()),
+        };
+        let one = IntegerInterval {
+            low: Some(1.into()),
+            high: Some(1.into()),
+        };
         assert!(transfer("@int.add", &[maximum, one]).is_none());
-        let minimum = IntegerInterval { low: Some(i64::MIN.into()), high: Some(i64::MIN.into()) };
+        let minimum = IntegerInterval {
+            low: Some(i64::MIN.into()),
+            high: Some(i64::MIN.into()),
+        };
         assert!(transfer("@int.neg", &[minimum]).is_none());
     }
 }

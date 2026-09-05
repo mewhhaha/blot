@@ -10081,6 +10081,29 @@ return F32.add (-1) 2.5
         run_with_compiler_test_stack(|| {
             let cases = [
                 (
+                    "arithmetic-result-interval",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Int = @type.attach @type.int \"add\" @int.add\n",
+                        "const add = fn left => fn right => left + right\n",
+                        "let result :: @type.range 5 5\n",
+                        "let result = add 2 3\n",
+                        "return result\n",
+                    ),
+                    true,
+                ),
+                (
+                    "arithmetic-wrong-result-rejected",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Int = @type.attach @type.int \"add\" @int.add\n",
+                        "let result :: @type.range 6 6\n",
+                        "let result = 2 + 3\n",
+                        "return result\n",
+                    ),
+                    false,
+                ),
+                (
                     "generic-int-and-float",
                     concat!(
                         "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",

@@ -1,3 +1,4 @@
+mod integer;
 mod operators;
 
 use std::cell::{Cell, RefCell};

@@ -152,7 +152,15 @@ impl Checker {
         );
         let needs_specialization =
             self.member_value_needs_specialization(&member, &mut HashSet::new());
-        if !attached && !needs_specialization {
+        let integer_primitive = matches!(
+            &member,
+            Value::Primitive { name, arity, applied }
+                if integer::ARITHMETIC.iter().any(|(primitive, count)| {
+                    name == primitive && arity == count
+                        && applied.len() + arguments.len() == *arity
+                })
+        );
+        if !attached && !needs_specialization && !integer_primitive {
             return Ok(None);
         }
         if matches!(
@@ -278,7 +286,18 @@ impl Checker {
                         .type_;
                 }
             }
-            return self.apply_member_signature(type_, arguments, span);
+            let mut inferred = self.apply_member_signature(type_, arguments, span)?;
+            if let Value::Primitive { name, applied, .. } = value {
+                let mut operands = applied
+                    .iter()
+                    .map(|value| self.bridge_runtime_value(value))
+                    .collect::<Vec<_>>();
+                operands.extend_from_slice(arguments);
+                if let Some(refined) = integer::primitive_result(self, name, &operands) {
+                    inferred.type_ = refined;
+                }
+            }
+            return Ok(inferred);
         };
         if self_name.is_some() {
             let type_ = self.static_member_type(value).ok_or_else(|| {

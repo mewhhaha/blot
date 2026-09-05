@@ -173,10 +173,31 @@ selector must be a literal or a `const` value so lowering receives an immediate
 certificate. The named `x`, `y`, `z`, and `w` operations remain the shortest
 spelling for fixed positions.
 
-There is no implicit conversion between the numeric types, and no operator
-serves more than one. An operator resolves to one binding by name (§4.7), so a
-`+` over both would have to dispatch on a value's type at run time. `F64.of_int`
-and `F64.truncate` cross explicitly; `truncate` rounds toward zero.
+There is no implicit conversion between bound numeric values. `F64.of_int` and
+`F64.truncate` cross explicitly; `truncate` rounds toward zero.
+
+An operator still resolves to one source binding by name (§4.7), but that
+binding can select a member of an operand's inferred type at compile time. The
+standard binary arithmetic operators and prefix `-` do this through `Op`. The
+same `+` therefore works for `Int`, `F64`, and `F32`; prefix `-` selects that
+type's attached `.negate`. This does not add runtime type dispatch or a
+cross-domain conversion.
+
+A selected source member's checked signature and implementation determine its
+arguments, effects, and result. The field spelling alone grants no numeric
+contract: a custom `.add` may return a text or a refined integer when its
+signature says so. A generic source wrapper retains the need for member lookup
+until its receiver type is known, and each concrete application checks that
+requirement independently instead of defaulting unknown operands to `Int`. A
+missing member at a concrete application is a diagnostic.
+
+Integer primitive application can preserve a conservative result interval for
+addition, subtraction, multiplication, division, remainder, and negation. These
+facts belong to the actual primitive, not to an operator's spelling. They flow
+through source dispatch and checked signatures. Division and remainder do not
+infer a narrower result when the divisor interval includes zero; uncertain or
+overflowing bounds retain the ordinary broad `Int` contract and do not establish
+a wrapping or overflow-freedom proof.
 
 A text literal is delimited by `"`. The defined escapes are:
 
