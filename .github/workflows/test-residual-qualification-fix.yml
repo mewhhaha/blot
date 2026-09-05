@@ -1,0 +1,62 @@
+name: Test residual qualification boundary fix
+
+on:
+  push:
+    branches:
+      - codex/unify-rust-diagnose
+    paths:
+      - .github/workflows/test-residual-qualification-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  test-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Apply candidate fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/typecheck.rs')
+          source = path.read_text()
+          old = '''    fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {\n        let type_ = self.qualify_type(type_);\n        self.boundary_materializations\n'''
+          new = '''    fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {\n        self.boundary_materializations\n'''
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one residual requalification site, found {source.count(old)}')
+          path.write_text(source.replace(old, new))
+          PY
+          git diff --check
+      - name: Compile tests once
+        run: cargo test --manifest-path compiler/Cargo.toml --no-run
+      - name: Verify regressions and qualified dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            an_empty_scratch_argument_uses_the_contextual_result_representation
+            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
+            development_provider_boolean_result_remains_a_reload_boundary
+            engine_entry_points_prepare_and_the_game_loop_emits_wasm
+            qualified_interface_round_trip_keeps_requirements
+            one_inferred_operator_function_is_reusable_across_numeric_domains
+          )
+          for test_name in "${tests[@]}"; do
+            echo "===== $test_name ====="
+            timeout 45s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --test-threads=1 --nocapture
+          done
+      - name: Commit candidate after validation
+        shell: bash
+        run: |
+          git rm .github/workflows/test-residual-qualification-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add compiler/src/typecheck.rs
+          git commit -m 'Avoid requalifying residual signatures'
+          git push origin HEAD:refs/heads/codex/unify-rust-diagnose
