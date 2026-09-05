@@ -1,0 +1,42 @@
+name: Draft operator offline workspace
+
+on:
+  push:
+    branches:
+      - codex/complete-operator-dispatch-20260905
+    paths:
+      - .github/workflows/operator-sandbox.yml
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/complete-operator-dispatch-20260905'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Package tracked source and public build dependencies without credentials
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/operator-sandbox/source/.cargo" "$RUNNER_TEMP/operator-sandbox/toolchain/bin"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/operator-sandbox/source"
+          cargo vendor --locked --versioned-dirs --manifest-path compiler/Cargo.toml "$RUNNER_TEMP/operator-sandbox/source/vendor" > "$RUNNER_TEMP/operator-sandbox/source/.cargo/config.toml"
+          sed -i "s|$RUNNER_TEMP/operator-sandbox/source/vendor|vendor|g" "$RUNNER_TEMP/operator-sandbox/source/.cargo/config.toml"
+          toolchain=$(rustc --print sysroot)
+          cp "$toolchain/bin/cargo" "$toolchain/bin/rustc" "$toolchain/bin/rustfmt" "$RUNNER_TEMP/operator-sandbox/toolchain/bin/"
+          cp -a "$toolchain/lib" "$RUNNER_TEMP/operator-sandbox/toolchain/"
+          tar -czf "$RUNNER_TEMP/operator-sandbox.tar.gz" -C "$RUNNER_TEMP/operator-sandbox" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: operator-offline-workspace
+          path: ${{ runner.temp }}/operator-sandbox.tar.gz
+          compression-level: 0
+          retention-days: 1
