@@ -24,18 +24,8 @@ jobs:
           from pathlib import Path
           path = Path('compiler/src/value.rs')
           source = path.read_text()
-          old = '''    let complete_signature = signature;
-    let signature = match complete_signature {
-        Value::Forall { body, .. } => body.as_ref(),
-        signature => signature,
-    };
-'''
-          new = '''    let complete_signature = signature;
-    let mut signature = complete_signature;
-    while let Value::Forall { body, .. } = signature {
-        signature = body.as_ref();
-    }
-'''
+          old = "    let complete_signature = signature;\n    let signature = match complete_signature {\n        Value::Forall { body, .. } => body.as_ref(),\n        signature => signature,\n    };\n"
+          new = "    let complete_signature = signature;\n    let mut signature = complete_signature;\n    while let Value::Forall { body, .. } = signature {\n        signature = body.as_ref();\n    }\n"
           if source.count(old) != 1:
               raise SystemExit(f'expected one attach-signature forall unwrap, found {source.count(old)}')
           path.write_text(source.replace(old, new, 1))
