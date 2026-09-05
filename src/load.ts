@@ -283,11 +283,17 @@ export function invalidateLoadedInputs(
   return invalidatedModules;
 }
 
+/**
+ * Load a graph, optionally re-resolving cached package edges after input changes.
+ * Unchanged resolutions retain their immutable loaded-node and AST identities.
+ * Callers using the default must invalidate package resolutions themselves.
+ */
 export async function load(
   path: string,
   cache: Map<string, Loaded> = modules,
   active: readonly string[] = [],
   inspect?: SourceInspector,
+  refreshPackageImports = false,
 ): Promise<Loaded> {
   const absolute = resolve(path);
   const cycleStart = active.indexOf(absolute);
@@ -302,11 +308,23 @@ export async function load(
   const nextActive = [...active, absolute];
   const cached = cache.get(absolute);
   if (cached !== undefined) {
-    return await rebindLoadedDependencies(cached, cache, nextActive, inspect);
+    return await rebindLoadedDependencies(
+      cached,
+      cache,
+      nextActive,
+      inspect,
+      refreshPackageImports,
+    );
   }
 
   if (absolute.endsWith(".blotc")) {
-    return await loadModuleCapsule(absolute, cache, active, inspect);
+    return await loadModuleCapsule(
+      absolute,
+      cache,
+      active,
+      inspect,
+      refreshPackageImports,
+    );
   }
 
   const source = await readFile(absolute, "utf8");
@@ -317,6 +335,7 @@ export async function load(
     nextActive,
     false,
     inspect,
+    refreshPackageImports,
   );
 }
 
@@ -325,12 +344,16 @@ async function rebindLoadedDependencies(
   cache: Map<string, Loaded>,
   active: readonly string[],
   inspect: SourceInspector | undefined,
+  refreshPackageImports: boolean,
 ): Promise<Loaded> {
   let changed = false;
   const dependencies = new Map<string, Loaded>();
   for (const [specifier, previous] of loaded.dependencies) {
     let dependency = cache.get(previous.path);
-    if (dependency === undefined) {
+    if (
+      dependency === undefined ||
+      (refreshPackageImports && isPackageSpecifier(specifier))
+    ) {
       let importer = loaded.path;
       if (loaded.storage.tag === "capsule") {
         importer = loaded.storage.path;
@@ -341,6 +364,7 @@ async function rebindLoadedDependencies(
         cache,
         active,
         inspect,
+        refreshPackageImports,
       );
     } else {
       const cycleStart = active.indexOf(dependency.path);
@@ -357,6 +381,7 @@ async function rebindLoadedDependencies(
         cache,
         [...active, dependency.path],
         inspect,
+        refreshPackageImports,
       );
     }
     dependencies.set(specifier, dependency);
@@ -388,6 +413,7 @@ export async function loadSource(
   source: string,
   cache: Map<string, Loaded> = new Map(),
   inspect?: SourceInspector,
+  refreshPackageImports = false,
 ): Promise<Loaded> {
   const absolute = resolve(path);
   return await loadSourceRevision(
@@ -397,6 +423,7 @@ export async function loadSource(
     [absolute],
     false,
     inspect,
+    refreshPackageImports,
   );
 }
 
@@ -416,6 +443,7 @@ export async function loadUncheckedSource(
     [absolute],
     true,
     undefined,
+    false,
   );
 }
 
@@ -426,6 +454,7 @@ async function loadSourceRevision(
   active: readonly string[],
   skipSourceValidation: boolean,
   inspect: SourceInspector | undefined,
+  refreshPackageImports: boolean,
 ): Promise<Loaded> {
   const parsed = skipSourceValidation
     ? await parseConcrete(source)
@@ -478,6 +507,7 @@ async function loadSourceRevision(
       cache,
       active,
       inspect,
+      refreshPackageImports,
     );
     dependencies.set(specifier, dependency);
   }
@@ -536,20 +566,39 @@ async function loadImport(
   cache: Map<string, Loaded>,
   active: readonly string[],
   inspect: SourceInspector | undefined,
+  refreshPackageImports: boolean,
 ): Promise<Loaded> {
   if (!isPackageSpecifier(specifier)) {
-    return await load(resolvePath(specifier, importer), cache, active, inspect);
+    return await load(
+      resolvePath(specifier, importer),
+      cache,
+      active,
+      inspect,
+      refreshPackageImports,
+    );
   }
   const exported = await resolvePackageExport(specifier, importer);
   if (exported.built !== undefined) {
     try {
-      return await load(exported.built, cache, active, inspect);
+      return await load(
+        exported.built,
+        cache,
+        active,
+        inspect,
+        refreshPackageImports,
+      );
     } catch (error) {
       if (!(error instanceof PackageArtifactError)) throw error;
     }
   }
   try {
-    return await load(exported.source, cache, active, inspect);
+    return await load(
+      exported.source,
+      cache,
+      active,
+      inspect,
+      refreshPackageImports,
+    );
   } catch (cause) {
     if (!(isNotFound(cause))) throw cause;
     throw new PackageArtifactError(
@@ -568,6 +617,7 @@ async function loadModuleCapsule(
   cache: Map<string, Loaded>,
   active: readonly string[],
   inspect: SourceInspector | undefined,
+  refreshPackageImports: boolean,
 ): Promise<Loaded> {
   let source: string;
   try {
@@ -633,6 +683,7 @@ async function loadModuleCapsule(
           cache,
           [...active, path],
           inspect,
+          refreshPackageImports,
         );
       }
       dependencies.set(imported.specifier, dependency);
@@ -676,7 +727,12 @@ function validateCapsuleDependencies(
   const sourceImports = [...new Set(importExpressions(module).values())].sort();
   const capsuleImports = encoded.imports.map((imported) => imported.specifier)
     .sort();
-  if (sourceImports.join("\0") !== capsuleImports.join("\0")) {
+  if (
+    sourceImports.length !== capsuleImports.length ||
+    sourceImports.some((specifier, index) =>
+      specifier !== capsuleImports[index]
+    )
+  ) {
     throw new PackageArtifactError(
       `Blot module capsule ${JSON.stringify(path)} has import edges for ${
         JSON.stringify(encoded.name)
@@ -687,7 +743,12 @@ function validateCapsuleDependencies(
     .sort();
   const capsuleIncludes = encoded.includes.map((included) => included.specifier)
     .sort();
-  if (sourceIncludes.join("\0") !== capsuleIncludes.join("\0")) {
+  if (
+    sourceIncludes.length !== capsuleIncludes.length ||
+    sourceIncludes.some((specifier, index) =>
+      specifier !== capsuleIncludes[index]
+    )
+  ) {
     throw new PackageArtifactError(
       `Blot module capsule ${JSON.stringify(path)} has include edges for ${
         JSON.stringify(encoded.name)
@@ -704,7 +765,10 @@ function requireDependencyParity(
 ): void {
   const syntaxSet = [...new Set(syntax)].sort();
   const inspectedSet = [...new Set(inspected)].sort();
-  if (syntaxSet.join("\0") === inspectedSet.join("\0")) return;
+  if (
+    syntaxSet.length === inspectedSet.length &&
+    syntaxSet.every((specifier, index) => specifier === inspectedSet[index])
+  ) return;
   throw new Error(
     `${path} ${kind} differ between tooling syntax [${
       syntaxSet.join(", ")

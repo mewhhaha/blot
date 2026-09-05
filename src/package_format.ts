@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
+import { compareCodeUnits } from "./text_order.ts";
 import {
   decodePortableModule,
   encodePortableModule,
@@ -118,7 +119,7 @@ export async function readPackageManifest(
     if (
       name !== "." &&
       (!name.startsWith("./") ||
-        name.slice(2).split("/").some((segment) => segment.length === 0))
+        invalidPackageSegments(name.slice(2).split("/")))
     ) {
       throw new PackageArtifactError(
         `Blot package manifest ${
@@ -380,7 +381,7 @@ function normalizePayload(
   const modules = list(payload.modules, `modules in ${location}`).map(
     (value, ordinal) =>
       normalizeModule(value, `${location} module ${ordinal}`, normalizeAst),
-  ).sort((left, right) => left.id.localeCompare(right.id));
+  ).sort((left, right) => compareCodeUnits(left.id, right.id));
   const identifiers = new Set<string>();
   const names = new Set<string>();
   for (const module of modules) {
@@ -483,8 +484,12 @@ function normalizeModule(
     includes.map((included) => included.specifier),
     `${location} include specifier`,
   );
-  imports.sort((left, right) => left.specifier.localeCompare(right.specifier));
-  includes.sort((left, right) => left.specifier.localeCompare(right.specifier));
+  imports.sort((left, right) =>
+    compareCodeUnits(left.specifier, right.specifier)
+  );
+  includes.sort((left, right) =>
+    compareCodeUnits(left.specifier, right.specifier)
+  );
   return { id, name, ast, imports, includes };
 }
 
@@ -525,12 +530,12 @@ function canonicalPayload(payload: ModuleCapsulePayload): string {
       name: module.name,
       ast: module.ast,
       imports: [...module.imports].sort((left, right) =>
-        left.specifier.localeCompare(right.specifier)
+        compareCodeUnits(left.specifier, right.specifier)
       ),
       includes: [...module.includes].sort((left, right) =>
-        left.specifier.localeCompare(right.specifier)
+        compareCodeUnits(left.specifier, right.specifier)
       ),
-    })).sort((left, right) => left.id.localeCompare(right.id)),
+    })).sort((left, right) => compareCodeUnits(left.id, right.id)),
   });
 }
 
@@ -569,7 +574,7 @@ function packageSpecifier(specifier: string): {
     );
   }
   const segments = specifier.split("/");
-  if (segments.some((segment) => segment.length === 0)) {
+  if (invalidPackageSegments(segments)) {
     throw new PackageArtifactError(
       `${JSON.stringify(specifier)} is not a valid Blot package specifier`,
     );
@@ -578,7 +583,7 @@ function packageSpecifier(specifier: string): {
   if (specifier.startsWith("@")) packageSegments = 2;
   if (
     segments.length < packageSegments ||
-    segments.slice(0, packageSegments).some((segment) => segment.length === 0)
+    (packageSegments === 2 && segments[0].length === 1)
   ) {
     throw new PackageArtifactError(
       `${JSON.stringify(specifier)} is not a valid Blot package specifier`,
@@ -589,6 +594,13 @@ function packageSpecifier(specifier: string): {
   let exportName = ".";
   if (subpath.length > 0) exportName = `./${subpath}`;
   return { packageName, exportName };
+}
+
+function invalidPackageSegments(segments: readonly string[]): boolean {
+  return segments.some((segment) =>
+    segment.length === 0 || segment === "." || segment === ".." ||
+    segment.includes("\\") || segment.includes("\0")
+  );
 }
 
 function confinedTarget(

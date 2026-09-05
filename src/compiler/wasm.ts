@@ -1,3 +1,4 @@
+import { compareCodeUnits } from "../text_order.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
 
@@ -667,7 +668,7 @@ export class CompilerWasm {
       const imports = Object.entries(configuration.imports).sort((
         [left],
         [right],
-      ) => left.localeCompare(right));
+      ) => compareCodeUnits(left, right));
       encoder.u32(imports.length);
       for (const [specifier, target] of imports) {
         encoder.string(specifier);
@@ -676,7 +677,7 @@ export class CompilerWasm {
       const includes = Object.entries(configuration.includes).sort((
         [left],
         [right],
-      ) => left.localeCompare(right));
+      ) => compareCodeUnits(left, right));
       encoder.u32(includes.length);
       for (const [specifier, included] of includes) {
         encoder.string(specifier);
@@ -956,7 +957,7 @@ export class CompilerWasm {
     const configuration = JSON.stringify({
       entryUnit,
       units: Object.fromEntries(
-        [...units].sort(([left], [right]) => left.localeCompare(right)),
+        [...units].sort(([left], [right]) => compareCodeUnits(left, right)),
       ),
     });
     const configurationAllocation = this.#allocate(textWords(configuration));

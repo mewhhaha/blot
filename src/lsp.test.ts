@@ -283,3 +283,61 @@ async function exchange(
   }
   return responses;
 }
+
+Deno.test("a completed cancellation cannot poison a reused request ID", async () => {
+  const uri = "untitled:lsp-cancellation-lifecycle.blot";
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  const input = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const send = (message: unknown): void => {
+    const body = JSON.stringify(message);
+    controller.enqueue(encoder.encode(
+      `Content-Length: ${encoder.encode(body).byteLength}\r\n\r\n${body}`,
+    ));
+  };
+  const replies: Record<string, unknown>[] = [];
+  const output = new WritableStream<Uint8Array>({
+    write(chunk) {
+      const frame = new TextDecoder().decode(chunk);
+      const reply = JSON.parse(frame.slice(frame.indexOf("\r\n\r\n") + 4));
+      if (reply.id !== 2) return;
+      replies.push(reply);
+      if (replies.length !== 1) return;
+      // Let the first request's finally block run before reusing its ID.
+      setTimeout(() => {
+        send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id: 2 } });
+        send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "workspace/symbol",
+          params: { query: "no-such-symbol" },
+        });
+        send({ jsonrpc: "2.0", id: 3, method: "shutdown", params: null });
+        send({ jsonrpc: "2.0", method: "exit", params: null });
+        controller.close();
+      }, 0);
+    },
+  });
+  send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  send({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri, version: 1, text: "return 1\n" } },
+  });
+  send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "textDocument/hover",
+    params: { textDocument: { uri }, position: { line: 0, character: 7 } },
+  });
+  send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id: 2 } });
+  await runLanguageServer(input, output);
+  assertEquals(replies.length, 2);
+  assertEquals((replies[0].error as { code: number }).code, -32800);
+  assertEquals(replies[1].error, undefined);
+  assertEquals(replies[1].result, []);
+});

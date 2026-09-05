@@ -55,6 +55,9 @@ marks an in-flight synchronous Wasm result stale and discards it. The compiler
 does not yet run in a terminable worker, so this is not preemptive interruption
 of a Wasm call. Document close is a queue barrier: prior requests finish or are
 discarded, then the server releases the document root and clears its overlay.
+Every completed request releases both its document tracking and cancellation
+state, including requests cancelled before dispatch. A cancellation arriving
+after completion is ignored and cannot cancel a later request reusing that ID.
 Shared dependencies remain resident while another open root reaches them, and
 closing a standalone unsaved document does not require a file on disk. A closed
 overlay still reached by another root must rebind that root to disk; the close
