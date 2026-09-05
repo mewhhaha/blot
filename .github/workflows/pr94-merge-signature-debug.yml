@@ -1,0 +1,57 @@
+name: PR94 merge signature map debug
+
+on:
+  push:
+    branches:
+      - debug/pr94-merge-signature-map
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Instrument closure signature publication
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/typecheck.rs')
+          source = path.read_text()
+          needle = '''        let reified_closure_signatures = closure_signatures
+            .iter()
+            .filter_map(|(body, type_)| {
+                self.reify_runtime_type(type_)
+                    .map(|signature| (*body, signature))
+            })
+            .collect::<HashMap<_, _>>();
+'''
+          replacement = '''        for (debug_body, debug_signature) in &closure_signatures {
+            if debug_body.0 == 2837 {
+                eprintln!("MERGE_SIGNATURE_TYPE: {debug_signature:#?}");
+            }
+          }
+        let reified_closure_signatures = closure_signatures
+            .iter()
+            .filter_map(|(body, type_)| {
+                let signature = self.reify_runtime_type(type_);
+                if body.0 == 2837 {
+                    eprintln!("MERGE_SIGNATURE_REIFIED: {}", signature.is_some());
+                }
+                signature.map(|signature| (*body, signature))
+            })
+            .collect::<HashMap<_, _>>();
+'''
+          if source.count(needle) != 1:
+              raise SystemExit(f'expected closure publication site once, found {source.count(needle)}')
+          path.write_text(source.replace(needle, replacement, 1))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml
+      - name: Run first regression
+        run: cargo test --manifest-path compiler/Cargo.toml an_empty_scratch_argument_uses_the_contextual_result_representation -- --nocapture --test-threads=1
