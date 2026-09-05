@@ -658,9 +658,9 @@ return count
     assertStringIncludes(imported.contents.value, "Instantiates a module once");
     const returned = await service.hover(uri, { line: 4, character: 1 });
     assert(returned !== null);
-    assertStringIncludes(
+    assertEquals(
       returned.contents.value,
-      "result of the nearest module",
+      "**return** — supplies the result of this module.",
     );
   } finally {
     await service.destroy();
