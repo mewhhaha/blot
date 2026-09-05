@@ -1,0 +1,71 @@
+name: Finalize bounded library documentation
+
+on:
+  push:
+    branches:
+      - language/evidence-and-syntax-review
+    paths:
+      - .github/workflows/library-docs-finalize.yml
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/language/evidence-and-syntax-review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Apply only the locally reviewed documentation patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import subprocess
+
+          def blob(path):
+              data = Path(path).read_bytes()
+              return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+
+          before = {
+              'LANGUAGE.md': 'f2762943ec0b37cbf8f0674616ef31087931a6b6',
+              'LANGUAGE_REVIEW.md': 'aaa3139d5de5401703ddc8cad8c45009be78ff95',
+              'SUGGESTION.md': 'ad6906bd1c491b540fd6c4d916c95a2a39155349',
+              'docs/language-review-extensions.md': 'aa503b5e6394fb47da834a5d632d40f12ae26cc5',
+              '.github/workflows/language-review-tools.yml': 'db51ccc9e22b2f0ff9543d8258d34c40a46970e3',
+              'scripts/library-docs-finalize.patch': '2fdd2cbeb121d02baf4986edd9f9e0adcd4ad626',
+          }
+          for path, expected in before.items():
+              assert blob(path) == expected, f'Unexpected source identity: {path}'
+          subprocess.run(['git', 'apply', '--check', 'scripts/library-docs-finalize.patch'], check=True)
+          subprocess.run(['git', 'apply', 'scripts/library-docs-finalize.patch'], check=True)
+          after = {
+              'LANGUAGE.md': '3385d64c9f993576f26fd117a59f6d05c1df8099',
+              'LANGUAGE_REVIEW.md': 'cdae03c68f46425e251f65d7db9b0135f168d2b0',
+              'SUGGESTION.md': '031d144f24fafee795cf1a5d064409f3834bd8f3',
+              'docs/language-review-extensions.md': '31aef7e7a85e9fdc1218165d3a9b6fa637e465f2',
+          }
+          for path, expected in after.items():
+              assert blob(path) == expected, f'Unexpected formatted result: {path}'
+          for path in [
+              '.github/workflows/language-review-tools.yml',
+              '.github/workflows/library-docs-finalize.yml',
+              'scripts/library-docs-finalize.patch',
+          ]:
+              Path(path).unlink()
+          PY
+          git diff --check
+          git add LANGUAGE.md LANGUAGE_REVIEW.md SUGGESTION.md docs/language-review-extensions.md .github/workflows/language-review-tools.yml .github/workflows/library-docs-finalize.yml scripts/library-docs-finalize.patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Specify optional library contracts and remove temporary review tooling'
+          git merge --no-edit 18a125d773658c6bc21eb5fbcb829305fd4903a8
+          git push origin HEAD:refs/heads/language/evidence-and-syntax-review
