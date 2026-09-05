@@ -6196,7 +6196,12 @@ fn trusted_scalar_operation(function: ExpressionId, module: &Module) -> bool {
         Expression::Intrinsic { .. } => true,
         Expression::Field { target, .. } => matches!(
             &module.arena.expressions[target.0 as usize],
-            Expression::Var { name, .. } if name == "Int" || name == "Array"
+            Expression::Var { name, .. }
+                if name == "Int"
+                    || name == "Array"
+                    || name == "Op"
+                    || name == "OpArithmetic"
+                    || name == "OpOrder"
         ),
         _ => false,
     }

@@ -60,6 +60,12 @@ function activeOperators(
       byTarget.set(target, null);
     } else {
       byTarget.set(target, fixity.operator);
+      if (fixity.target[0] === "Op") {
+        const intTarget = ["Int", ...fixity.target.slice(1)].join(".");
+        if (!byTarget.has(intTarget)) {
+          byTarget.set(intTarget, fixity.operator);
+        }
+      }
     }
   }
   return new Map(

@@ -53,37 +53,37 @@
       "operator": "==",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.eq"
+      "target": "Op.eq"
     },
     {
       "operator": "!=",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.ne"
+      "target": "Op.ne"
     },
     {
       "operator": "<",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.lt"
+      "target": "Op.lt"
     },
     {
       "operator": "<=",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.le"
+      "target": "Op.le"
     },
     {
       "operator": ">",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.gt"
+      "target": "Op.gt"
     },
     {
       "operator": ">=",
       "associativity": "none",
       "precedence": 30,
-      "target": "Int.ge"
+      "target": "Op.ge"
     },
     {
       "operator": "|",
@@ -119,31 +119,31 @@
       "operator": "+",
       "associativity": "left",
       "precedence": 60,
-      "target": "Int.add"
+      "target": "Op.add"
     },
     {
       "operator": "-",
       "associativity": "left",
       "precedence": 60,
-      "target": "Int.sub"
+      "target": "Op.sub"
     },
     {
       "operator": "*",
       "associativity": "left",
       "precedence": 70,
-      "target": "Int.mul"
+      "target": "Op.mul"
     },
     {
       "operator": "/",
       "associativity": "left",
       "precedence": 70,
-      "target": "Int.div"
+      "target": "Op.div"
     },
     {
       "operator": "%",
       "associativity": "left",
       "precedence": 70,
-      "target": "Int.rem"
+      "target": "Op.rem"
     },
     {
       "operator": "-",
@@ -227,6 +227,7 @@
     "BLOT_INCLUDE_PATH",
     "BLOT_INCOMPLETE_CASE",
     "BLOT_INCONSISTENT_INDENT",
+    "BLOT_INFERRED_TYPE_DIRECT",
     "BLOT_INTEGER_OVERFLOW",
     "BLOT_JSON_NOT_COMPTIME",
     "BLOT_JSON_NUMBER",
@@ -284,9 +285,11 @@
     "BLOT_NOT_CALLABLE",
     "BLOT_NOT_COMPTIME",
     "BLOT_NO_BRANCH",
+    "BLOT_NO_EQUALITY",
     "BLOT_NO_FIELD",
     "BLOT_NO_MATCH",
     "BLOT_NO_OPERATION",
+    "BLOT_NO_TYPE_MEMBER",
     "BLOT_OPEN_RECORD_SPREAD",
     "BLOT_OUT_OF_BOUNDS",
     "BLOT_PANIC",
@@ -333,6 +336,7 @@
     "BLOT_UNBOUND",
     "BLOT_UNHANDLED_EFFECT",
     "BLOT_UNKNOWN_DECLARATION",
+    "BLOT_UNKNOWN_MEMBER",
     "BLOT_UNKNOWN_OPERATOR",
     "BLOT_UNKNOWN_PRIMITIVE",
     "BLOT_UNMATCHABLE_PIN",
@@ -576,6 +580,7 @@
     "@type.i32x4_mask",
     "@type.i8x16",
     "@type.i8x16_mask",
+    "@type.inferred",
     "@type.instantiate",
     "@type.int",
     "@type.intersect",
@@ -587,6 +592,7 @@
     "@type.range",
     "@type.refine",
     "@type.reflect",
+    "@type.resolve_member",
     "@type.seal",
     "@type.text",
     "@type.unbounded",
@@ -712,7 +718,10 @@
     "U64",
     "Nat",
     "Int",
-    "Unit"
+    "Unit",
+    "Op",
+    "OpOrder",
+    "OpArithmetic"
   ],
   "focusedModules": [
     "array",
@@ -725,11 +734,11 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 15172
+      "lines": 16010
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14308
+      "lines": 14541
     },
     {
       "path": "compiler/src/session.rs",
@@ -740,12 +749,12 @@
       "lines": 8039
     },
     {
-      "path": "compiler/src/ownership.rs",
-      "lines": 6684
+      "path": "compiler/src/eval.rs",
+      "lines": 6722
     },
     {
-      "path": "compiler/src/eval.rs",
-      "lines": 6335
+      "path": "compiler/src/ownership.rs",
+      "lines": 6689
     },
     {
       "path": "compiler/src/lower.rs",
@@ -756,12 +765,12 @@
       "lines": 3516
     },
     {
-      "path": "compiler/src/value_capsule.rs",
-      "lines": 3376
+      "path": "src/prelude/prelude.blot",
+      "lines": 3395
     },
     {
-      "path": "src/prelude/prelude.blot",
-      "lines": 3363
+      "path": "compiler/src/value_capsule.rs",
+      "lines": 3376
     },
     {
       "path": "src/syntax/lower.ts",
@@ -772,12 +781,12 @@
       "lines": 2325
     },
     {
-      "path": "compiler/src/qcore.rs",
-      "lines": 2236
+      "path": "compiler/src/primitives.rs",
+      "lines": 2322
     },
     {
-      "path": "compiler/src/primitives.rs",
-      "lines": 2196
+      "path": "compiler/src/qcore.rs",
+      "lines": 2236
     },
     {
       "path": "compiler/src/qcore_typing.rs",

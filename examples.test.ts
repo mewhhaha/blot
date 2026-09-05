@@ -415,10 +415,6 @@ const PENDING: Record<
     type: "([(Int | 0)] | ['a])",
     stage: "type",
   },
-  "type_directed_text_equality": {
-    code: "BLOT_TYPE_ERROR",
-    stage: "check",
-  },
   "affine_index_rebinding": {
     code: "BLOT_UNPROVEN_INDEX",
     stage: "check",

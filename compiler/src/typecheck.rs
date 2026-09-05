@@ -5241,6 +5241,79 @@ impl Checker {
                 let function_expression = function;
                 let (member_callee, member_arguments) =
                     application_spine_ids(module, expression_id);
+                if member_arguments.len() == 3
+                    && (matches!(
+                        &module.arena.expressions[member_callee.0 as usize],
+                        Expression::Intrinsic { name, .. } if name == "@type.resolve_member"
+                    ) || matches!(
+                        self.evaluate(path, member_callee, values, Phase::Comptime),
+                        Ok(Value::Primitive { name, .. }) if name == "@type.resolve_member"
+                    ))
+                {
+                    let member_name = match self.evaluate(
+                        path,
+                        member_arguments[0],
+                        values,
+                        Phase::Comptime,
+                    ) {
+                        Ok(Value::Text(name)) => name,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "BLOT_TYPE_ERROR",
+                                "The operation name in `@type.resolve_member` must be a compile-time text literal.",
+                                span,
+                            ));
+                        }
+                    };
+                    return self.infer_resolve_member(
+                        path,
+                        module,
+                        expression_id,
+                        member_name,
+                        member_arguments[1],
+                        member_arguments[2],
+                        environment,
+                        values,
+                        dependencies,
+                        span,
+                    );
+                }
+                if member_arguments.len() == 2
+                    && let Expression::Field { target, name, .. } =
+                        &module.arena.expressions[member_callee.0 as usize]
+                    && (inferred_type_subject(module, *target).is_some()
+                        || self
+                            .evaluate(path, *target, values, Phase::Comptime)
+                            .ok()
+                            .and_then(|value| static_member(&value, name))
+                            .is_some_and(|value| is_operator_member_closure(&self.context, &value)))
+                    && matches!(
+                        name.as_str(),
+                        "eq" | "ne"
+                            | "lt"
+                            | "le"
+                            | "gt"
+                            | "ge"
+                            | "add"
+                            | "sub"
+                            | "mul"
+                            | "div"
+                            | "rem"
+                    )
+                {
+                    return self.infer_resolve_member(
+                        path,
+                        module,
+                        expression_id,
+                        name.clone(),
+                        member_arguments[0],
+                        member_arguments[1],
+                        environment,
+                        values,
+                        dependencies,
+                        span,
+                    );
+                }
                 if member_arguments.len() == 2
                     && let Ok(Value::Primitive { name, .. }) =
                         self.evaluate(path, member_callee, values, Phase::Comptime)
@@ -5274,7 +5347,10 @@ impl Checker {
                     && let Expression::Field { target, name, .. } =
                         &module.arena.expressions[member_callee.0 as usize]
                     && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
-                    && matches!(target_value, Value::Extended { .. })
+                    && (matches!(target_value, Value::Extended { .. })
+                        || static_member(&target_value, name)
+                            .as_ref()
+                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -5287,9 +5363,9 @@ impl Checker {
                 {
                     let mut effects = pure();
                     let mut arguments = Vec::new();
-                    for argument in member_arguments {
+                    for argument in &member_arguments {
                         let inferred =
-                            self.infer(path, module, argument, environment, values, dependencies)?;
+                            self.infer(path, module, *argument, environment, values, dependencies)?;
                         effects = self.join_effects(effects, inferred.effects)?;
                         arguments.push(inferred.type_);
                     }
@@ -5299,10 +5375,66 @@ impl Checker {
                         && !matches!(value, Value::Closure { .. })
                     {
                         return Ok(Inferred {
-                            type_: self.bridge_runtime_value(&value),
+                            type_: if arguments.len() >= 2 {
+                                let operator_type = match name.as_str() {
+                                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Some(bool_type()),
+                                    "add" | "sub" | "mul" | "div" | "rem" => self
+                                        .resolve_operand_domain(&arguments[0], &arguments[1])
+                                        .map(|domain| match domain {
+                                            Domain::Int => int_type(),
+                                            Domain::Text => text_type(),
+                                            Domain::Float => float_type(),
+                                            Domain::Float32 => float32_type(),
+                                        }),
+                                    _ => None,
+                                };
+                                operator_type.unwrap_or_else(|| self.bridge_runtime_value(&value))
+                            } else {
+                                self.bridge_runtime_value(&value)
+                            },
                             effects,
                         });
                     }
+                    let is_resolve_op = static_member(&target_value, name)
+                        .as_ref()
+                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
+                    if is_resolve_op && arguments.len() >= 2 {
+                        let domain = self.resolve_operand_domain(&arguments[0], &arguments[1]);
+                        if let Some(domain) = domain {
+                            let span = module.arena.expression_span(expression_id);
+                            match domain {
+                                Domain::Int => {
+                                    let int = int_type();
+                                    self.constrain(arguments[0].clone(), int.clone(), span)?;
+                                    self.constrain(arguments[1].clone(), int, span)?;
+                                }
+                                Domain::Text => {
+                                    let text = text_type();
+                                    self.constrain(arguments[0].clone(), text.clone(), span)?;
+                                    self.constrain(arguments[1].clone(), text, span)?;
+                                }
+                                Domain::Float => {
+                                    if name != "eq" && name != "ne" {
+                                        let float = float_type();
+                                        self.constrain(arguments[0].clone(), float.clone(), span)?;
+                                        self.constrain(arguments[1].clone(), float, span)?;
+                                    }
+                                }
+                                Domain::Float32 => {
+                                    if name != "eq" && name != "ne" {
+                                        let f32_ = float32_type();
+                                        self.constrain(arguments[0].clone(), f32_.clone(), span)?;
+                                        self.constrain(arguments[1].clone(), f32_, span)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let parameter_type = if is_resolve_op {
+                        arguments.first().cloned()
+                    } else {
+                        None
+                    };
                     let mut function_type = self.infer_evaluated_closure(
                         path,
                         module,
@@ -5316,7 +5448,7 @@ impl Checker {
                         },
                         environment,
                         dependencies,
-                        None,
+                        parameter_type,
                     )?;
                     for argument in arguments {
                         let result = self.fresh();
@@ -5343,7 +5475,11 @@ impl Checker {
                 if let Expression::Field { target, name, .. } =
                     &module.arena.expressions[function.0 as usize]
                     && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
-                    && (matches!(target_value, Value::Extended { .. }) || name == "transform")
+                    && (matches!(target_value, Value::Extended { .. })
+                        || name == "transform"
+                        || static_member(&target_value, name)
+                            .as_ref()
+                            .is_some_and(|val| is_resolve_member_closure(&self.context, val)))
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -5366,6 +5502,14 @@ impl Checker {
                             effects: argument_type.effects,
                         });
                     }
+                    let is_resolve_op = static_member(&target_value, name)
+                        .as_ref()
+                        .is_some_and(|val| is_resolve_member_closure(&self.context, val));
+                    let parameter_type = if is_resolve_op {
+                        Some(argument_type.type_.clone())
+                    } else {
+                        None
+                    };
                     let function_type = self.infer_evaluated_closure(
                         path,
                         module,
@@ -5379,7 +5523,7 @@ impl Checker {
                         },
                         environment,
                         dependencies,
-                        None,
+                        parameter_type,
                     )?;
                     let result = self.fresh();
                     let performed = self.fresh();
@@ -5816,6 +5960,61 @@ impl Checker {
                 })
             }
             Expression::Field { target, name, .. } => {
+                if let Some(subject_expression) = inferred_type_subject(module, target) {
+                    let subject = self.infer(
+                        path,
+                        module,
+                        subject_expression,
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let mut settled = self.settle(subject.type_.clone(), true);
+                    if contains_bottom(&settled)
+                        && self.mentions_pending_numeric_literal(&subject.type_)
+                    {
+                        self.resolve_numeric_literals()?;
+                        settled = self.settle(subject.type_.clone(), true);
+                    }
+                    if contains_bottom(&settled)
+                        || !closed_checked_type(&settled, &mut HashSet::new())
+                        || !operator_dispatch_type_is_concrete(&settled)
+                    {
+                        self.defer_current_closure();
+                        return Ok(Inferred {
+                            type_: self.fresh(),
+                            effects: subject.effects,
+                        });
+                    }
+                    let type_value = self.reify_runtime_type(&settled).ok_or_else(|| {
+                        Diagnostic::new(
+                            "BLOT_TYPE_NOT_REIFIABLE",
+                            format!(
+                                "`{}` has no compile-time type value for operator lookup.",
+                                self.show(&settled)
+                            ),
+                            span,
+                        )
+                    })?;
+                    let type_value = self.context.decorate_operator_type(type_value);
+                    let member = static_member(&type_value, &name).ok_or_else(|| {
+                        Diagnostic::new(
+                            "BLOT_NO_TYPE_MEMBER",
+                            format!(
+                                "Type `{}` has no attached `{name}` operation.",
+                                self.show(&settled)
+                            ),
+                            span,
+                        )
+                    })?;
+                    let type_ = self
+                        .static_member_type(&member)
+                        .unwrap_or_else(|| self.fresh());
+                    return Ok(Inferred {
+                        type_,
+                        effects: subject.effects,
+                    });
+                }
                 let static_type = self
                     .evaluate(path, target, values, Phase::Comptime)
                     .ok()
@@ -5827,7 +6026,9 @@ impl Checker {
                             if let Some(type_) = self.bridge(&member) {
                                 return Some(type_);
                             }
-                            if matches!(target_value, Value::Extended { .. }) {
+                            if matches!(target_value, Value::Extended { .. })
+                                || is_resolve_member_closure(&self.context, &member)
+                            {
                                 return Some(self.fresh());
                             }
                         }
@@ -6757,6 +6958,38 @@ impl Checker {
         inferred
     }
 
+    fn static_member_type(&self, member: &Value) -> Option<Type> {
+        if let Value::Primitive { name, .. } = member {
+            return primitive_type(self, name);
+        }
+        if let Some(type_) = self.bridge(member) {
+            return Some(type_);
+        }
+        let Value::Closure {
+            module,
+            body,
+            signature,
+            ..
+        } = member
+        else {
+            return None;
+        };
+        if let Some(signature) = signature.as_deref()
+            && let Some(type_) = self.bridge(signature)
+        {
+            return Some(type_);
+        }
+        self.closure_types
+            .borrow()
+            .get(module.as_str(), body)
+            .cloned()
+            .or_else(|| {
+                self.context
+                    .closure_signature(module.as_str(), *body)
+                    .and_then(|signature| self.bridge(&signature))
+            })
+    }
+
     fn requirement(&self, value: Value) -> Requirement {
         match self.bridge(&value) {
             Some(type_) => Requirement::Type(type_),
@@ -7034,6 +7267,222 @@ impl Checker {
             effects,
         })
     }
+    #[allow(clippy::too_many_arguments)]
+    fn infer_resolve_member(
+        &self,
+        path: &str,
+        module: &Module,
+        _expression_id: ExpressionId,
+        member_name: String,
+        left_arg: ExpressionId,
+        right_arg: ExpressionId,
+        environment: &TypeEnvironment,
+        values: &ValueEnvironment,
+        dependencies: &BTreeMap<String, Type>,
+        span: Span,
+    ) -> Result<Inferred, Diagnostic> {
+        let left = self.infer(path, module, left_arg, environment, values, dependencies)?;
+        let right = self.infer(path, module, right_arg, environment, values, dependencies)?;
+        let effects = self.join_effects(left.effects, right.effects)?;
+        let settled_left = self.settle(left.type_.clone(), true);
+        let settled_right = self.settle(right.type_.clone(), true);
+        let domain = self.resolve_operand_domain(&left.type_, &right.type_);
+        if let Some(domain) = domain {
+            match domain {
+                Domain::Int => match member_name.as_str() {
+                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                        let int = int_type();
+                        self.constrain(left.type_, int.clone(), span)?;
+                        self.constrain(right.type_, int, span)?;
+                        return Ok(Inferred {
+                            type_: bool_type(),
+                            effects,
+                        });
+                    }
+                    "add" | "sub" | "mul" | "div" | "rem" => {
+                        let int = int_type();
+                        self.constrain(left.type_, int.clone(), span)?;
+                        self.constrain(right.type_, int.clone(), span)?;
+                        return Ok(Inferred {
+                            type_: int,
+                            effects,
+                        });
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "BLOT_UNKNOWN_MEMBER",
+                            format!("`Int` has no member `{member_name}`"),
+                            span,
+                        ));
+                    }
+                },
+                Domain::Text => match member_name.as_str() {
+                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                        let text = text_type();
+                        self.constrain(left.type_, text.clone(), span)?;
+                        self.constrain(right.type_, text, span)?;
+                        return Ok(Inferred {
+                            type_: bool_type(),
+                            effects,
+                        });
+                    }
+                    "add" => {
+                        let text = text_type();
+                        self.constrain(left.type_, text.clone(), span)?;
+                        self.constrain(right.type_, text.clone(), span)?;
+                        return Ok(Inferred {
+                            type_: text,
+                            effects,
+                        });
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "BLOT_UNKNOWN_MEMBER",
+                            format!("`Text` has no member `{member_name}`"),
+                            span,
+                        ));
+                    }
+                },
+                Domain::Float => match member_name.as_str() {
+                    "eq" | "ne" => {
+                        return Err(Diagnostic::new(
+                            "BLOT_NO_EQUALITY",
+                            "Floating-point types do not support equality. Use `F64.cmp` to compare explicitly.",
+                            span,
+                        ));
+                    }
+                    "lt" | "le" | "gt" | "ge" => {
+                        let float = float_type();
+                        self.constrain(left.type_, float.clone(), span)?;
+                        self.constrain(right.type_, float, span)?;
+                        return Ok(Inferred {
+                            type_: bool_type(),
+                            effects,
+                        });
+                    }
+                    "add" | "sub" | "mul" | "div" | "rem" => {
+                        let float = float_type();
+                        self.constrain(left.type_, float.clone(), span)?;
+                        self.constrain(right.type_, float.clone(), span)?;
+                        return Ok(Inferred {
+                            type_: float,
+                            effects,
+                        });
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "BLOT_UNKNOWN_MEMBER",
+                            format!("`Float` has no member `{member_name}`"),
+                            span,
+                        ));
+                    }
+                },
+                Domain::Float32 => match member_name.as_str() {
+                    "eq" | "ne" => {
+                        return Err(Diagnostic::new(
+                            "BLOT_NO_EQUALITY",
+                            "Floating-point types do not support equality. Use `F32.cmp` to compare explicitly.",
+                            span,
+                        ));
+                    }
+                    "lt" | "le" | "gt" | "ge" => {
+                        let f32_ = float32_type();
+                        self.constrain(left.type_, f32_.clone(), span)?;
+                        self.constrain(right.type_, f32_, span)?;
+                        return Ok(Inferred {
+                            type_: bool_type(),
+                            effects,
+                        });
+                    }
+                    "add" | "sub" | "mul" | "div" => {
+                        let f32_ = float32_type();
+                        self.constrain(left.type_, f32_.clone(), span)?;
+                        self.constrain(right.type_, f32_.clone(), span)?;
+                        return Ok(Inferred {
+                            type_: f32_,
+                            effects,
+                        });
+                    }
+                    _ => {
+                        return Err(Diagnostic::new(
+                            "BLOT_UNKNOWN_MEMBER",
+                            format!("`Float32` has no member `{member_name}`"),
+                            span,
+                        ));
+                    }
+                },
+            }
+        }
+
+        if !matches!(settled_left, Type::Bottom) && !matches!(settled_right, Type::Bottom) {
+            let _ = self.constrain(right.type_.clone(), left.type_.clone(), span);
+        }
+        if matches!(
+            settled_left,
+            Type::Bottom | Type::Top | Type::Variable(_) | Type::Rigid(_)
+        ) || matches!(
+            settled_right,
+            Type::Bottom | Type::Top | Type::Variable(_) | Type::Rigid(_)
+        ) || matches!(left.type_, Type::Variable(_) | Type::Rigid(_))
+            || matches!(right.type_, Type::Variable(_) | Type::Rigid(_))
+        {
+            return match member_name.as_str() {
+                "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                    let int = int_type();
+                    self.constrain(left.type_, int.clone(), span)?;
+                    self.constrain(right.type_, int, span)?;
+                    Ok(Inferred {
+                        type_: bool_type(),
+                        effects,
+                    })
+                }
+                "add" | "sub" | "mul" | "div" | "rem" => {
+                    let int = int_type();
+                    self.constrain(left.type_, int.clone(), span)?;
+                    self.constrain(right.type_, int.clone(), span)?;
+                    Ok(Inferred {
+                        type_: int,
+                        effects,
+                    })
+                }
+                _ => Err(Diagnostic::new(
+                    "BLOT_UNKNOWN_MEMBER",
+                    format!("Type has no member `{member_name}`"),
+                    span,
+                )),
+            };
+        }
+
+        match settled_left {
+            Type::Opaque(ref name) if name == "F32x4" => match member_name.as_str() {
+                "add" | "sub" | "mul" | "div" => Ok(Inferred {
+                    type_: Type::Opaque("F32x4".to_owned()),
+                    effects,
+                }),
+                _ => Err(Diagnostic::new(
+                    "BLOT_UNKNOWN_MEMBER",
+                    format!("`F32x4` has no member `{member_name}`"),
+                    span,
+                )),
+            },
+            Type::Opaque(ref name) if name == "I32x4" => match member_name.as_str() {
+                "add" | "sub" | "mul" => Ok(Inferred {
+                    type_: Type::Opaque("I32x4".to_owned()),
+                    effects,
+                }),
+                _ => Err(Diagnostic::new(
+                    "BLOT_UNKNOWN_MEMBER",
+                    format!("`I32x4` has no member `{member_name}`"),
+                    span,
+                )),
+            },
+            _ => Err(Diagnostic::new(
+                "BLOT_UNKNOWN_MEMBER",
+                format!("Type has no member `{member_name}`"),
+                span,
+            )),
+        }
+    }
 
     fn fresh_numeric_literal(
         &self,
@@ -7242,6 +7691,103 @@ impl Checker {
             }
         }
         false
+    }
+
+    fn pending_numeric_literal_domain(&self, type_: &Type) -> Option<Domain> {
+        if self.numeric_literals.borrow().is_empty() {
+            return None;
+        }
+        let literals = self.numeric_literals.borrow();
+        let mut seen_variables = HashSet::new();
+        let mut pending = vec![type_.clone()];
+        let mut found = None;
+        while let Some(type_) = pending.pop() {
+            match type_ {
+                Type::Variable(variable) => {
+                    if let Some(fact) = literals.get(&variable) {
+                        match fact.kind {
+                            NumericLiteralKind::Float => return Some(Domain::Float),
+                            NumericLiteralKind::Integer(_) => {
+                                found = Some(Domain::Int);
+                            }
+                        }
+                    }
+                    if seen_variables.insert(variable)
+                        && let Some(variable_info) = self.variables.borrow().get(variable as usize)
+                    {
+                        pending.extend(
+                            variable_info
+                                .lower
+                                .iter()
+                                .chain(variable_info.upper.iter())
+                                .map(|bound| self.expand_constraint(*bound)),
+                        );
+                    }
+                }
+                Type::Forall { body, .. } => pending.push(Rc::unwrap_or_clone(body)),
+                Type::Function {
+                    parameter,
+                    effects,
+                    result,
+                    ..
+                } => {
+                    pending.push(Rc::unwrap_or_clone(parameter));
+                    pending.push(Rc::unwrap_or_clone(effects));
+                    pending.push(Rc::unwrap_or_clone(result));
+                }
+                Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                    pending.extend(fields.iter().map(|(_, field)| field.clone()));
+                }
+                Type::RecordUpdate { base, fields } => {
+                    pending.push(Rc::unwrap_or_clone(base));
+                    pending.extend(fields.iter().map(|(_, field)| field.clone()));
+                }
+                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                    pending.push(Rc::unwrap_or_clone(element))
+                }
+                Type::OpenEffects { tail, .. } => pending.push(Rc::unwrap_or_clone(tail)),
+                Type::Union(members) => {
+                    pending.extend(members.iter().cloned());
+                }
+                Type::Bottom
+                | Type::Rigid(_)
+                | Type::Range { .. }
+                | Type::Unit
+                | Type::Effects(_)
+                | Type::Opaque(_)
+                | Type::Top => {}
+            }
+        }
+        found
+    }
+
+    fn resolve_type_domain(&self, type_: &Type) -> Option<Domain> {
+        let settled_lower = self.settle(type_.clone(), true);
+        if let Some(domain) = type_domain(&settled_lower) {
+            return Some(domain);
+        }
+        let settled_upper = self.settle(type_.clone(), false);
+        if let Some(domain) = type_domain(&settled_upper) {
+            return Some(domain);
+        }
+        None
+    }
+
+    fn resolve_operand_domain(&self, left: &Type, right: &Type) -> Option<Domain> {
+        if let Some(domain) = self.resolve_type_domain(left) {
+            return Some(domain);
+        }
+        if let Some(domain) = self.resolve_type_domain(right) {
+            return Some(domain);
+        }
+        match (
+            self.pending_numeric_literal_domain(left),
+            self.pending_numeric_literal_domain(right),
+        ) {
+            (Some(Domain::Float), _) | (_, Some(Domain::Float)) => Some(Domain::Float),
+            (Some(Domain::Int), _) | (_, Some(Domain::Int)) => Some(Domain::Int),
+            _ => None,
+        }
     }
 
     fn instantiate(&self, typing: Typing) -> Type {
@@ -9236,6 +9782,40 @@ impl Checker {
         }
     }
 
+    fn expression_has_unresolved_operator_dispatch(
+        &self,
+        path: &str,
+        arguments: &[ExpressionId],
+    ) -> bool {
+        let inferred = self.analysis_expression_types.borrow();
+        arguments.iter().any(|argument| {
+            let Some(type_) = inferred.get(path, argument).cloned() else {
+                return true;
+            };
+            let settled = self.settle(type_, true);
+            !operator_dispatch_type_is_concrete(&settled)
+        })
+    }
+
+    fn publish_evaluation_expression_types(&self, path: &str, expression_types: &[ExpressionId]) {
+        let inferred = self.analysis_expression_types.borrow();
+        let reified = expression_types.iter().filter_map(|expression| {
+            let type_ = inferred.get(path, expression).cloned()?;
+            let settled = self.settle(type_, true);
+            if !closed_checked_type(&settled, &mut HashSet::new())
+                || !operator_dispatch_type_is_concrete(&settled)
+            {
+                return None;
+            }
+            self.reify_runtime_type(&settled)
+                .map(|type_| (*expression, type_))
+        });
+        let mut expression_types = self.context.expression_types.borrow_mut();
+        for (expression, type_) in reified {
+            expression_types.insert(path.to_owned(), expression, type_);
+        }
+    }
+
     fn evaluate(
         &self,
         path: &str,
@@ -9243,6 +9823,28 @@ impl Checker {
         environment: &ValueEnvironment,
         phase: Phase,
     ) -> Result<Value, Diagnostic> {
+        let module = self
+            .context
+            .modules
+            .borrow()
+            .get(path)
+            .map(|loaded| loaded.module.clone())
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    format!("Module `{path}` was not loaded for compile-time evaluation."),
+                    Span { start: 0, end: 0 },
+                )
+            })?;
+        let operator_arguments = operator_dispatch_arguments(&module, expression);
+        if self.expression_has_unresolved_operator_dispatch(path, &operator_arguments) {
+            return Err(Diagnostic::new(
+                "BLOT_NOT_COMPTIME",
+                "Attached operator lookup remains generic until specialization.",
+                module.arena.expression_span(expression),
+            ));
+        }
+        self.publish_evaluation_expression_types(path, &operator_arguments);
         run(evaluate_expression(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -9255,12 +9857,20 @@ impl Checker {
     fn evaluate_binding(
         &self,
         path: &str,
-        _module: &Module,
+        module: &Module,
         pattern: PatternId,
         expression: ExpressionId,
         environment: &ValueEnvironment,
         phase: Phase,
     ) -> Result<Value, Diagnostic> {
+        let operator_arguments = operator_dispatch_arguments(module, expression);
+        if self.expression_has_unresolved_operator_dispatch(path, &operator_arguments) {
+            return Err(Diagnostic::new(
+                "BLOT_NOT_COMPTIME",
+                "Attached operator lookup remains generic until specialization.",
+                module.arena.expression_span(expression),
+            ));
+        }
         let environment_identity = Rc::as_ptr(environment) as usize;
         let key = (pattern, expression, phase, environment_identity);
         let cached = {
@@ -9281,6 +9891,7 @@ impl Checker {
         if let Some(value) = cached {
             return Ok(value);
         }
+        self.publish_evaluation_expression_types(path, &operator_arguments);
         let evaluated = run(evaluate_binding(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -9835,6 +10446,43 @@ fn quantify_settlement_holes(
     }
 }
 
+fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
+    match type_ {
+        Type::Variable(_) | Type::Rigid(_) | Type::Forall { .. } => false,
+        Type::Function {
+            parameter,
+            effects,
+            result,
+            ..
+        } => {
+            operator_dispatch_type_is_concrete(parameter)
+                && operator_dispatch_type_is_concrete(effects)
+                && operator_dispatch_type_is_concrete(result)
+        }
+        Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
+            .iter()
+            .all(|(_, field)| operator_dispatch_type_is_concrete(field)),
+        Type::RecordUpdate { base, fields } => {
+            operator_dispatch_type_is_concrete(base)
+                && fields
+                    .iter()
+                    .all(|(_, field)| operator_dispatch_type_is_concrete(field))
+        }
+        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+            operator_dispatch_type_is_concrete(element)
+        }
+        Type::OpenEffects { tail, .. } => operator_dispatch_type_is_concrete(tail),
+        Type::Union(members) => members.iter().all(operator_dispatch_type_is_concrete),
+        Type::Opaque(name) if name.starts_with("'t") => false,
+        Type::Range { .. }
+        | Type::Unit
+        | Type::Effects(_)
+        | Type::Opaque(_)
+        | Type::Top
+        | Type::Bottom => true,
+    }
+}
+
 fn contains_bottom(type_: &Type) -> bool {
     match type_ {
         Type::Bottom => true,
@@ -10375,6 +11023,27 @@ fn simd_primitive_type(name: &str) -> Option<Type> {
     None
 }
 
+fn type_domain(type_: &Type) -> Option<Domain> {
+    match type_ {
+        Type::Range { domain, .. } => Some(*domain),
+        Type::Union(members) => {
+            let mut domain = None;
+            for member in members {
+                let member_domain = type_domain(member)?;
+                if let Some(existing) = domain {
+                    if existing != member_domain {
+                        return None;
+                    }
+                } else {
+                    domain = Some(member_domain);
+                }
+            }
+            domain
+        }
+        _ => None,
+    }
+}
+
 fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
     let int = int_type();
     let text = text_type();
@@ -10637,7 +11306,13 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
             Type::Opaque("Type".to_owned()),
         ),
         "@type.equal" => curried(vec![checker.fresh(), checker.fresh()], bool_),
-        "@type.probe" => curried(vec![checker.fresh()], Type::Opaque("Type".to_owned())),
+        "@type.probe" | "@type.inferred" => {
+            curried(vec![checker.fresh()], Type::Opaque("Type".to_owned()))
+        }
+        "@type.resolve_member" => {
+            let a = checker.fresh();
+            curried(vec![text, a.clone(), a], checker.fresh())
+        }
         "@type.of" | "@type.reflect" | "@type.members" | "@type.union_of" => {
             curried(vec![checker.fresh()], checker.fresh())
         }
@@ -11009,6 +11684,25 @@ fn integer_equality_pattern(
     }
 }
 
+fn refined_original_integer_type(
+    checker: &Checker,
+    environment: &TypeEnvironment,
+    name: &str,
+) -> Option<Type> {
+    let instantiated = checker.instantiate(environment.lookup(name, checker)?);
+    let settled_pos = checker.settle(instantiated.clone(), true);
+    if integer_intervals(&settled_pos).is_some_and(|v| !v.is_empty()) {
+        Some(settled_pos)
+    } else {
+        let settled_neg = checker.settle(instantiated, false);
+        if integer_intervals(&settled_neg).is_some_and(|v| !v.is_empty()) {
+            Some(settled_neg)
+        } else {
+            Some(int_type())
+        }
+    }
+}
+
 fn comparison_refinements(
     module: &Module,
     expression: ExpressionId,
@@ -11040,10 +11734,7 @@ fn comparison_refinements(
         if left.0 != right.0 {
             return None;
         }
-        let original = checker.settle(
-            checker.instantiate(environment.lookup(&left.0, checker)?),
-            true,
-        );
+        let original = refined_original_integer_type(checker, environment, &left.0)?;
         return match junction {
             crate::recognise::Junction::And => Some((
                 left.0,
@@ -11068,10 +11759,7 @@ fn comparison_refinements(
         if left.0 != right.0 {
             return None;
         }
-        let original = checker.settle(
-            checker.instantiate(environment.lookup(&left.0, checker)?),
-            true,
-        );
+        let original = refined_original_integer_type(checker, environment, &left.0)?;
         return match junction {
             crate::recognise::Junction::And => Some((
                 left.0,
@@ -11111,10 +11799,7 @@ fn comparison_refinements(
         }
         _ => return None,
     };
-    let original = checker.settle(
-        checker.instantiate(environment.lookup(&name, checker)?),
-        true,
-    );
+    let original = refined_original_integer_type(checker, environment, &name)?;
     let accepted = ordering_type(&orderings, &witness);
     let rejected = ordering_type(&complement_orderings(&orderings), &witness);
     Some((
@@ -12007,6 +12692,20 @@ fn total_pattern(module: &Module, pattern: PatternId) -> bool {
     }
 }
 
+fn inferred_type_subject(module: &Module, expression: ExpressionId) -> Option<ExpressionId> {
+    let Expression::Apply {
+        function, argument, ..
+    } = module.arena.expressions.get(expression.0 as usize)?
+    else {
+        return None;
+    };
+    let Expression::Intrinsic { name, .. } = module.arena.expressions.get(function.0 as usize)?
+    else {
+        return None;
+    };
+    (name == "@type.inferred").then_some(*argument)
+}
+
 fn static_member(value: &Value, name: &str) -> Option<Value> {
     match value {
         Value::Extended { inner, members } => members
@@ -12016,6 +12715,56 @@ fn static_member(value: &Value, name: &str) -> Option<Value> {
         Value::Shape(fields) => fields.get(name).cloned(),
         _ => None,
     }
+}
+
+fn is_resolve_member_closure(context: &Context, closure: &Value) -> bool {
+    let Value::Closure { module, body, .. } = closure else {
+        return false;
+    };
+    let Some(loaded) = context.modules.borrow().get(module.as_str()).cloned() else {
+        return false;
+    };
+    let mut current = *body;
+    while let Expression::Lambda {
+        body: next_body, ..
+    } = &loaded.module.arena.expressions[current.0 as usize]
+    {
+        current = *next_body;
+    }
+    let (callee, _) = application_spine_ids(&loaded.module, current);
+    matches!(
+        &loaded.module.arena.expressions[callee.0 as usize],
+        Expression::Intrinsic { name, .. } if name == "@type.resolve_member"
+    )
+}
+
+fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
+    if is_resolve_member_closure(context, closure) {
+        return true;
+    }
+    let Value::Closure { module, body, .. } = closure else {
+        return false;
+    };
+    let Some(loaded) = context.modules.borrow().get(module.as_str()).cloned() else {
+        return false;
+    };
+    let mut current = *body;
+    while let Expression::Lambda {
+        body: next_body, ..
+    } = &loaded.module.arena.expressions[current.0 as usize]
+    {
+        current = *next_body;
+    }
+    let (callee, _) = application_spine_ids(&loaded.module, current);
+    let Expression::Field { target, name, .. } =
+        &loaded.module.arena.expressions[callee.0 as usize]
+    else {
+        return false;
+    };
+    matches!(
+        name.as_str(),
+        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
+    ) && inferred_type_subject(&loaded.module, *target).is_some()
 }
 
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
@@ -13180,6 +13929,95 @@ fn expression_contains_computed_field(module: &Module, expression: ExpressionId)
                     .any(|member| matches!(member, ShapeMember::Computed { .. }))
         )
     })
+}
+
+fn operator_dispatch_arguments(module: &Module, expression: ExpressionId) -> Vec<ExpressionId> {
+    let mut arguments = Vec::new();
+    collect_operator_dispatch_arguments(module, expression, &mut arguments);
+    arguments
+}
+
+fn collect_operator_dispatch_arguments(
+    module: &Module,
+    expression: ExpressionId,
+    arguments: &mut Vec<ExpressionId>,
+) {
+    let expression = &module.arena.expressions[expression.0 as usize];
+    match expression {
+        Expression::Apply {
+            function, argument, ..
+        } => {
+            if matches!(
+                &module.arena.expressions[function.0 as usize],
+                Expression::Intrinsic { name, .. } if name == "@type.inferred"
+            ) {
+                arguments.push(*argument);
+            }
+            collect_operator_dispatch_arguments(module, *function, arguments);
+            collect_operator_dispatch_arguments(module, *argument, arguments);
+        }
+        Expression::Field { target, .. } => {
+            collect_operator_dispatch_arguments(module, *target, arguments);
+        }
+        Expression::Lambda { .. } | Expression::Rec { .. } => {}
+        Expression::Array { elements, .. } => {
+            for element in elements {
+                collect_operator_dispatch_arguments(module, element.value, arguments);
+            }
+        }
+        Expression::Tuple { elements, .. } => {
+            for element in elements {
+                collect_operator_dispatch_arguments(module, *element, arguments);
+            }
+        }
+        Expression::Shape { members, .. } => {
+            for member in members {
+                match member {
+                    ShapeMember::Field { value, .. } | ShapeMember::Spread { value } => {
+                        collect_operator_dispatch_arguments(module, *value, arguments);
+                    }
+                    ShapeMember::Computed { name, value } => {
+                        collect_operator_dispatch_arguments(module, *name, arguments);
+                        collect_operator_dispatch_arguments(module, *value, arguments);
+                    }
+                }
+            }
+        }
+        Expression::If {
+            branches, fallback, ..
+        } => {
+            for branch in branches {
+                collect_operator_dispatch_arguments(module, branch.condition, arguments);
+                collect_operator_dispatch_arguments(module, branch.consequence, arguments);
+            }
+            if let Some(fallback) = fallback {
+                collect_operator_dispatch_arguments(module, *fallback, arguments);
+            }
+        }
+        Expression::Case { target, arms, .. } => {
+            collect_operator_dispatch_arguments(module, *target, arguments);
+            for arm in arms {
+                collect_operator_dispatch_arguments(module, arm.body, arguments);
+            }
+        }
+        Expression::Block {
+            declarations,
+            result,
+            ..
+        } => {
+            for declaration in declarations {
+                let value = match &module.arena.declarations[declaration.0 as usize] {
+                    Declaration::Signature { value, .. }
+                    | Declaration::Binding { value, .. }
+                    | Declaration::Shadow { value, .. }
+                    | Declaration::Open { value, .. } => *value,
+                };
+                collect_operator_dispatch_arguments(module, value, arguments);
+            }
+            collect_operator_dispatch_arguments(module, *result, arguments);
+        }
+        _ => {}
+    }
 }
 
 fn expression_contains(

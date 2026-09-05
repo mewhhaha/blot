@@ -1,0 +1,6 @@
+// SPECIFIED BEHAVIOR: `==` resolves via compile-time member lookup to text
+// equality from the opened prelude.
+
+open import "blot:prelude"
+
+return "same" == "same"

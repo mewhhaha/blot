@@ -4,7 +4,7 @@
 
 open import "blot:prelude"
 
-const Int = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
+const Op = { .eq = fn _ => fn _ => True; .ne = fn _ => fn _ => False; }
 
 let name :: 1 | 2 | 3 -> Text
 let name = fn n => do:

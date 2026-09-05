@@ -634,6 +634,19 @@ impl Analysis<'_> {
                         let offset = if name == "@int.sub" { -right } else { right };
                         return Some(shift(left, offset));
                     }
+                    if name == "@type.resolve_member"
+                        && arguments.len() == 3
+                        && let Expression::Text { value: member, .. } =
+                            &self.module.arena.expressions[arguments[0].0 as usize]
+                        && (member == "add" || member == "sub")
+                    {
+                        let left = self.term(arguments[1], scope)?;
+                        let Term::Literal(right) = self.term(arguments[2], scope)? else {
+                            return None;
+                        };
+                        let offset = if member == "sub" { -right } else { right };
+                        return Some(shift(left, offset));
+                    }
                 }
                 let callee = self.callee_value(callee, scope)?;
                 let summary = self.summaries.derive(&callee, self.context)?;
@@ -656,15 +669,28 @@ impl Analysis<'_> {
                 let (callee, arguments) = application_spine(expression, self.module);
                 if let Expression::Intrinsic { name, .. } =
                     &self.module.arena.expressions[callee.0 as usize]
-                    && matches!(name.as_str(), "@int.add" | "@int.sub")
-                    && arguments.len() == 2
                 {
-                    let left = self.witness(arguments[0], scope)?;
-                    let Term::Literal(right) = self.witness(arguments[1], scope)? else {
-                        return None;
-                    };
-                    let offset = if name == "@int.sub" { -right } else { right };
-                    return Some(shift(left, offset));
+                    if matches!(name.as_str(), "@int.add" | "@int.sub") && arguments.len() == 2 {
+                        let left = self.witness(arguments[0], scope)?;
+                        let Term::Literal(right) = self.witness(arguments[1], scope)? else {
+                            return None;
+                        };
+                        let offset = if name == "@int.sub" { -right } else { right };
+                        return Some(shift(left, offset));
+                    }
+                    if name == "@type.resolve_member"
+                        && arguments.len() == 3
+                        && let Expression::Text { value: member, .. } =
+                            &self.module.arena.expressions[arguments[0].0 as usize]
+                        && (member == "add" || member == "sub")
+                    {
+                        let left = self.witness(arguments[1], scope)?;
+                        let Term::Literal(right) = self.witness(arguments[2], scope)? else {
+                            return None;
+                        };
+                        let offset = if member == "sub" { -right } else { right };
+                        return Some(shift(left, offset));
+                    }
                 }
                 self.term(expression, scope)
             }
