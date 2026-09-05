@@ -1,0 +1,26 @@
+name: Integration source snapshot
+
+on:
+  push:
+    branches: [codex/unify-operator-language-review-20260905]
+    paths: [.github/workflows/integration-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/unify-operator-language-review-20260905'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Archive tracked source without credentials or Git configuration
+        run: git archive HEAD | gzip > "${{ runner.temp }}/integration-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: integration-source-${{ github.sha }}
+          path: ${{ runner.temp }}/integration-source.tar.gz
+          retention-days: 1
