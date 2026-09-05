@@ -18,30 +18,10 @@ jobs:
         with:
           toolchain: 1.97.1
       - name: Widen loop-carried scalar signatures to their stable domain
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('compiler/src/typecheck.rs')
-          source = path.read_text()
-          old = '''fn stable_loop_signature(type_: Type) -> Type {
-              match type_ {
-          '''
-          old = old.replace('              ', '')
-          new = '''fn stable_loop_signature(type_: Type) -> Type {
-    match type_ {
-        Type::Range { domain, .. } => Type::Range {
-            domain,
-            low: None,
-            high: None,
-        },
-'''
-          if source.count(old) != 1:
-              raise SystemExit(f'expected one stable_loop_signature anchor, found {source.count(old)}')
-          path.write_text(source.replace(old, new, 1))
-          PY
-          cargo fmt --manifest-path compiler/Cargo.toml
-          git diff --check
+        run: >-
+          python3 -c "from pathlib import Path; p=Path('compiler/src/typecheck.rs'); s=p.read_text(); old='fn stable_loop_signature(type_: Type) -> Type {\\n    match type_ {\\n'; new=old+'        Type::Range { domain, .. } => Type::Range {\\n            domain,\\n            low: None,\\n            high: None,\\n        },\\n'; assert s.count(old)==1, s.count(old); p.write_text(s.replace(old,new,1))"
+          && cargo fmt --manifest-path compiler/Cargo.toml
+          && git diff --check
       - name: Loop inference regressions
         shell: bash
         run: |
