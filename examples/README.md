@@ -31,8 +31,41 @@ language rather than studying one compiler feature at a time.
 | [`validation_pipeline.blot`](validation_pipeline.blot)   | accumulate accepted values and typed rejection reasons                      |
 | [`word_frequency.blot`](word_frequency.blot)             | tokenize text, count sorted runs, and build an ordered text map             |
 
-Run `deno task verify:showcase` to evaluate these programs against their golden
-results and compile each one through the semantic compiler.
+## Practical boundary cases
+
+These examples include `Pain point:` comments at the relevant code, explicit
+edge cases, evaluator goldens, and separate emitted-Wasm result goldens. They
+return a `.default` value so each runs directly through the Node CLI.
+
+- [`paginated_feed.blot`](paginated_feed.blot): bounded pages, continuation
+  cursors, empty input, invalid limits, and an Int-maximum limit without adding
+  untrusted bounds before clamping.
+- [`unicode_preview.blot`](unicode_preview.blot): Unicode-scalar previews,
+  zero/negative limits, ellipsis budgeting, and the distinction between scalar
+  counts and grapheme clusters.
+- [`idempotent_events.blot`](idempotent_events.blot): accepted deliveries,
+  duplicate retries, conflicting payloads, invalid-then-corrected input, and an
+  empty batch. The array-backed dictionary is a small-batch baseline, not a
+  durable or constant-time deduplication service.
+- [`sensor_units.blot`](sensor_units.blot): explicit Int/F64 conversion, typed
+  float accumulation, an optional empty mean, and a named-operation workaround
+  for the current generic float-loop inference limitation.
+
+```sh
+pnpm blot run examples/paginated_feed.blot
+pnpm blot run examples/unicode_preview.blot
+pnpm blot run examples/idempotent_events.blot
+pnpm blot run examples/sensor_units.blot
+```
+
+Run `deno task verify:showcase` to evaluate the everyday programs, these four
+boundary examples, and the graph showcases against their golden results and
+compile each one through the semantic compiler. `pnpm test:node` also checks the
+four new examples' exact emitted-Wasm outputs and canonical formatting.
+
+See [the current-state review](../docs/review-2026-09-05-examples.md) for
+findings, reproduction details, and the distinction between fixes and
+workarounds.
 
 ## Common algorithms
 

@@ -1,0 +1,1 @@
+{ .default = { .fits = #Ok "café🙂"; .short = #Ok "caf…"; .ellipsis_only = #Ok "…"; .zero = #Ok ""; .empty = #Ok ""; .negative = #Error "negative preview limit"; .precomposed_length = 1; .decomposed_length = 2; }; }

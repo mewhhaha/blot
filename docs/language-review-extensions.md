@@ -1,9 +1,9 @@
 # Language review: library extensions
 
 These modules are ordinary Blot source. They add no primitives, grammar,
-implicit imports, runtime reflection, or alternate semantic implementation.
-Normative integration into `LANGUAGE.md` is still required before this draft is
-ready for review.
+implicit imports, runtime reflection, or alternate semantic implementation. The
+normative contracts and their restrictions are specified in `LANGUAGE.md`
+section 14.1. The compiler research below remains outside this bounded change.
 
 ## Floating-point partial comparison
 

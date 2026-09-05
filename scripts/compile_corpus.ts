@@ -54,4 +54,7 @@ console.log(JSON.stringify(
   null,
   2,
 ));
-if (failed.length > 0) Deno.exit(1);
+// Top-level examples claim support by the ordinary target. A target refusal
+// remains distinct from a source/compiler error in the report, but neither is
+// a successful accepted-corpus run.
+if (failed.length > 0 || refused.length > 0) Deno.exit(1);

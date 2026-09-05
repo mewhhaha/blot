@@ -1,0 +1,75 @@
+// Apply a small delivery batch once per event id, retaining conflict counts.
+// This is an in-memory policy example, not durable exactly-once delivery.
+
+open import "blot:prelude"
+
+const Event = { .id = Text; .quantity = Int; }
+const Summary =
+  {
+    .total = Int;
+    .accepted = Int;
+    .duplicates = Int;
+    .conflicts = Int;
+    .invalid = Int;
+  }
+
+// Return per-event counter changes instead of hiding control transfer in a
+// helper. An invalid delivery does not claim its id; a corrected retry may pass.
+let classify :: (Event, Option Int) -> (Int, Int, Int, Int)
+let classify = fn (event, previous) => do:
+  if event.quantity <= 0:
+    return (0, 0, 0, 1)
+
+  return case previous of
+    #None => (1, 0, 0, 0)
+    #Some quantity => case quantity == event.quantity of
+      #True => (0, 1, 0, 0)
+      #False => (0, 0, 1, 0)
+
+let process :: [Event] -> Summary
+let process = fn &events => do:
+  // Pain point: Dict is an array-backed map, not a hash table. Lookups and
+  // persistent copies make this small-batch baseline quadratic in distinct ids.
+  let seen :: [(Text, Int)]
+  let seen = []
+  let total = 0
+  let accepted = 0
+  let duplicates = 0
+  let conflicts = 0
+  let invalid = 0
+
+  // Pain point: borrowing a parameter also requires borrowing it at the call.
+  for event in Iter.items (&events):
+    let delta = classify (event, Dict.get ((&seen), event.id))
+    // Dict.put returns (previous value, new map). Copying here is deliberate:
+    // both case branches produce the next map without consuming a shared one.
+    seen := case delta.0 == 1 of
+      #True => (Dict.put (Array.copy seen, event.id, event.quantity)).1
+      #False => Array.copy seen
+    // Pain point: there is no continue keyword. Unconditional counter deltas
+    // express skip/accept policy while keeping loop-carried state explicit.
+    total := total + delta.0 * event.quantity
+    accepted := accepted + delta.0
+    duplicates := duplicates + delta.1
+    conflicts := conflicts + delta.2
+    invalid := invalid + delta.3
+
+  return {
+    .total = total;
+    .accepted = accepted;
+    .duplicates = duplicates;
+    .conflicts = conflicts;
+    .invalid = invalid;
+  }
+
+let events :: [Event]
+let events =
+  [
+    { .id = "a"; .quantity = 3; },
+    { .id = "a"; .quantity = 3; },
+    { .id = "a"; .quantity = 9; },
+    { .id = "b"; .quantity = 0; },
+    { .id = "b"; .quantity = 2; }
+  ]
+// Name a default value so `pnpm blot run` can select one runtime export.
+return { .default = { .batch = process events; .empty = process []; }; }

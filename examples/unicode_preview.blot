@@ -1,0 +1,38 @@
+// Produce scalar-bounded previews without slicing UTF-8 in the host.
+
+open import "blot:prelude"
+
+let preview :: (Text, Int) -> Result (Text, Text)
+let preview = fn (text, limit) => do:
+  if limit < 0:
+    return Error "negative preview limit"
+
+  if Text.length text <= limit:
+    return Ok text
+
+  if limit == 0:
+    return Ok ""
+
+  // Pain point: Text.length and Text.slice count Unicode scalar values,
+  // not UTF-8 bytes, UTF-16 code units, or user-perceived grapheme clusters.
+  // Reserve one scalar for the ellipsis. Combining marks may still separate.
+  if let #Some beginning = Text.slice (text, 0, limit - 1) else:
+    return Error "inconsistent preview bounds"
+
+  return Ok (beginning <> "…")
+
+// Name a default value so `pnpm blot run` can select one runtime export.
+return {
+  .default = {
+    .fits = preview ("café🙂", 5);
+    .short = preview ("café🙂", 4);
+    .ellipsis_only = preview ("café🙂", 1);
+    .zero = preview ("café🙂", 0);
+    .empty = preview ("", 0);
+    .negative = preview ("café🙂", -1);
+    // Pain point: visually identical text can have different scalar lengths.
+    // No normalization or grapheme segmentation is implied by this example.
+    .precomposed_length = Text.length "é";
+    .decomposed_length = Text.length "é";
+  };
+  }
