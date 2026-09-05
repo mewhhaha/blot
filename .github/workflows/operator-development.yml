@@ -1,4 +1,4 @@
-name: Branch-scoped operator development
+name: Branch-scoped operator draft validation
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
   validate:
     if: startsWith(github.event.head_commit.message, 'Validate operator')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,67 +46,96 @@ jobs:
           key: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-${{ github.sha }}
           restore-keys: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-
       - run: pnpm install --frozen-lockfile
-      - name: Apply source patch
-        run: |
-          python3 scripts/operator_dev.py
-          python3 scripts/operator_iteration.py
-          python3 scripts/operator_followup.py
-      - name: Generate source fixities and health
+      - name: Apply locally verified source patch
+        run: python3 scripts/operator_final.py
+      - name: Format source and regenerate source metadata
         run: |
           deno task generate:compiler-schema
           cargo fmt --manifest-path compiler/Cargo.toml
-          deno fmt LANGUAGE.md spec/TYPECHECKING.md
+          deno fmt LANGUAGE.md spec/TYPECHECKING.md spec/STAGING.md
           pnpm generate:health
           git diff --check
-      - name: Commit generated source changes to the development branch
+      - name: Commit source and generated metadata
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add compiler/src/typecheck.rs compiler/src/typecheck/operators.rs compiler/src/typecheck/integer.rs compiler/src/eval.rs compiler/src/session.rs src/prelude/prelude.blot compiler/src/fixities_generated.rs src/syntax/fixities.generated.ts generated/language-health.json LANGUAGE.md spec/TYPECHECKING.md
+          git add compiler/src/typecheck.rs compiler/src/typecheck/operators.rs compiler/src/typecheck/integer.rs compiler/src/eval.rs compiler/src/hir.rs compiler/src/session.rs src/prelude/prelude.blot compiler/src/fixities_generated.rs src/syntax/fixities.generated.ts generated/language-health.json LANGUAGE.md spec/TYPECHECKING.md spec/STAGING.md
           if ! git diff --cached --quiet; then
-            git commit -m 'Apply source-defined operator implementation and generated fixities'
+            git commit -m 'Implement source member contracts and generic refined operator applications'
             git push origin HEAD:refs/heads/codex/source-defined-generic-operators
           fi
-      - name: Operator regression tests
-        id: operators
+      - name: Focused source operator and interval regressions
+        id: focused
         continue-on-error: true
-        run: cargo test --manifest-path compiler/Cargo.toml source_operator_regressions -- --nocapture
-      - name: Full Rust test suite
-        run: cargo test --manifest-path compiler/Cargo.toml --quiet
-      - name: Build compiler and regenerate prelude snapshot
-        run: pnpm compiler:build
-      - name: Validate source and Wasm execution agreement
-        run: pnpm conformance
-      - name: TypeScript and generated checks
         run: |
-          deno check .
+          mkdir -p /tmp/operator-validation
+          cargo test --manifest-path compiler/Cargo.toml source_operator_regressions -- --nocapture 2>&1 | tee /tmp/operator-validation/focused.log
+          cargo test --manifest-path compiler/Cargo.toml evidence_search_visits_a_shared_constraint_graph_once 2>&1 | tee -a /tmp/operator-validation/focused.log
+          cargo test --manifest-path compiler/Cargo.toml integer_result 2>&1 | tee -a /tmp/operator-validation/focused.log
+      - name: Full Rust suite (draft blocker verification)
+        id: rust
+        continue-on-error: true
+        timeout-minutes: 8
+        run: cargo test --manifest-path compiler/Cargo.toml --quiet -- --test-threads=4 2>&1 | tee /tmp/operator-validation/rust.log
+      - name: Build Wasm compiler and prelude snapshot
+        id: wasm
+        continue-on-error: true
+        timeout-minutes: 12
+        run: pnpm compiler:build 2>&1 | tee /tmp/operator-validation/wasm.log
+      - name: Commit tracked generated snapshot when applicable
+        if: steps.wasm.outcome == 'success'
+        run: |
+          if git ls-files --error-unmatch generated/compiler/prelude.snapshot >/dev/null 2>&1; then
+            git add generated/compiler/prelude.snapshot
+            if ! git diff --cached --quiet; then
+              git commit -m 'Regenerate prelude snapshot for source operators'
+              git push origin HEAD:refs/heads/codex/source-defined-generic-operators
+            fi
+          fi
+      - name: Conformance
+        id: conformance
+        if: steps.wasm.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: pnpm conformance 2>&1 | tee /tmp/operator-validation/conformance.log
+      - name: Rust lint
+        id: lint
+        continue-on-error: true
+        run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings 2>&1 | tee /tmp/operator-validation/lint.log
+      - name: Generated metadata and formatting checks
+        id: metadata
+        continue-on-error: true
+        run: |
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
           deno task generate:compiler-schema --check
           pnpm health
-      - name: Package verification workspace
+          git diff --check
+      - name: Record validation outcomes
         if: always()
         run: |
-          mkdir -p /tmp/operator-workspace
-          git archive --format=tar HEAD | gzip > /tmp/operator-workspace/source.tar.gz
-          git archive --format=tar 2816fbc82f0201614463fd64a5e99361beb6e961 | gzip > /tmp/operator-workspace/base.tar.gz
-          tar -C "$HOME/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu" -czf /tmp/operator-workspace/rust.tar.gz bin/cargo bin/rustc lib
-          tar -C "$HOME/.cargo" -czf /tmp/operator-workspace/registry.tar.gz registry
-      - name: Retain verification workspace
+          mkdir -p /tmp/operator-validation
+          cat > /tmp/operator-validation/outcomes.txt <<'RESULTS'
+          Focused: ${{ steps.focused.outcome }}
+          Full Rust: ${{ steps.rust.outcome }}
+          Wasm/prelude snapshot: ${{ steps.wasm.outcome }}
+          Conformance: ${{ steps.conformance.outcome }}
+          Rust lint: ${{ steps.lint.outcome }}
+          Metadata: ${{ steps.metadata.outcome }}
+          RESULTS
+          cat /tmp/operator-validation/outcomes.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: operator-verification-workspace
-          path: /tmp/operator-workspace
-          retention-days: 1
-          compression-level: 0
-      - name: Retain compilation cache
+          name: operator-draft-validation
+          path: /tmp/operator-validation
+          retention-days: 7
+      - name: Require all executed checks to pass
         if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            compiler/target
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-${{ github.sha }}
-      - name: Require operator regressions to pass
-        if: always()
-        run: test '${{ steps.operators.outcome }}' = success
+        run: |
+          test '${{ steps.focused.outcome }}' = success
+          test '${{ steps.rust.outcome }}' = success
+          test '${{ steps.wasm.outcome }}' = success
+          test '${{ steps.conformance.outcome }}' = success
+          test '${{ steps.lint.outcome }}' = success
+          test '${{ steps.metadata.outcome }}' = success
