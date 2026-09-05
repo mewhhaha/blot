@@ -1,0 +1,51 @@
+name: Test first-bad residual qualification fix
+
+on:
+  push:
+    branches:
+      - codex/bisect-4dffd2d
+    paths:
+      - .github/workflows/test-first-bad-residual-fix.yml
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Remove residual requalification
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('compiler/src/typecheck.rs')
+          s = p.read_text()
+          old = '    fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {\n        let type_ = self.qualify_type(type_);\n'
+          new = '    fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {\n'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one site, found {s.count(old)}')
+          p.write_text(s.replace(old, new))
+          PY
+          git diff --check
+      - name: Compile tests once
+        run: cargo test --manifest-path compiler/Cargo.toml --no-run
+      - name: Run regression boundary tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            an_empty_scratch_argument_uses_the_contextual_result_representation
+            an_ordinary_helper_with_an_unsettled_scratch_result_stays_staged
+            development_provider_boolean_result_remains_a_reload_boundary
+            engine_entry_points_prepare_and_the_game_loop_emits_wasm
+          )
+          for test_name in "${tests[@]}"; do
+            echo "===== $test_name ====="
+            timeout 45s cargo test --manifest-path compiler/Cargo.toml "$test_name" -- --test-threads=1 --nocapture
+          done
