@@ -1691,11 +1691,10 @@ const upto = fn (low, high) => upto_build (low, high, Array.empty)
 
 // --- floats -----------------------------------------------------------------
 //
-// Attached operations do not imply overload resolution: an operator resolves
-// to one binding by name, and a `+` that worked on both would have to dispatch
-// on a value's type at run time — the typeclass machinery this language does
-// not have. `F64.add` is the floating-point addition; integer operators remain
-// fixed to `Int` and other domains use named calls.
+// Operators resolve to the source Op bindings. Their inferred-type projection
+// selects these attached operations at compile time: the same arithmetic
+// spelling works for Int, F64, and F32 without converting bound values or
+// introducing runtime type dispatch. Named calls remain ordinary alternatives.
 
 const F64Operations =
   {

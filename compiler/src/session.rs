@@ -10081,6 +10081,61 @@ return F32.add (-1) 2.5
         run_with_compiler_test_stack(|| {
             let cases = [
                 (
+                    "member-pattern-rejection",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Int = @type.attach @type.int \"add\" (fn (first, second) => fn right => 7)\n",
+                        "return 2 + 3\n",
+                    ),
+                    false,
+                ),
+                (
+                    "f32-generic-binary-and-unary",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; .negate = fn value => (@type.inferred value).negate value; }\n",
+                        "const F32 = @type.attach (@type.attach @type.float32 \"add\" @f32.add) \"negate\" @f32.neg\n",
+                        "const add = fn left => fn right => left + right\n",
+                        "let left :: F32\nlet left = 1.5\n",
+                        "return -(add left 2.5)\n",
+                    ),
+                    true,
+                ),
+                (
+                    "literal-context-mixed",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Float = @type.attach @type.float \"add\" @float.add\n",
+                        "return 1 + 2.0\n",
+                    ),
+                    true,
+                ),
+                (
+                    "arbitrary-source-member",
+                    concat!(
+                        "const Int = @type.attach @type.int \"combine\" (fn left => fn right => @int.mul left right)\n",
+                        "const combine = fn left => fn right => (@type.inferred left).combine left right\n",
+                        "return combine 2 3\n",
+                    ),
+                    true,
+                ),
+                (
+                    "record-source-operator",
+                    concat!(
+                        "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
+                        "const Box = @type.attach { .value = @type.int; } \"add\" (fn left => fn right => { .value = @int.add left.value right.value; })\n",
+                        "return { .value = 2; } + { .value = 3; }\n",
+                    ),
+                    true,
+                ),
+                (
+                    "missing-member-rejected",
+                    concat!(
+                        "const combine = fn left => fn right => (@type.inferred left).combine left right\n",
+                        "return combine 2 3\n",
+                    ),
+                    false,
+                ),
+                (
                     "arithmetic-result-interval",
                     concat!(
                         "const Op = { .add = fn left => fn right => (@type.inferred left).add left right; }\n",
@@ -10186,12 +10241,27 @@ return F32.add (-1) 2.5
                     .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
                     .expect(label);
                 let checked = session.check_module("main.blot");
-                eprintln!("{label}: {checked}");
+
                 if checked["ok"] != expected {
                     failures.push(format!("{label}: {checked}"));
                     continue;
                 }
                 if expected {
+                    let expected_type = match label {
+                        "arithmetic-result-interval" => "5",
+                        "generic-int-and-float" | "generic-unary" | "literal-context-mixed" => {
+                            "F64"
+                        }
+                        "f32-generic-binary-and-unary" => "F32",
+                        "custom-result" => "\"custom\"",
+                        "refined-result" => "7",
+                        "arbitrary-source-member" => "6",
+                        "record-source-operator" => "{ .value = 5 }",
+                        _ => panic!("missing principal type assertion for {label}"),
+                    };
+                    assert_eq!(checked["type"], expected_type, "{label}: {checked}");
+                    let evaluated = session.evaluate_module("main.blot");
+                    assert_eq!(evaluated["ok"], true, "{label}: {evaluated}");
                     let prepared = session.prepare_runtime_hir("main.blot");
                     if prepared["ok"] != true {
                         failures.push(format!("{label}: {prepared}"));

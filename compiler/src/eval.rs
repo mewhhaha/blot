@@ -591,6 +591,7 @@ enum ResidentOperatorMember {
         environment: Weak<Env>,
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
+        signature: Option<Box<Value>>,
         reuse_assertion: Option<Span>,
         deferred: bool,
     },
@@ -603,7 +604,7 @@ impl ResidentOperatorMember {
                 name,
                 arity,
                 applied,
-            } if applied.is_empty() => Some(Self::Primitive {
+            } => Some(Self::Primitive {
                 name: name.clone(),
                 arity: *arity,
                 applied: applied.clone(),
@@ -617,6 +618,7 @@ impl ResidentOperatorMember {
                 environment,
                 self_name,
                 imports,
+                signature,
                 reuse_assertion,
                 deferred,
                 ..
@@ -629,6 +631,7 @@ impl ResidentOperatorMember {
                 environment: Rc::downgrade(environment),
                 self_name: self_name.clone(),
                 imports: imports.clone(),
+                signature: signature.clone(),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
             }),
@@ -656,6 +659,7 @@ impl ResidentOperatorMember {
                 environment,
                 self_name,
                 imports,
+                signature,
                 reuse_assertion,
                 deferred,
             } => Some(Value::Closure {
@@ -667,7 +671,7 @@ impl ResidentOperatorMember {
                 environment: environment.upgrade()?,
                 self_name: self_name.clone(),
                 imports: imports.clone(),
-                signature: None,
+                signature: signature.clone(),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
             }),
@@ -681,7 +685,7 @@ impl ResidentOperatorExtension {
         let mut combined = BTreeMap::new();
         while let Value::Extended { inner, members } = current {
             for (name, value) in members.iter() {
-                if !operator_member_name(name) || combined.contains_key(name) {
+                if combined.contains_key(name) {
                     continue;
                 }
                 if let Some(member) = ResidentOperatorMember::capture(value) {
@@ -701,11 +705,13 @@ impl ResidentOperatorExtension {
 fn operator_type_key(value: &Value) -> String {
     match value {
         Value::Extended { inner, .. } => operator_type_key(inner),
-        Value::Range {
+        Value::Int(_)
+        | Value::Range {
             domain: Some(ValueDomain::Int),
             ..
         } => "domain:Int".to_owned(),
-        Value::Range {
+        Value::Text(_)
+        | Value::Range {
             domain: Some(ValueDomain::Text),
             ..
         } => "domain:Text".to_owned(),
@@ -717,6 +723,35 @@ fn operator_type_key(value: &Value) -> String {
             domain: Some(ValueDomain::Float32),
             ..
         } => "domain:F32".to_owned(),
+        Value::Tag {
+            name,
+            payload: None,
+        } if matches!(name.as_str(), "True" | "False") => "domain:Bool".to_owned(),
+        Value::Union(members) if !members.is_empty() => {
+            let first = operator_type_key(&members[0]);
+            if members
+                .iter()
+                .skip(1)
+                .all(|member| operator_type_key(member) == first)
+            {
+                first
+            } else {
+                show(value)
+            }
+        }
+        Value::Shape(fields) => {
+            let mut fields = fields.iter().collect::<Vec<_>>();
+            fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+            let fields = fields
+                .into_iter()
+                .map(|(name, value)| {
+                    let key = operator_type_key(value);
+                    format!("{}:{name}{}:{key}", name.len(), key.len())
+                })
+                .collect::<Vec<_>>()
+                .join(";");
+            format!("record:{{{fields}}}")
+        }
         value => show(value),
     }
 }
@@ -1118,34 +1153,34 @@ impl Context {
     }
 
     pub(crate) fn decorate_operator_type(&self, value: Value) -> Value {
-        // Reified singleton types use their scalar inhabitant as the canonical
-        // type value. Preserve those bounds while recovering the member domain.
-        // Ordinary scalar projection does not call this type-only entry point.
-        let value = match value {
-            Value::Int(integer) => Value::Range {
-                low: Box::new(Value::Int(integer.clone())),
-                high: Box::new(Value::Int(integer)),
-                domain: Some(ValueDomain::Int),
-            },
-            Value::Text(text) => Value::Range {
-                low: Box::new(Value::Text(text.clone())),
-                high: Box::new(Value::Text(text)),
-                domain: Some(ValueDomain::Text),
-            },
-            value => value,
-        };
         let key = operator_type_key(&value);
-        let extensions = self.operator_extensions.borrow();
-        let extension = extensions
+        let extension = self
+            .operator_extensions
+            .borrow()
             .iter()
             .rev()
             .find(|extension| extension.key == key)
             .cloned();
-        drop(extensions);
         if let Some(extension) = extension {
             return overlay_operator_extension(value, &extension);
         }
-        bootstrap_operator_type(value)
+        // Singleton and finite-union type values retain their exact inhabitants;
+        // only member selection uses the common scalar carrier. This type-only
+        // path does not change ordinary projection on scalar runtime values.
+        let domain = match key.as_str() {
+            "domain:Int" => Some(ValueDomain::Int),
+            "domain:Text" => Some(ValueDomain::Text),
+            "domain:F64" => Some(ValueDomain::Float),
+            "domain:F32" => Some(ValueDomain::Float32),
+            _ => None,
+        };
+        match domain {
+            Some(domain) => Value::Extended {
+                inner: Box::new(value),
+                members: bootstrap_operator_members(domain),
+            },
+            None => value,
+        }
     }
 
     pub(crate) fn effect_value(&self, label: &str) -> Option<Value> {
@@ -1539,24 +1574,30 @@ fn bootstrap_operator_type(value: Value) -> Value {
 }
 
 fn operator_type_with_members(value: Value) -> Value {
-    let members = OPERATOR_MEMBER_NAMES
+    let Value::Range {
+        domain: Some(domain),
+        ..
+    } = &value
+    else {
+        return value;
+    };
+    let members = bootstrap_operator_members(*domain);
+    Value::Extended {
+        inner: Box::new(value),
+        members,
+    }
+}
+
+fn bootstrap_operator_members(domain: ValueDomain) -> OrderedFields {
+    OPERATOR_MEMBER_NAMES
         .iter()
         .filter_map(|name| {
             let implementation = if *name == "negate" {
-                let primitive = match &value {
-                    Value::Range {
-                        domain: Some(ValueDomain::Int),
-                        ..
-                    } => "@int.neg",
-                    Value::Range {
-                        domain: Some(ValueDomain::Float),
-                        ..
-                    } => "@float.neg",
-                    Value::Range {
-                        domain: Some(ValueDomain::Float32),
-                        ..
-                    } => "@f32.neg",
-                    _ => return None,
+                let primitive = match domain {
+                    ValueDomain::Int => "@int.neg",
+                    ValueDomain::Float => "@float.neg",
+                    ValueDomain::Float32 => "@f32.neg",
+                    ValueDomain::Text => return None,
                 };
                 Value::Primitive {
                     name: primitive.to_owned(),
@@ -1572,11 +1613,7 @@ fn operator_type_with_members(value: Value) -> Value {
             };
             Some(((*name).to_owned(), implementation))
         })
-        .collect();
-    Value::Extended {
-        inner: Box::new(value),
-        members,
-    }
+        .collect()
 }
 
 fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
@@ -1601,7 +1638,7 @@ fn recognition_argument_type(runtime: &Runtime, span: Span) -> Option<Value> {
     }
 }
 
-fn runtime_value_type(value: Value) -> Option<Value> {
+fn runtime_value_type(value: Value, runtime: &Runtime) -> Option<Value> {
     let constant = |name| crate::primitives::constant(name);
     match value {
         Value::Int(_) => constant("@type.int"),
@@ -1617,6 +1654,26 @@ fn runtime_value_type(value: Value) -> Option<Value> {
         Value::IntegerVector { bits: 8, .. } => constant("@type.i8x16"),
         Value::IntegerVectorMask { bits: 8, .. } => constant("@type.i8x16_mask"),
         Value::Unit => Some(Value::Unit),
+        Value::Runtime(value) => runtime
+            .residual
+            .as_ref()?
+            .borrow()
+            .checked_scalar_type(&value),
+        Value::Shape(fields) => Some(Value::Shape(
+            fields
+                .iter()
+                .map(|(name, value)| {
+                    Some((name.clone(), runtime_value_type(value.clone(), runtime)?))
+                })
+                .collect::<Option<OrderedFields>>()?,
+        )),
+        Value::Tag { name, payload } => Some(Value::Tag {
+            name,
+            payload: match payload {
+                Some(value) => Some(Box::new(runtime_value_type(*value, runtime)?)),
+                None => None,
+            },
+        }),
         _ => None,
     }
 }
@@ -2391,9 +2448,8 @@ pub fn evaluate_expression(
                 .or_else(|| recognition_argument_type(&runtime, span))
                 .or_else(
                     || match &loaded_module.arena.expressions[argument.0 as usize] {
-                        Expression::Var { name, .. } => {
-                            lookup(&environment, name).and_then(runtime_value_type)
-                        }
+                        Expression::Var { name, .. } => lookup(&environment, name)
+                            .and_then(|value| runtime_value_type(value, &runtime)),
                         _ => None,
                     },
                 );
@@ -2402,11 +2458,6 @@ pub fn evaluate_expression(
                 Expression::Intrinsic { name, .. } if name == "@type.inferred"
             ) {
                 let Some(expected_argument) = expected_argument else {
-                    if runtime.residual.is_some() {
-                        return Computation::value(operator_type_with_members(
-                            inferred_argument.unwrap_or(Value::TypeVariable(0)),
-                        ));
-                    }
                     return Computation::error(Diagnostic::new(
                         "BLOT_NOT_COMPTIME",
                         format!(

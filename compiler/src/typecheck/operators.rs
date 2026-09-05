@@ -5,6 +5,20 @@
 
 use super::*;
 
+pub(super) struct PendingSourceMember {
+    pub(super) path: String,
+    receiver: Type,
+    expression: ExpressionId,
+    callee: ExpressionId,
+    arguments: Vec<ExpressionId>,
+    environment: TypeEnvironment,
+    values: ValueEnvironment,
+    dependencies: BTreeMap<String, Type>,
+    result: Type,
+    effects: Type,
+    span: Span,
+}
+
 impl Checker {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn infer_source_member_application(
@@ -35,19 +49,53 @@ impl Checker {
             // Only a literal may select a numeric representation from another
             // operand. A bound value is never implicitly converted.
             if self.mentions_pending_numeric_literal(&subject.type_) {
-                let contextual_domain = inferred_arguments
-                    .iter()
-                    .find_map(|argument| self.resolve_type_domain(argument));
-                if let Some(domain) = contextual_domain {
-                    let expected = match domain {
-                        Domain::Int => int_type(),
-                        Domain::Text => text_type(),
-                        Domain::Float => float_type(),
-                        Domain::Float32 => float32_type(),
-                    };
-                    self.constrain(subject.type_.clone(), expected, span)?;
+                let literal_ids = self
+                    .numeric_literals
+                    .borrow()
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>();
+                let receiver = self.settle(subject.type_.clone(), true);
+                if matches!(
+                    receiver,
+                    Type::Bottom | Type::Variable(_) | Type::Range { .. }
+                ) {
+                    let contextual_domain = inferred_arguments
+                        .iter()
+                        .find_map(|argument| self.resolve_type_domain(argument))
+                        .or_else(|| {
+                            let mut selected = None;
+                            for argument in &inferred_arguments {
+                                match self.pending_numeric_literal_domain(argument) {
+                                    Some(Domain::Float) => return Some(Domain::Float),
+                                    Some(Domain::Int) => selected = Some(Domain::Int),
+                                    _ => {}
+                                }
+                            }
+                            selected
+                        });
+                    if let Some(domain) = contextual_domain {
+                        let expected = match domain {
+                            Domain::Int => int_type(),
+                            Domain::Text => text_type(),
+                            Domain::Float => float_type(),
+                            Domain::Float32 => float32_type(),
+                        };
+                        self.constrain(subject.type_.clone(), expected, span)?;
+                    }
                 }
                 self.resolve_numeric_literals()?;
+                // Literal nodes are immutable evidence. Preserve their selected
+                // singleton/domain when passing them into source specialization,
+                // without freezing an ordinary open inference variable.
+                let replacements = literal_ids
+                    .into_iter()
+                    .map(|id| (id, self.settle(Type::Variable(id), true)))
+                    .collect();
+                inferred_arguments = inferred_arguments
+                    .into_iter()
+                    .map(|argument| substitute_inference_variables(argument, &replacements))
+                    .collect();
             }
             let mut settled = self.settle(subject.type_.clone(), true);
             if contains_bottom(&settled) {
@@ -74,9 +122,26 @@ impl Checker {
                     ));
                 }
                 self.defer_current_closure();
+                let result = self.fresh();
+                let performed = self.fresh();
+                self.pending_source_members
+                    .borrow_mut()
+                    .push(PendingSourceMember {
+                        path: path.to_owned(),
+                        receiver: subject.type_,
+                        expression,
+                        callee,
+                        arguments: arguments.to_vec(),
+                        environment: environment.clone(),
+                        values: values.clone(),
+                        dependencies: dependencies.clone(),
+                        result: result.clone(),
+                        effects: performed.clone(),
+                        span,
+                    });
                 return Ok(Some(Inferred {
-                    type_: self.fresh(),
-                    effects: self.join_effects(effects, self.fresh())?,
+                    type_: result,
+                    effects: self.join_effects(effects, performed)?,
                 }));
             }
             let type_value = self.reify_runtime_type(&settled).ok_or_else(|| {
@@ -141,7 +206,17 @@ impl Checker {
             }));
         }
 
-        let selected = comptime_expression_value(module, callee, values);
+        let selected = comptime_expression_value(module, callee, values).or_else(|| {
+            let Expression::Intrinsic { name, .. } = &module.arena.expressions[callee.0 as usize]
+            else {
+                return None;
+            };
+            crate::primitives::primitive_arity(name).map(|arity| Value::Primitive {
+                name: name.clone(),
+                arity,
+                applied: Vec::new(),
+            })
+        });
         let Some(member) = selected else {
             return Ok(None);
         };
@@ -150,8 +225,25 @@ impl Checker {
             Expression::Field { target, .. }
                 if matches!(comptime_expression_value(module, *target, values), Some(Value::Extended { .. }))
         );
-        let needs_specialization =
-            self.member_value_needs_specialization(&member, &mut HashSet::new());
+        let concrete_contract = closure_signature(&member)
+            .and_then(|signature| self.bridge(&signature))
+            .is_some_and(|signature| {
+                closed_checked_type(&signature, &mut HashSet::new()) && !contains_bottom(&signature)
+            });
+        let direct_dispatch = match &member {
+            Value::Closure { module, body, .. } => self
+                .context
+                .modules
+                .borrow()
+                .get(module.as_str())
+                .is_some_and(|loaded| {
+                    expression_contains_intrinsic(&loaded.module, *body, "@type.inferred")
+                }),
+            _ => false,
+        };
+        let needs_specialization = direct_dispatch
+            || (!concrete_contract
+                && self.member_value_needs_specialization(&member, &mut HashSet::new()));
         let integer_primitive = matches!(
             &member,
             Value::Primitive { name, arity, applied }
@@ -195,18 +287,76 @@ impl Checker {
         }))
     }
 
+    pub(super) fn resolve_pending_source_members(&self) -> Result<(), Diagnostic> {
+        loop {
+            let pending = std::mem::take(&mut *self.pending_source_members.borrow_mut());
+            let mut unresolved = Vec::new();
+            let mut progress = false;
+            for member in pending {
+                let mut receiver = self.settle(member.receiver.clone(), true);
+                if contains_bottom(&receiver) {
+                    receiver = self.settle(member.receiver.clone(), false);
+                }
+                if matches!(
+                    receiver,
+                    Type::Top | Type::Bottom | Type::Variable(_) | Type::Rigid(_)
+                ) || contains_bottom(&receiver)
+                    || !closed_checked_type(&receiver, &mut HashSet::new())
+                    || !operator_dispatch_type_is_concrete(&receiver)
+                {
+                    unresolved.push(member);
+                    continue;
+                }
+                let loaded = self
+                    .context
+                    .modules
+                    .borrow()
+                    .get(&member.path)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "BLOT_UNRESOLVED_IMPORT",
+                            "A pending member application lost its source module.",
+                            member.span,
+                        )
+                    })?;
+                let inferred = self
+                    .infer_source_member_application(
+                        &member.path,
+                        &loaded.module,
+                        member.expression,
+                        member.callee,
+                        &member.arguments,
+                        &member.environment,
+                        &member.values,
+                        &member.dependencies,
+                        member.span,
+                    )?
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            "BLOT_RUST_INVARIANT",
+                            "A pending source member application lost its lookup expression.",
+                            member.span,
+                        )
+                    })?;
+                self.constrain(inferred.type_, member.result, member.span)?;
+                self.constrain(inferred.effects, member.effects, member.span)?;
+                progress = true;
+            }
+            self.pending_source_members.borrow_mut().extend(unresolved);
+            if !progress {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn member_value_needs_specialization(
         &self,
         value: &Value,
         visited: &mut HashSet<(String, ExpressionId)>,
     ) -> bool {
-        let Value::Closure {
-            module,
-            body,
-            environment,
-            ..
-        } = value
-        else {
+        let Value::Closure { module, body, .. } = value else {
             return false;
         };
         let key = (module.as_ref().clone(), *body);
@@ -222,32 +372,7 @@ impl Checker {
         if expression_contains_intrinsic(&loaded.module, *body, "@type.inferred") {
             return true;
         }
-        // Follow the actual captured binding, not an operator name. This also
-        // retains specialization requirements across module/snapshot boundaries.
-        let candidates = RefCell::new(Vec::new());
-        expression_contains(&loaded.module, *body, &|expression| {
-            match expression {
-                Expression::Var { name, .. } => {
-                    if let Some(value) = lookup(environment, name) {
-                        candidates.borrow_mut().push(value);
-                    }
-                }
-                Expression::Field { target, name, .. } => {
-                    if let Some(target) =
-                        comptime_expression_value(&loaded.module, *target, environment)
-                        && let Some(value) = static_member(&target, name)
-                    {
-                        candidates.borrow_mut().push(value);
-                    }
-                }
-                _ => {}
-            }
-            false
-        });
-        candidates
-            .into_inner()
-            .iter()
-            .any(|value| self.member_value_needs_specialization(value, visited))
+        false
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -267,7 +392,6 @@ impl Checker {
             body,
             environment: captures,
             self_name,
-            deferred,
             ..
         } = value
         else {
@@ -346,13 +470,15 @@ impl Checker {
         let root_body = *body;
         let mut parameter = *parameter;
         let mut body = *body;
-        let mut deferred = *deferred;
         let mut consumed = 0;
         let mut bodies = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             // Deferred argument demand is handled by ordinary application. The
             // current operator source members are strict, but user members need
             // the same convention check rather than an eager reinterpretation.
+            if let Some(accepted) = self.pattern_type(&loaded.module, parameter, &mut scope) {
+                self.constrain(argument.clone(), accepted, span)?;
+            }
             self.bind_pattern_at_phase(
                 &loaded.module,
                 parameter,
@@ -368,7 +494,6 @@ impl Checker {
             let Expression::Lambda {
                 parameter: next,
                 body: next_body,
-                deferred: next_deferred,
                 ..
             } = &loaded.module.arena.expressions[body.0 as usize]
             else {
@@ -376,12 +501,19 @@ impl Checker {
             };
             parameter = *next;
             body = *next_body;
-            deferred = *next_deferred;
         }
-        let _ = deferred;
         if let Some(argument) = arguments.first() {
             self.record_specialization(closure_module, root_body, argument, path, span)?;
         }
+        let previous_context = self.synthetic_call_context.get();
+        let context = self.next_synthetic_call_context.get();
+        self.next_synthetic_call_context.set(
+            context
+                .checked_add(1)
+                .expect("synthetic-call inference context overflowed"),
+        );
+        self.synthetic_call_context.set(context);
+        let pending_before = self.pending_source_members.borrow().len();
         let previous_depth = self.specialization_depth.get();
         self.specialization_depth.set(previous_depth + 1);
         let previous_active = self.active_closures.borrow().len();
@@ -396,6 +528,7 @@ impl Checker {
         );
         self.active_closures.borrow_mut().truncate(previous_active);
         self.specialization_depth.set(previous_depth);
+        self.synthetic_call_context.set(previous_context);
         let mut result = result?;
         if consumed < arguments.len() {
             let rest = self.apply_member_signature(result.type_, &arguments[consumed..], span)?;
@@ -407,6 +540,16 @@ impl Checker {
         if let Some(declared) = declared {
             self.constrain(result.type_.clone(), declared.type_, span)?;
             self.constrain(result.effects.clone(), declared.effects, span)?;
+        }
+        // Concrete source specialization owns its output type. Publish the
+        // closed result rather than leaking a callee-local join variable into
+        // the caller's case-coverage constraints.
+        let settled_result = self.settle(result.type_.clone(), true);
+        if self.pending_source_members.borrow().len() == pending_before
+            && !contains_bottom(&settled_result)
+            && closed_checked_type(&settled_result, &mut HashSet::new())
+        {
+            result.type_ = settled_result;
         }
         // Keep the caller's source span as the application evidence. No member
         // spelling or compile-time sample value contributes a result type.
@@ -442,5 +585,39 @@ impl Checker {
             type_: signature,
             effects,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evidence_search_visits_a_shared_constraint_graph_once() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let span = Span { start: 1, end: 2 };
+        let mut graph = int_type();
+        for _ in 0..32 {
+            let next = checker.fresh();
+            checker
+                .constrain(
+                    Type::Record(
+                        vec![
+                            ("left".to_owned(), graph.clone()),
+                            ("right".to_owned(), graph),
+                        ]
+                        .into(),
+                    ),
+                    next.clone(),
+                    span,
+                )
+                .unwrap();
+            graph = next;
+        }
+        let mut visited = HashSet::new();
+        assert!(!checker.contains_unevidenced(&graph, &mut visited));
+        assert_eq!(visited.len(), 32);
+        checker.constrain(Type::Top, graph.clone(), span).unwrap();
+        assert!(checker.contains_unevidenced(&graph, &mut HashSet::new()));
     }
 }

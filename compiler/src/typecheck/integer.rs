@@ -27,7 +27,7 @@ pub(super) fn primitive_result(checker: &Checker, name: &str, arguments: &[Type]
         // A primitive has already constrained this pending literal to Int. Read
         // its singleton without committing unrelated literals elsewhere.
         let literal = match argument {
-            Type::Variable(id) => checker.pending_numeric_literals.borrow().get(id).cloned(),
+            Type::Variable(id) => checker.numeric_literals.borrow().get(id).cloned(),
             _ => None,
         };
         if let Some(NumericLiteralFact {
@@ -41,12 +41,10 @@ pub(super) fn primitive_result(checker: &Checker, name: &str, arguments: &[Type]
             });
             continue;
         }
-        let positive = checker.settle(argument.clone(), true);
-        let settled = if matches!(positive, Type::Bottom) {
-            checker.settle(argument.clone(), false)
-        } else {
-            positive
-        };
+        // Lower bounds of an open variable are only accumulated evidence;
+        // recursive/loop uses may add more inhabitants later. A range proof
+        // must use its upper bound, not freeze the current lower approximation.
+        let settled = checker.settle(argument.clone(), !matches!(argument, Type::Variable(_)));
         let intervals = integer_intervals(&settled)?;
         if intervals.is_empty() {
             return None;

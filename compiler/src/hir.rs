@@ -2469,6 +2469,58 @@ impl ResidualTrace {
         self.operation("indirect.load", target_type, vec![target.id], span, None)
     }
 
+    /// Reify an already checked scalar carrier for source specialization.
+    /// This reads the admitted HIR type; it does not infer an operation from
+    /// its spelling or from a sample value, and cannot establish a refinement.
+    pub(crate) fn checked_scalar_type(&self, value: &RuntimeValue) -> Option<Value> {
+        let intrinsic = match self.types.get(value.type_id)? {
+            RuntimeType::SignedInteger64 => "@type.int",
+            RuntimeType::Float32 => "@type.float32",
+            RuntimeType::Float64 => "@type.float",
+            RuntimeType::Text => "@type.text",
+            RuntimeType::Unit => return Some(Value::Unit),
+            RuntimeType::Boolean => {
+                return Some(Value::Union(
+                    vec![crate::value::boolean(false), crate::value::boolean(true)].into(),
+                ));
+            }
+            RuntimeType::Vector {
+                element: "float-32",
+                lanes: 4,
+            } => "@type.f32x4",
+            RuntimeType::Vector {
+                element: "integer-32",
+                lanes: 4,
+            } => "@type.i32x4",
+            RuntimeType::Vector {
+                element: "integer-16",
+                lanes: 8,
+            } => "@type.i16x8",
+            RuntimeType::Vector {
+                element: "integer-8",
+                lanes: 16,
+            } => "@type.i8x16",
+            RuntimeType::Mask {
+                element: "float-32",
+                lanes: 4,
+            } => "@type.f32x4_mask",
+            RuntimeType::Mask {
+                element: "integer-32",
+                lanes: 4,
+            } => "@type.i32x4_mask",
+            RuntimeType::Mask {
+                element: "integer-16",
+                lanes: 8,
+            } => "@type.i16x8_mask",
+            RuntimeType::Mask {
+                element: "integer-8",
+                lanes: 16,
+            } => "@type.i8x16_mask",
+            _ => return None,
+        };
+        crate::primitives::constant(intrinsic)
+    }
+
     pub(crate) fn type_name(&self, value: &RuntimeValue) -> &'static str {
         match self.types[value.type_id] {
             RuntimeType::Unit => "Unit",
@@ -4012,17 +4064,11 @@ impl ResidualTrace {
         {
             current = *function;
         }
-        let crate::ast::Expression::Field { target, name, .. } =
+        let crate::ast::Expression::Field { target, .. } =
             &loaded.module.arena.expressions[current.0 as usize]
         else {
             return false;
         };
-        if !matches!(
-            name.as_str(),
-            "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-        ) {
-            return false;
-        }
         let crate::ast::Expression::Apply { function, .. } =
             &loaded.module.arena.expressions[target.0 as usize]
         else {

@@ -2303,6 +2303,7 @@ pub struct Checker {
     specialization_depth: Cell<u32>,
     active_closures: RefCell<Vec<(String, ExpressionId)>>,
     deferred_predicate_closures: RefCell<HashSet<(String, ExpressionId)>>,
+    pending_source_members: RefCell<Vec<operators::PendingSourceMember>>,
     synthetic_calls: RefCell<HashMap<(String, u64, String, usize), SyntheticCallFact>>,
     synthetic_call_context: Cell<u64>,
     next_synthetic_call_context: Cell<u64>,
@@ -2391,6 +2392,7 @@ impl Checker {
             specialization_depth: Cell::new(0),
             active_closures: RefCell::new(Vec::new()),
             deferred_predicate_closures: RefCell::new(HashSet::new()),
+            pending_source_members: RefCell::new(Vec::new()),
             synthetic_calls: RefCell::new(HashMap::new()),
             synthetic_call_context: Cell::new(0),
             next_synthetic_call_context: Cell::new(1),
@@ -2746,6 +2748,7 @@ impl Checker {
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
         self.deferred_predicate_closures.borrow_mut().clear();
+        self.pending_source_members.borrow_mut().clear();
         self.synthetic_calls.borrow_mut().clear();
         self.synthetic_call_context.set(0);
         self.next_synthetic_call_context.set(1);
@@ -2774,6 +2777,9 @@ impl Checker {
     }
 
     pub fn invalidate(&self, paths: &HashSet<String>) {
+        self.pending_source_members
+            .borrow_mut()
+            .retain(|member| !paths.contains(&member.path));
         self.modules
             .borrow_mut()
             .retain(|path, _| !paths.contains(path));
@@ -3430,6 +3436,7 @@ impl Checker {
         )?;
         effects = self.join_effects(effects, inferred.effects)?;
         self.resolve_numeric_literals()?;
+        self.resolve_pending_source_members()?;
         let effects = self.settle(effects, true);
         if let Type::Effects(labels) = &effects
             && labels.iter().any(|label| !label.starts_with("host:"))
@@ -5655,6 +5662,15 @@ impl Checker {
                 let unsettled_result = can_specialize
                     && matches!(self.settle(result.clone(), true), Type::Top | Type::Bottom);
                 let requires_specialization = evaluated_function.as_ref().is_some_and(|value| {
+                    if closure_signature(value)
+                        .and_then(|signature| self.bridge(&signature))
+                        .is_some_and(|signature| {
+                            closed_checked_type(&signature, &mut HashSet::new())
+                                && !contains_bottom(&signature)
+                        })
+                    {
+                        return false;
+                    }
                     let Value::Closure { module, body, .. } = value else {
                         return false;
                     };
@@ -5838,6 +5854,16 @@ impl Checker {
                 } else {
                     let target =
                         self.infer(path, module, target, environment, values, dependencies)?;
+                    if let Type::Record(fields) = &target.type_
+                        && let Some(field) = fields.get(&name)
+                        && !contains_bottom(field)
+                        && closed_checked_type(field, &mut HashSet::new())
+                    {
+                        return Ok(Inferred {
+                            type_: field.clone(),
+                            effects: target.effects,
+                        });
+                    }
                     let field = self.fresh();
                     self.constrain(
                         target.type_,
@@ -9513,7 +9539,9 @@ impl Checker {
                     .chain(&variable.upper)
                     .map(|bound| self.expand_constraint(*bound))
                     .any(|bound| self.contains_unevidenced(&bound, seen));
-                seen.remove(id);
+                // This is graph reachability, not a path-dependent query.
+                // Retain visited variables to avoid exponential revisits of
+                // shared recursive constraint subgraphs.
                 found
             }
             Type::Function {

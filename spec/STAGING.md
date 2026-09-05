@@ -353,3 +353,20 @@ Staging and specialization owe:
 Tests and validation passes provide finite evidence for these obligations. A
 successful build does not by itself prove phase safety or the whole-compiler
 observation theorem.
+
+### Source-member carrier evidence
+
+An inferred-type member application remains a source application during staging.
+The selected attached closure or primitive determines behavior; a field spelling
+is not an alternative semantic contract. Prefix negation uses the same boundary
+as binary operators, and arbitrary attached member names do not require an HIR
+operator whitelist.
+
+When specialization receives a scalar Runtime value whose source type variable
+has already been substituted by an admitted HIR representation, staging may
+reify that checked carrier (`Int`, `F64`, `F32`, `Bool`, `Text`, or a supported
+SIMD carrier) to select its source member. This reads the validated type
+identity; it does not infer a new source type, prove a refinement, or choose
+semantics from sample data. Existing checked source type evidence takes
+precedence. Missing carrier evidence must not manufacture a type variable with a
+built-in operator namespace attached to it.
