@@ -52,6 +52,21 @@ pnpm test
 canonical ABI result. Programs that need host capabilities must be embedded in a
 host that implements them.
 
+`pnpm blot ast file.blot` is syntax-only: it uses the generated Baba frontend
+without creating a semantic compiler session or requiring the Rust compiler
+artifact. Syntax errors and unreadable files still make the command fail; when
+several paths are supplied, later files are processed after an earlier failure.
+This is not type checking. `check`, `build`, and `run` still require Rust/Wasm.
+
+The practical examples described in
+[the September 5 review](review-2026-09-05-examples.md) return an explicit
+`.default` value so each can be executed directly with `pnpm blot run`.
+
+`pnpm compile:corpus` treats top-level `examples/*.blot` as supported by the
+ordinary compiler target. It succeeds only when every entry compiles. Target
+refusals stay distinct from other errors in its JSON report, but either category
+makes the command fail; successful checking or evaluation is not sufficient.
+
 Library consumers use the same resident compiler:
 
 ```ts

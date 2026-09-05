@@ -14,10 +14,11 @@ open import "blot:prelude"
 
 // --- arithmetic -------------------------------------------------------------
 //
-// `F64.add` rather than `+`. An operator resolves to one binding by name, so
-// a single `+` over both numeric types would have to dispatch on a value's
-// type at run time, which is the typeclass machinery this language does not
-// have. A module that wants an operator for these says so in its own header.
+// Named operations make the numeric domain explicit. Standard value operators
+// now resolve through members attached to the inferred operand type, at
+// compile time; this does not require runtime typeclass dispatch. Concrete
+// float expressions can use +, -, *, and /. The sensor_units example also
+// records a current generic-loop limitation and its named F64.add workaround.
 
 let quarter :: F64
 let quarter = F64.div 1.0 4.0

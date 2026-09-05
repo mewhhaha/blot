@@ -1,0 +1,56 @@
+// Paginate a borrowed feed without trusting caller-supplied bounds.
+// Pain point: computing offset + limit before clamping can overflow Int.
+// Clamp against the remaining length first, even for the largest legal limit.
+
+open import "blot:prelude"
+
+const Page = { .items = [Text]; .next = Option Int; }
+const PageResult = #Page Page | #InvalidPage Text
+
+let page :: ([Text], Int, Int) -> PageResult
+let page = fn (&values, offset, limit) => do:
+  if offset < 0:
+    return #InvalidPage "negative offset"
+
+  if limit <= 0:
+    return #InvalidPage "limit must be positive"
+
+  let length = Array.length (&values)
+  if offset >= length:
+    return #Page { .items = []; .next = None; }
+
+  let remaining = length - offset
+  let count = case limit < remaining of
+    #True => limit
+    #False => remaining
+  let stop = offset + count
+  let items :: [Text]
+  let items = []
+  // Pain point: a computed bound is not automatically an indexing proof.
+  // Array.get is total; a missing item here means our own bounds are wrong,
+  // so do not silently turn that invariant failure into a short page.
+  for index in Iter.range (offset, stop):
+    if let #Some item = Array.get ((&values), index) else:
+      return #InvalidPage "inconsistent page bounds"
+
+    items := @array.push items item
+
+  let next :: Option Int
+  let next = case stop < length of
+    #True => Some stop
+    #False => None
+  return #Page { .items = items; .next = next; }
+
+let feed = ["alpha", "beta", "gamma"]
+// Name a default value so `pnpm blot run` can select one runtime export.
+return {
+  .default = {
+    .first = page ((&feed), 0, 2);
+    .last = page ((&feed), 2, 2);
+    .past_end = page ((&feed), 3, 2);
+    .empty = page ([], 0, 2);
+    .negative = page ((&feed), -1, 2);
+    .zero_limit = page ((&feed), 0, 0);
+    .huge_limit = page ((&feed), 1, 9223372036854775807);
+  };
+  }

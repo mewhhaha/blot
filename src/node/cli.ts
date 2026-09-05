@@ -37,6 +37,26 @@ if (
     const failed = await lintFiles(invocation.mode, invocation.paths);
     if (failed) process.exitCode = 1;
   }
+} else if (command === "ast") {
+  let failed = false;
+  for (const path of paths) {
+    try {
+      const source = await readFile(resolve(path), "utf8");
+      const parsed = await parse(source);
+      if (!parsed.ok) {
+        for (const diagnostic of parsed.diagnostics) {
+          console.error(render(path, source, diagnostic));
+        }
+        failed = true;
+        continue;
+      }
+      console.log(JSON.stringify(parsed.module, bigintJson, 2));
+    } catch (error) {
+      failed = true;
+      report(path, error);
+    }
+  }
+  if (failed) process.exitCode = 1;
 } else if (command === "dev") {
   if (paths.length !== 1) {
     console.error("usage: pnpm blot dev <blot.json>");
@@ -68,17 +88,6 @@ if (
         } else if (command === "check") {
           const checked = await compiler.check(path);
           console.log(`${path}: ${checked.type}${checked.effects}`);
-        } else {
-          const source = await readFile(resolve(path), "utf8");
-          const parsed = await parse(source);
-          if (!parsed.ok) {
-            for (const diagnostic of parsed.diagnostics) {
-              console.error(render(path, source, diagnostic));
-            }
-            failed = true;
-            continue;
-          }
-          console.log(JSON.stringify(parsed.module, bigintJson, 2));
         }
       } catch (error) {
         failed = true;

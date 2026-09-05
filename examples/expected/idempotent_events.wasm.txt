@@ -1,0 +1,1 @@
+{ .batch = { .accepted = 2; .conflicts = 1; .duplicates = 1; .invalid = 1; .total = 5 }; .empty = { .accepted = 0; .conflicts = 0; .duplicates = 0; .invalid = 0; .total = 0 } }

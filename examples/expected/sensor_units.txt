@@ -1,0 +1,1 @@
+{ .default = { .celsius = [19.5, 20, 20.5]; .fahrenheit = [67.1, 68, 68.9]; .mean = #Some 20; .empty_mean = #None; .below_zero = -5; }; }
