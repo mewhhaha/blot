@@ -5,6 +5,7 @@ on:
     branches: [codex/source-defined-generic-operators]
     paths:
       - scripts/operator_dev.py
+      - scripts/operator_iteration.py
       - compiler/src/typecheck/operators.rs
       - .github/workflows/operator-development.yml
 
@@ -37,7 +38,7 @@ jobs:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: |
             compiler/target
@@ -47,7 +48,9 @@ jobs:
           restore-keys: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-
       - run: pnpm install --frozen-lockfile
       - name: Apply source patch
-        run: python3 scripts/operator_dev.py
+        run: |
+          python3 scripts/operator_dev.py
+          python3 scripts/operator_iteration.py
       - name: Generate source fixities and health
         run: |
           deno task generate:compiler-schema
@@ -64,6 +67,8 @@ jobs:
             git push origin HEAD:refs/heads/codex/source-defined-generic-operators
           fi
       - name: Operator regression tests
+        id: operators
+        continue-on-error: true
         run: cargo test --manifest-path compiler/Cargo.toml source_operator_regressions -- --nocapture
       - name: Full Rust test suite
         run: cargo test --manifest-path compiler/Cargo.toml
@@ -76,3 +81,15 @@ jobs:
           deno check .
           deno task generate:compiler-schema --check
           pnpm health
+      - name: Retain compilation cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            compiler/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: operator-dev-${{ runner.os }}-${{ hashFiles('compiler/Cargo.lock') }}-${{ github.sha }}
+      - name: Require operator regressions to pass
+        if: always()
+        run: test '${{ steps.operators.outcome }}' = success
