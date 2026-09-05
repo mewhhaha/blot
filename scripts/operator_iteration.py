@@ -25,10 +25,12 @@ t = t[:start] + t[end:]
 p.write_text(t)
 
 p = Path("compiler/src/session.rs")
-t = p.read_text()
+text = p.read_text()
+start = text.index("    fn source_operator_regressions()")
+prefix, t = text[:start], text[start:]
 t = once(t, "            for (label, text, expected) in cases {", "            let mut failures = Vec::new();\n            for (label, text, expected) in cases {")
 t = once(t, '                assert_eq!(checked["ok"], expected, "{label}: {checked}");', '                if checked["ok"] != expected {\n                    failures.push(format!("{label}: {checked}"));\n                    continue;\n                }')
 t = once(t, '                    assert_eq!(prepared["ok"], true, "{label}: {prepared}");', '                    if prepared["ok"] != true { failures.push(format!("{label}: {prepared}")); }')
 anchor = '            }\n        });\n    }\n\n    fn source(value:'
 t = once(t, anchor, '            }\n            assert!(failures.is_empty(), "{}", failures.join("\\n"));\n        });\n    }\n\n    fn source(value:')
-p.write_text(t)
+p.write_text(prefix + t)
