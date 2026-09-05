@@ -1,0 +1,28 @@
+name: Diagnose unified Rust tests
+
+on:
+  push:
+    branches:
+      - codex/unify-rust-diagnose
+    paths:
+      - .github/workflows/rust-diagnose.yml
+
+permissions:
+  contents: read
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Run Rust tests serially with live names
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 300s stdbuf -oL -eL cargo test --manifest-path compiler/Cargo.toml -- --test-threads=1 --nocapture
