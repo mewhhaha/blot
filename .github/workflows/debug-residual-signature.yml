@@ -1,0 +1,39 @@
+name: Inspect residual signature shape
+
+on:
+  push:
+    branches:
+      - debug/pr94-residual-signature-shape
+    paths:
+      - .github/workflows/debug-residual-signature.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Add signature shape to refusal
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('compiler/src/hir.rs')
+          s = p.read_text()
+          old = 'Residual closure `{name}` at {module} expression {} has no settled function signature.'
+          new = 'Residual closure `{name}` at {module} expression {} has no settled function signature: {signature:?}.'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one refusal, found {s.count(old)}')
+          p.write_text(s.replace(old, new))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Run first failing residual test
+        shell: bash
+        run: |
+          cargo test --manifest-path compiler/Cargo.toml an_empty_scratch_argument_uses_the_contextual_result_representation -- --test-threads=1 --nocapture
