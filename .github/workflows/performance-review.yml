@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - perf/compiler-runtime-review
+    paths:
+      - .github/workflows/performance-review.yml
   workflow_dispatch:
 
 permissions:
@@ -12,7 +14,7 @@ permissions:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -25,3 +27,32 @@ jobs:
           path: blot-review-source.tar.gz
           if-no-files-found: error
           retention-days: 7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked --manifest-path compiler/Cargo.toml
+      - name: Pack isolated offline review tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/review-tools/bin" "$RUNNER_TEMP/review-tools/cargo"
+          cp "$(command -v deno)" "$RUNNER_TEMP/review-tools/bin/deno"
+          cp "$(command -v node)" "$RUNNER_TEMP/review-tools/bin/node"
+          cp -a "$HOME/.cargo/registry" "$RUNNER_TEMP/review-tools/cargo/registry"
+          cp -a "$(rustc --print sysroot)" "$RUNNER_TEMP/review-tools/rust"
+          tar -czf blot-review-tools.tar.gz -C "$RUNNER_TEMP/review-tools" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: blot-review-tools
+          path: blot-review-tools.tar.gz
+          if-no-files-found: error
+          retention-days: 1
