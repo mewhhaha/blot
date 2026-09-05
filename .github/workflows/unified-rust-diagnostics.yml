@@ -9,28 +9,13 @@ permissions:
   contents: read
 
 jobs:
-  targeted:
+  serial:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - name: Qualified requirement unit tests
-        run: timeout 180 cargo test --manifest-path compiler/Cargo.toml member_constraint_tests -- --nocapture
-      - name: Operator dispatch integration tests
-        run: timeout 180 cargo test --manifest-path compiler/Cargo.toml operator_dispatch_tests -- --nocapture
-      - name: Loop inference regressions
-        shell: bash
-        run: |
-          set -euo pipefail
-          for test in \
-            a_conditionally_rebound_loop_element_stays_local_to_each_iteration \
-            a_rebound_loop_element_stays_local_to_each_iteration \
-            multi_subject_refinements_do_not_narrow_recursive_loop_signatures \
-            stable_rebinding_preserves_a_declared_variant_inside_a_loop \
-            surface_for_preserves_owned_array_accumulators; do
-            echo "=== $test ==="
-            timeout 120 cargo test --manifest-path compiler/Cargo.toml "$test" -- --exact --nocapture
-          done
+      - name: Full Rust suite serially with progress
+        run: timeout 420 cargo test --manifest-path compiler/Cargo.toml -- --test-threads=1 --nocapture
