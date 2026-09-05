@@ -1,0 +1,28 @@
+name: Apply draft operator iteration
+
+on:
+  push:
+    branches:
+      - codex/complete-operator-dispatch-20260905
+    paths:
+      - scripts/operator-iteration.patch
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/complete-operator-dispatch-20260905'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply the exact reviewed patch on this draft branch
+        run: |
+          git apply --index --whitespace=error scripts/operator-iteration.patch
+          git rm scripts/operator-iteration.patch
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Apply tested operator-dispatch development increment'
+          git push origin HEAD:refs/heads/codex/complete-operator-dispatch-20260905
