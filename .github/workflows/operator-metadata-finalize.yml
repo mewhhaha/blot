@@ -22,9 +22,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      - run: pnpm install --frozen-lockfile
       - name: Regenerate from the actual integrated source and remove this helper
         shell: bash
         run: |
