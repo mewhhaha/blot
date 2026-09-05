@@ -1532,3 +1532,14 @@ Performance reports record medians, source path, compiler artifact hash, sample
 count, cold instantiation separately from compilation, and checker timing. A
 faster result that changes a principal type, diagnostic, Runtime HIR, or ABI is
 not an optimisation.
+
+### Qualified attached-member requirements
+
+An unresolved projection through `@type.inferred` records the receiver type,
+member name, and required member type. It does not choose an integer default or
+an unconstrained result. Requirements are freshened with their function scheme,
+including their argument, result, and effect variables. The solver discharges a
+requirement only against the selected attached member's actual checked signature.
+Numeric candidate trials and failed union branches roll back requirement state
+as well as ordinary subtype bounds. Closed interfaces retain any requirements
+beneath their quantifiers; they must not be silently erased by serialization.

@@ -1,4 +1,9 @@
 use std::cell::{Cell, RefCell};
+
+#[path = "member_constraints.rs"]
+mod member_constraints;
+use member_constraints::MemberConstraints;
+pub use member_constraints::MemberRequirement;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -179,6 +184,10 @@ pub enum Type {
         variables: Vec<VariableId>,
         body: Rc<Type>,
     },
+    Qualified {
+        requirements: TypeList<MemberRequirement<Type>>,
+        body: Rc<Type>,
+    },
     Range {
         domain: Domain,
         low: Option<Scalar>,
@@ -266,6 +275,9 @@ pub(crate) fn record_update_type(base: Type, updates: TypeRow) -> Type {
 // source-level field refinement layered over it.
 fn stable_loop_signature(type_: Type) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, |child| stable_loop_signature(child))
+        }
         Type::RecordUpdate { base, .. } => stable_loop_signature(Rc::unwrap_or_clone(base)),
         Type::Forall { variables, body } => Type::Forall {
             variables,
@@ -351,6 +363,10 @@ enum ConstraintTypeNode {
     Rigid(VariableId),
     Forall {
         variables: Vec<VariableId>,
+        body: ConstraintTypeId,
+    },
+    Qualified {
+        requirements: Vec<MemberRequirement<ConstraintTypeId>>,
         body: ConstraintTypeId,
     },
     Range {
@@ -476,6 +492,13 @@ impl ConstraintTypeArena {
 
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
         let node = match type_ {
+            Type::Qualified { requirements, body } => ConstraintTypeNode::Qualified {
+                requirements: requirements
+                    .iter()
+                    .map(|requirement| requirement.map_ref(|type_| self.intern(type_)))
+                    .collect(),
+                body: self.intern(body),
+            },
             Type::Variable(id) => ConstraintTypeNode::Variable(*id),
             Type::Rigid(id) => ConstraintTypeNode::Rigid(*id),
             Type::Forall { variables, body } => ConstraintTypeNode::Forall {
@@ -550,6 +573,13 @@ impl ConstraintTypeArena {
 
     fn expand(&self, id: ConstraintTypeId) -> Type {
         match &self.nodes[id.0 as usize] {
+            ConstraintTypeNode::Qualified { requirements, body } => Type::Qualified {
+                requirements: requirements
+                    .iter()
+                    .map(|requirement| requirement.map_ref(|type_| self.expand(*type_)))
+                    .collect(),
+                body: Rc::new(self.expand(*body)),
+            },
             ConstraintTypeNode::Variable(id) => Type::Variable(*id),
             ConstraintTypeNode::Rigid(id) => Type::Rigid(*id),
             ConstraintTypeNode::Forall { variables, body } => Type::Forall {
@@ -621,6 +651,13 @@ impl ConstraintTypeArena {
         match &self.nodes[id.0 as usize] {
             ConstraintTypeNode::Variable(id) => variables[*id as usize].level,
             ConstraintTypeNode::Forall { body, .. } => self.level_of(*body, variables),
+            ConstraintTypeNode::Qualified { requirements, body } => requirements
+                .iter()
+                .flat_map(|requirement| [requirement.subject, requirement.member])
+                .chain(std::iter::once(*body))
+                .map(|type_| self.level_of(type_, variables))
+                .max()
+                .unwrap_or(0),
             ConstraintTypeNode::Function {
                 parameter,
                 effects,
@@ -1209,6 +1246,10 @@ pub(crate) enum FlatTypeNode {
         variables: Vec<VariableId>,
         body: FlatTypeId,
     },
+    Qualified {
+        requirements: Vec<MemberRequirement<FlatTypeId>>,
+        body: FlatTypeId,
+    },
     Range {
         domain: Domain,
         low: Option<Scalar>,
@@ -1247,6 +1288,12 @@ pub(crate) enum FlatTypeNode {
 fn append_flat_type_children(node: &FlatTypeNode, children: &mut Vec<FlatTypeId>) {
     match node {
         FlatTypeNode::Forall { body, .. } => children.push(*body),
+        FlatTypeNode::Qualified { requirements, body } => {
+            children.push(*body);
+            for requirement in requirements {
+                children.extend([requirement.subject, requirement.member]);
+            }
+        }
         FlatTypeNode::Function {
             parameter,
             effects,
@@ -2293,6 +2340,7 @@ pub struct Checker {
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
+    member_constraints: RefCell<MemberConstraints>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
     level: Cell<u32>,
@@ -2381,6 +2429,7 @@ impl Checker {
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             numeric_literals: RefCell::new(BTreeMap::new()),
+            member_constraints: RefCell::new(MemberConstraints::default()),
             next_skolem: Rc::new(Cell::new(0x8000_0000)),
             next_representation_hole: Rc::new(Cell::new(u32::MAX)),
             level: Cell::new(0),
@@ -2740,6 +2789,7 @@ impl Checker {
         self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().clear();
         self.numeric_literals.borrow_mut().clear();
+        self.member_constraints.borrow_mut().clear();
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
         self.deferred_predicate_closures.borrow_mut().clear();
@@ -5893,8 +5943,14 @@ impl Checker {
                         || !operator_dispatch_type_is_concrete(&settled)
                     {
                         self.defer_current_closure();
+                        let member = self.fresh();
+                        self.register_member_requirement(MemberRequirement {
+                            name,
+                            subject: subject.type_,
+                            member: member.clone(),
+                        });
                         return Ok(Inferred {
-                            type_: self.fresh(),
+                            type_: member,
                             effects: subject.effects,
                         });
                     }
@@ -5921,7 +5977,19 @@ impl Checker {
                     })?;
                     let type_ = self
                         .static_member_type(&member, Some(&settled))
-                        .unwrap_or_else(|| self.fresh());
+                        .ok_or_else(|| {
+                            Diagnostic::new(
+                                "BLOT_TYPE_NOT_REIFIABLE",
+                                format!(
+                                    "The attached `{name}` member has no checked source signature."
+                                ),
+                                span,
+                            )
+                        })?;
+                    let type_ = self.instantiate(Typing::Scheme {
+                        level: 0,
+                        body: type_,
+                    });
                     return Ok(Inferred {
                         type_,
                         effects: subject.effects,
@@ -7519,8 +7587,10 @@ impl Checker {
         let insertion_count = self.bound_insertions.borrow().len();
         let variable_count = self.variables.borrow().len();
         let next_skolem = self.next_skolem.get();
+        let member_constraints = self.member_constraints.borrow().clone();
         let result = self.constrain_numeric_literal_candidate(variable, candidate, span);
         self.rollback_bounds(insertion_count, variable_count, next_skolem);
+        *self.member_constraints.borrow_mut() = member_constraints;
         result
     }
 
@@ -7737,8 +7807,12 @@ impl Checker {
 
     fn instantiate(&self, typing: Typing) -> Type {
         match typing {
-            Typing::Mono(type_) => type_,
-            Typing::Scheme { level, body } => self.freshen(body, level, &mut HashMap::new()),
+            Typing::Mono(type_) => self.activate_qualified_type(type_),
+            Typing::Scheme { level, body } => {
+                let body = self.qualify_type(body);
+                let body = self.freshen(body, level, &mut HashMap::new());
+                self.activate_qualified_type(body)
+            }
         }
     }
 
@@ -7762,12 +7836,21 @@ impl Checker {
     }
 
     fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
+        if let Some(replacements) = self.copy_qualified_scheme_constraints(type_, level) {
+            return replacements;
+        }
         let mut roots = BTreeSet::new();
         let mut pending = vec![type_];
         while let Some(type_) = pending.pop() {
             match type_ {
                 Type::Variable(variable) => {
                     roots.insert(*variable);
+                }
+                Type::Qualified { requirements, body } => {
+                    pending.push(body);
+                    for requirement in requirements {
+                        pending.extend([&requirement.subject, &requirement.member]);
+                    }
                 }
                 Type::Forall { body, .. } => pending.push(body),
                 Type::Function {
@@ -7949,6 +8032,16 @@ impl Checker {
             return replacement_type;
         }
         let rebuilt = match node {
+            ConstraintTypeNode::Qualified { requirements, body } => ConstraintTypeNode::Qualified {
+                requirements: requirements
+                    .into_iter()
+                    .map(|requirement| {
+                        requirement
+                            .map(|type_| self.freshen_constraint(type_, level, fresh, rewritten))
+                    })
+                    .collect(),
+                body: self.freshen_constraint(body, level, fresh, rewritten),
+            },
             ConstraintTypeNode::Forall { variables, body } => ConstraintTypeNode::Forall {
                 variables,
                 body: self.freshen_constraint(body, level, fresh, rewritten),
@@ -8034,7 +8127,7 @@ impl Checker {
             .into_iter()
             .map(|variable| (variable, self.fresh()))
             .collect();
-        substitute_rigid(body, &replacements)
+        self.activate_qualified_type(substitute_rigid(body, &replacements))
     }
 
     fn skolemize(&self, variables: Vec<VariableId>, body: Type) -> Type {
@@ -8053,6 +8146,13 @@ impl Checker {
         match type_ {
             Type::Variable(id) => self.variables.borrow()[*id as usize].level,
             Type::Forall { body, .. } => self.level_of(body),
+            Type::Qualified { requirements, body } => requirements
+                .iter()
+                .flat_map(|requirement| [&requirement.subject, &requirement.member])
+                .chain(std::iter::once(body.as_ref()))
+                .map(|type_| self.level_of(type_))
+                .max()
+                .unwrap_or(0),
             Type::Function {
                 parameter,
                 effects,
@@ -8091,6 +8191,11 @@ impl Checker {
             return type_;
         }
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.extrude(child, polarity, level, copies)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(copy) = copies.get(&id) {
                     return copy.clone();
@@ -8226,6 +8331,7 @@ impl Checker {
     }
 
     fn record_bound_insertion(&self, variable: VariableId, direction: BoundDirection) {
+        self.member_constraints.borrow_mut().changed(variable);
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().push(BoundInsertion {
@@ -8262,6 +8368,8 @@ impl Checker {
             .borrow_mut()
             .retain(|variable, _| (*variable as usize) < variable_count);
         self.next_skolem.set(next_skolem);
+        self.settled_variables.borrow_mut().clear();
+        self.residual_variables.borrow_mut().clear();
     }
 
     fn add_upper_bound(
@@ -8352,10 +8460,16 @@ impl Checker {
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
         let mut work = VecDeque::from([WorkItem { left, right, span }]);
-        while let Some(item) = work.pop_front() {
-            self.constrain_work_item(item, seen, &mut work)?;
-            self.solver_worklist_peak
-                .set(self.solver_worklist_peak.get().max(work.len() as u64));
+        loop {
+            while let Some(item) = work.pop_front() {
+                self.constrain_work_item(item, seen, &mut work)?;
+                self.solver_worklist_peak
+                    .set(self.solver_worklist_peak.get().max(work.len() as u64));
+            }
+            work.extend(self.take_ready_member_constraints(span)?);
+            if work.is_empty() {
+                break;
+            }
         }
         Ok(())
     }
@@ -8379,6 +8493,32 @@ impl Checker {
             )
         };
         let compatible = match (left_node, right_node) {
+            (ConstraintTypeNode::Qualified { requirements, body }, _) => {
+                for requirement in requirements {
+                    self.register_member_requirement(
+                        requirement.map(|type_| self.expand_constraint(type_)),
+                    );
+                }
+                work.push_back(WorkItem {
+                    left: body,
+                    right,
+                    span,
+                });
+                true
+            }
+            (_, ConstraintTypeNode::Qualified { requirements, body }) => {
+                for requirement in requirements {
+                    self.register_member_requirement(
+                        requirement.map(|type_| self.expand_constraint(type_)),
+                    );
+                }
+                work.push_back(WorkItem {
+                    left,
+                    right: body,
+                    span,
+                });
+                true
+            }
             (_, ConstraintTypeNode::Top) | (ConstraintTypeNode::Bottom, _) => true,
             (ConstraintTypeNode::Forall { variables, body }, _) => {
                 let body = self.expand_constraint(body);
@@ -8799,11 +8939,13 @@ impl Checker {
         let insertion_count = self.bound_insertions.borrow().len();
         let variable_count = self.variables.borrow().len();
         let next_skolem = self.next_skolem.get();
+        let member_constraints = self.member_constraints.borrow().clone();
         let result = self
             .constrain_ids(left, right, span, &mut HashSet::new())
             .is_ok();
         if !result {
             self.rollback_bounds(insertion_count, variable_count, next_skolem);
+            *self.member_constraints.borrow_mut() = member_constraints;
         }
         result
     }
@@ -8829,6 +8971,7 @@ impl Checker {
     }
 
     fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {
+        let type_ = self.qualify_type(type_);
         self.boundary_materializations
             .set(self.boundary_materializations.get() + 1);
         let mut unresolved = BTreeSet::new();
@@ -8853,6 +8996,13 @@ impl Checker {
                     let mut nested_bound = bound;
                     nested_bound.extend(variables);
                     pending.push((body, nested_bound));
+                }
+                Type::Qualified { requirements, body } => {
+                    pending.push((body, bound.clone()));
+                    for requirement in requirements {
+                        pending.push((&requirement.subject, bound.clone()));
+                        pending.push((&requirement.member, bound.clone()));
+                    }
                 }
                 Type::Function {
                     parameter,
@@ -8920,6 +9070,11 @@ impl Checker {
         recursive: &mut HashSet<VariableId>,
     ) -> Type {
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.residual_signature_type(child, seen, resolved, unresolved, recursive)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(type_) = resolved.get(&id) {
                     return type_.clone();
@@ -9035,7 +9190,17 @@ impl Checker {
                     unresolved,
                     recursive,
                 )),
-                effects: Rc::new(self.settle(Rc::unwrap_or_clone(effects), true)),
+                effects: Rc::new(if self.has_member_requirements(&effects) {
+                    self.residual_signature_type(
+                        Rc::unwrap_or_clone(effects),
+                        seen,
+                        resolved,
+                        unresolved,
+                        recursive,
+                    )
+                } else {
+                    self.settle(Rc::unwrap_or_clone(effects), true)
+                }),
                 result: Rc::new(self.residual_signature_type(
                     Rc::unwrap_or_clone(result),
                     seen,
@@ -9169,6 +9334,11 @@ impl Checker {
     fn settle_seen(&self, type_: Type, positive: bool, traversal: &mut SettleTraversal) -> Type {
         self.settle_visits.set(self.settle_visits.get() + 1);
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.settle_seen(child, positive, traversal)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(settled) = self.settled_variables.borrow().get(&(id, positive)) {
                     return settled.clone();
@@ -11962,6 +12132,11 @@ fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Ve
 
 fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, |child| {
+                substitute_rigid(child, replacements)
+            })
+        }
         Type::Rigid(id) => replacements.get(&id).cloned().unwrap_or(Type::Rigid(id)),
         Type::Forall { variables, body } => {
             let mut inner_replacements = replacements.clone();
@@ -12038,6 +12213,11 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
 
 fn substitute_inference_variables(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, |child| {
+                substitute_inference_variables(child, replacements)
+            })
+        }
         Type::Variable(id) => replacements.get(&id).cloned().unwrap_or(Type::Variable(id)),
         Type::Forall { variables, body } => Type::Forall {
             variables,

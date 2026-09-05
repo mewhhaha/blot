@@ -3811,3 +3811,12 @@ This module receives its authority through `init`, explicitly opens the prelude,
 constructs types as values, uses `for` as a fold with an inferred accumulator,
 declares a host effect as its interface, and returns a concrete record suitable
 for staging and WebAssembly lowering.
+
+### Generic operator requirements
+
+Operator fixities name ordinary source bindings. Binary arithmetic and prefix
+negation dispatch to members of the inferred operand type. An unresolved operand
+retains an attached-member requirement instead of defaulting to `Int`. Each use
+of a generic function resolves its own members; the selected member's parameter,
+result, and effect signature is checked without replacing it from its name.
+Already-bound integer and floating-point values are not implicitly converted.

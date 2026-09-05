@@ -79,7 +79,12 @@ impl Checker {
                         pending.extend([requirement.subject, requirement.member]);
                     }
                 }
-                ConstraintTypeNode::Function { parameter, effects, result, .. } => {
+                ConstraintTypeNode::Function {
+                    parameter,
+                    effects,
+                    result,
+                    ..
+                } => {
                     pending.extend([parameter, effects, result]);
                 }
                 ConstraintTypeNode::Record(fields)
@@ -112,7 +117,11 @@ impl Checker {
         variables.extend(self.member_variable_ids(&requirement.member));
         let mut constraints = self.member_constraints.borrow_mut();
         for variable in variables {
-            constraints.variables.entry(variable).or_default().insert(id);
+            constraints
+                .variables
+                .entry(variable)
+                .or_default()
+                .insert(id);
         }
     }
 
@@ -140,14 +149,22 @@ impl Checker {
     }
 
     fn reachable_member_requirements(&self, type_: &Type) -> Vec<MemberRequirement<Type>> {
-        let mut pending = self.member_variable_ids(type_).into_iter().collect::<Vec<_>>();
+        let mut pending = self
+            .member_variable_ids(type_)
+            .into_iter()
+            .collect::<Vec<_>>();
         let mut variables = BTreeSet::new();
         let mut selected = BTreeSet::new();
         while let Some(variable) = pending.pop() {
             if !variables.insert(variable) {
                 continue;
             }
-            let ids = self.member_constraints.borrow().variables.get(&variable).cloned();
+            let ids = self
+                .member_constraints
+                .borrow()
+                .variables
+                .get(&variable)
+                .cloned();
             for id in ids.into_iter().flatten() {
                 let entry = self.member_constraints.borrow().entries[id].clone();
                 if entry.discharged || !selected.insert(id) {
@@ -158,7 +175,10 @@ impl Checker {
             }
         }
         let constraints = self.member_constraints.borrow();
-        selected.into_iter().map(|id| constraints.entries[id].requirement.clone()).collect()
+        selected
+            .into_iter()
+            .map(|id| constraints.entries[id].requirement.clone())
+            .collect()
     }
 
     pub(super) fn qualify_type(&self, type_: Type) -> Type {
@@ -166,7 +186,10 @@ impl Checker {
         if requirements.is_empty() {
             return type_;
         }
-        Type::Qualified { requirements: requirements.into(), body: Rc::new(type_) }
+        Type::Qualified {
+            requirements: requirements.into(),
+            body: Rc::new(type_),
+        }
     }
 
     /// A qualifier is activated only after its enclosing forall has been
@@ -213,7 +236,10 @@ impl Checker {
     /// Running this inside the solver worklist keeps numeric-candidate rollback
     /// and union speculation transactional, including obligations created by
     /// instantiating the selected member's own qualified signature.
-    pub(super) fn take_ready_member_constraints(&self, span: Span) -> Result<Vec<WorkItem>, Diagnostic> {
+    pub(super) fn take_ready_member_constraints(
+        &self,
+        span: Span,
+    ) -> Result<Vec<WorkItem>, Diagnostic> {
         let mut work = Vec::new();
         loop {
             let next = self.member_constraints.borrow_mut().queued.pop_first();
@@ -230,23 +256,44 @@ impl Checker {
             {
                 continue;
             }
-            let value = self.reify_runtime_type(&subject).ok_or_else(|| Diagnostic::new(
-                "BLOT_TYPE_NOT_REIFIABLE",
-                format!("`{}` has no compile-time type value for member lookup.", self.show(&subject)),
-                span,
-            ))?;
+            let value = self.reify_runtime_type(&subject).ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_TYPE_NOT_REIFIABLE",
+                    format!(
+                        "`{}` has no compile-time type value for member lookup.",
+                        self.show(&subject)
+                    ),
+                    span,
+                )
+            })?;
             let value = self.context.decorate_operator_type(value);
-            let member = static_member(&value, &entry.requirement.name).ok_or_else(|| Diagnostic::new(
-                "BLOT_NO_TYPE_MEMBER",
-                format!("Type `{}` has no attached `{}` operation.", self.show(&subject), entry.requirement.name),
-                span,
-            ))?;
-            let signature = self.static_member_type(&member, Some(&subject)).ok_or_else(|| Diagnostic::new(
-                "BLOT_TYPE_NOT_REIFIABLE",
-                format!("The attached `{}` member has no checked source signature.", entry.requirement.name),
-                span,
-            ))?;
-            let signature = self.instantiate(Typing::Scheme { level: 0, body: signature });
+            let member = static_member(&value, &entry.requirement.name).ok_or_else(|| {
+                Diagnostic::new(
+                    "BLOT_NO_TYPE_MEMBER",
+                    format!(
+                        "Type `{}` has no attached `{}` operation.",
+                        self.show(&subject),
+                        entry.requirement.name
+                    ),
+                    span,
+                )
+            })?;
+            let signature = self
+                .static_member_type(&member, Some(&subject))
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TYPE_NOT_REIFIABLE",
+                        format!(
+                            "The attached `{}` member has no checked source signature.",
+                            entry.requirement.name
+                        ),
+                        span,
+                    )
+                })?;
+            let signature = self.instantiate(Typing::Scheme {
+                level: 0,
+                body: signature,
+            });
             self.member_constraints.borrow_mut().entries[id].discharged = true;
             work.push(WorkItem {
                 left: self.constraint_type(&signature),
@@ -263,31 +310,53 @@ impl Checker {
 pub(super) fn map_type_children(type_: Type, mut f: impl FnMut(Type) -> Type) -> Type {
     match type_ {
         Type::Forall { variables, body } => Type::Forall {
-            variables, body: Rc::new(f(Rc::unwrap_or_clone(body))),
-        },
-        Type::Qualified { requirements, body } => Type::Qualified {
-            requirements: requirements.into_iter().map(|requirement| requirement.map(&mut f)).collect(),
+            variables,
             body: Rc::new(f(Rc::unwrap_or_clone(body))),
         },
-        Type::Function { deferred, parameter, effects, result } => Type::Function {
+        Type::Qualified { requirements, body } => Type::Qualified {
+            requirements: requirements
+                .into_iter()
+                .map(|requirement| requirement.map(&mut f))
+                .collect(),
+            body: Rc::new(f(Rc::unwrap_or_clone(body))),
+        },
+        Type::Function {
+            deferred,
+            parameter,
+            effects,
+            result,
+        } => Type::Function {
             deferred,
             parameter: Rc::new(f(Rc::unwrap_or_clone(parameter))),
             effects: Rc::new(f(Rc::unwrap_or_clone(effects))),
             result: Rc::new(f(Rc::unwrap_or_clone(result))),
         },
-        Type::Record(fields) => Type::Record(fields.into_iter().map(|(name, field)| (name, f(field))).collect()),
+        Type::Record(fields) => Type::Record(
+            fields
+                .into_iter()
+                .map(|(name, field)| (name, f(field)))
+                .collect(),
+        ),
         Type::RecordUpdate { base, fields } => Type::RecordUpdate {
             base: Rc::new(f(Rc::unwrap_or_clone(base))),
-            fields: fields.into_iter().map(|(name, field)| (name, f(field))).collect(),
+            fields: fields
+                .into_iter()
+                .map(|(name, field)| (name, f(field)))
+                .collect(),
         },
         Type::Array(element) => Type::Array(Rc::new(f(Rc::unwrap_or_clone(element)))),
         Type::Region(element) => Type::Region(Rc::new(f(Rc::unwrap_or_clone(element)))),
         Type::Scratch(element) => Type::Scratch(Rc::new(f(Rc::unwrap_or_clone(element)))),
         Type::Variant { cases, open } => Type::Variant {
-            cases: cases.into_iter().map(|(name, field)| (name, f(field))).collect(), open,
+            cases: cases
+                .into_iter()
+                .map(|(name, field)| (name, f(field)))
+                .collect(),
+            open,
         },
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
-            labels, tail: Rc::new(f(Rc::unwrap_or_clone(tail))),
+            labels,
+            tail: Rc::new(f(Rc::unwrap_or_clone(tail))),
         },
         Type::Union(members) => Type::Union(members.into_iter().map(f).collect()),
         other => other,
