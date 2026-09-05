@@ -276,7 +276,7 @@ pub(crate) fn record_update_type(base: Type, updates: TypeRow) -> Type {
 fn stable_loop_signature(type_: Type) -> Type {
     match type_ {
         qualified @ Type::Qualified { .. } => {
-            member_constraints::map_type_children(qualified, |child| stable_loop_signature(child))
+            member_constraints::map_type_children(qualified, stable_loop_signature)
         }
         Type::RecordUpdate { base, .. } => stable_loop_signature(Rc::unwrap_or_clone(base)),
         Type::Forall { variables, body } => Type::Forall {
