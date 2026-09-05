@@ -15,7 +15,7 @@ Deno.test("the LSP advertises and returns lint code actions", async () => {
           version: 1,
           text: `open import "blot:prelude"
 let remainder :: _
-let remainder = Int.rem 5 2
+let remainder = Op.rem 5 2
 const Result = Int
 let typed :: Result
 let typed = 1
@@ -32,7 +32,7 @@ return remainder
         textDocument: { uri },
         range: {
           start: { line: 2, character: 16 },
-          end: { line: 2, character: 27 },
+          end: { line: 2, character: 26 },
         },
         context: { diagnostics: [] },
       },
@@ -107,7 +107,7 @@ return remainder
     readonly result: readonly { readonly title: string }[];
   };
   assertEquals(codeAction.result.map((action) => action.title), [
-    "Replace `Int.rem` with `%`",
+    "Replace `Op.rem` with `%`",
   ]);
   const completion = responses.find((response) => response.id === 4) as {
     readonly result: readonly { readonly label: string }[];

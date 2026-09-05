@@ -41,7 +41,7 @@ test("lint check refuses a file with findings", async () => {
     await writeFile(
       path,
       `open import "blot:prelude"
-return Int.rem 5 2
+return Op.rem 5 2
 `,
     );
     await assert.rejects(
@@ -70,7 +70,7 @@ test("lint fix writes only the compiler-checked result", async () => {
     await writeFile(
       path,
       `open import "blot:prelude"
-return Int.rem 5 2
+return Op.rem 5 2
 `,
     );
     await execute(

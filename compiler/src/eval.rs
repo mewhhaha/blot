@@ -5284,7 +5284,7 @@ fn project(target: Value, name: &str, span: Span) -> Computation {
         value => {
             if operator_member_name(name) {
                 let decorated = bootstrap_operator_type(value.clone());
-                if !matches!(decorated, Value::Range { .. }) {
+                if matches!(decorated, Value::Extended { .. }) {
                     return project(decorated, name, span);
                 }
             }
@@ -6717,5 +6717,45 @@ mod tests {
             effect_id_for_instance(&context, first_nested, dependency_revision.clone()),
             effect_id_for_instance(&context, second_nested, dependency_revision)
         );
+    }
+}
+
+#[cfg(test)]
+mod operator_projection_regression_tests {
+    use super::*;
+
+    #[test]
+    fn missing_operator_projection_is_a_diagnostic() {
+        let span = Span { start: 10, end: 15 };
+        for value in [
+            Value::Unit,
+            Value::Int(1.into()),
+            Value::Float(1.0),
+            Value::Text("text".to_owned()),
+            Value::Tag {
+                name: "True".to_owned(),
+                payload: None,
+            },
+        ] {
+            for name in ["add", "eq", "and"] {
+                let error = run(project(value.clone(), name, span))
+                    .err()
+                    .expect("an unsupported projection must return a diagnostic");
+                assert_eq!(error.code, "BLOT_NO_FIELD");
+            }
+        }
+    }
+
+    #[test]
+    fn supported_operator_projection_still_bootstraps_members() {
+        let integer = constant("@type.int").expect("integer type exists");
+        let value = run(project(integer, "add", Span { start: 10, end: 15 }))
+            .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+        assert!(matches!(
+            value,
+            Value::Primitive { name, arity: 3, applied }
+                if name == "@type.resolve_member"
+                    && matches!(applied.as_slice(), [Value::Text(member)] if member == "add")
+        ));
     }
 }

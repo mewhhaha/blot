@@ -28,12 +28,27 @@ pub fn comparison(context: &Rc<Context>, value: &Value) -> Option<BTreeSet<Order
         return comparison_answers(context, value);
     }
     let member_name = inferred_operator_member_name(context, value)?;
-    if let Some(member) = inferred_integer_comparison_member(context, &member_name)
-        && factored(context, &member)
-    {
+    let member = inferred_integer_comparison_member(context, &member_name)?;
+    if factored(context, &member) {
         return comparison_answers(context, &member);
     }
-    integer_comparison_orderings(&member_name)
+    // A field spelling is not evidence about an attached implementation.
+    // Only the exact built-in resolver has a known ordering without a closure probe.
+    let Value::Primitive {
+        name,
+        arity: 3,
+        applied,
+    } = &member
+    else {
+        return None;
+    };
+    if name != "@type.resolve_member" {
+        return None;
+    }
+    let [Value::Text(resolved_member)] = applied.as_slice() else {
+        return None;
+    };
+    integer_comparison_orderings(resolved_member)
 }
 
 fn comparison_answers(context: &Rc<Context>, value: &Value) -> Option<BTreeSet<Ordering>> {
@@ -111,6 +126,9 @@ fn inferred_operator_member_name(context: &Context, value: &Value) -> Option<Str
         return None;
     };
     let second = pattern_name(&module, *parameter)?;
+    if first == second {
+        return None;
+    }
     let Expression::Apply {
         function,
         argument: right,

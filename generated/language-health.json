@@ -742,7 +742,7 @@
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10037
+      "lines": 10099
     },
     {
       "path": "compiler/src/backend.rs",
@@ -750,7 +750,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6722
+      "lines": 6762
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -789,8 +789,8 @@
       "lines": 2236
     },
     {
-      "path": "compiler/src/qcore_typing.rs",
-      "lines": 2115
+      "path": "src/tooling/lint.test.ts",
+      "lines": 2127
     }
   ]
 }
