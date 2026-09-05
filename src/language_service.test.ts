@@ -645,7 +645,7 @@ return count
     assert(overloaded !== null);
     assertStringIncludes(overloaded.contents.value, "`Op.sub`");
     assertStringIncludes(overloaded.contents.value, "left - right");
-    assertStringIncludes(overloaded.contents.value, "`Int.negate`");
+    assertStringIncludes(overloaded.contents.value, "`Op.negate`");
     assertStringIncludes(overloaded.contents.value, "-value");
     const field = await service.hover(uri, { line: 3, character: 19 });
     assert(field !== null);

@@ -32,10 +32,10 @@
       "display": "3"
     },
     {
-      "id": "named-equality-defaults-to-int",
-      "status": "current-limit",
+      "id": "named-equality-retains-generic-members",
+      "status": "accepted",
       "source": "open import \"blot:prelude\"\nlet same = fn left => fn right => left == right\nreturn same \"same\" \"same\"\n",
-      "code": "BLOT_TYPE_ERROR"
+      "display": "true"
     },
     {
       "id": "predicate-helper-loses-bounds",

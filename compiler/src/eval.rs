@@ -6787,8 +6787,7 @@ mod operator_projection_regression_tests {
         ] {
             for name in ["add", "eq", "and"] {
                 let error = run(project(value.clone(), name, span))
-                    .err()
-                    .expect("an unsupported projection must return a diagnostic");
+                    .expect_err("an unsupported projection must return a diagnostic");
                 assert_eq!(error.code, "BLOT_NO_FIELD");
             }
         }
