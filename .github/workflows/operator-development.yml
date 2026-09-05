@@ -4,9 +4,8 @@ on:
   push:
     branches: [codex/source-defined-generic-operators]
     paths:
-      - scripts/operator_dev.py
-      - scripts/operator_iteration.py
-      - compiler/src/typecheck/operators.rs
+      - scripts/operator_*.py
+      - compiler/src/typecheck/*.rs
       - .github/workflows/operator-development.yml
 
 permissions:
@@ -51,17 +50,19 @@ jobs:
         run: |
           python3 scripts/operator_dev.py
           python3 scripts/operator_iteration.py
+          python3 scripts/operator_followup.py
       - name: Generate source fixities and health
         run: |
           deno task generate:compiler-schema
           cargo fmt --manifest-path compiler/Cargo.toml
+          deno fmt LANGUAGE.md spec/TYPECHECKING.md
           pnpm generate:health
           git diff --check
       - name: Commit generated source changes to the development branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add compiler/src/typecheck.rs compiler/src/typecheck/operators.rs compiler/src/eval.rs compiler/src/session.rs src/prelude/prelude.blot compiler/src/fixities_generated.rs src/syntax/fixities.generated.ts generated/language-health.json
+          git add compiler/src/typecheck.rs compiler/src/typecheck/operators.rs compiler/src/typecheck/integer.rs compiler/src/eval.rs compiler/src/session.rs src/prelude/prelude.blot compiler/src/fixities_generated.rs src/syntax/fixities.generated.ts generated/language-health.json LANGUAGE.md spec/TYPECHECKING.md
           if ! git diff --cached --quiet; then
             git commit -m 'Apply source-defined operator implementation and generated fixities'
             git push origin HEAD:refs/heads/codex/source-defined-generic-operators
@@ -71,7 +72,7 @@ jobs:
         continue-on-error: true
         run: cargo test --manifest-path compiler/Cargo.toml source_operator_regressions -- --nocapture
       - name: Full Rust test suite
-        run: cargo test --manifest-path compiler/Cargo.toml
+        run: cargo test --manifest-path compiler/Cargo.toml --quiet
       - name: Build compiler and regenerate prelude snapshot
         run: pnpm compiler:build
       - name: Validate source and Wasm execution agreement
@@ -81,6 +82,22 @@ jobs:
           deno check .
           deno task generate:compiler-schema --check
           pnpm health
+      - name: Package verification workspace
+        if: always()
+        run: |
+          mkdir -p /tmp/operator-workspace
+          git archive --format=tar HEAD | gzip > /tmp/operator-workspace/source.tar.gz
+          git archive --format=tar 2816fbc82f0201614463fd64a5e99361beb6e961 | gzip > /tmp/operator-workspace/base.tar.gz
+          tar -C "$HOME/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu" -czf /tmp/operator-workspace/rust.tar.gz bin/cargo bin/rustc lib
+          tar -C "$HOME/.cargo" -czf /tmp/operator-workspace/registry.tar.gz registry
+      - name: Retain verification workspace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-verification-workspace
+          path: /tmp/operator-workspace
+          retention-days: 1
+          compression-level: 0
       - name: Retain compilation cache
         if: always()
         uses: actions/cache/save@v4
