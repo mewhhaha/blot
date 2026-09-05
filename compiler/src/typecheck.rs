@@ -7427,14 +7427,24 @@ impl Checker {
             || matches!(right.type_, Type::Variable(_) | Type::Rigid(_))
         {
             return match member_name.as_str() {
-                "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Ok(Inferred {
-                    type_: bool_type(),
-                    effects,
-                }),
-                "add" | "sub" | "mul" | "div" | "rem" => Ok(Inferred {
-                    type_: left.type_,
-                    effects,
-                }),
+                "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                    let int = int_type();
+                    self.constrain(left.type_, int.clone(), span)?;
+                    self.constrain(right.type_, int, span)?;
+                    Ok(Inferred {
+                        type_: bool_type(),
+                        effects,
+                    })
+                }
+                "add" | "sub" | "mul" | "div" | "rem" => {
+                    let int = int_type();
+                    self.constrain(left.type_, int.clone(), span)?;
+                    self.constrain(right.type_, int.clone(), span)?;
+                    Ok(Inferred {
+                        type_: int,
+                        effects,
+                    })
+                }
                 _ => Err(Diagnostic::new(
                     "BLOT_UNKNOWN_MEMBER",
                     format!("Type has no member `{member_name}`"),
