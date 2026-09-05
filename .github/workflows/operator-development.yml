@@ -16,6 +16,8 @@ jobs:
     if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/codex/complete-operator-dispatch-20260905'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -26,6 +28,15 @@ jobs:
       - name: Apply an incremental source patch when present
         run: |
           if test -f scripts/operator-next.py; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/operator-next.py')
+          s = p.read_text()
+          if "def section(name, transform):" in s:
+              lines = s.splitlines()
+              lines = ["    following = re.search(r'(?m)^' + re.escape(match.group(1)) + r'(?:pub(?:\\([^)]*\\))?\\s+)?fn \\w+\\(', s[match.end():])" if line.strip().startswith('following = re.search(') else line for line in lines]
+              p.write_text('\n'.join(lines) + '\n')
+          PY
             python3 scripts/operator-next.py
             rm scripts/operator-next.py
             cargo fmt --manifest-path compiler/Cargo.toml
@@ -38,9 +49,11 @@ jobs:
             git push origin HEAD:refs/heads/codex/complete-operator-dispatch-20260905
           fi
       - name: Locate inference boundary helpers
-        run: grep -nE 'fn (freshen|instantiate|constrain|settle|generalize|residual)|struct Checker|enum Typing|struct ResidualVariable' compiler/src/typecheck.rs
-      - name: Test the full Rust compiler
-        run: cargo test --manifest-path compiler/Cargo.toml
-      - name: Check Rust lint
         if: always()
+        run: grep -nE 'fn (freshen|instantiate|constrain|settle|generalize|residual|flatten|inflate|closed|copy_boundary|reify|show)|struct Checker|enum Typing|struct ResidualVariable' compiler/src/typecheck.rs
+      - name: Check compiler boundaries
+        run: cargo check --manifest-path compiler/Cargo.toml --tests --message-format=short
+      - name: Test the full Rust compiler
+        run: cargo test --manifest-path compiler/Cargo.toml --quiet
+      - name: Check Rust lint
         run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
