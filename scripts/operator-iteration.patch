@@ -1,0 +1,416 @@
+diff --git a/compiler/src/eval.rs b/compiler/src/eval.rs
+index d89ce84..d0c62ee 100644
+--- a/compiler/src/eval.rs
++++ b/compiler/src/eval.rs
+@@ -593,2 +593,3 @@ enum ResidentOperatorMember {
+         imports: Option<BTreeMap<String, String>>,
++        signature: Option<Box<Value>>,
+         reuse_assertion: Option<Span>,
+@@ -605,3 +606,3 @@ impl ResidentOperatorMember {
+                 applied,
+-            } if applied.is_empty() => Some(Self::Primitive {
++            } => Some(Self::Primitive {
+                 name: name.clone(),
+@@ -619,2 +620,3 @@ impl ResidentOperatorMember {
+                 imports,
++                signature,
+                 reuse_assertion,
+@@ -631,2 +633,3 @@ impl ResidentOperatorMember {
+                 imports: imports.clone(),
++                signature: signature.clone(),
+                 reuse_assertion: *reuse_assertion,
+@@ -658,2 +661,3 @@ impl ResidentOperatorMember {
+                 imports,
++                signature,
+                 reuse_assertion,
+@@ -669,3 +673,3 @@ impl ResidentOperatorMember {
+                 imports: imports.clone(),
+-                signature: None,
++                signature: signature.clone(),
+                 reuse_assertion: *reuse_assertion,
+@@ -703,2 +707,13 @@ fn operator_type_key(value: &Value) -> String {
+         Value::Extended { inner, .. } => operator_type_key(inner),
++        Value::Int(_) => "domain:Int".to_owned(),
++        Value::Text(_) => "domain:Text".to_owned(),
++        Value::Union(members) => {
++            let mut keys = members.iter().map(operator_type_key);
++            if let Some(first) = keys.next()
++                && keys.all(|key| key == first)
++            {
++                return first;
++            }
++            show(value)
++        }
+         Value::Range {
+@@ -1131,2 +1146,5 @@ impl Context {
+         }
++        if key.starts_with("domain:") {
++            return operator_type_with_members(value);
++        }
+         bootstrap_operator_type(value)
+@@ -1528,4 +1546,29 @@ fn operator_type_with_members(value: Value) -> Value {
+         .map(|name| {
+-            (
+-                (*name).to_owned(),
++            let primitive = if *name == "negate" {
++                match &value {
++                    Value::Int(_)
++                    | Value::Range {
++                        domain: Some(ValueDomain::Int),
++                        ..
++                    } => Some("@int.neg"),
++                    Value::Range {
++                        domain: Some(ValueDomain::Float),
++                        ..
++                    } => Some("@float.neg"),
++                    Value::Range {
++                        domain: Some(ValueDomain::Float32),
++                        ..
++                    } => Some("@f32.neg"),
++                    _ => None,
++                }
++            } else {
++                None
++            };
++            let member = if let Some(primitive) = primitive {
++                Value::Primitive {
++                    name: primitive.to_owned(),
++                    arity: 1,
++                    applied: Vec::new(),
++                }
++            } else {
+                 Value::Primitive {
+@@ -1534,4 +1577,5 @@ fn operator_type_with_members(value: Value) -> Value {
+                     applied: vec![Value::Text((*name).to_owned())],
+-                },
+-            )
++                }
++            };
++            ((*name).to_owned(), member)
+         })
+diff --git a/compiler/src/fixities_generated.rs b/compiler/src/fixities_generated.rs
+index 1d53678..2196bab 100644
+--- a/compiler/src/fixities_generated.rs
++++ b/compiler/src/fixities_generated.rs
+@@ -27,3 +27,3 @@ const GENERATED_FIXITIES: &[GeneratedFixity] = &[
+     GeneratedFixity { operator: "%", associativity: GeneratedAssociativity::Left, precedence: 70, target: "Op.rem" },
+-    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "Int.negate" },
++    GeneratedFixity { operator: "-", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "Op.negate" },
+     GeneratedFixity { operator: "!", associativity: GeneratedAssociativity::Prefix, precedence: 90, target: "@linear.own" },
+diff --git a/compiler/src/operator_dispatch_tests.rs b/compiler/src/operator_dispatch_tests.rs
+index 7110243..e06ee60 100644
+--- a/compiler/src/operator_dispatch_tests.rs
++++ b/compiler/src/operator_dispatch_tests.rs
+@@ -83,3 +83,3 @@ fn source_member_parameter_signature_is_checked_even_when_body_ignores_it() {
+     with_stack(|| {
+-        let mut compiler = session(&format!(
++        let compiler = session(&format!(
+             "{DISPATCH}const custom :: @type.text -> @type.text -> 7\nconst custom = fn left => fn right => 7\nconst Int = @type.attach @type.int \"add\" custom\nreturn 1 + 2\n"
+@@ -88,3 +88,6 @@ fn source_member_parameter_signature_is_checked_even_when_body_ignores_it() {
+         assert_eq!(checked["ok"], false, "{checked}");
+-        assert_eq!(checked["diagnostic"]["code"], "BLOT_TYPE_ERROR", "{checked}");
++        assert_eq!(
++            checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
++            "{checked}"
++        );
+     });
+@@ -105,3 +108,3 @@ fn one_inferred_operator_function_is_reusable_across_numeric_domains() {
+     with_stack(|| {
+-        let mut compiler = with_prelude(concat!(
++        let compiler = with_prelude(concat!(
+             "open import \"blot:prelude\"\n",
+diff --git a/compiler/src/typecheck.rs b/compiler/src/typecheck.rs
+index e079836..31f1799 100644
+--- a/compiler/src/typecheck.rs
++++ b/compiler/src/typecheck.rs
+@@ -5280,38 +5280,2 @@ impl Checker {
+                 }
+-                if member_arguments.len() == 2
+-                    && let Expression::Field { target, name, .. } =
+-                        &module.arena.expressions[member_callee.0 as usize]
+-                    && (inferred_type_subject(module, *target).is_some()
+-                        || self
+-                            .evaluate(path, *target, values, Phase::Comptime)
+-                            .ok()
+-                            .and_then(|value| static_member(&value, name))
+-                            .is_some_and(|value| is_operator_member_closure(&self.context, &value)))
+-                    && matches!(
+-                        name.as_str(),
+-                        "eq" | "ne"
+-                            | "lt"
+-                            | "le"
+-                            | "gt"
+-                            | "ge"
+-                            | "add"
+-                            | "sub"
+-                            | "mul"
+-                            | "div"
+-                            | "rem"
+-                    )
+-                {
+-                    return self.infer_resolve_member(
+-                        path,
+-                        module,
+-                        expression_id,
+-                        name.clone(),
+-                        member_arguments[0],
+-                        member_arguments[1],
+-                        environment,
+-                        values,
+-                        dependencies,
+-                        span,
+-                    );
+-                }
+                 if member_arguments.len() == 2
+@@ -5371,28 +5335,2 @@ impl Checker {
+                     }
+-                    if matches!(target_value, Value::Extended { .. })
+-                        && let Ok(value) =
+-                            self.evaluate(path, expression_id, values, Phase::Comptime)
+-                        && !matches!(value, Value::Closure { .. })
+-                    {
+-                        return Ok(Inferred {
+-                            type_: if arguments.len() >= 2 {
+-                                let operator_type = match name.as_str() {
+-                                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Some(bool_type()),
+-                                    "add" | "sub" | "mul" | "div" | "rem" => self
+-                                        .resolve_operand_domain(&arguments[0], &arguments[1])
+-                                        .map(|domain| match domain {
+-                                            Domain::Int => int_type(),
+-                                            Domain::Text => text_type(),
+-                                            Domain::Float => float_type(),
+-                                            Domain::Float32 => float32_type(),
+-                                        }),
+-                                    _ => None,
+-                                };
+-                                operator_type.unwrap_or_else(|| self.bridge_runtime_value(&value))
+-                            } else {
+-                                self.bridge_runtime_value(&value)
+-                            },
+-                            effects,
+-                        });
+-                    }
+                     let is_resolve_op = static_member(&target_value, name)
+@@ -5400,34 +5338,2 @@ impl Checker {
+                         .is_some_and(|val| is_operator_member_closure(&self.context, val));
+-                    if is_resolve_op && arguments.len() >= 2 {
+-                        let domain = self.resolve_operand_domain(&arguments[0], &arguments[1]);
+-                        if let Some(domain) = domain {
+-                            let span = module.arena.expression_span(expression_id);
+-                            match domain {
+-                                Domain::Int => {
+-                                    let int = int_type();
+-                                    self.constrain(arguments[0].clone(), int.clone(), span)?;
+-                                    self.constrain(arguments[1].clone(), int, span)?;
+-                                }
+-                                Domain::Text => {
+-                                    let text = text_type();
+-                                    self.constrain(arguments[0].clone(), text.clone(), span)?;
+-                                    self.constrain(arguments[1].clone(), text, span)?;
+-                                }
+-                                Domain::Float => {
+-                                    if name != "eq" && name != "ne" {
+-                                        let float = float_type();
+-                                        self.constrain(arguments[0].clone(), float.clone(), span)?;
+-                                        self.constrain(arguments[1].clone(), float, span)?;
+-                                    }
+-                                }
+-                                Domain::Float32 => {
+-                                    if name != "eq" && name != "ne" {
+-                                        let f32_ = float32_type();
+-                                        self.constrain(arguments[0].clone(), f32_.clone(), span)?;
+-                                        self.constrain(arguments[1].clone(), f32_, span)?;
+-                                    }
+-                                }
+-                            }
+-                        }
+-                    }
+                     let parameter_type = if is_resolve_op {
+@@ -5437,17 +5343,25 @@ impl Checker {
+                     };
+-                    let mut function_type = self.infer_evaluated_closure(
+-                        path,
+-                        module,
+-                        EvaluatedClosure {
+-                            module_path: &closure_module,
+-                            parameter,
+-                            body,
+-                            captures: &closure_values,
+-                            self_name: self_name.as_deref(),
+-                            deferred,
+-                        },
+-                        environment,
+-                        dependencies,
+-                        parameter_type,
+-                    )?;
++                    let attached_signature = static_member(&target_value, name)
++                        .as_ref()
++                        .filter(|_| !is_resolve_op)
++                        .and_then(|member| self.bridge_closed_attached_signature(member));
++                    let mut function_type = if let Some(signature) = attached_signature {
++                        signature
++                    } else {
++                        self.infer_evaluated_closure(
++                            path,
++                            module,
++                            EvaluatedClosure {
++                                module_path: &closure_module,
++                                parameter,
++                                body,
++                                captures: &closure_values,
++                                self_name: self_name.as_deref(),
++                                deferred,
++                            },
++                            environment,
++                            dependencies,
++                            parameter_type,
++                        )?
++                    };
+                     for argument in arguments {
+@@ -5481,3 +5395,3 @@ impl Checker {
+                             .as_ref()
+-                            .is_some_and(|val| is_resolve_member_closure(&self.context, val)))
++                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
+                     && let Some(Value::Closure {
+@@ -5494,15 +5408,5 @@ impl Checker {
+                         self.infer(path, module, argument, environment, values, dependencies)?;
+-                    if matches!(target_value, Value::Extended { .. })
+-                        && let Ok(value) =
+-                            self.evaluate(path, expression_id, values, Phase::Comptime)
+-                        && !matches!(value, Value::Closure { .. })
+-                    {
+-                        return Ok(Inferred {
+-                            type_: self.bridge_runtime_value(&value),
+-                            effects: argument_type.effects,
+-                        });
+-                    }
+                     let is_resolve_op = static_member(&target_value, name)
+                         .as_ref()
+-                        .is_some_and(|val| is_resolve_member_closure(&self.context, val));
++                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
+                     let parameter_type = if is_resolve_op {
+@@ -5512,17 +5416,25 @@ impl Checker {
+                     };
+-                    let function_type = self.infer_evaluated_closure(
+-                        path,
+-                        module,
+-                        EvaluatedClosure {
+-                            module_path: &closure_module,
+-                            parameter,
+-                            body,
+-                            captures: &closure_values,
+-                            self_name: self_name.as_deref(),
+-                            deferred,
+-                        },
+-                        environment,
+-                        dependencies,
+-                        parameter_type,
+-                    )?;
++                    let attached_signature = static_member(&target_value, name)
++                        .as_ref()
++                        .filter(|_| !is_resolve_op)
++                        .and_then(|member| self.bridge_closed_attached_signature(member));
++                    let function_type = if let Some(signature) = attached_signature {
++                        signature
++                    } else {
++                        self.infer_evaluated_closure(
++                            path,
++                            module,
++                            EvaluatedClosure {
++                                module_path: &closure_module,
++                                parameter,
++                                body,
++                                captures: &closure_values,
++                                self_name: self_name.as_deref(),
++                                deferred,
++                            },
++                            environment,
++                            dependencies,
++                            parameter_type,
++                        )?
++                    };
+                     let result = self.fresh();
+@@ -6010,3 +5922,3 @@ impl Checker {
+                     let type_ = self
+-                        .static_member_type(&member)
++                        .static_member_type(&member, Some(&settled))
+                         .unwrap_or_else(|| self.fresh());
+@@ -6960,5 +6872,39 @@ impl Checker {
+ 
+-    fn static_member_type(&self, member: &Value) -> Option<Type> {
+-        if let Value::Primitive { name, .. } = member {
+-            return primitive_type(self, name);
++    fn static_member_type(&self, member: &Value, subject: Option<&Type>) -> Option<Type> {
++        if let Value::Primitive {
++            name,
++            applied,
++            arity,
++        } = member
++        {
++            if name == "@type.resolve_member" && *arity == 3 {
++                if let [Value::Text(operation)] = applied.as_slice() {
++                    let domain = type_domain(subject?)?;
++                    let operand = match domain {
++                        Domain::Int => int_type(),
++                        Domain::Text => text_type(),
++                        Domain::Float => float_type(),
++                        Domain::Float32 => float32_type(),
++                    };
++                    let result = match (domain, operation.as_str()) {
++                        (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
++                        | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => {
++                            bool_type()
++                        }
++                        (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
++                        | (Domain::Float32, "add" | "sub" | "mul" | "div")
++                        | (Domain::Text, "add") => operand.clone(),
++                        _ => return None,
++                    };
++                    return Some(curried(vec![operand.clone(), operand], result));
++                }
++            }
++            let mut type_ = primitive_type(self, name)?;
++            for _ in applied {
++                let Type::Function { result, .. } = type_ else {
++                    return None;
++                };
++                type_ = Rc::unwrap_or_clone(result);
++            }
++            return Some(type_);
+         }
+@@ -12758,4 +12704,3 @@ fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
+     let (callee, _) = application_spine_ids(&loaded.module, current);
+-    let Expression::Field { target, name, .. } =
+-        &loaded.module.arena.expressions[callee.0 as usize]
++    let Expression::Field { target, .. } = &loaded.module.arena.expressions[callee.0 as usize]
+     else {
+@@ -12763,6 +12708,3 @@ fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
+     };
+-    matches!(
+-        name.as_str(),
+-        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
+-    ) && inferred_type_subject(&loaded.module, *target).is_some()
++    inferred_type_subject(&loaded.module, *target).is_some()
+ }
+diff --git a/src/prelude/prelude.blot b/src/prelude/prelude.blot
+index 354a79f..ccea120 100644
+--- a/src/prelude/prelude.blot
++++ b/src/prelude/prelude.blot
+@@ -29,3 +29,3 @@ infixl 70 (/) = Op.div
+ infixl 70 (%) = Op.rem
+-prefix 90 (-) = Int.negate
++prefix 90 (-) = Op.negate
+ prefix 90 (!) = @linear.own
+@@ -56,2 +56,3 @@ const OpArithmetic =
+   {
++    .negate = fn value => (@type.inferred value).negate value;
+     .add = fn left => fn right => (@type.inferred left).add left right;
+diff --git a/src/syntax/fixities.generated.ts b/src/syntax/fixities.generated.ts
+index becad95..aeff98d 100644
+--- a/src/syntax/fixities.generated.ts
++++ b/src/syntax/fixities.generated.ts
+@@ -145,3 +145,3 @@ export const generatedFixities = [
+     "precedence": 90,
+-    "target": "Int.negate"
++    "target": "Op.negate"
+   },
