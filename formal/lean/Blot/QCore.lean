@@ -92,6 +92,12 @@ mutual
                 scopedValue arena remaining depth rigids tail
             | .StructuralUnion members =>
                 members.all (scopedValue arena remaining depth rigids)
+            | .StructuralQualified body names subjects members =>
+                decide (names.length = subjects.length) &&
+                decide (names.length = members.length) &&
+                scopedValue arena remaining depth rigids body &&
+                subjects.all (scopedValue arena remaining depth rigids) &&
+                members.all (scopedValue arena remaining depth rigids)
             | .StructuralOpaque _ | .StructuralTop | .StructuralBottom => true
 
   def scopedComputation
