@@ -1532,3 +1532,36 @@ Performance reports record medians, source path, compiler artifact hash, sample
 count, cold instantiation separately from compilation, and checker timing. A
 faster result that changes a principal type, diagnostic, Runtime HIR, or ABI is
 not an optimisation.
+
+### Qualified attached-member requirements
+
+An unresolved projection through `@type.inferred` records the receiver type,
+member name, and required member type. It does not choose an integer default or
+an unconstrained result. Requirements are freshened with their function scheme,
+including their argument, result, and effect variables. The solver discharges a
+requirement only against the selected attached member's actual checked
+signature. Numeric candidate trials and failed union branches roll back
+requirement state as well as ordinary subtype bounds. Closed interfaces retain
+any requirements beneath their quantifiers; they must not be silently erased by
+serialization.
+
+Qualified schemes freeze their requirements at generalization. Freshening a use
+never rediscovers requirements from an already-used source graph. Projection
+retains intermediate argument, result, and effect variables reachable through
+structural member bounds, while collapsing non-root alias chains as for ordinary
+schemes. Unqualified schemes retain the ordinary projection contract.
+
+Member lookup may use a closed numeric domain established by upper subtype
+bounds, not only a lower-bound witness. This is evidence about all possible
+inhabitants, not defaulting: an unconstrained receiver remains qualified.
+Integer branch refinement requires existing integer-domain evidence; it cannot
+turn an unknown or floating-point receiver into Int. Otherwise branch-local
+refinements would disconnect later constraints from the original parameter.
+Attached callable names are ordinary source names, not a compiler allow-list.
+
+Receiver lookup follows upper-variable aliases with a visited set. Repeated
+bounds and cycle edges cannot discard a concrete domain already established by
+another upper edge. Only the receiver's upper edges provide this evidence:
+lookup does not project a numeric element or field out of a container, nor use
+an unconstrained cycle as a default. The chosen member's complete signature is
+still constrained against the pending requirement.

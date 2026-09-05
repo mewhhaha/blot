@@ -1,4 +1,9 @@
 use std::cell::{Cell, RefCell};
+
+#[path = "member_constraints.rs"]
+mod member_constraints;
+use member_constraints::MemberConstraints;
+pub use member_constraints::MemberRequirement;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -179,6 +184,10 @@ pub enum Type {
         variables: Vec<VariableId>,
         body: Rc<Type>,
     },
+    Qualified {
+        requirements: TypeList<MemberRequirement<Type>>,
+        body: Rc<Type>,
+    },
     Range {
         domain: Domain,
         low: Option<Scalar>,
@@ -266,6 +275,9 @@ pub(crate) fn record_update_type(base: Type, updates: TypeRow) -> Type {
 // source-level field refinement layered over it.
 fn stable_loop_signature(type_: Type) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, stable_loop_signature)
+        }
         Type::RecordUpdate { base, .. } => stable_loop_signature(Rc::unwrap_or_clone(base)),
         Type::Forall { variables, body } => Type::Forall {
             variables,
@@ -351,6 +363,10 @@ enum ConstraintTypeNode {
     Rigid(VariableId),
     Forall {
         variables: Vec<VariableId>,
+        body: ConstraintTypeId,
+    },
+    Qualified {
+        requirements: Vec<MemberRequirement<ConstraintTypeId>>,
         body: ConstraintTypeId,
     },
     Range {
@@ -476,6 +492,13 @@ impl ConstraintTypeArena {
 
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
         let node = match type_ {
+            Type::Qualified { requirements, body } => ConstraintTypeNode::Qualified {
+                requirements: requirements
+                    .iter()
+                    .map(|requirement| requirement.map_ref(|type_| self.intern(type_)))
+                    .collect(),
+                body: self.intern(body),
+            },
             Type::Variable(id) => ConstraintTypeNode::Variable(*id),
             Type::Rigid(id) => ConstraintTypeNode::Rigid(*id),
             Type::Forall { variables, body } => ConstraintTypeNode::Forall {
@@ -550,6 +573,13 @@ impl ConstraintTypeArena {
 
     fn expand(&self, id: ConstraintTypeId) -> Type {
         match &self.nodes[id.0 as usize] {
+            ConstraintTypeNode::Qualified { requirements, body } => Type::Qualified {
+                requirements: requirements
+                    .iter()
+                    .map(|requirement| requirement.map_ref(|type_| self.expand(*type_)))
+                    .collect(),
+                body: Rc::new(self.expand(*body)),
+            },
             ConstraintTypeNode::Variable(id) => Type::Variable(*id),
             ConstraintTypeNode::Rigid(id) => Type::Rigid(*id),
             ConstraintTypeNode::Forall { variables, body } => Type::Forall {
@@ -621,6 +651,13 @@ impl ConstraintTypeArena {
         match &self.nodes[id.0 as usize] {
             ConstraintTypeNode::Variable(id) => variables[*id as usize].level,
             ConstraintTypeNode::Forall { body, .. } => self.level_of(*body, variables),
+            ConstraintTypeNode::Qualified { requirements, body } => requirements
+                .iter()
+                .flat_map(|requirement| [requirement.subject, requirement.member])
+                .chain(std::iter::once(*body))
+                .map(|type_| self.level_of(type_, variables))
+                .max()
+                .unwrap_or(0),
             ConstraintTypeNode::Function {
                 parameter,
                 effects,
@@ -669,6 +706,24 @@ impl ConstraintTypeArena {
             return true;
         }
         match (&self.nodes[left.0 as usize], &self.nodes[right.0 as usize]) {
+            (
+                ConstraintTypeNode::Qualified {
+                    requirements: left,
+                    body: left_body,
+                },
+                ConstraintTypeNode::Qualified {
+                    requirements: right,
+                    body: right_body,
+                },
+            ) => {
+                left.len() == right.len()
+                    && self.same_with_rigids(*left_body, *right_body, rigids)
+                    && left.iter().zip(right).all(|(left, right)| {
+                        left.name == right.name
+                            && self.same_with_rigids(left.subject, right.subject, rigids)
+                            && self.same_with_rigids(left.member, right.member, rigids)
+                    })
+            }
             (ConstraintTypeNode::Variable(left), ConstraintTypeNode::Variable(right)) => {
                 left == right
             }
@@ -1209,6 +1264,10 @@ pub(crate) enum FlatTypeNode {
         variables: Vec<VariableId>,
         body: FlatTypeId,
     },
+    Qualified {
+        requirements: Vec<MemberRequirement<FlatTypeId>>,
+        body: FlatTypeId,
+    },
     Range {
         domain: Domain,
         low: Option<Scalar>,
@@ -1247,6 +1306,12 @@ pub(crate) enum FlatTypeNode {
 fn append_flat_type_children(node: &FlatTypeNode, children: &mut Vec<FlatTypeId>) {
     match node {
         FlatTypeNode::Forall { body, .. } => children.push(*body),
+        FlatTypeNode::Qualified { requirements, body } => {
+            children.push(*body);
+            for requirement in requirements {
+                children.extend([requirement.subject, requirement.member]);
+            }
+        }
         FlatTypeNode::Function {
             parameter,
             effects,
@@ -1766,6 +1831,20 @@ fn closed_boundary_type_key(
                 let first_child = keys.len().checked_sub(child_count)?;
                 let mut children = keys.split_off(first_child).into_iter();
                 let key = match node {
+                    FlatTypeNode::Qualified { requirements, .. } => {
+                        let body = children.next()?;
+                        let mut keys = Vec::with_capacity(requirements.len());
+                        for requirement in requirements {
+                            keys.push(format!(
+                                "{}({},{})",
+                                text(&requirement.name),
+                                children.next()?,
+                                children.next()?
+                            ));
+                        }
+                        keys.sort();
+                        format!("qualified({body};{})", keys.join(","))
+                    }
                     FlatTypeNode::Function { deferred, .. } => format!(
                         "fun({deferred},{},{},{})",
                         children.next()?,
@@ -1930,7 +2009,8 @@ fn copy_boundary_type(
                         copied.push(target.intern(node));
                         continue;
                     }
-                    FlatTypeNode::Function { .. }
+                    FlatTypeNode::Qualified { .. }
+                    | FlatTypeNode::Function { .. }
                     | FlatTypeNode::Array(_)
                     | FlatTypeNode::Region(_)
                     | FlatTypeNode::Scratch(_)
@@ -1950,6 +2030,17 @@ fn copy_boundary_type(
                     .expect("sealed boundary assembly must receive every child");
                 let mut children = copied.split_off(first_child).into_iter();
                 let node = match node {
+                    FlatTypeNode::Qualified { requirements, .. } => FlatTypeNode::Qualified {
+                        body: children.next().expect("qualified body"),
+                        requirements: requirements
+                            .into_iter()
+                            .map(|requirement| MemberRequirement {
+                                name: requirement.name,
+                                subject: children.next().expect("requirement subject"),
+                                member: children.next().expect("requirement member"),
+                            })
+                            .collect(),
+                    },
                     FlatTypeNode::Function { deferred, .. } => FlatTypeNode::Function {
                         deferred,
                         parameter: children.next().expect("function parameter"),
@@ -2293,6 +2384,7 @@ pub struct Checker {
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
+    member_constraints: RefCell<MemberConstraints>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
     level: Cell<u32>,
@@ -2381,6 +2473,7 @@ impl Checker {
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             numeric_literals: RefCell::new(BTreeMap::new()),
+            member_constraints: RefCell::new(MemberConstraints::default()),
             next_skolem: Rc::new(Cell::new(0x8000_0000)),
             next_representation_hole: Rc::new(Cell::new(u32::MAX)),
             level: Cell::new(0),
@@ -2740,6 +2833,7 @@ impl Checker {
         self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().clear();
         self.numeric_literals.borrow_mut().clear();
+        self.member_constraints.borrow_mut().clear();
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
         self.deferred_predicate_closures.borrow_mut().clear();
@@ -4039,6 +4133,17 @@ impl Checker {
                         .expect("flat type assembly must receive every child");
                     let mut children = inflated.split_off(first_child).into_iter();
                     let type_ = match arena.node(type_) {
+                        FlatTypeNode::Qualified { requirements, .. } => Type::Qualified {
+                            body: Rc::new(children.next().expect("qualified body")),
+                            requirements: requirements
+                                .iter()
+                                .map(|requirement| MemberRequirement {
+                                    name: requirement.name.clone(),
+                                    subject: children.next().expect("requirement subject"),
+                                    member: children.next().expect("requirement member"),
+                                })
+                                .collect(),
+                        },
                         FlatTypeNode::Function { deferred, .. } => Type::Function {
                             deferred: *deferred,
                             parameter: Rc::new(children.next().expect("function parameter")),
@@ -4896,7 +5001,10 @@ impl Checker {
                     } else {
                         Typing::Scheme {
                             level: self.level.get(),
-                            body: substitute_inference_variables(body, &scheme_replacements),
+                            body: substitute_inference_variables(
+                                self.qualify_type(body),
+                                &scheme_replacements,
+                            ),
                         }
                     };
                     Rc::make_mut(&mut types.names).insert(name.clone(), typing);
@@ -5279,42 +5387,6 @@ impl Checker {
                     );
                 }
                 if member_arguments.len() == 2
-                    && let Expression::Field { target, name, .. } =
-                        &module.arena.expressions[member_callee.0 as usize]
-                    && (inferred_type_subject(module, *target).is_some()
-                        || self
-                            .evaluate(path, *target, values, Phase::Comptime)
-                            .ok()
-                            .and_then(|value| static_member(&value, name))
-                            .is_some_and(|value| is_operator_member_closure(&self.context, &value)))
-                    && matches!(
-                        name.as_str(),
-                        "eq" | "ne"
-                            | "lt"
-                            | "le"
-                            | "gt"
-                            | "ge"
-                            | "add"
-                            | "sub"
-                            | "mul"
-                            | "div"
-                            | "rem"
-                    )
-                {
-                    return self.infer_resolve_member(
-                        path,
-                        module,
-                        expression_id,
-                        name.clone(),
-                        member_arguments[0],
-                        member_arguments[1],
-                        environment,
-                        values,
-                        dependencies,
-                        span,
-                    );
-                }
-                if member_arguments.len() == 2
                     && let Ok(Value::Primitive { name, .. }) =
                         self.evaluate(path, member_callee, values, Phase::Comptime)
                     && name == "@i32x4.lane"
@@ -5369,87 +5441,37 @@ impl Checker {
                         effects = self.join_effects(effects, inferred.effects)?;
                         arguments.push(inferred.type_);
                     }
-                    if matches!(target_value, Value::Extended { .. })
-                        && let Ok(value) =
-                            self.evaluate(path, expression_id, values, Phase::Comptime)
-                        && !matches!(value, Value::Closure { .. })
-                    {
-                        return Ok(Inferred {
-                            type_: if arguments.len() >= 2 {
-                                let operator_type = match name.as_str() {
-                                    "eq" | "ne" | "lt" | "le" | "gt" | "ge" => Some(bool_type()),
-                                    "add" | "sub" | "mul" | "div" | "rem" => self
-                                        .resolve_operand_domain(&arguments[0], &arguments[1])
-                                        .map(|domain| match domain {
-                                            Domain::Int => int_type(),
-                                            Domain::Text => text_type(),
-                                            Domain::Float => float_type(),
-                                            Domain::Float32 => float32_type(),
-                                        }),
-                                    _ => None,
-                                };
-                                operator_type.unwrap_or_else(|| self.bridge_runtime_value(&value))
-                            } else {
-                                self.bridge_runtime_value(&value)
-                            },
-                            effects,
-                        });
-                    }
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
                         .is_some_and(|val| is_operator_member_closure(&self.context, val));
-                    if is_resolve_op && arguments.len() >= 2 {
-                        let domain = self.resolve_operand_domain(&arguments[0], &arguments[1]);
-                        if let Some(domain) = domain {
-                            let span = module.arena.expression_span(expression_id);
-                            match domain {
-                                Domain::Int => {
-                                    let int = int_type();
-                                    self.constrain(arguments[0].clone(), int.clone(), span)?;
-                                    self.constrain(arguments[1].clone(), int, span)?;
-                                }
-                                Domain::Text => {
-                                    let text = text_type();
-                                    self.constrain(arguments[0].clone(), text.clone(), span)?;
-                                    self.constrain(arguments[1].clone(), text, span)?;
-                                }
-                                Domain::Float => {
-                                    if name != "eq" && name != "ne" {
-                                        let float = float_type();
-                                        self.constrain(arguments[0].clone(), float.clone(), span)?;
-                                        self.constrain(arguments[1].clone(), float, span)?;
-                                    }
-                                }
-                                Domain::Float32 => {
-                                    if name != "eq" && name != "ne" {
-                                        let f32_ = float32_type();
-                                        self.constrain(arguments[0].clone(), f32_.clone(), span)?;
-                                        self.constrain(arguments[1].clone(), f32_, span)?;
-                                    }
-                                }
-                            }
-                        }
-                    }
                     let parameter_type = if is_resolve_op {
                         arguments.first().cloned()
                     } else {
                         None
                     };
-                    let mut function_type = self.infer_evaluated_closure(
-                        path,
-                        module,
-                        EvaluatedClosure {
-                            module_path: &closure_module,
-                            parameter,
-                            body,
-                            captures: &closure_values,
-                            self_name: self_name.as_deref(),
-                            deferred,
-                        },
-                        environment,
-                        dependencies,
-                        parameter_type,
-                    )?;
+                    let attached_signature = static_member(&target_value, name)
+                        .as_ref()
+                        .filter(|_| !is_resolve_op)
+                        .and_then(|member| self.bridge_closed_attached_signature(member));
+                    let mut function_type = if let Some(signature) = attached_signature {
+                        signature
+                    } else {
+                        self.infer_evaluated_closure(
+                            path,
+                            module,
+                            EvaluatedClosure {
+                                module_path: &closure_module,
+                                parameter,
+                                body,
+                                captures: &closure_values,
+                                self_name: self_name.as_deref(),
+                                deferred,
+                            },
+                            environment,
+                            dependencies,
+                            parameter_type,
+                        )?
+                    };
                     for argument in arguments {
                         let result = self.fresh();
                         let performed = self.fresh();
@@ -5479,7 +5501,7 @@ impl Checker {
                         || name == "transform"
                         || static_member(&target_value, name)
                             .as_ref()
-                            .is_some_and(|val| is_resolve_member_closure(&self.context, val)))
+                            .is_some_and(|val| is_operator_member_closure(&self.context, val)))
                     && let Some(Value::Closure {
                         module: closure_module,
                         parameter,
@@ -5492,39 +5514,37 @@ impl Checker {
                 {
                     let argument_type =
                         self.infer(path, module, argument, environment, values, dependencies)?;
-                    if matches!(target_value, Value::Extended { .. })
-                        && let Ok(value) =
-                            self.evaluate(path, expression_id, values, Phase::Comptime)
-                        && !matches!(value, Value::Closure { .. })
-                    {
-                        return Ok(Inferred {
-                            type_: self.bridge_runtime_value(&value),
-                            effects: argument_type.effects,
-                        });
-                    }
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
-                        .is_some_and(|val| is_resolve_member_closure(&self.context, val));
+                        .is_some_and(|val| is_operator_member_closure(&self.context, val));
                     let parameter_type = if is_resolve_op {
                         Some(argument_type.type_.clone())
                     } else {
                         None
                     };
-                    let function_type = self.infer_evaluated_closure(
-                        path,
-                        module,
-                        EvaluatedClosure {
-                            module_path: &closure_module,
-                            parameter,
-                            body,
-                            captures: &closure_values,
-                            self_name: self_name.as_deref(),
-                            deferred,
-                        },
-                        environment,
-                        dependencies,
-                        parameter_type,
-                    )?;
+                    let attached_signature = static_member(&target_value, name)
+                        .as_ref()
+                        .filter(|_| !is_resolve_op)
+                        .and_then(|member| self.bridge_closed_attached_signature(member));
+                    let function_type = if let Some(signature) = attached_signature {
+                        signature
+                    } else {
+                        self.infer_evaluated_closure(
+                            path,
+                            module,
+                            EvaluatedClosure {
+                                module_path: &closure_module,
+                                parameter,
+                                body,
+                                captures: &closure_values,
+                                self_name: self_name.as_deref(),
+                                deferred,
+                            },
+                            environment,
+                            dependencies,
+                            parameter_type,
+                        )?
+                    };
                     let result = self.fresh();
                     let performed = self.fresh();
                     let deferred = self.deferred_call(&function_type);
@@ -5969,23 +5989,25 @@ impl Checker {
                         values,
                         dependencies,
                     )?;
-                    let mut settled = self.settle(subject.type_.clone(), true);
+                    let settled = self.settle(subject.type_.clone(), true);
                     if contains_bottom(&settled)
                         && self.mentions_pending_numeric_literal(&subject.type_)
                     {
                         self.resolve_numeric_literals()?;
-                        settled = self.settle(subject.type_.clone(), true);
                     }
-                    if contains_bottom(&settled)
-                        || !closed_checked_type(&settled, &mut HashSet::new())
-                        || !operator_dispatch_type_is_concrete(&settled)
-                    {
+                    let Some(settled) = self.member_lookup_subject(&subject.type_) else {
                         self.defer_current_closure();
+                        let member = self.fresh();
+                        self.register_member_requirement(MemberRequirement {
+                            name,
+                            subject: subject.type_,
+                            member: member.clone(),
+                        });
                         return Ok(Inferred {
-                            type_: self.fresh(),
+                            type_: member,
                             effects: subject.effects,
                         });
-                    }
+                    };
                     let type_value = self.reify_runtime_type(&settled).ok_or_else(|| {
                         Diagnostic::new(
                             "BLOT_TYPE_NOT_REIFIABLE",
@@ -6008,8 +6030,20 @@ impl Checker {
                         )
                     })?;
                     let type_ = self
-                        .static_member_type(&member)
-                        .unwrap_or_else(|| self.fresh());
+                        .static_member_type(&member, Some(&settled))
+                        .ok_or_else(|| {
+                            Diagnostic::new(
+                                "BLOT_TYPE_NOT_REIFIABLE",
+                                format!(
+                                    "The attached `{name}` member has no checked source signature."
+                                ),
+                                span,
+                            )
+                        })?;
+                    let type_ = self.instantiate(Typing::Scheme {
+                        level: 0,
+                        body: type_,
+                    });
                     return Ok(Inferred {
                         type_,
                         effects: subject.effects,
@@ -6958,9 +6992,42 @@ impl Checker {
         inferred
     }
 
-    fn static_member_type(&self, member: &Value) -> Option<Type> {
-        if let Value::Primitive { name, .. } = member {
-            return primitive_type(self, name);
+    fn static_member_type(&self, member: &Value, subject: Option<&Type>) -> Option<Type> {
+        if let Value::Primitive {
+            name,
+            applied,
+            arity,
+        } = member
+        {
+            if name == "@type.resolve_member"
+                && *arity == 3
+                && let [Value::Text(operation)] = applied.as_slice()
+            {
+                let domain = type_domain(subject?)?;
+                let operand = match domain {
+                    Domain::Int => int_type(),
+                    Domain::Text => text_type(),
+                    Domain::Float => float_type(),
+                    Domain::Float32 => float32_type(),
+                };
+                let result = match (domain, operation.as_str()) {
+                    (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                    | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => bool_type(),
+                    (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
+                    | (Domain::Float32, "add" | "sub" | "mul" | "div")
+                    | (Domain::Text, "add") => operand.clone(),
+                    _ => return None,
+                };
+                return Some(curried(vec![operand.clone(), operand], result));
+            }
+            let mut type_ = primitive_type(self, name)?;
+            for _ in applied {
+                let Type::Function { result, .. } = type_ else {
+                    return None;
+                };
+                type_ = Rc::unwrap_or_clone(result);
+            }
+            return Some(type_);
         }
         if let Some(type_) = self.bridge(member) {
             return Some(type_);
@@ -6983,6 +7050,7 @@ impl Checker {
             .borrow()
             .get(module.as_str(), body)
             .cloned()
+            .map(|type_| self.qualify_type(type_))
             .or_else(|| {
                 self.context
                     .closure_signature(module.as_str(), *body)
@@ -7574,8 +7642,10 @@ impl Checker {
         let insertion_count = self.bound_insertions.borrow().len();
         let variable_count = self.variables.borrow().len();
         let next_skolem = self.next_skolem.get();
+        let member_constraints = self.member_constraints.borrow().clone();
         let result = self.constrain_numeric_literal_candidate(variable, candidate, span);
         self.rollback_bounds(insertion_count, variable_count, next_skolem);
+        *self.member_constraints.borrow_mut() = member_constraints;
         result
     }
 
@@ -7640,6 +7710,12 @@ impl Checker {
         let mut pending = vec![type_.clone()];
         while let Some(type_) = pending.pop() {
             match type_ {
+                Type::Qualified { requirements, body } => {
+                    pending.push(Rc::unwrap_or_clone(body));
+                    for requirement in requirements {
+                        pending.extend([requirement.subject, requirement.member]);
+                    }
+                }
                 Type::Variable(variable) => {
                     if literals.contains_key(&variable) {
                         return true;
@@ -7703,6 +7779,12 @@ impl Checker {
         let mut found = None;
         while let Some(type_) = pending.pop() {
             match type_ {
+                Type::Qualified { requirements, body } => {
+                    pending.push(Rc::unwrap_or_clone(body));
+                    for requirement in requirements {
+                        pending.extend([requirement.subject, requirement.member]);
+                    }
+                }
                 Type::Variable(variable) => {
                     if let Some(fact) = literals.get(&variable) {
                         match fact.kind {
@@ -7792,8 +7874,11 @@ impl Checker {
 
     fn instantiate(&self, typing: Typing) -> Type {
         match typing {
-            Typing::Mono(type_) => type_,
-            Typing::Scheme { level, body } => self.freshen(body, level, &mut HashMap::new()),
+            Typing::Mono(type_) => self.activate_qualified_type(type_),
+            Typing::Scheme { level, body } => {
+                let body = self.freshen(body, level, &mut HashMap::new());
+                self.activate_qualified_type(body)
+            }
         }
     }
 
@@ -7816,13 +7901,19 @@ impl Checker {
             .any(|candidate| types.same(*candidate, bound_id))
     }
 
-    fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
+    fn syntactic_type_variables(type_: &Type) -> BTreeSet<VariableId> {
         let mut roots = BTreeSet::new();
         let mut pending = vec![type_];
         while let Some(type_) = pending.pop() {
             match type_ {
                 Type::Variable(variable) => {
                     roots.insert(*variable);
+                }
+                Type::Qualified { requirements, body } => {
+                    pending.push(body);
+                    for requirement in requirements {
+                        pending.extend([&requirement.subject, &requirement.member]);
+                    }
                 }
                 Type::Forall { body, .. } => pending.push(body),
                 Type::Function {
@@ -7854,6 +7945,37 @@ impl Checker {
                 | Type::Opaque(_)
                 | Type::Top
                 | Type::Bottom => {}
+            }
+        }
+        roots
+    }
+
+    fn project_scheme_constraints(&self, type_: &Type, level: u32) -> HashMap<VariableId, Type> {
+        let qualified = self.qualify_type(type_.clone());
+        let type_ = &qualified;
+        let mut roots = Self::syntactic_type_variables(type_);
+        let mut pending_roots = if matches!(qualified, Type::Qualified { .. }) {
+            roots.clone()
+        } else {
+            BTreeSet::new()
+        };
+        while let Some(owner) = pending_roots.pop_first() {
+            let variable = self.variables.borrow()[owner as usize].clone();
+            if variable.level <= level {
+                continue;
+            }
+            for (bounds, direction) in [
+                (variable.lower, BoundDirection::Lower),
+                (variable.upper, BoundDirection::Upper),
+            ] {
+                for bound in self.project_scheme_bounds(owner, bounds, direction, &roots, level) {
+                    let type_ = self.expand_constraint(bound);
+                    for variable in Self::syntactic_type_variables(&type_) {
+                        if roots.insert(variable) {
+                            pending_roots.insert(variable);
+                        }
+                    }
+                }
             }
         }
         let snapshots = {
@@ -7902,6 +8024,9 @@ impl Checker {
             variables[replacement as usize].lower = lower;
             variables[replacement as usize].upper = upper;
         }
+        // Requirements and their type graph use the same replacement map.
+        // Keep the immutable qualified scheme independent of later uses of the
+        // source inference graph.
         replacements
     }
 
@@ -8004,6 +8129,16 @@ impl Checker {
             return replacement_type;
         }
         let rebuilt = match node {
+            ConstraintTypeNode::Qualified { requirements, body } => ConstraintTypeNode::Qualified {
+                requirements: requirements
+                    .into_iter()
+                    .map(|requirement| {
+                        requirement
+                            .map(|type_| self.freshen_constraint(type_, level, fresh, rewritten))
+                    })
+                    .collect(),
+                body: self.freshen_constraint(body, level, fresh, rewritten),
+            },
             ConstraintTypeNode::Forall { variables, body } => ConstraintTypeNode::Forall {
                 variables,
                 body: self.freshen_constraint(body, level, fresh, rewritten),
@@ -8089,7 +8224,7 @@ impl Checker {
             .into_iter()
             .map(|variable| (variable, self.fresh()))
             .collect();
-        substitute_rigid(body, &replacements)
+        self.activate_qualified_type(substitute_rigid(body, &replacements))
     }
 
     fn skolemize(&self, variables: Vec<VariableId>, body: Type) -> Type {
@@ -8108,6 +8243,13 @@ impl Checker {
         match type_ {
             Type::Variable(id) => self.variables.borrow()[*id as usize].level,
             Type::Forall { body, .. } => self.level_of(body),
+            Type::Qualified { requirements, body } => requirements
+                .iter()
+                .flat_map(|requirement| [&requirement.subject, &requirement.member])
+                .chain(std::iter::once(body.as_ref()))
+                .map(|type_| self.level_of(type_))
+                .max()
+                .unwrap_or(0),
             Type::Function {
                 parameter,
                 effects,
@@ -8146,6 +8288,11 @@ impl Checker {
             return type_;
         }
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.extrude(child, polarity, level, copies)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(copy) = copies.get(&id) {
                     return copy.clone();
@@ -8281,6 +8428,7 @@ impl Checker {
     }
 
     fn record_bound_insertion(&self, variable: VariableId, direction: BoundDirection) {
+        self.member_constraints.borrow_mut().changed(variable);
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
         self.bound_insertions.borrow_mut().push(BoundInsertion {
@@ -8317,6 +8465,8 @@ impl Checker {
             .borrow_mut()
             .retain(|variable, _| (*variable as usize) < variable_count);
         self.next_skolem.set(next_skolem);
+        self.settled_variables.borrow_mut().clear();
+        self.residual_variables.borrow_mut().clear();
     }
 
     fn add_upper_bound(
@@ -8407,10 +8557,16 @@ impl Checker {
         seen: &mut HashSet<(VariableId, VariableId)>,
     ) -> Result<(), Diagnostic> {
         let mut work = VecDeque::from([WorkItem { left, right, span }]);
-        while let Some(item) = work.pop_front() {
-            self.constrain_work_item(item, seen, &mut work)?;
-            self.solver_worklist_peak
-                .set(self.solver_worklist_peak.get().max(work.len() as u64));
+        loop {
+            while let Some(item) = work.pop_front() {
+                self.constrain_work_item(item, seen, &mut work)?;
+                self.solver_worklist_peak
+                    .set(self.solver_worklist_peak.get().max(work.len() as u64));
+            }
+            work.extend(self.take_ready_member_constraints(span)?);
+            if work.is_empty() {
+                break;
+            }
         }
         Ok(())
     }
@@ -8434,6 +8590,32 @@ impl Checker {
             )
         };
         let compatible = match (left_node, right_node) {
+            (ConstraintTypeNode::Qualified { requirements, body }, _) => {
+                for requirement in requirements {
+                    self.register_member_requirement(
+                        requirement.map(|type_| self.expand_constraint(type_)),
+                    );
+                }
+                work.push_back(WorkItem {
+                    left: body,
+                    right,
+                    span,
+                });
+                true
+            }
+            (_, ConstraintTypeNode::Qualified { requirements, body }) => {
+                for requirement in requirements {
+                    self.register_member_requirement(
+                        requirement.map(|type_| self.expand_constraint(type_)),
+                    );
+                }
+                work.push_back(WorkItem {
+                    left,
+                    right: body,
+                    span,
+                });
+                true
+            }
             (_, ConstraintTypeNode::Top) | (ConstraintTypeNode::Bottom, _) => true,
             (ConstraintTypeNode::Forall { variables, body }, _) => {
                 let body = self.expand_constraint(body);
@@ -8854,11 +9036,13 @@ impl Checker {
         let insertion_count = self.bound_insertions.borrow().len();
         let variable_count = self.variables.borrow().len();
         let next_skolem = self.next_skolem.get();
+        let member_constraints = self.member_constraints.borrow().clone();
         let result = self
             .constrain_ids(left, right, span, &mut HashSet::new())
             .is_ok();
         if !result {
             self.rollback_bounds(insertion_count, variable_count, next_skolem);
+            *self.member_constraints.borrow_mut() = member_constraints;
         }
         result
     }
@@ -8884,6 +9068,7 @@ impl Checker {
     }
 
     fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {
+        let type_ = self.qualify_type(type_);
         self.boundary_materializations
             .set(self.boundary_materializations.get() + 1);
         let mut unresolved = BTreeSet::new();
@@ -8908,6 +9093,13 @@ impl Checker {
                     let mut nested_bound = bound;
                     nested_bound.extend(variables);
                     pending.push((body, nested_bound));
+                }
+                Type::Qualified { requirements, body } => {
+                    pending.push((body, bound.clone()));
+                    for requirement in requirements {
+                        pending.push((&requirement.subject, bound.clone()));
+                        pending.push((&requirement.member, bound.clone()));
+                    }
                 }
                 Type::Function {
                     parameter,
@@ -8975,6 +9167,11 @@ impl Checker {
         recursive: &mut HashSet<VariableId>,
     ) -> Type {
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.residual_signature_type(child, seen, resolved, unresolved, recursive)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(type_) = resolved.get(&id) {
                     return type_.clone();
@@ -9090,7 +9287,17 @@ impl Checker {
                     unresolved,
                     recursive,
                 )),
-                effects: Rc::new(self.settle(Rc::unwrap_or_clone(effects), true)),
+                effects: Rc::new(if self.has_member_requirements(&effects) {
+                    self.residual_signature_type(
+                        Rc::unwrap_or_clone(effects),
+                        seen,
+                        resolved,
+                        unresolved,
+                        recursive,
+                    )
+                } else {
+                    self.settle(Rc::unwrap_or_clone(effects), true)
+                }),
                 result: Rc::new(self.residual_signature_type(
                     Rc::unwrap_or_clone(result),
                     seen,
@@ -9224,6 +9431,11 @@ impl Checker {
     fn settle_seen(&self, type_: Type, positive: bool, traversal: &mut SettleTraversal) -> Type {
         self.settle_visits.set(self.settle_visits.get() + 1);
         match type_ {
+            qualified @ Type::Qualified { .. } => {
+                member_constraints::map_type_children(qualified, |child| {
+                    self.settle_seen(child, positive, traversal)
+                })
+            }
             Type::Variable(id) => {
                 if let Some(settled) = self.settled_variables.borrow().get(&(id, positive)) {
                     return settled.clone();
@@ -9797,7 +10009,11 @@ impl Checker {
         })
     }
 
-    fn publish_evaluation_expression_types(&self, path: &str, expression_types: &[ExpressionId]) {
+    fn publish_evaluation_expression_types(
+        &self,
+        path: &str,
+        expression_types: &[ExpressionId],
+    ) -> Vec<(ExpressionId, Option<Value>)> {
         let inferred = self.analysis_expression_types.borrow();
         let reified = expression_types.iter().filter_map(|expression| {
             let type_ = inferred.get(path, expression).cloned()?;
@@ -9811,8 +10027,26 @@ impl Checker {
                 .map(|type_| (*expression, type_))
         });
         let mut expression_types = self.context.expression_types.borrow_mut();
-        for (expression, type_) in reified {
-            expression_types.insert(path.to_owned(), expression, type_);
+        reified
+            .map(|(expression, type_)| {
+                let previous = expression_types.insert(path.to_owned(), expression, type_);
+                (expression, previous)
+            })
+            .collect()
+    }
+
+    fn restore_evaluation_expression_types(
+        &self,
+        path: &str,
+        saved: Vec<(ExpressionId, Option<Value>)>,
+    ) {
+        let mut types = self.context.expression_types.borrow_mut();
+        for (expression, previous) in saved {
+            if let Some(previous) = previous {
+                types.insert(path.to_owned(), expression, previous);
+            } else {
+                types.remove(path, &expression);
+            }
         }
     }
 
@@ -9844,14 +10078,18 @@ impl Checker {
                 module.arena.expression_span(expression),
             ));
         }
-        self.publish_evaluation_expression_types(path, &operator_arguments);
-        run(evaluate_expression(
+        // These certificates belong to this compile-time application, not to
+        // every future instantiation of the source closure.
+        let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
+        let evaluated = run(evaluate_expression(
             self.context.clone(),
             Rc::new(path.to_owned()),
             expression,
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
-        ))
+        ));
+        self.restore_evaluation_expression_types(path, saved);
+        evaluated
     }
 
     fn evaluate_binding(
@@ -9891,7 +10129,7 @@ impl Checker {
         if let Some(value) = cached {
             return Ok(value);
         }
-        self.publish_evaluation_expression_types(path, &operator_arguments);
+        let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
         let evaluated = run(evaluate_binding(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -9900,6 +10138,7 @@ impl Checker {
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
         ));
+        self.restore_evaluation_expression_types(path, saved);
         if let Ok(value) = &evaluated {
             let key = if reusable_across_module_instances(value) {
                 (pattern, expression, phase, 0)
@@ -10129,6 +10368,20 @@ impl Checker {
 
     fn show_settled(&self, type_: &Type) -> String {
         match type_ {
+            Type::Qualified { requirements, body } => format!(
+                "({}) => {}",
+                requirements
+                    .iter()
+                    .map(|requirement| format!(
+                        "{}.{} :: {}",
+                        self.show_settled(&requirement.subject),
+                        requirement.name,
+                        self.show_settled(&requirement.member)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self.show_settled(body),
+            ),
             Type::Variable(id) => format!("'t{id}"),
             Type::Rigid(id) => format!("'s{id}"),
             Type::Forall { variables, body } => {
@@ -10329,6 +10582,7 @@ fn quantify_settlement_holes(
     variables: &mut Vec<VariableId>,
 ) -> Option<Type> {
     match type_ {
+        Type::Qualified { .. } => None,
         Type::Variable(_) => None,
         Type::Top | Type::Bottom => {
             let variable = next_skolem.get();
@@ -10448,6 +10702,7 @@ fn quantify_settlement_holes(
 
 fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { .. } => false,
         Type::Variable(_) | Type::Rigid(_) | Type::Forall { .. } => false,
         Type::Function {
             parameter,
@@ -10485,6 +10740,12 @@ fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
 
 fn contains_bottom(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            contains_bottom(body)
+                || requirements.iter().any(|requirement| {
+                    contains_bottom(&requirement.subject) || contains_bottom(&requirement.member)
+                })
+        }
         Type::Bottom => true,
         Type::Forall { body, .. } => contains_bottom(body),
         Type::Function {
@@ -10568,6 +10829,22 @@ fn closed_type_key(type_: &Type) -> Option<String> {
 
     fn visit(type_: &Type, binders: &mut HashMap<VariableId, usize>) -> Option<String> {
         match type_ {
+            Type::Qualified { requirements, body } => {
+                let body = visit(body, binders)?;
+                let mut keys = requirements
+                    .iter()
+                    .map(|requirement| {
+                        Some(format!(
+                            "{}({},{})",
+                            text(&requirement.name),
+                            visit(&requirement.subject, binders)?,
+                            visit(&requirement.member, binders)?
+                        ))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                keys.sort();
+                Some(format!("qualified({body};{})", keys.join(",")))
+            }
             Type::Variable(_) => None,
             Type::Rigid(id) => binders.get(id).map(|index| format!("^{index}")),
             Type::Forall { variables, body } => {
@@ -10660,6 +10937,13 @@ fn free_rigid_variables(
     free: &mut BTreeSet<VariableId>,
 ) {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            free_rigid_variables(body, bound, free);
+            for requirement in requirements {
+                free_rigid_variables(&requirement.subject, bound, free);
+                free_rigid_variables(&requirement.member, bound, free);
+            }
+        }
         Type::Rigid(variable) => {
             if !bound.contains(variable) {
                 free.insert(*variable);
@@ -11517,6 +11801,7 @@ fn function_body(mut type_: &Type) -> &Type {
 
 fn contains_function(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => contains_function(body),
         Type::Function { .. } => true,
         Type::Forall { body, .. }
         | Type::Array(body)
@@ -11533,6 +11818,7 @@ fn contains_function(type_: &Type) -> bool {
 
 fn ownership_uses_expression_type(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => ownership_uses_expression_type(body),
         Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Forall { body, .. } => ownership_uses_expression_type(body),
         Type::Function { .. } | Type::Array(_) => true,
@@ -11553,6 +11839,7 @@ fn ownership_uses_expression_type(type_: &Type) -> bool {
 
 fn function_result_contains_embedded_function(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { body, .. } => function_result_contains_embedded_function(body),
         Type::Forall { body, .. } => function_result_contains_embedded_function(body),
         Type::Function { result, .. } => match result.as_ref() {
             Type::Function { .. } => false,
@@ -11698,7 +11985,10 @@ fn refined_original_integer_type(
         if integer_intervals(&settled_neg).is_some_and(|v| !v.is_empty()) {
             Some(settled_neg)
         } else {
-            Some(int_type())
+            // A generic comparison does not establish the receiver's domain.
+            // Inventing Int here would detach branch constraints from the
+            // original variable and could validate a non-integer array index.
+            None
         }
     }
 }
@@ -12017,6 +12307,11 @@ fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Ve
 
 fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, |child| {
+                substitute_rigid(child, replacements)
+            })
+        }
         Type::Rigid(id) => replacements.get(&id).cloned().unwrap_or(Type::Rigid(id)),
         Type::Forall { variables, body } => {
             let mut inner_replacements = replacements.clone();
@@ -12093,6 +12388,11 @@ fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Ty
 
 fn substitute_inference_variables(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
     match type_ {
+        qualified @ Type::Qualified { .. } => {
+            member_constraints::map_type_children(qualified, |child| {
+                substitute_inference_variables(child, replacements)
+            })
+        }
         Type::Variable(id) => replacements.get(&id).cloned().unwrap_or(Type::Variable(id)),
         Type::Forall { variables, body } => Type::Forall {
             variables,
@@ -12247,6 +12547,11 @@ fn coverage_matrix(rows: &[CoverageRow], types: &[Type]) -> bool {
     }
     let rest = &types[1..];
     match &types[0] {
+        Type::Qualified { body, .. } => {
+            let mut unqualified = vec![body.as_ref().clone()];
+            unqualified.extend_from_slice(rest);
+            coverage_matrix(rows, &unqualified)
+        }
         Type::Bottom => true,
         Type::Unit => coverage_matrix(&specialize_unit(rows), rest),
         Type::Range {
@@ -12756,15 +13061,11 @@ fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
         current = *next_body;
     }
     let (callee, _) = application_spine_ids(&loaded.module, current);
-    let Expression::Field { target, name, .. } =
-        &loaded.module.arena.expressions[callee.0 as usize]
+    let Expression::Field { target, .. } = &loaded.module.arena.expressions[callee.0 as usize]
     else {
         return false;
     };
-    matches!(
-        name.as_str(),
-        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-    ) && inferred_type_subject(&loaded.module, *target).is_some()
+    inferred_type_subject(&loaded.module, *target).is_some()
 }
 
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
@@ -13435,6 +13736,24 @@ fn same_type_with_rigids(
     rigids: &mut Vec<(VariableId, VariableId)>,
 ) -> bool {
     match (left, right) {
+        (
+            Type::Qualified {
+                requirements: left,
+                body: left_body,
+            },
+            Type::Qualified {
+                requirements: right,
+                body: right_body,
+            },
+        ) => {
+            left.len() == right.len()
+                && same_type_with_rigids(left_body, right_body, rigids)
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.name == right.name
+                        && same_type_with_rigids(&left.subject, &right.subject, rigids)
+                        && same_type_with_rigids(&left.member, &right.member, rigids)
+                })
+        }
         (Type::Variable(left), Type::Variable(right)) => left == right,
         (Type::Rigid(left), Type::Rigid(right)) => {
             if let Some(bound_left) = rigids
@@ -14560,6 +14879,13 @@ fn nullary_unit_type(type_: &Type) -> bool {
 
 pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            type_exposes_generative_effect(body)
+                || requirements.iter().any(|requirement| {
+                    type_exposes_generative_effect(&requirement.subject)
+                        || type_exposes_generative_effect(&requirement.member)
+                })
+        }
         Type::Forall { body, .. }
         | Type::Array(body)
         | Type::Region(body)
@@ -14600,6 +14926,13 @@ pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
 
 fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
     match type_ {
+        Type::Qualified { requirements, body } => {
+            closed_checked_type(body, bound)
+                && requirements.iter().all(|requirement| {
+                    closed_checked_type(&requirement.subject, bound)
+                        && closed_checked_type(&requirement.member, bound)
+                })
+        }
         Type::Variable(_) => false,
         Type::Rigid(variable) => bound.contains(variable),
         Type::Forall { variables, body } => {
@@ -14655,6 +14988,19 @@ fn flatten_interface_type(
     types: &mut FlatTypeBuilder,
 ) -> Option<FlatTypeId> {
     let node = match type_ {
+        Type::Qualified { requirements, body } => FlatTypeNode::Qualified {
+            body: flatten_interface_type(body, bound, types)?,
+            requirements: requirements
+                .iter()
+                .map(|requirement| {
+                    Some(MemberRequirement {
+                        name: requirement.name.clone(),
+                        subject: flatten_interface_type(&requirement.subject, bound, types)?,
+                        member: flatten_interface_type(&requirement.member, bound, types)?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+        },
         Type::Variable(_) => return None,
         Type::Rigid(id) => {
             if !bound.contains(id) {
@@ -16007,3 +16353,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "member_constraint_tests.rs"]
+mod member_constraint_tests;

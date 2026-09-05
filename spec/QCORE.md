@@ -214,3 +214,16 @@ values are therefore deliberately outside any typing or conversion judgment. A
 still needs extensions to the pure typing and conversion shadow plus separate
 definitions for proof checking, erasure, and translation adequacy. None may be
 inferred from `ValidatedQModule` alone.
+
+### Qualified structural certificates
+
+Schema version 4 adds `StructuralQualified`: a body plus equally sized member
+name, receiver-type, and member-type arrays. Receivers and members are checked
+under the enclosing structural quantifiers. Repeated member names are valid when
+they constrain different receivers. These obligations are retained in the
+structural shadow certificate; they do not become proofs in the pure QCore
+fragment, which rejects this node like other structural certificate forms.
+
+Checked-module certificate schema 17 carries the corresponding qualified flat
+type. Older certificates are rejected rather than read with erased obligations.
+Unresolved qualifications cannot select a Runtime HIR representation.

@@ -4012,17 +4012,11 @@ impl ResidualTrace {
         {
             current = *function;
         }
-        let crate::ast::Expression::Field { target, name, .. } =
+        let crate::ast::Expression::Field { target, .. } =
             &loaded.module.arena.expressions[current.0 as usize]
         else {
             return false;
         };
-        if !matches!(
-            name.as_str(),
-            "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-        ) {
-            return false;
-        }
         let crate::ast::Expression::Apply { function, .. } =
             &loaded.module.arena.expressions[target.0 as usize]
         else {
@@ -4099,6 +4093,13 @@ impl ResidualTrace {
             },
         ) = signature
         else {
+            // A nonrecursive source helper can stay in the ordinary staged
+            // evaluator until its actual arguments discharge member lookups.
+            // Do not invent a runtime signature, and do not inline across a
+            // development boundary or turn recursive calls into host recursion.
+            if signature.is_none() && self_name.is_none() && !crosses_development_boundary {
+                return Ok(ResidualFunctionCall::Static);
+            }
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
@@ -11901,6 +11902,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
 
 fn type_value(type_: &Type) -> Value {
     match type_ {
+        Type::Qualified { .. } => Value::Unbounded,
         Type::Variable(_) | Type::Rigid(_) | Type::Top | Type::Bottom => Value::Unbounded,
         Type::Forall { variables, body } => {
             variables
@@ -12220,6 +12222,9 @@ impl HirBuilder {
 
     fn runtime_type(&mut self, type_: &Type, value: &Value) -> Result<usize, Diagnostic> {
         match type_ {
+            Type::Qualified { .. } => Err(hir_error(
+                "An attached-member requirement must be discharged before the runtime boundary.",
+            )),
             Type::Range { domain, .. } => match domain {
                 Domain::Int => {
                     Ok(self

@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 6,
-    "checkedModuleCertificate": 16,
+    "checkedModuleCertificate": 17,
     "moduleSnapshotSchema": 2,
     "valueCapsuleSchema": 4,
     "runtimeHir": 10
@@ -149,7 +149,7 @@
       "operator": "-",
       "associativity": "prefix",
       "precedence": 90,
-      "target": "Int.negate"
+      "target": "Op.negate"
     },
     {
       "operator": "!",
@@ -734,15 +734,15 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 16010
+      "lines": 16360
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14541
+      "lines": 14546
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10099
+      "lines": 10114
     },
     {
       "path": "compiler/src/backend.rs",
@@ -750,11 +750,11 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6762
+      "lines": 6809
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6689
+      "lines": 6691
     },
     {
       "path": "compiler/src/lower.rs",
@@ -786,7 +786,7 @@
     },
     {
       "path": "compiler/src/qcore.rs",
-      "lines": 2236
+      "lines": 2289
     },
     {
       "path": "src/tooling/lint.test.ts",

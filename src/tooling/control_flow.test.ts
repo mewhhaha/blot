@@ -30,7 +30,7 @@ return find
   const outer = await description(source, "return find");
   assert.equal(
     outer?.markdown,
-    "**return** — supplies the result of this module.",
+    "**return** — supplies the result of the nearest module (this module).",
   );
 });
 

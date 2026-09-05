@@ -27,7 +27,7 @@ infixl 60 (-) = Op.sub
 infixl 70 (*) = Op.mul
 infixl 70 (/) = Op.div
 infixl 70 (%) = Op.rem
-prefix 90 (-) = Int.negate
+prefix 90 (-) = Op.negate
 prefix 90 (!) = @linear.own
 prefix 90 (?) = @linear.maybe
 prefix 90 (&) = @linear.borrow
@@ -54,6 +54,7 @@ const OpOrder =
 
 const OpArithmetic =
   {
+    .negate = fn value => (@type.inferred value).negate value;
     .add = fn left => fn right => (@type.inferred left).add left right;
     .sub = fn left => fn right => (@type.inferred left).sub left right;
     .mul = fn left => fn right => (@type.inferred left).mul left right;
@@ -1690,11 +1691,10 @@ const upto = fn (low, high) => upto_build (low, high, Array.empty)
 
 // --- floats -----------------------------------------------------------------
 //
-// Attached operations do not imply overload resolution: an operator resolves
-// to one binding by name, and a `+` that worked on both would have to dispatch
-// on a value's type at run time — the typeclass machinery this language does
-// not have. `F64.add` is the floating-point addition; integer operators remain
-// fixed to `Int` and other domains use named calls.
+// Standard arithmetic operators call Op's source-defined dispatchers, which
+// select these attached members from each call's inferred operand type.
+// F64 and F32 remain distinct domains: only unbound numeric literals select a
+// domain from context. Already-bound values require explicit conversion.
 
 const F64Operations =
   {

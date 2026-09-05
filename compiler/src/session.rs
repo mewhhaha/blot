@@ -2548,19 +2548,30 @@ mod tests {
     }
 
     fn snapshot_from_source(path: &str, text: &str) -> Vec<u8> {
-        let mut session = CompilerSession::default();
-        session
-            .add_source(path.to_owned(), source(text))
-            .expect("snapshot source should load");
-        session
-            .configure_module(path, BTreeMap::new(), BTreeMap::new())
-            .expect("snapshot source should configure");
-        session.module_snapshot(path).unwrap_or_else(|error| {
-            panic!(
-                "module snapshot should encode: {error}; check: {}",
-                session.check_module(path)
-            )
-        })
+        let build = || {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(path.to_owned(), source(text))
+                .expect("snapshot source should load");
+            session
+                .configure_module(path, BTreeMap::new(), BTreeMap::new())
+                .expect("snapshot source should configure");
+            session.module_snapshot(path).unwrap_or_else(|error| {
+                panic!(
+                    "module snapshot should encode: {error}; check: {}",
+                    session.check_module(path)
+                )
+            })
+        };
+        // Share only the immutable serialized fixture. Every test still installs
+        // it into its own session and exercises the ordinary boundary decoder.
+        // Rechecking this identical prelude for every integration test obscures
+        // compiler regressions behind repeated fixture construction.
+        if path == "prelude.blot" && text == include_str!("../../src/prelude/prelude.blot") {
+            static PRELUDE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+            return PRELUDE.get_or_init(build).clone();
+        }
+        build()
     }
 
     #[test]
@@ -10096,3 +10107,7 @@ return F32.add (-1) 2.5
         raw.encode_utf16().collect()
     }
 }
+
+#[cfg(test)]
+#[path = "operator_dispatch_tests.rs"]
+mod operator_dispatch_tests;

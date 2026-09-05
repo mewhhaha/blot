@@ -519,6 +519,10 @@ impl<K: Eq + std::hash::Hash, V> ModuleFacts<K, V> {
         self.modules.insert(module, facts);
     }
 
+    pub(crate) fn remove(&mut self, module: &str, key: &K) -> Option<V> {
+        self.modules.get_mut(module)?.remove(key)
+    }
+
     pub(crate) fn remove_module(&mut self, module: &str) -> Option<HashMap<K, V>> {
         self.modules.remove(module)
     }
@@ -591,6 +595,7 @@ enum ResidentOperatorMember {
         environment: Weak<Env>,
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
+        signature: Option<Box<Value>>,
         reuse_assertion: Option<Span>,
         deferred: bool,
     },
@@ -603,7 +608,7 @@ impl ResidentOperatorMember {
                 name,
                 arity,
                 applied,
-            } if applied.is_empty() => Some(Self::Primitive {
+            } => Some(Self::Primitive {
                 name: name.clone(),
                 arity: *arity,
                 applied: applied.clone(),
@@ -617,6 +622,7 @@ impl ResidentOperatorMember {
                 environment,
                 self_name,
                 imports,
+                signature,
                 reuse_assertion,
                 deferred,
                 ..
@@ -629,6 +635,7 @@ impl ResidentOperatorMember {
                 environment: Rc::downgrade(environment),
                 self_name: self_name.clone(),
                 imports: imports.clone(),
+                signature: signature.clone(),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
             }),
@@ -656,6 +663,7 @@ impl ResidentOperatorMember {
                 environment,
                 self_name,
                 imports,
+                signature,
                 reuse_assertion,
                 deferred,
             } => Some(Value::Closure {
@@ -667,7 +675,7 @@ impl ResidentOperatorMember {
                 environment: environment.upgrade()?,
                 self_name: self_name.clone(),
                 imports: imports.clone(),
-                signature: None,
+                signature: signature.clone(),
                 reuse_assertion: *reuse_assertion,
                 deferred: *deferred,
             }),
@@ -681,7 +689,7 @@ impl ResidentOperatorExtension {
         let mut combined = BTreeMap::new();
         while let Value::Extended { inner, members } = current {
             for (name, value) in members.iter() {
-                if !operator_member_name(name) || combined.contains_key(name) {
+                if combined.contains_key(name) {
                     continue;
                 }
                 if let Some(member) = ResidentOperatorMember::capture(value) {
@@ -701,6 +709,17 @@ impl ResidentOperatorExtension {
 fn operator_type_key(value: &Value) -> String {
     match value {
         Value::Extended { inner, .. } => operator_type_key(inner),
+        Value::Int(_) => "domain:Int".to_owned(),
+        Value::Text(_) => "domain:Text".to_owned(),
+        Value::Union(members) => {
+            let mut keys = members.iter().map(operator_type_key);
+            if let Some(first) = keys.next()
+                && keys.all(|key| key == first)
+            {
+                return first;
+            }
+            show(value)
+        }
         Value::Range {
             domain: Some(ValueDomain::Int),
             ..
@@ -1129,6 +1148,9 @@ impl Context {
         if let Some(extension) = extension {
             return overlay_operator_extension(value, &extension);
         }
+        if key.starts_with("domain:") {
+            return operator_type_with_members(value);
+        }
         bootstrap_operator_type(value)
     }
 
@@ -1526,14 +1548,40 @@ fn operator_type_with_members(value: Value) -> Value {
     let members = OPERATOR_MEMBER_NAMES
         .iter()
         .map(|name| {
-            (
-                (*name).to_owned(),
+            let primitive = if *name == "negate" {
+                match &value {
+                    Value::Int(_)
+                    | Value::Range {
+                        domain: Some(ValueDomain::Int),
+                        ..
+                    } => Some("@int.neg"),
+                    Value::Range {
+                        domain: Some(ValueDomain::Float),
+                        ..
+                    } => Some("@float.neg"),
+                    Value::Range {
+                        domain: Some(ValueDomain::Float32),
+                        ..
+                    } => Some("@f32.neg"),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let member = if let Some(primitive) = primitive {
+                Value::Primitive {
+                    name: primitive.to_owned(),
+                    arity: 1,
+                    applied: Vec::new(),
+                }
+            } else {
                 Value::Primitive {
                     name: "@type.resolve_member".to_owned(),
                     arity: 3,
                     applied: vec![Value::Text((*name).to_owned())],
-                },
-            )
+                }
+            };
+            ((*name).to_owned(), member)
         })
         .collect();
     Value::Extended {
@@ -6739,8 +6787,7 @@ mod operator_projection_regression_tests {
         ] {
             for name in ["add", "eq", "and"] {
                 let error = run(project(value.clone(), name, span))
-                    .err()
-                    .expect("an unsupported projection must return a diagnostic");
+                    .expect_err("an unsupported projection must return a diagnostic");
                 assert_eq!(error.code, "BLOT_NO_FIELD");
             }
         }

@@ -383,6 +383,7 @@ impl<'module> PureLowerer<'module> {
             }
             structural @ (Value::StructuralRigid { .. }
             | Value::StructuralForall { .. }
+            | Value::StructuralQualified { .. }
             | Value::StructuralRange { .. }
             | Value::StructuralUnit
             | Value::StructuralFunction { .. }

@@ -1,6 +1,6 @@
 // Generated from qcore/schema.json by scripts/generate_qcore.ts. Do not edit.
 
-export const qcoreSchemaVersion = 3;
+export const qcoreSchemaVersion = 4;
 
 export interface ValueId {
   readonly value_id: number;
@@ -153,6 +153,7 @@ export enum ValueTag {
   StructuralOpaque = 27,
   StructuralTop = 28,
   StructuralBottom = 29,
+  StructuralQualified = 30,
 }
 
 export type Value =
@@ -291,6 +292,13 @@ export type Value =
   }
   | {
     readonly tag: ValueTag.StructuralBottom;
+  }
+  | {
+    readonly tag: ValueTag.StructuralQualified;
+    readonly body: ValueId;
+    readonly names: readonly string[];
+    readonly subjects: readonly ValueId[];
+    readonly members: readonly ValueId[];
   };
 
 export enum ComputationTag {
