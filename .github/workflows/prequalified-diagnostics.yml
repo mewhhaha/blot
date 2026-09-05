@@ -17,6 +17,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - name: Widen loop-carried scalar signatures to their stable domain
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/typecheck.rs')
+          source = path.read_text()
+          old = '''fn stable_loop_signature(type_: Type) -> Type {
+              match type_ {
+          '''
+          old = old.replace('              ', '')
+          new = '''fn stable_loop_signature(type_: Type) -> Type {
+    match type_ {
+        Type::Range { domain, .. } => Type::Range {
+            domain,
+            low: None,
+            high: None,
+        },
+'''
+          if source.count(old) != 1:
+              raise SystemExit(f'expected one stable_loop_signature anchor, found {source.count(old)}')
+          path.write_text(source.replace(old, new, 1))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml
+          git diff --check
+      - name: Loop inference regressions
+        shell: bash
+        run: |
+          timeout 120 cargo test --manifest-path compiler/Cargo.toml a_rebound_loop_element_stays_local_to_each_iteration -- --nocapture
+          timeout 120 cargo test --manifest-path compiler/Cargo.toml a_conditionally_rebound_loop_element_stays_local_to_each_iteration -- --nocapture
       - name: Operator dispatch tests
         run: timeout 180 cargo test --manifest-path compiler/Cargo.toml operator_dispatch_tests -- --nocapture
       - name: Full Rust suite serially
