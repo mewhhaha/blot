@@ -10153,6 +10153,7 @@ return F32.add (-1) 2.5
                     true,
                 ),
             ];
+            let mut failures = Vec::new();
             for (label, text, expected) in cases {
                 let mut session = CompilerSession::default();
                 session
@@ -10163,12 +10164,18 @@ return F32.add (-1) 2.5
                     .expect(label);
                 let checked = session.check_module("main.blot");
                 eprintln!("{label}: {checked}");
-                assert_eq!(checked["ok"], expected, "{label}: {checked}");
+                if checked["ok"] != expected {
+                    failures.push(format!("{label}: {checked}"));
+                    continue;
+                }
                 if expected {
                     let prepared = session.prepare_runtime_hir("main.blot");
-                    assert_eq!(prepared["ok"], true, "{label}: {prepared}");
+                    if prepared["ok"] != true {
+                        failures.push(format!("{label}: {prepared}"));
+                    }
                 }
             }
+            assert!(failures.is_empty(), "{}", failures.join("\n"));
         });
     }
 

@@ -12492,35 +12492,6 @@ fn is_resolve_member_closure(context: &Context, closure: &Value) -> bool {
     )
 }
 
-fn is_operator_member_closure(context: &Context, closure: &Value) -> bool {
-    if is_resolve_member_closure(context, closure) {
-        return true;
-    }
-    let Value::Closure { module, body, .. } = closure else {
-        return false;
-    };
-    let Some(loaded) = context.modules.borrow().get(module.as_str()).cloned() else {
-        return false;
-    };
-    let mut current = *body;
-    while let Expression::Lambda {
-        body: next_body, ..
-    } = &loaded.module.arena.expressions[current.0 as usize]
-    {
-        current = *next_body;
-    }
-    let (callee, _) = application_spine_ids(&loaded.module, current);
-    let Expression::Field { target, name, .. } =
-        &loaded.module.arena.expressions[callee.0 as usize]
-    else {
-        return false;
-    };
-    matches!(
-        name.as_str(),
-        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
-    ) && inferred_type_subject(&loaded.module, *target).is_some()
-}
-
 fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnostic> {
     let Value::Shape(fields) = value else {
         return Err(Diagnostic::new(

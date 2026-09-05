@@ -52,13 +52,17 @@ impl Checker {
             let mut settled = self.settle(subject.type_.clone(), true);
             if contains_bottom(&settled) {
                 let upper = self.settle(subject.type_.clone(), false);
-                if closed_checked_type(&upper, &mut HashSet::new())
+                if !matches!(upper, Type::Top | Type::Bottom)
+                    && closed_checked_type(&upper, &mut HashSet::new())
                     && operator_dispatch_type_is_concrete(&upper)
                 {
                     settled = upper;
                 }
             }
-            if contains_bottom(&settled)
+            if matches!(
+                settled,
+                Type::Top | Type::Bottom | Type::Variable(_) | Type::Rigid(_)
+            ) || contains_bottom(&settled)
                 || !closed_checked_type(&settled, &mut HashSet::new())
                 || !operator_dispatch_type_is_concrete(&settled)
             {
@@ -320,6 +324,7 @@ impl Checker {
                 Rc::make_mut(&mut scope.phases).insert(name, Phase::Comptime);
             }
         }
+        let root_body = *body;
         let mut parameter = *parameter;
         let mut body = *body;
         let mut deferred = *deferred;
@@ -356,7 +361,7 @@ impl Checker {
         }
         let _ = deferred;
         if let Some(argument) = arguments.first() {
-            self.record_specialization(closure_module, *body_ref(value), argument, path, span)?;
+            self.record_specialization(closure_module, root_body, argument, path, span)?;
         }
         let previous_depth = self.specialization_depth.get();
         self.specialization_depth.set(previous_depth + 1);
@@ -419,11 +424,4 @@ impl Checker {
             effects,
         })
     }
-}
-
-fn body_ref(value: &Value) -> &ExpressionId {
-    let Value::Closure { body, .. } = value else {
-        unreachable!("source application requires a closure")
-    };
-    body
 }
