@@ -1,0 +1,1 @@
+{ .empty = #Page { .items = []; .next = #None }; .first = #Page { .items = ["alpha", "beta"]; .next = #Some 2 }; .huge_limit = #Page { .items = ["beta", "gamma"]; .next = #None }; .last = #Page { .items = ["gamma"]; .next = #None }; .negative = #InvalidPage "negative offset"; .past_end = #Page { .items = []; .next = #None }; .zero_limit = #InvalidPage "limit must be positive" }

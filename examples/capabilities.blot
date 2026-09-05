@@ -43,7 +43,11 @@ const to_memory =
     .return = fn _ => "";
   }
 
+// Pain point: host effects at module initialization cannot be replayed for
+// separate runtime field exports. Return one aggregate under .default.
 return {
-  .printed = @handle (Console, report, to_host);
-  .captured = @handle (Console, report, to_memory);
+  .default = {
+    .printed = @handle (Console, report, to_host);
+    .captured = @handle (Console, report, to_memory);
+  };
   }

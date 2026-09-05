@@ -1,0 +1,44 @@
+// Convert sensor readings with explicit numeric-domain boundaries.
+
+open import "blot:prelude"
+
+let celsius :: Int -> F64
+let celsius = fn raw_tenths => do:
+  // Pain point: an already-bound Int is not implicitly converted to F64.
+  // Contextual literals can adapt, but raw_tenths needs an explicit conversion.
+  return F64.of_int raw_tenths / 10.0
+
+let fahrenheit :: F64 -> F64
+let fahrenheit = fn degrees => degrees * 1.8 + 32.0
+
+let mean :: [F64] -> Option F64
+let mean = fn &readings => do:
+  let count = Array.length (&readings)
+  if count == 0:
+    return None
+
+  // Pain point: := preserves the accumulator's numeric domain. Starting at
+  // the unconstrained integer 0 is not a promise to become a float later.
+  let total :: F64
+  let total = 0.0
+  // Pain point on this revision: generic + inside this inferred loop is
+  // constrained to Int despite the F64 accumulator. The named member avoids
+  // that unresolved operator/loop-inference interaction without coercion.
+  for reading in Iter.items (&readings):
+    total := F64.add total reading
+
+  return Some (total / F64.of_int count)
+
+let readings = map ([195, 200, 205], celsius)
+// Name a default value so `pnpm blot run` can select one runtime export.
+return {
+  .default = {
+    .celsius = readings;
+    .fahrenheit = map (readings, fahrenheit);
+    .mean = mean readings;
+    .empty_mean = mean [];
+    // Pain point on this main revision: use the named float negation member;
+    // generic prefix negation is still being developed in the operator PRs.
+    .below_zero = F64.negate (celsius 50);
+  };
+  }

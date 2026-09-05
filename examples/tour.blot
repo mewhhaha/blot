@@ -116,9 +116,12 @@ let printing =
 let !token = 41
 let consume = fn !value => value + 1
 
+// Pain point: type values stay compile-time exports, while host effects must
+// initialize one runtime aggregate rather than replay for each runtime field.
 return {
   .small = Small;
   .message = Message;
+  .default = {
   .counter_fields = Counter.fields;
 
   .doubled = double 21;
@@ -151,4 +154,5 @@ return {
   .appended = "a" <> "b" <> "c";
   .piped = 20 |> Int.add 2 |> double;
   .comptime = 20 * 2 + 1;
+};
 }

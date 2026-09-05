@@ -14,6 +14,7 @@ import {
   inspectGpuFrontendPlan,
 } from "@mewhhaha/baba/runtime/webgpu";
 import { elaborateLayout } from "./src/syntax/layout.ts";
+import { ingestCpuSource, parse } from "./src/syntax/parse.ts";
 
 const plan = await Deno.readFile("generated/wasm/parser.plan");
 const frontend = CpuFrontend.create(plan);
@@ -52,7 +53,9 @@ for (const directory of CORPUS) {
           ),
         );
       }
-      const result = frontend.ingest(elaborated.layout.source);
+      // Use the same I64-aware Baba adapter as production parsing. Baba
+      // still owns acceptance; its compact I32 policy is not Blot syntax.
+      const result = ingestCpuSource(frontend, elaborated.layout.source);
       if (!result.ok) {
         throw new Error(
           result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("\n"),
@@ -61,3 +64,21 @@ for (const directory of CORPUS) {
     });
   }
 }
+
+Deno.test("full-width integer syntax preserves the original I64 value", async () => {
+  const parsed = await parse("return 9223372036854775807\n");
+  assert(parsed.ok);
+  assertEquals(parsed.module.result.tag, "int");
+  assert(parsed.module.result.tag === "int");
+  assertEquals(parsed.module.result.value, 9223372036854775807n);
+});
+
+Deno.test("full-width integers do not hide malformed syntax", async () => {
+  const parsed = await parse("return 9223372036854775807 +\n");
+  assert(!parsed.ok);
+  assert(
+    parsed.diagnostics.some((diagnostic) =>
+      diagnostic.code === "GPU_FRONTEND_SYNTAX_ERROR"
+    ),
+  );
+});
