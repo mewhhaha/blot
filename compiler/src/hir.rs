@@ -3991,6 +3991,49 @@ impl ResidualTrace {
         )
     }
 
+    fn is_operator_member_body(
+        context: &Context,
+        module: &str,
+        body: crate::ast::ExpressionId,
+    ) -> bool {
+        let modules = context.modules.borrow();
+        let Some(loaded) = modules.get(module) else {
+            return false;
+        };
+        let mut current = body;
+        while let crate::ast::Expression::Lambda {
+            body: next_body, ..
+        } = &loaded.module.arena.expressions[current.0 as usize]
+        {
+            current = *next_body;
+        }
+        while let crate::ast::Expression::Apply { function, .. } =
+            &loaded.module.arena.expressions[current.0 as usize]
+        {
+            current = *function;
+        }
+        let crate::ast::Expression::Field { target, name, .. } =
+            &loaded.module.arena.expressions[current.0 as usize]
+        else {
+            return false;
+        };
+        if !matches!(
+            name.as_str(),
+            "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
+        ) {
+            return false;
+        }
+        let crate::ast::Expression::Apply { function, .. } =
+            &loaded.module.arena.expressions[target.0 as usize]
+        else {
+            return false;
+        };
+        matches!(
+            &loaded.module.arena.expressions[function.0 as usize],
+            crate::ast::Expression::Intrinsic { name, .. } if name == "@type.inferred"
+        )
+    }
+
     pub(crate) fn begin_residual_function(
         &mut self,
         closure: ResidualClosure<'_>,
@@ -4012,7 +4055,10 @@ impl ResidualTrace {
             root_application,
             crosses_development_boundary,
         } = closure;
-        if root_application || Self::is_resolve_member_body(context, module, body) {
+        if root_application
+            || Self::is_resolve_member_body(context, module, body)
+            || Self::is_operator_member_body(context, module, body)
+        {
             return Ok(ResidualFunctionCall::Static);
         }
         let lexical_closure = LexicalClosure {
