@@ -1,0 +1,34 @@
+name: PR94 attach signature first regression
+
+on:
+  push:
+    branches:
+      - debug/pr94-attach-signature-first
+
+permissions:
+  contents: read
+
+jobs:
+  first:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - name: Patch nested forall attachment
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('compiler/src/value.rs')
+          source = path.read_text()
+          old = "    let complete_signature = signature;\n    let signature = match complete_signature {\n        Value::Forall { body, .. } => body.as_ref(),\n        signature => signature,\n    };\n"
+          new = "    let complete_signature = signature;\n    let mut signature = complete_signature;\n    while let Value::Forall { body, .. } = signature {\n        signature = body.as_ref();\n    }\n"
+          assert source.count(old) == 1
+          path.write_text(source.replace(old, new, 1))
+          PY
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Run first lowering regression
+        run: cargo test --manifest-path compiler/Cargo.toml an_empty_scratch_argument_uses_the_contextual_result_representation -- --nocapture --test-threads=1
