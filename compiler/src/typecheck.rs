@@ -10013,7 +10013,11 @@ impl Checker {
         })
     }
 
-    fn publish_evaluation_expression_types(&self, path: &str, expression_types: &[ExpressionId]) {
+    fn publish_evaluation_expression_types(
+        &self,
+        path: &str,
+        expression_types: &[ExpressionId],
+    ) -> Vec<(ExpressionId, Option<Value>)> {
         let inferred = self.analysis_expression_types.borrow();
         let reified = expression_types.iter().filter_map(|expression| {
             let type_ = inferred.get(path, expression).cloned()?;
@@ -10027,8 +10031,26 @@ impl Checker {
                 .map(|type_| (*expression, type_))
         });
         let mut expression_types = self.context.expression_types.borrow_mut();
-        for (expression, type_) in reified {
-            expression_types.insert(path.to_owned(), expression, type_);
+        reified
+            .map(|(expression, type_)| {
+                let previous = expression_types.insert(path.to_owned(), expression, type_);
+                (expression, previous)
+            })
+            .collect()
+    }
+
+    fn restore_evaluation_expression_types(
+        &self,
+        path: &str,
+        saved: Vec<(ExpressionId, Option<Value>)>,
+    ) {
+        let mut types = self.context.expression_types.borrow_mut();
+        for (expression, previous) in saved {
+            if let Some(previous) = previous {
+                types.insert(path.to_owned(), expression, previous);
+            } else {
+                types.remove(path, &expression);
+            }
         }
     }
 
@@ -10060,14 +10082,18 @@ impl Checker {
                 module.arena.expression_span(expression),
             ));
         }
-        self.publish_evaluation_expression_types(path, &operator_arguments);
-        run(evaluate_expression(
+        // These certificates belong to this compile-time application, not to
+        // every future instantiation of the source closure.
+        let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
+        let evaluated = run(evaluate_expression(
             self.context.clone(),
             Rc::new(path.to_owned()),
             expression,
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
-        ))
+        ));
+        self.restore_evaluation_expression_types(path, saved);
+        evaluated
     }
 
     fn evaluate_binding(
@@ -10107,7 +10133,7 @@ impl Checker {
         if let Some(value) = cached {
             return Ok(value);
         }
-        self.publish_evaluation_expression_types(path, &operator_arguments);
+        let saved = self.publish_evaluation_expression_types(path, &operator_arguments);
         let evaluated = run(evaluate_binding(
             self.context.clone(),
             Rc::new(path.to_owned()),
@@ -10116,6 +10142,7 @@ impl Checker {
             environment.clone(),
             Runtime::new(phase, path.to_owned()),
         ));
+        self.restore_evaluation_expression_types(path, saved);
         if let Ok(value) = &evaluated {
             let key = if reusable_across_module_instances(value) {
                 (pattern, expression, phase, 0)

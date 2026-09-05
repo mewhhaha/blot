@@ -519,6 +519,10 @@ impl<K: Eq + std::hash::Hash, V> ModuleFacts<K, V> {
         self.modules.insert(module, facts);
     }
 
+    pub(crate) fn remove(&mut self, module: &str, key: &K) -> Option<V> {
+        self.modules.get_mut(module)?.remove(key)
+    }
+
     pub(crate) fn remove_module(&mut self, module: &str) -> Option<HashMap<K, V>> {
         self.modules.remove(module)
     }

@@ -173,10 +173,12 @@ selector must be a literal or a `const` value so lowering receives an immediate
 certificate. The named `x`, `y`, `z`, and `w` operations remain the shortest
 spelling for fixed positions.
 
-There is no implicit conversion between the numeric types, and no operator
-serves more than one. An operator resolves to one binding by name (§4.7), so a
-`+` over both would have to dispatch on a value's type at run time. `F64.of_int`
-and `F64.truncate` cross explicitly; `truncate` rounds toward zero.
+There is no implicit conversion between already-bound numeric types. An operator
+still resolves to one source binding (§7), but that binding can select an
+attached member of the inferred operand type. The standard `+`, for example,
+works on `Int`, `F64`, and `F32` without a runtime type tag or implicit numeric
+conversion. `F64.of_int` and `F64.truncate` cross domains explicitly; `truncate`
+rounds toward zero.
 
 A text literal is delimited by `"`. The defined escapes are:
 
@@ -1307,24 +1309,24 @@ Build generation derives the bootstrap index needed before imports can be
 elaborated; the compiler contains no separately authored operator vocabulary.
 Standard entries, from loosest to tightest:
 
-| level | spelling                    | associativity   | target                          |
-| ----- | --------------------------- | --------------- | ------------------------------- |
-| 10    | `$`                         | right           | `Fn.apply`                      |
-| 20    | `\|>`                       | left            | `Fn.pipe`                       |
-| 21    | `~`                         | left            | `@type.performs`                |
-| 22    | `\|\|`                      | right           | `Logic.or`                      |
-| 24    | `&&`                        | right           | `Logic.and`                     |
-| 25    | `->`                        | right           | `@type.arrow`                   |
-| 25    | `~>`                        | right           | `@type.deferred_arrow`          |
-| 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Int.*`                         |
-| 40    | `\|` `\`                    | left            | `Type.union`, `Type.diff`       |
-| 45    | `&`                         | left            | `Type.intersect`                |
-| 50    | `<+`                        | left            | `attach`                        |
-| 55    | `<>`                        | right           | `Text.append`                   |
-| 60    | `+` `-`                     | left            | `Int.add`, `Int.sub`            |
-| 70    | `*` `/` `%`                 | left            | `Int.mul`, `Int.div`, `Int.rem` |
-| 90    | `-`                         | prefix          | `Int.negate`                    |
-| 90    | `!` `?` `&`                 | prefix          | `@linear.*`                     |
+| level | spelling                    | associativity   | target                       |
+| ----- | --------------------------- | --------------- | ---------------------------- |
+| 10    | `$`                         | right           | `Fn.apply`                   |
+| 20    | `\|>`                       | left            | `Fn.pipe`                    |
+| 21    | `~`                         | left            | `@type.performs`             |
+| 22    | `\|\|`                      | right           | `Logic.or`                   |
+| 24    | `&&`                        | right           | `Logic.and`                  |
+| 25    | `->`                        | right           | `@type.arrow`                |
+| 25    | `~>`                        | right           | `@type.deferred_arrow`       |
+| 30    | `==` `!=` `<` `<=` `>` `>=` | non-associative | `Op.*`                       |
+| 40    | `\|` `\`                    | left            | `Type.union`, `Type.diff`    |
+| 45    | `&`                         | left            | `Type.intersect`             |
+| 50    | `<+`                        | left            | `attach`                     |
+| 55    | `<>`                        | right           | `Text.append`                |
+| 60    | `+` `-`                     | left            | `Op.add`, `Op.sub`           |
+| 70    | `*` `/` `%`                 | left            | `Op.mul`, `Op.div`, `Op.rem` |
+| 90    | `-`                         | prefix          | `Op.negate`                  |
+| 90    | `!` `?` `&`                 | prefix          | `@linear.*`                  |
 
 Every operator lowers to an ordinary function call. `&&` and `||` target
 `Logic.and` and `Logic.or`; those ordinary prelude functions take a deferred
@@ -1334,6 +1336,34 @@ compiler-only control rule.
 `?name` introduces an affine binding when it appears in a pattern. Affine names
 are consumed by ordinary move positions; `?value` is not a separate ownership
 operation.
+
+### 7.1 Generic and refined member dispatch
+
+The standard arithmetic targets are ordinary source functions. For example,
+`Op.add` is `fn left => fn right => (@type.inferred left).add left right`, and
+`Op.negate` is `fn value => (@type.inferred value).negate value`. Fixity only
+selects these bindings; it does not choose a numeric domain or a signature.
+
+When the receiver type is known, lookup selects its attached member and checks
+the call against that member's actual parameter, result, and effect signature.
+The name `.add` does not imply `Int -> Int -> Int`. A source implementation can
+require narrower operands, return a refined result, or return a different type.
+Those requirements apply even when its body ignores an operand. Calling a member
+through an operator does not bypass arithmetic safety checks.
+
+When the receiver is unknown, inference retains an attached-member requirement
+in the function's qualified scheme instead of defaulting it to `Int`. The
+receiver and member signature, including intermediate results and effects, are
+freshened together at each use. Thus one inferred function using `+` can be used
+independently at `Int`, `F64`, and `F32`. Imported and cached schemes retain the
+same requirements. Unsupported receivers and incompatible arguments remain
+errors, even when the call's result is discarded.
+
+Member resolution is a compile-time obligation, not a runtime dictionary or a
+conversion between numeric domains. Before emitted code is formed, each
+reachable runtime instance must have a resolved member and representation.
+Missing members are not filled in from their spelling, and unresolved
+requirements cannot be erased to an arbitrary runtime representation.
 
 ## 8. Conditional control flow
 
@@ -3811,12 +3841,3 @@ This module receives its authority through `init`, explicitly opens the prelude,
 constructs types as values, uses `for` as a fold with an inferred accumulator,
 declares a host effect as its interface, and returns a concrete record suitable
 for staging and WebAssembly lowering.
-
-### Generic operator requirements
-
-Operator fixities name ordinary source bindings. Binary arithmetic and prefix
-negation dispatch to members of the inferred operand type. An unresolved operand
-retains an attached-member requirement instead of defaulting to `Int`. Each use
-of a generic function resolves its own members; the selected member's parameter,
-result, and effect signature is checked without replacing it from its name.
-Already-bound integer and floating-point values are not implicitly converted.

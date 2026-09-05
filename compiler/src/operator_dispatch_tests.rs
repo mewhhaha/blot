@@ -164,3 +164,53 @@ fn generic_dispatch_rejects_unsupported_operands_even_with_unused_result() {
         }
     });
 }
+
+#[test]
+fn generic_attached_members_select_each_call_site_domain() {
+    with_stack(|| {
+        let mut compiler = session(&format!(
+            "{DISPATCH}const Int = @type.attach @type.int \"add\" @int.add\nconst F64 = @type.attach @type.float \"add\" @float.add\nconst F32 = @type.attach @type.float32 \"add\" @f32.add\nconst sum = fn left => fn right => left + right\nreturn (sum 2 3, sum (@float.of_int 2) (@float.of_int 3), sum (@f32.of_int 2) (@f32.of_int 3))\n"
+        ));
+        assert_result(
+            &mut compiler,
+            "{ .0 = Int; .1 = F64; .2 = F32 }",
+            "(5, 5, 5f32)",
+        );
+        let prepared = compiler.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+}
+
+#[test]
+fn imported_dispatcher_does_not_reuse_an_earlier_specialization() {
+    with_stack(|| {
+        let mut compiler = session(concat!(
+            "open import \"operators\"\n",
+            "const sum = fn left => fn right => left + right\n",
+            "let integer :: @type.int\nlet integer = sum 2 3\n",
+            "let double :: @type.float\nlet double = sum (@float.of_int 2) (@float.of_int 3)\n",
+            "let single :: @type.float32\nlet single = sum (@f32.of_int 2) (@f32.of_int 3)\n",
+            "return (integer, double, single)\n",
+        ));
+        compiler.add_source("operators.blot".to_owned(), format!(
+            "{DISPATCH}const Int = @type.attach @type.int \"add\" @int.add\nconst F64 = @type.attach @type.float \"add\" @float.add\nconst F32 = @type.attach @type.float32 \"add\" @f32.add\nconst warmup = Op.add 1 1\nreturn {{ .Op = Op; .Int = Int; .F64 = F64; .F32 = F32; .warmup = warmup; }}\n"
+        ).encode_utf16().collect()).unwrap();
+        compiler
+            .configure_module("operators.blot", BTreeMap::new(), BTreeMap::new())
+            .unwrap();
+        compiler
+            .configure_module(
+                "main.blot",
+                BTreeMap::from([("operators".to_owned(), "operators.blot".to_owned())]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        assert_result(
+            &mut compiler,
+            "{ .0 = Int; .1 = F64; .2 = F32 }",
+            "(5, 5, 5f32)",
+        );
+        let prepared = compiler.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+}

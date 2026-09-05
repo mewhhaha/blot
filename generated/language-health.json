@@ -734,7 +734,7 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 16334
+      "lines": 16361
     },
     {
       "path": "compiler/src/hir.rs",
@@ -750,7 +750,7 @@
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6806
+      "lines": 6810
     },
     {
       "path": "compiler/src/ownership.rs",
@@ -766,7 +766,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3396
+      "lines": 3395
     },
     {
       "path": "compiler/src/value_capsule.rs",
