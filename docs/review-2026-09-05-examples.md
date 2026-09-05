@@ -9,9 +9,9 @@ workspace from the successful main CI run
 [33958254674](https://github.com/mewhhaha/blot/actions/runs/33958254674).
 
 This is a review of the merged language, not a claim about the unmerged operator
-and language-library work in #86, #87, or their integration PRs. It adds executable
-examples and bounded tooling fixes without changing the Rust semantic compiler,
-Baba grammar, prelude, ownership rules, compiler ABI, or CI workflows.
+and language-library work in #86, #87, or their integration PRs. It adds
+executable examples and bounded tooling fixes without changing the Rust semantic
+compiler, Baba grammar, prelude, ownership rules, compiler ABI, or CI workflows.
 
 ## Assessment
 
@@ -21,8 +21,8 @@ Unicode text operations, and emitted-Wasm execution. The examples below combine
 those facilities instead of demonstrating only isolated syntax.
 
 The most actionable gaps found in this pass were at the boundaries between
-"parses", "checks", "evaluates", and "compiles". Those are different claims.
-A syntax command unnecessarily required the semantic compiler; a compilation
+"parses", "checks", "evaluates", and "compiles". Those are different claims. A
+syntax command unnecessarily required the semantic compiler; a compilation
 command reported refusals but still exited successfully; and three accepted
 examples had evaluator results but no supported runtime export shape. A separate
 syntax gate also applied a narrower integer policy than production parsing.
@@ -48,9 +48,9 @@ isolated children; they are not an alternative compiler. The accepted-corpus
 success contract is recorded in [the compiler guide](compiler.md).
 
 Running the strengthened command exposed three real refusals among 137 examples:
-`capabilities.blot`, `projected.blot`, and `tour.blot`. Each had an effectful module
-initialization and multiple runtime field exports. The compiler correctly refused
-to replay that initialization independently for each exported field.
+`capabilities.blot`, `projected.blot`, and `tour.blot`. Each had an effectful
+module initialization and multiple runtime field exports. The compiler correctly
+refused to replay that initialization independently for each exported field.
 
 The examples now return one runtime aggregate under `.default`. The tour keeps
 its `.small` and `.message` type values as separate compile-time exports. These
@@ -69,11 +69,11 @@ refused, zero failed**, with exit status zero.
 syntax-only inspection, even though the generated Baba frontend was available.
 
 `ast` now has a syntax-only branch. It preserves BigInt JSON serialization,
-source diagnostics, nonzero status for unreadable files, and continued processing
-of later paths. Four isolated child-process regressions deliberately make
-`Compiler.create` fail: three prove `ast` still works or reports the correct file
-or syntax error, and one proves `check` still requires the semantic compiler.
-No semantic fallback was introduced.
+source diagnostics, nonzero status for unreadable files, and continued
+processing of later paths. Four isolated child-process regressions deliberately
+make `Compiler.create` fail: three prove `ast` still works or reports the
+correct file or syntax error, and one proves `check` still requires the semantic
+compiler. No semantic fallback was introduced.
 
 ### P2: the syntax corpus gate used Baba's compact I32 policy directly
 
@@ -97,45 +97,49 @@ from the remaining generic-loop issue below.
 
 The showcase verifier now includes all four new examples and the previously
 omitted `shader_metadata.blot`, which was already listed in the example catalog.
-The example index links the boundary cases, explains their limitations, and gives
-direct run commands. Compiler documentation explains the syntax-only AST path.
+The example index links the boundary cases, explains their limitations, and
+gives direct run commands. Compiler documentation explains the syntax-only AST
+path.
 
 ## New practical examples
 
-Each example has `Pain point:` comments beside the relevant operation, deliberate
-edge-case inputs, an evaluator golden, and a separate exact emitted-Wasm result
-golden. All four expose a `.default` runtime value and need no host capabilities.
+Each example has `Pain point:` comments beside the relevant operation,
+deliberate edge-case inputs, an evaluator golden, and a separate exact
+emitted-Wasm result golden. All four expose a `.default` runtime value and need
+no host capabilities.
 
 ### Bounded pagination
 
 [`paginated_feed.blot`](../examples/paginated_feed.blot) returns a page and an
-optional continuation cursor, or a typed invalid-page result. It covers the first
-page, final page, exhausted feed, empty feed, negative offset, zero limit, and an
-Int-maximum limit.
+optional continuation cursor, or a typed invalid-page result. It covers the
+first page, final page, exhausted feed, empty feed, negative offset, zero limit,
+and an Int-maximum limit.
 
 The important order is to clamp against `length - offset` before computing the
 stop index. Adding arbitrary caller bounds first can overflow. Checked indexing
 also has an explicit invariant-error branch instead of silently omitting an
-unexpectedly missing item. The input is borrowed; the page owns its result array.
+unexpectedly missing item. The input is borrowed; the page owns its result
+array.
 
 ### Unicode-scalar previews
 
-[`unicode_preview.blot`](../examples/unicode_preview.blot) budgets one scalar for
-an ellipsis, accepts empty and zero-length results, and returns an error for a
-negative limit. For `café🙂`, a five-scalar budget preserves the text and a
+[`unicode_preview.blot`](../examples/unicode_preview.blot) budgets one scalar
+for an ellipsis, accepts empty and zero-length results, and returns an error for
+a negative limit. For `café🙂`, a five-scalar budget preserves the text and a
 four-scalar budget produces `caf…`.
 
 Comments distinguish scalars from UTF-8 bytes, UTF-16 code units, and grapheme
-clusters. The precomposed and decomposed accent cases make the limitation visible:
-this is not normalization or user-perceived-character segmentation.
+clusters. The precomposed and decomposed accent cases make the limitation
+visible: this is not normalization or user-perceived-character segmentation.
 
 ### Idempotent small-batch processing
 
-[`idempotent_events.blot`](../examples/idempotent_events.blot) separates accepted
-events, identical retries, conflicting payloads, and invalid quantities. Invalid
-input does not claim an identifier, so a corrected retry can subsequently pass.
-The demonstration yields total 5, two accepted events, one duplicate, one
-conflict, and one invalid event; an empty batch yields zero counters.
+[`idempotent_events.blot`](../examples/idempotent_events.blot) separates
+accepted events, identical retries, conflicting payloads, and invalid
+quantities. Invalid input does not claim an identifier, so a corrected retry can
+subsequently pass. The demonstration yields total 5, two accepted events, one
+duplicate, one conflict, and one invalid event; an empty batch yields zero
+counters.
 
 The code makes dictionary replacement, persistent copying, borrowing, and
 loop-carried counters explicit. It also says what it is not: an array-backed map
@@ -145,9 +149,9 @@ durable, or exactly-once delivery system.
 ### Sensor-unit conversion and optional means
 
 [`sensor_units.blot`](../examples/sensor_units.blot) converts integer tenths to
-`F64`, computes Celsius and Fahrenheit values, and uses `Option F64` for an empty
-mean rather than dividing by zero. The sample Celsius values are 19.5, 20, and
-20.5, with a mean of 20.
+`F64`, computes Celsius and Fahrenheit values, and uses `Option F64` for an
+empty mean rather than dividing by zero. The sample Celsius values are 19.5, 20,
+and 20.5, with a mean of 20.
 
 The comments distinguish contextual numeric literals from conversion of an
 already-bound integer. They also distinguish stable accumulator typing from the
@@ -183,9 +187,9 @@ let sum = fn &values => do:
 return sum [1.0, 2.0]
 ```
 
-Replacing only `total + value` with `F64.add total value` makes it check as `F64`.
-Concrete float arithmetic outside the loop is exercised successfully in the
-sensor example. This is a current operator/loop-inference interaction, not a
+Replacing only `total + value` with `F64.add total value` makes it check as
+`F64`. Concrete float arithmetic outside the loop is exercised successfully in
+the sensor example. This is a current operator/loop-inference interaction, not a
 language rule that floats cannot use operators. The patch does not weaken a
 principal-type assertion, add implicit numeric coercions, or claim a compiler
 fix for this case. It should be reevaluated against the eventual merged operator
@@ -193,9 +197,9 @@ implementation before removing the workaround.
 
 ## Validation and limits
 
-Local validation used Node 22.16.0 and main's actual CI-built Rust/Wasm compiler.
-The artifact's bytes, host ABI, prelude digest, and compiler-input identity were
-verified against the downloaded source tree before testing.
+Local validation used Node 22.16.0 and main's actual CI-built Rust/Wasm
+compiler. The artifact's bytes, host ABI, prelude digest, and compiler-input
+identity were verified against the downloaded source tree before testing.
 
 - The initial focused tooling run had five failures: three AST failures and two
   refusal-status failures. The same assertions passed after the fixes.

@@ -47,9 +47,9 @@ return a `.default` value so each runs directly through the Node CLI.
   duplicate retries, conflicting payloads, invalid-then-corrected input, and an
   empty batch. The array-backed dictionary is a small-batch baseline, not a
   durable or constant-time deduplication service.
-- [`sensor_units.blot`](sensor_units.blot): explicit Int/F64 conversion,
-  typed float accumulation, an optional empty mean, and a named-operation
-  workaround for the current generic float-loop inference limitation.
+- [`sensor_units.blot`](sensor_units.blot): explicit Int/F64 conversion, typed
+  float accumulation, an optional empty mean, and a named-operation workaround
+  for the current generic float-loop inference limitation.
 
 ```sh
 pnpm blot run examples/paginated_feed.blot
@@ -63,8 +63,9 @@ boundary examples, and the graph showcases against their golden results and
 compile each one through the semantic compiler. `pnpm test:node` also checks the
 four new examples' exact emitted-Wasm outputs and canonical formatting.
 
-See [the current-state review](../docs/review-2026-09-05-examples.md) for findings,
-reproduction details, and the distinction between fixes and workarounds.
+See [the current-state review](../docs/review-2026-09-05-examples.md) for
+findings, reproduction details, and the distinction between fixes and
+workarounds.
 
 ## Common algorithms
 

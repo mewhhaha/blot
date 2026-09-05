@@ -25,14 +25,15 @@ Compiler.create = async () => {
   );
   return {
     directory,
-    run: (...arguments_: string[]) => execute(process.execPath, [
-      "--import",
-      "tsx",
-      "--import",
-      preload,
-      resolve("src/node/cli.ts"),
-      ...arguments_,
-    ]),
+    run: (...arguments_: string[]) =>
+      execute(process.execPath, [
+        "--import",
+        "tsx",
+        "--import",
+        preload,
+        resolve("src/node/cli.ts"),
+        ...arguments_,
+      ]),
   };
 }
 
@@ -74,18 +75,21 @@ test("ast continues after a missing file and retains failure status", async () =
     const path = join(fixture.directory, "valid.blot");
     const missing = join(fixture.directory, "missing.blot");
     await writeFile(path, "return 42\n");
-    await assert.rejects(fixture.run("ast", missing, path), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      const failure = error as Error & {
-        code: number;
-        stderr: string;
-        stdout: string;
-      };
-      assert.equal(failure.code, 1);
-      assert.ok(failure.stderr.includes(missing));
-      assert.match(failure.stdout, /"42n"/);
-      return true;
-    });
+    await assert.rejects(
+      fixture.run("ast", missing, path),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        const failure = error as Error & {
+          code: number;
+          stderr: string;
+          stdout: string;
+        };
+        assert.equal(failure.code, 1);
+        assert.ok(failure.stderr.includes(missing));
+        assert.match(failure.stdout, /"42n"/);
+        return true;
+      },
+    );
   } finally {
     await rm(fixture.directory, { recursive: true });
   }

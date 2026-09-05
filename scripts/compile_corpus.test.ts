@@ -12,13 +12,15 @@ const execute = promisify(execFile);
 // These are process/exit-status tests, not a replacement semantic compiler.
 // Inject outcomes into an isolated child to exercise the actual corpus script
 // without putting intentionally refused files in the shared accepted catalog.
-for (const statuses of [
-  ["ok"],
-  ["refused"],
-  ["error"],
-  ["ok", "refused"],
-  ["ok", "error", "refused"],
-]) {
+for (
+  const statuses of [
+    ["ok"],
+    ["refused"],
+    ["error"],
+    ["ok", "refused"],
+    ["ok", "error", "refused"],
+  ]
+) {
   test(`corpus exit status for ${statuses.join(", ")}`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "blot-corpus-status-"));
     try {
@@ -50,13 +52,14 @@ Compiler.create = async () => ({
 });
 `,
       );
-      const run = () => execute(process.execPath, [
-        "--import",
-        "tsx",
-        "--import",
-        preload,
-        resolve("scripts/compile_corpus.ts"),
-      ]);
+      const run = () =>
+        execute(process.execPath, [
+          "--import",
+          "tsx",
+          "--import",
+          preload,
+          resolve("scripts/compile_corpus.ts"),
+        ]);
       let stdout: string;
       if (statuses.every((status) => status === "ok")) {
         stdout = (await run()).stdout;

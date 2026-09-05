@@ -37,11 +37,13 @@ for (const name of examples) {
   });
 }
 
-for (const [name, capability] of [
-  ["capabilities", "Init"],
-  ["projected", "Console"],
-  ["tour", "Init"],
-]) {
+for (
+  const [name, capability] of [
+    ["capabilities", "Init"],
+    ["projected", "Console"],
+    ["tour", "Init"],
+  ]
+) {
   test(`${name} compiles one effectful runtime aggregate`, async () => {
     const compiler = await Compiler.create();
     try {
