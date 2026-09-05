@@ -245,6 +245,16 @@ has no general thunk value merely because the source used a deferred parameter.
 An unresolved deferred closure that escapes known application is a stated target
 refusal, not an implicit new ABI object.
 
+An ordinary nonrecursive source helper whose checked interface is not yet
+reifiable may stay in the existing staged evaluator at a known application. This
+is specialization of its checked body with actual arguments, not invention of a
+runtime function signature or erasure of qualified member requirements. Every
+operation and aggregate that reaches Runtime HIR still requires its resolved
+member, checked ownership facts, and closed representation. A recursive helper
+or a development boundary does not receive this fallback: outlining it still
+requires the corresponding settled interface. A present but malformed interface
+is not treated as a missing one.
+
 ## 9. Representation closure
 
 Write:

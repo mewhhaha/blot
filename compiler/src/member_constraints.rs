@@ -61,17 +61,38 @@ impl Checker {
     /// In particular, an unconstrained upper Top is never a lookup subject.
     pub(super) fn member_lookup_subject(&self, type_: &Type) -> Option<Type> {
         let mut subject = self.settle(type_.clone(), true);
-        if matches!(subject, Type::Bottom | Type::Top) {
-            let upper = self.settle(type_.clone(), false);
-            if type_domain(&upper).is_some() || matches!(upper, Type::Opaque(_)) {
-                subject = upper;
-            }
+        if matches!(subject, Type::Bottom | Type::Top)
+            && let Some(upper) = self.member_upper_subject(type_)
+        {
+            subject = upper;
         }
         (!matches!(subject, Type::Top)
             && !contains_bottom(&subject)
             && closed_checked_type(&subject, &mut HashSet::new())
             && operator_dispatch_type_is_concrete(&subject))
         .then_some(subject)
+    }
+
+    /// A checked upper edge is evidence even when negative settlement has
+    /// conservatively widened several bounds to Top. Follow only upper aliases:
+    /// a lower bound or a type nested inside a container is not receiver evidence.
+    fn member_upper_subject(&self, type_: &Type) -> Option<Type> {
+        let mut pending = vec![self.constraint_type(type_)];
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(variable) = self.constraint_variable(id) {
+                pending.extend(self.variables.borrow()[variable as usize].upper.clone());
+                continue;
+            }
+            let upper = self.settle(self.expand_constraint(id), false);
+            if type_domain(&upper).is_some() || matches!(upper, Type::Opaque(_)) {
+                return Some(upper);
+            }
+        }
+        None
     }
 
     /// Include graph edges as well as syntactic occurrences. A member's result

@@ -1365,6 +1365,15 @@ reachable runtime instance must have a resolved member and representation.
 Missing members are not filled in from their spelling, and unresolved
 requirements cannot be erased to an arbitrary runtime representation.
 
+A numeric domain proved by an upper subtype bound remains usable through alias
+cycles and repeated bounds; this is not an integer default. A cycle without such
+evidence does not resolve a member, and the element type of a container does not
+establish the container's own numeric domain. Ordinary nonrecursive helpers
+without an outlineable interface may remain staged at a known application until
+their concrete arguments resolve the operations. This does not create a runtime
+dictionary, bypass checking, or permit an unresolved recursive or development
+boundary to be emitted.
+
 ## 8. Conditional control flow
 
 ### 8.1 Boolean value selection

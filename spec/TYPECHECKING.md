@@ -1558,3 +1558,10 @@ Integer branch refinement requires existing integer-domain evidence; it cannot
 turn an unknown or floating-point receiver into Int. Otherwise branch-local
 refinements would disconnect later constraints from the original parameter.
 Attached callable names are ordinary source names, not a compiler allow-list.
+
+Receiver lookup follows upper-variable aliases with a visited set. Repeated
+bounds and cycle edges cannot discard a concrete domain already established by
+another upper edge. Only the receiver's upper edges provide this evidence:
+lookup does not project a numeric element or field out of a container, nor use
+an unconstrained cycle as a default. The chosen member's complete signature is
+still constrained against the pending requirement.

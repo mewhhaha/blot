@@ -201,3 +201,53 @@ fn refinement_does_not_invent_an_integer_domain() {
         assert!(refined_original_integer_type(&checker, &environment, "value").is_none());
     }
 }
+
+#[test]
+fn member_upper_evidence_survives_repeated_bounds_and_alias_cycles() {
+    for domain in [int_type(), float_type(), float32_type()] {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let subject = checker.fresh();
+        let alias = checker.fresh();
+        let result = checker.fresh();
+        let span = Span { start: 1, end: 4 };
+        checker
+            .constrain(subject.clone(), alias.clone(), span)
+            .unwrap();
+        checker.constrain(alias, subject.clone(), span).unwrap();
+        checker.register_member_requirement(MemberRequirement {
+            name: "add".to_owned(),
+            subject: subject.clone(),
+            member: curried(vec![subject.clone(), domain.clone()], result.clone()),
+        });
+        assert!(checker.member_lookup_subject(&subject).is_none());
+        checker
+            .constrain(subject.clone(), domain.clone(), span)
+            .unwrap();
+        checker
+            .constrain(subject.clone(), domain.clone(), span)
+            .unwrap();
+        assert!(same_type(
+            &checker.member_lookup_subject(&subject).unwrap(),
+            &domain
+        ));
+        assert!(same_type(&checker.settle(result, true), &domain));
+        assert!(!checker.has_member_requirements(&subject));
+    }
+}
+
+#[test]
+fn member_upper_evidence_does_not_default_cycles_or_project_container_elements() {
+    let checker = Checker::new(Rc::new(Context::default()));
+    let subject = checker.fresh();
+    let alias = checker.fresh();
+    let span = Span { start: 1, end: 4 };
+    checker
+        .constrain(subject.clone(), alias.clone(), span)
+        .unwrap();
+    checker.constrain(alias, subject.clone(), span).unwrap();
+    assert!(checker.member_lookup_subject(&subject).is_none());
+    checker
+        .constrain(subject.clone(), Type::Array(Rc::new(int_type())), span)
+        .unwrap();
+    assert!(checker.member_lookup_subject(&subject).is_none());
+}

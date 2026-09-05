@@ -4093,6 +4093,13 @@ impl ResidualTrace {
             },
         ) = signature
         else {
+            // A nonrecursive source helper can stay in the ordinary staged
+            // evaluator until its actual arguments discharge member lookups.
+            // Do not invent a runtime signature, and do not inline across a
+            // development boundary or turn recursive calls into host recursion.
+            if signature.is_none() && self_name.is_none() && !crosses_development_boundary {
+                return Ok(ResidualFunctionCall::Static);
+            }
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
                 format!(
