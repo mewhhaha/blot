@@ -58,7 +58,8 @@ export function controlFlowAt(
       if (rule.name === "lambda" || rule.name === "bounded_lambda") return null;
     }
     return {
-      markdown: "**return** — supplies the result of the nearest module (this module).",
+      markdown:
+        "**return** — supplies the result of the nearest module (this module).",
       span: token.span,
       target: { start: module.span.start, end: module.span.start },
     };
