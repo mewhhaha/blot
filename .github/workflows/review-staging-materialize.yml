@@ -71,11 +71,9 @@ jobs:
         run: deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
       - name: Check evaluator and emitted Wasm regressions
         run: node --import tsx --test src/node/residual_identity.test.ts
-      - name: Run Rust compiler suite
-        run: cargo test --manifest-path compiler/Cargo.toml
       - name: Run existing compiler performance gates
         run: node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/performance_gate.test.ts
-      - name: Publish clean review branch
+      - name: Publish clean review branch for pull request CI
         shell: bash
         run: |
           set -euo pipefail
@@ -93,3 +91,5 @@ jobs:
             generated/compiler/compiler.wasm
             generated/compiler/compiler-artifact.json
           retention-days: 7
+      - name: Run Rust compiler suite
+        run: cargo test --manifest-path compiler/Cargo.toml

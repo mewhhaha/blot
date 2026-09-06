@@ -22,7 +22,7 @@ async function agrees(
     for (const [input, expected] of cases) {
       assert.equal(run(input), expected, `Wasm at ${input}`);
       const evaluationPath = join(directory, "evaluate.blot");
-      await writeFile(evaluationPath, `const run = import "./main.blot"\nreturn run ${input}\n`);
+      await writeFile(evaluationPath, `open import "blot:prelude"\nconst run = import "./main.blot"\nreturn run (${input})\n`);
       assert.equal((await compiler.evaluate(evaluationPath)).display, String(expected), `evaluator at ${input}`);
     }
   } finally {
