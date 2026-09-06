@@ -1,0 +1,42 @@
+name: Temporary review tooling
+
+on:
+  push:
+    branches:
+      - codex/review-implementation-20260906
+    paths:
+      - .github/workflows/review-tools-temporary.yml
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Package public offline dependencies and compiler tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/blot-review-tools"
+          cargo vendor --manifest-path compiler/Cargo.toml --locked \
+            "$RUNNER_TEMP/blot-review-tools/vendor" > "$RUNNER_TEMP/blot-review-tools/vendor-config.toml"
+          cp "$(command -v deno)" "$RUNNER_TEMP/blot-review-tools/deno"
+          sysroot="$(rustc --print sysroot)"
+          tar -czf "$RUNNER_TEMP/blot-review-tools/rust-toolchain.tar.gz" -C "$sysroot" bin lib
+      - uses: actions/upload-artifact@v7
+        with:
+          name: blot-review-offline-tools
+          path: ${{ runner.temp }}/blot-review-tools
+          if-no-files-found: error
+          retention-days: 1
