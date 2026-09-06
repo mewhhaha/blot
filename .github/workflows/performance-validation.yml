@@ -1,0 +1,44 @@
+name: Isolated performance validation
+on:
+  push:
+    branches: [validation/performance-pathologies-20260906]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - run: pnpm install --frozen-lockfile
+      - run: deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
+      - name: Pack exact runnable baseline
+        run: |
+          mkdir -p validation-tools
+          cp "$(command -v deno)" validation-tools/deno
+          git ls-files -z > "$RUNNER_TEMP/files"
+          printf 'generated/compiler/compiler.wasm\0generated/compiler/compiler-artifact.json\0.pnp.cjs\0node_modules\0validation-tools\0' >> "$RUNNER_TEMP/files"
+          tar -czf performance-baseline.tar.gz --null -T "$RUNNER_TEMP/files"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: performance-baseline
+          path: performance-baseline.tar.gz
+          retention-days: 7
+      - name: Baseline Node tests
+        run: pnpm test:node
+      - name: Baseline deterministic gates
+        if: always()
+        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/performance_gate.test.ts
