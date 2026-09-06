@@ -1,3 +1,4 @@
+import { BinaryDecoder, BinaryEncoder } from "./binary_frame.ts";
 import { compareCodeUnits } from "../text_order.ts";
 import type { BlotRuntimeModule } from "../runtime/hir.ts";
 import { COMPILER_HOST_ABI_VERSION } from "./host_abi.ts";
@@ -1090,7 +1091,7 @@ export class CompilerWasm {
       this.#exports.memory.buffer,
       this.#exports.lower_result_pointer(),
       length,
-    ).slice();
+    );
     const decoder = new BinaryDecoder(bytes);
     const magic = decoder.u32("response magic");
     if (magic !== compilerBinaryFrameMagic) {
@@ -1133,83 +1134,6 @@ const compilerBinaryFrameMagic = 0x33544c42;
 const compilerBinaryFrameSchema = 3;
 const compilerAnalysisFactMask = 0xffff_ffff;
 
-class BinaryEncoder {
-  readonly #bytes: number[] = [];
-
-  u32(value: number): void {
-    if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
-      throw new RangeError(`compiler binary u32 cannot encode ${value}`);
-    }
-    this.#bytes.push(
-      value & 0xff,
-      (value >>> 8) & 0xff,
-      (value >>> 16) & 0xff,
-      (value >>> 24) & 0xff,
-    );
-  }
-
-  bytes(value: Uint8Array): void {
-    this.u32(value.byteLength);
-    for (const byte of value) this.#bytes.push(byte);
-  }
-
-  string(value: string): void {
-    this.bytes(new TextEncoder().encode(value));
-  }
-
-  finish(): Uint8Array {
-    return Uint8Array.from(this.#bytes);
-  }
-}
-
-class BinaryDecoder {
-  readonly #bytes: Uint8Array;
-  #offset = 0;
-
-  constructor(bytes: Uint8Array) {
-    this.#bytes = bytes;
-  }
-
-  u32(label: string): number {
-    const end = this.#offset + 4;
-    if (!Number.isSafeInteger(end) || end > this.#bytes.byteLength) {
-      throw new Error(`compiler binary frame omitted ${label}`);
-    }
-    const value = new DataView(
-      this.#bytes.buffer,
-      this.#bytes.byteOffset + this.#offset,
-      4,
-    ).getUint32(0, true);
-    this.#offset = end;
-    return value;
-  }
-
-  bytes(label: string): Uint8Array {
-    const length = this.u32(`${label} byte length`);
-    const end = this.#offset + length;
-    if (!Number.isSafeInteger(end) || end > this.#bytes.byteLength) {
-      throw new Error(`compiler binary frame truncated ${label}`);
-    }
-    const value = this.#bytes.subarray(this.#offset, end);
-    this.#offset = end;
-    return value;
-  }
-
-  string(label: string): string {
-    return new TextDecoder("utf-8", { fatal: true }).decode(this.bytes(label));
-  }
-
-  finish(): void {
-    if (this.#offset !== this.#bytes.byteLength) {
-      throw new Error(
-        `compiler binary frame has ${
-          this.#bytes.byteLength - this.#offset
-        } trailing bytes`,
-      );
-    }
-  }
-}
-
 function encodeDeltaPayload(
   encoder: BinaryEncoder,
   payload: CompilerSessionDelta["payload"],
@@ -1221,11 +1145,11 @@ function encodeDeltaPayload(
       return;
     case "source":
       encoder.u32(1);
-      encoder.bytes(new TextEncoder().encode(payload.source));
+      encoder.string(payload.source);
       return;
     case "ast":
       encoder.u32(2);
-      encoder.bytes(new TextEncoder().encode(payload.ast));
+      encoder.string(payload.ast);
       return;
     case "remove":
       encoder.u32(3);

@@ -118,6 +118,25 @@ nested aggregates never share backing storage across unit memories. Replacing a
 unit therefore resets only that unit's runtime state and cannot invalidate an
 alias retained by another unit.
 
+The bridge owns temporary parameter copies from their first allocation,
+including a failure while copying a later argument. Cleanup attempts every
+recorded allocation in reverse allocation order, even when post-return or an
+earlier release traps. Partially copied results, and copied results whose
+post-return or parameter cleanup fails, have not transferred to the consumer and
+must also be released. Successful result copies transfer to the consumer; bridge
+cleanup must not free them. These failure paths retain the public ownership
+contract; they do not turn a trap into a successful return.
+
+Host adapters may memoize canonical memory layouts by immutable parsed ABI
+descriptor identity. Record offsets, size, and alignment are computed together
+from each field layout once; variant payload layout and canonical case order are
+computed once per descriptor. The cache uses weak keys so obsolete unit
+manifests are not retained. It contains no guest values, pointers, or memory
+views and is not a semantic compiler cache. Cross-unit allocation can grow Wasm
+memory, so copying refreshes views after allocation. The synchronous Node result
+reader may reuse one view only until the next guest call or post-return. The
+canonical ABI representation and manifest bytes are unchanged.
+
 ## 2. Validation
 
 Write:
