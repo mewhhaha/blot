@@ -255,6 +255,54 @@ or a development boundary does not receive this fallback: outlining it still
 requires the corresponding settled interface. A present but malformed interface
 is not treated as a missing one.
 
+### 8.1 Residual code sharing is an environment judgment
+
+Representation equality is necessary but not sufficient for sharing a residual
+function. A closure consists of source code and a lexical environment. Two
+closures made from `fn name => fn value => @shape.get value name` have the same
+body and argument/result representations when `name` is `"left"` or `"right"`;
+they do not have the same meaning. Runtime captures also have positions: two
+same-typed captures bound to `left, right` cannot be exchanged merely because
+their capture-type vectors are equal.
+
+For a closure `c`, let `E(c, slots)` be finite environment evidence in which
+each runtime leaf is replaced by its position in the actual capture-argument
+vector. The evidence preserves static values transitively through captured
+closures, lexical type substitutions and signatures, ordered fields, aliasing,
+runtime ownership meaning, and generative creation contexts. The sharing
+obligation is:
+
+```text
+E(c1, slots1) = E(c2, slots2)
+  and equal source body, closed signature, representations, and reuse witnesses
+  implies equivalent residual bodies under corresponding runtime parameters.
+```
+
+This is a sufficient-condition contract, not a decision procedure for contextual
+equivalence. Different evidence may produce separate functions even when a
+stronger proof could establish equivalence. Closure graph back-references make
+recursive environments finite; caller SSA numbers and environment allocation
+addresses are not semantic components of the key. Addresses may only detect
+visited graph nodes while constructing the trace-local evidence.
+
+The Rust implementation uses exact, tagged structural evidence rather than
+printed values or an unchecked hash. Floating values retain their bits,
+including signed zero and NaN payloads. Captures retain both their runtime type
+and their ownership/reuse meaning. Creation scopes and module-instance stacks
+retain their complete recorded identities. Unsupported mutable authority,
+deferred demand, and continuations yield no reusable environment key: the call
+remains in the existing staging path, subject to its ordinary limits and target
+policy. This decision is made before lowering a call argument, so declining
+sharing does not emit duplicate argument work. It is not a new source rejection
+or an excuse to fall back to a type-only key.
+
+Recursive result placeholders use the same environment evidence as function
+identities. A placeholder for one static environment cannot be settled by a
+branch from another. The evidence is local to one residual trace and is neither
+a serialized cache format nor a source value-equality operation. In particular,
+it does not reuse the separate, first-order compile-time result cache from
+section 4.
+
 ## 9. Representation closure
 
 Write:

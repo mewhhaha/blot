@@ -934,6 +934,15 @@ Typed Core retains a live host-effect capability when runtime code refers to it.
 Other compile-time constants are specialized at their uses; Core never leaves an
 ordinary variable for a host capability whose definition it removed.
 
+A function retains the meaning of its captured bindings across specialization.
+Equal function types do not make differently captured compile-time values
+interchangeable. For example, getters constructed with `"left"` and `"right"`
+must still select different fields when applied to a runtime record. Runtime
+captures likewise retain their binding positions and aliasing even when their
+types are equal. Sharing emitted code is permitted only when corresponding
+arguments and captured environments have the same residual meaning; the order in
+which specializations are encountered cannot change the result.
+
 ### 6.1 Unit, arrays, tuples, and shapes
 
 `()` is the unit value.

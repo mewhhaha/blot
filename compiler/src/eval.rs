@@ -4518,6 +4518,8 @@ fn apply_with_expected(
                         name,
                         self_name: self_name.as_deref(),
                         environment: &environment,
+                        module_instances: &module_instances,
+                        effect_scope: &creation_scope,
                         signature: signature.as_deref(),
                         reuse: reuse_assertion.is_some(),
                         root_application: matches!(

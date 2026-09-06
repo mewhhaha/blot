@@ -7,8 +7,9 @@ baseline examined is `bbd33c00275189a45d22ad6c23cb231567d0d583`.
 ## Reproduced compiler issues
 
 Run the opt-in probes with `node --import tsx` and the indicated file. They
-assert the desired semantics and currently fail; they are deliberately not named
-`.test.ts` and do not redefine wrong output as a regression contract.
+assert the desired semantics and failed on that historical baseline. They are
+not a claim about every subsequent revision. They do not redefine wrong output
+as a regression contract.
 
 `operator_coherence.repro.ts` attaches an alternative `.eq` to raw `@type.int`.
 The constant comparison emits `false`; the dynamic equivalent returns `1`. The
@@ -30,8 +31,13 @@ contract, not the behavior delivered by this draft.
 `compiler/src/hir.rs`: argument/result types and runtime capture types alone do
 not distinguish different static environments. A correct key must account for
 relevant transitive static evidence or refuse sharing. The restricted derivation
-module keeps getters deferred to avoid this case; it does not repair the general
-specialization cache.
+module keeps getters deferred to avoid this historical case. The compiler repair
+and its current contract are described in `docs/theory-review-2026-09.md` and
+`spec/STAGING.md` section 8.1. Mandatory tests now live in
+`src/node/residual_identity.test.ts`; they also cover reversed encounter order,
+record and transitive captures, mixed static/dynamic captures, runtime capture
+permutations, recursion, and repeated calls. The library workaround is retained;
+this change does not broaden its ownership or derivation contract.
 
 ## Predicate evidence and affine reasoning
 

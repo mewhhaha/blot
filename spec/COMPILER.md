@@ -450,12 +450,21 @@ sibling field.
 One production preparation builds one residual specialization graph for all
 runtime function exports. A specialization identity includes its source closure,
 closed signature, argument and result representations, capture representations,
-and Store-reuse witness. Equal identities share one function even when reached
-from different exports. Recursive identities enter the graph before their bodies
-are evaluated. Store authority returned through a recursive aggregate is
-initially deferred, settled at control-flow joins, and published with the
-completed identity; a later call must not infer that authority again from the
-backend representation.
+Store-reuse witness, and complete residual environment evidence as specified in
+[`STAGING.md` section 8.1](STAGING.md#81-residual-code-sharing-is-an-environment-judgment).
+The evidence retains transitive static bindings and maps dynamic leaves to their
+actual capture-argument positions, including aliasing and ownership meaning.
+Type vectors alone are not identity evidence. Unsupported state declines sharing
+before argument lowering rather than minting an incomplete key. The same
+environment evidence qualifies recursive result placeholders; result-layout
+settlement cannot cross static environments. This evidence is trace-local, not a
+persistent cache identity or a second type checker.
+
+Equal identities share one function even when reached from different exports.
+Recursive identities enter the graph before their bodies are evaluated. Store
+authority returned through a recursive aggregate is initially deferred, settled
+at control-flow joins, and published with the completed identity; a later call
+must not infer that authority again from the backend representation.
 
 A recursive result whose finite representation is not yet known uses a private
 indirect identity plus a separate settlement fact. The target type identifier is
