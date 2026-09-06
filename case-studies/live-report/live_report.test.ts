@@ -21,13 +21,15 @@ async function withReport(
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "blot-live-report-"));
   try {
-    for (const name of [
-      "main.blot",
-      "config.blot",
-      "score.blot",
-      "heading.blot",
-      "label.txt",
-    ]) {
+    for (
+      const name of [
+        "main.blot",
+        "config.blot",
+        "score.blot",
+        "heading.blot",
+        "label.txt",
+      ]
+    ) {
       await writeFile(
         join(directory, name),
         await readFile(new URL(name, import.meta.url)),

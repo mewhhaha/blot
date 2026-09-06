@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blot live report</title>
+    <style>
+    body {
+      font: 18px system-ui;
+      max-width: 44rem;
+      margin: 4rem auto;
+      padding: 0 1rem;
+    }
+    input,
+    button {
+      font: inherit;
+      padding: .5rem;
+    }
+    output {
+      display: block;
+      margin: 2rem 0;
+      font-size: 2rem;
+    }
+    #error {
+      color: #a21d26;
+    }
+    </style>
+  </head>
+  <body>
+    <h1>Live report</h1>
+    <p>Edit the Blot modules or heading file. Failed reloads retain the last working report.</p>
+    <form>
+      <label>Quantity <input name="quantity" value="21" inputmode="numeric" required></label>
+      <button>Calculate</button>
+    </form>
+    <output aria-live="polite"></output>
+    <p id="revision"></p>
+    <p id="error" role="alert"></p>
+    <script>
+    const form = document.querySelector("form");
+    let request = 0;
+    async function refresh() {
+      const ticket = ++request;
+      const quantity = new FormData(form).get("quantity");
+      try {
+        const response = await fetch(
+          `/report?quantity=${encodeURIComponent(quantity)}`,
+        );
+        const report = await response.json();
+        if (ticket !== request) return;
+        if (!response.ok) throw new Error(report.error);
+        document.querySelector("h1").textContent = report.heading;
+        document.querySelector("output").textContent = report.score;
+        document.querySelector("#revision").textContent =
+          `Revision ${report.revision}`;
+        document.querySelector("#error").textContent = "";
+      } catch (error) {
+        if (ticket === request) {
+          document.querySelector("#error").textContent = error.message;
+        }
+      }
+    }
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      refresh();
+    });
+    refresh();
+    setInterval(refresh, 1000);
+    </script>
+  </body>
+</html>

@@ -49,6 +49,9 @@ test("npm package is a runnable distribution", async (context) => {
       "LICENSE",
       "dist/mod.js",
       "dist/mod.d.ts",
+      "dist/src/node/cli.js",
+      "dist/src/host.js",
+      "dist/src/host.d.ts",
       "dist/src/compiler.js",
       "dist/src/compiler.d.ts",
       "dist/generated/wasm/parser.wasm",
@@ -119,11 +122,31 @@ test("npm package is a runnable distribution", async (context) => {
     `isolated consumer installed ${developmentOnlyPackage}`,
   );
 
+  await context.test("installed CLI runs without a TypeScript loader", async () => {
+    const help = await exec("pnpm", ["exec", "blot", "--help"], {
+      cwd: consumer,
+      env: consumerEnvironment,
+    });
+    assert.match(help.stdout, /pack\|explain/);
+    const entry = join(consumer, "main.blot");
+    await writeFile(entry, "return 42\n");
+    const result = await exec("pnpm", ["exec", "blot", "run", entry], {
+      cwd: consumer,
+      env: consumerEnvironment,
+    });
+    assert.equal(result.stdout.trim(), "42");
+  });
+
   await context.test(
     "declarations resolve without repository development types",
     async () => {
       const source = [
-        'import { Compiler, DevelopmentProject, DevelopmentRuntime, buildPackage, parse } from "@mewhhaha/blot";',
+        'import { Compiler, DevelopmentProject, DevelopmentRuntime, buildPackage, instantiateArtifact, parse } from "@mewhhaha/blot";',
+        'import type { HostedModule, HostCapabilities } from "@mewhhaha/blot";',
+        "const hostFactory: typeof instantiateArtifact = instantiateArtifact;",
+        "const hosted: HostedModule | undefined = undefined;",
+        "const capabilities: HostCapabilities = new Map();",
+        "void hostFactory; void hosted; void capabilities;",
         'import type { BuiltPackageExport, DevelopmentActivation, DevelopmentBuild, DevelopmentEdge, DevelopmentMemoryCheckpoint, DevelopmentMemoryProfile } from "@mewhhaha/blot";',
         'import { Compiler as CompilerEntry } from "@mewhhaha/blot/compiler";',
         'import type { CompilerHost } from "@mewhhaha/blot/compiler";',

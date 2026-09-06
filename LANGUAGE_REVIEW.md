@@ -27,8 +27,8 @@ contracts are in `LANGUAGE.md`, `spec/STAGING.md` section 8.1, and
 `spec/COMPILER.md` section 9. Mandatory regressions cover static and mixed
 captures, runtime capture positions, transitive environments, and recursion.
 This does not broaden the restricted derivation API or complete the other
-roadmap items below. The validation history below belongs to the original library
-review; the compiler follow-up has its own pull-request checks.
+roadmap items below. The validation history below belongs to the original
+library review; the compiler follow-up has its own pull-request checks.
 
 ## Working, restricted prototypes
 
@@ -46,8 +46,11 @@ review; the compiler follow-up has its own pull-request checks.
       and an explicit generic-operation defaulting contract.
 - [x] Fix static-capture-sensitive residual function sharing, including dynamic
       capture-slot correspondence. Generalizing derivation remains separate.
-- [ ] Checked predicate summaries surviving abstraction, proof-loss diagnostics,
-      and overflow-safe affine relations with loop-invariant acceptance tests.
+- [x] Bounded environment-sensitive predicate-helper expansion for existing
+      comparison and Boolean facts, including import/capsule regression
+      coverage.
+- [ ] General checked predicate summaries, proof-loss diagnostics, and
+      overflow-safe affine relations with loop-invariant acceptance tests.
 - [ ] Baba-only numeric separators, exponent notation, and radix literals;
       regenerate/profile the frontend and test lexical boundaries.
 - [ ] General ownership-aware reflection with consuming extraction, rebuilding,

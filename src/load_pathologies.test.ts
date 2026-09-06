@@ -68,7 +68,9 @@ test("512-file refresh fits a 64-descriptor process", {
   try {
     const script = join(directory, "refresh.mjs");
     const loader = new URL("./load.ts", import.meta.url).href;
-    await writeFile(script, `
+    await writeFile(
+      script,
+      `
 import assert from "node:assert/strict";
 import { writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -90,7 +92,8 @@ await unlink(join(${JSON.stringify(directory)}, "511.blot"));
 await refreshLoadedModules(cache);
 assert.equal(cache.size, 510);
 console.log("512 refreshed; changed and missing inputs invalidated");
-`);
+`,
+    );
     const child = spawnSync("/bin/sh", [
       "-c",
       'ulimit -n 64 && exec "$@"',

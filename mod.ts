@@ -7,6 +7,7 @@
 export * from "./src/check.ts";
 export * from "./src/compiler.ts";
 export * from "./src/diagnostic.ts";
+export * from "./src/host.ts";
 export * from "./src/language_service.ts";
 export * from "./src/package.ts";
 export * from "./src/project_format.ts";

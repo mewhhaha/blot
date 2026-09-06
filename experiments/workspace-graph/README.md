@@ -1,9 +1,9 @@
 # Shared-import and wide-refresh pathologies
 
 This experiment scales the shared configuration in the
-[live-report study](../../case-studies/live-report/README.md). A depth-`d` diamond
-chain has `2d + 2` reachable modules but exponentially many import paths. The
-loader must resolve shared nodes, not recursively unfold every path.
+[live-report study](../../case-studies/live-report/README.md). A depth-`d`
+diamond chain has `2d + 2` reachable modules but exponentially many import
+paths. The loader must resolve shared nodes, not recursively unfold every path.
 
 ```sh
 node --import tsx experiments/workspace-graph/benchmark.ts --depths=4,8,12 --samples=3
@@ -39,12 +39,12 @@ With Node 22.16.0 and the published compiler/workspace for
 
 The original `src/load.ts` and `src/workspace_graph.ts` are unchanged between
 that reference commit and reviewed main
-`e9f32423502bfbe4d927608b98c96211f71ecf96`. Restoring those two original files made
-eight of the ten initial focused regressions fail; applying the repairs made all
-ten pass. Other compiler files differ between those revisions. These local
-results do not establish that the complete current-main compiler, Rust suite,
-or CI pipeline has passed. The PR's normal rebuilt-compiler CI remains the
-integration authority.
+`e9f32423502bfbe4d927608b98c96211f71ecf96`. Restoring those two original files
+made eight of the ten initial focused regressions fail; applying the repairs
+made all ten pass. Other compiler files differ between those revisions. These
+local results do not establish that the complete current-main compiler, Rust
+suite, or CI pipeline has passed. The PR's normal rebuilt-compiler CI remains
+the integration authority.
 
 ## Why the loader changed
 
@@ -57,8 +57,8 @@ not all compiler work: active-path scans/copies and source resolution have their
 own costs. It is not a claim of polynomial inference or faster emitted Wasm.
 
 Refreshing a wide workspace also used one concurrent file read per input. The
-regression launches a process with a 64-descriptor limit and refreshes 512 source
-files, then modifies one and removes another. Previously this failed with
+regression launches a process with a 64-descriptor limit and refreshes 512
+source files, then modifies one and removes another. Previously this failed with
 `EMFILE`. Sixteen draining workers now bound concurrent refresh reads, and
 invalidation occurs only after successful completion. The test skips Windows,
 where the POSIX descriptor-limit command is unavailable. The bound does not

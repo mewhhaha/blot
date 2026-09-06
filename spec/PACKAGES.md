@@ -162,3 +162,13 @@ A future certificate-bearing capsule key additionally includes the compiler
 semantic schema, generated parser plan, primitive catalog, dependency logical
 identities, include transforms, and every target policy observed by the cached
 phase. The cache laws in [`INCREMENTAL.md`](INCREMENTAL.md) apply unchanged.
+
+## 7. Package-author command
+
+`blot pack <blot.json>` invokes the existing package graph check and capsule
+encoder. All declared exports must have distinct built targets. Every source
+graph is checked and every capsule is prepared before the write phase begins; a
+source failure in any export leaves earlier built files untouched. A filesystem
+failure during final writes is reported but is not claimed to be an atomic
+multi-file transaction. The command does not execute package JavaScript, change
+capsule bytes or versions, or skip consumer-side checking and specialization.

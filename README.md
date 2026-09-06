@@ -41,6 +41,15 @@ deno task prepare:publish
 deno publish
 ```
 
+For package users, the installed `blot` executable exposes `check`, `build`,
+`run`, `pack`, and `explain` without a TypeScript loader. The
+[hosted application guide](docs/hosted-applications.md) covers explicit scalar
+host capabilities, a runnable live-report browser application, compiler
+explanations, and the boundary between user installation and compiler
+development. [Release qualification](docs/release-qualification.md) records
+exact-commit validation rather than treating an uploaded artifact as a
+successful release.
+
 ## Direct definitions should stay viable
 
 Blot's performance goal is not to make programmers translate the clear version
@@ -88,14 +97,14 @@ checked module capsule:
 }
 ```
 
-The Node CLI does not build package capsules yet. It does resolve existing
-source and capsule exports from `node_modules`. An importer writes
-`import "@scope/package"`, or a declared package subpath, and Blot resolves the
-nearest `node_modules` package without executing its JavaScript. A valid
-`.blotc` is preferred and corrupt or unsupported built files fall back to the
-declared source. The capsule bundles the package-owned Rust-exported AST graph
-and its includes without retaining source text, while package imports remain
-shared external edges. Consumer-specific typechecking and compile-time
+Build all declared capsule exports with `pnpm blot pack path/to/blot.json`. The
+Node CLI resolves source and capsule exports from `node_modules`. An importer
+writes `import "@scope/package"`, or a declared package subpath, and Blot
+resolves the nearest `node_modules` package without executing its JavaScript. A
+valid `.blotc` is preferred and corrupt or unsupported built files fall back to
+the declared source. The capsule bundles the package-owned Rust-exported AST
+graph and its includes without retaining source text, while package imports
+remain shared external edges. Consumer-specific typechecking and compile-time
 specialization still happen in the importer, so a reusable capsule is not final
 WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
 

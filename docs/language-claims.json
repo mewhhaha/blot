@@ -38,10 +38,10 @@
       "display": "true"
     },
     {
-      "id": "predicate-helper-loses-bounds",
-      "status": "current-limit",
+      "id": "predicate-helper-retains-bounds",
+      "status": "accepted",
       "source": "open import \"blot:prelude\"\nlet in_bounds = fn (index, length) => index >= 0 && index < length\nlet at = fn (values, index) => do:\n  if in_bounds (index, @array.len values):\n    return #Some (@array.get values index)\n  return #None\nreturn at ([10, 20], 1)\n",
-      "code": "BLOT_UNPROVEN_INDEX"
+      "display": "#Some 20"
     },
     {
       "id": "unresolved-expression-hole",

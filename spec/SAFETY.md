@@ -117,6 +117,38 @@ out of it. This local min-plus elimination preserves every live difference fact
 without materializing paths among unrelated nodes. The ordinary term and edge
 budgets still bound the resulting context.
 
+### 3.1 Bounded predicate-helper evidence
+
+The production analysis may expand a known nonrecursive, strict closure at a
+Boolean test. The expansion input consists of its actual source module, body,
+lexical environment, and a mapping from parameter patterns to caller `Term`
+identities and array-length witnesses. Captured integers are exact literals;
+parameter names mask captured bindings. No summary cache substitutes body or
+runtime-type equality for environment evidence.
+
+The accepted expression fragment is recognized comparisons and Boolean
+combinations, empty declaration blocks, ordinary parameter projection, direct
+aggregate arguments, and forwarding to another known helper. Comparisons and
+junctions use the existing checked implementation recognizer; helper spelling
+has no authority. Conjunction contributes positive facts from both operands;
+disjunction contributes negative facts from both operands; negation exchanges
+positive and negative facts. Other branch directions contribute no new facts
+unless separately proved. Existing demand and source typing remain premises.
+
+One expansion has 128 traversal steps shared by argument projection and helper
+visits. An unsupported value, body, capture, or exhausted traversal returns no
+facts. This bounds the new traversal rather than claiming that the complete
+checker or recognizer is bounded by 128 operations. Recursive helpers, local
+statement declarations, general affine arithmetic rewriting, and
+runtime-selected callbacks are not given a guessed summary.
+
+The resulting inequalities refer to the original caller identities and enter
+`Phi` only on the corresponding branch. Existing rebinding invalidation,
+array-index certificate generation, and independent replay apply unchanged. No
+representation layout, observed sample output, stale strict bound, or
+unsupported helper can discharge a direct access premise. The certificate format
+and runtime ABI do not change.
+
 ## 4. Total and proof-required operations
 
 A total array access performs the source bounds decision and returns the

@@ -3334,10 +3334,9 @@ fallback would either discard an owned element or encode an optional element as
 an unconstrained array.
 
 ```blot
-let at :: [Int] -> Int -> Int
-let at = fn xs => fn n => if n >= 0 && n < @array.len xs:
-  return @array.get xs n
-else:
+let at = fn (xs, n) => do:
+  if n >= 0 && n < @array.len xs:
+    return @array.get xs n
   return 0
 ```
 
@@ -3373,11 +3372,41 @@ else:
 ```
 
 It does not become part of `[T]` or attach to an unstable value identity. It may
-cross an ordinary function result only through the verified structural package
-transform described in §9.2; an arbitrary call publishes no relationship. A `:=`
-to a different value invalidates facts about the previous value. These cases
-fail closed with `BLOT_UNPROVEN_INDEX` rather than leaving a possible runtime
-trap.
+cross an ordinary function result through the verified structural package
+transform described in §9.2. A known Boolean helper may also retain caller
+bounds through the bounded predicate expansion below; an arbitrary Boolean call
+still publishes no relationship. A `:=` to a different value invalidates facts
+about the previous value. These cases fail closed with `BLOT_UNPROVEN_INDEX`
+rather than leaving a possible runtime trap.
+
+A known, pure helper can express the same bounds check without repeating it at
+the caller:
+
+```blot
+const in_bounds = fn (index, length) => index >= 0 && index < length
+let at = fn (values, index) => do:
+  if in_bounds (index, @array.len values):
+    return #Some (@array.get values index)
+  return #None
+```
+
+The compiler expands a restricted predicate body against its actual lexical
+environment and the caller's immutable terms. It supports known nonrecursive
+closures, direct tuple/record argument patterns, strict curried parameters,
+recognized comparisons, conjunction, disjunction, negation, and forwarding to
+another supported helper. Integer captures retain their exact values. Imports
+and validated source-free capsules use the same Rust analysis. A callback that
+shadows an environment binding cannot inherit that binding's proof.
+
+Expansion has 128 steps shared across argument projection and helper traversal.
+Exhaustion or an unsupported body contributes no facts; it does not make the
+predicate true or grant unchecked indexing. This is not an arbitrary Boolean
+summary or a type-level theorem language. Local declarations, recursive helpers,
+runtime-selected predicates, general arithmetic transformations, and projection
+through an already-bound aggregate argument are outside this implementation. A
+following increment still requires a fresh bound: `i < length` does not prove
+`i + 1 < length`. Existing array-index certificates and replay remain mandatory;
+no proof or predicate object crosses the runtime ABI.
 
 For iteration, `Iter.items xs` yields each value and `Iter.indexed xs` yields
 `(index, value)`. Both perform one total termination test per iteration, so a
@@ -3970,3 +3999,16 @@ This module receives its authority through `init`, explicitly opens the prelude,
 constructs types as values, uses `for` as a fold with an inferred accumulator,
 declares a host effect as its interface, and returns a concrete record suitable
 for staging and WebAssembly lowering.
+
+## Hosted tooling boundary
+
+The Node scalar host adapter consumes the versioned ABI 2.0 manifest and emitted
+Wasm; it does not introduce source types or reinterpret effect rows. It exposes
+scalar parameters, copied canonical results, and an exact map of synchronous
+unrestricted scalar host operations. Missing/extra capabilities, Promise
+results, reentrant calls, and sidecar/embedded manifest disagreement are
+refused. Its limited input marshalling does not narrow the compiler's broader
+ABI support. See `docs/hosted-applications.md` for the adapter contract and its
+explicit non-sandbox and non-suspending boundaries. `blot pack` uses the
+existing package semantics, and `blot explain` displays existing Rust compiler
+facts; neither adds an alternative semantic compiler.

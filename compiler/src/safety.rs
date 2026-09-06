@@ -1,3 +1,6 @@
+#[path = "predicate_summary.rs"]
+mod predicate_summary;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use num_bigint::BigInt;
@@ -530,9 +533,18 @@ impl Analysis<'_> {
                 None => {}
             }
         }
-        if arguments.len() != 2 {
-            return (Vec::new(), Vec::new());
+        if arguments.len() == 1 && recognise::negation(self.context, &callee_value) {
+            let (taken, untaken) = self.comparison_constraints(arguments[0], scope);
+            return (untaken, taken);
         }
+        if arguments.len() != 2 {
+            return predicate_summary::constraints(self, &callee_value, &arguments, scope)
+                .unwrap_or_default();
+        }
+        let Some(orderings) = recognise::comparison(self.context, &callee_value) else {
+            return predicate_summary::constraints(self, &callee_value, &arguments, scope)
+                .unwrap_or_default();
+        };
         let left_witness = self.witness(arguments[0], scope);
         let right_witness = self.witness(arguments[1], scope);
         if left_witness.is_none() && right_witness.is_none() {
@@ -547,9 +559,6 @@ impl Analysis<'_> {
             return (Vec::new(), Vec::new());
         };
         let Some(right) = self.term(arguments[1], scope) else {
-            return (Vec::new(), Vec::new());
-        };
-        let Some(orderings) = recognise::comparison(self.context, &callee_value) else {
             return (Vec::new(), Vec::new());
         };
         let answers = (

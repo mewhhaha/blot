@@ -14,7 +14,7 @@ Reviewed main: `4ca2337bbef0ad8662d9fdc1f76840db6f26427c`.
 ordinary function application unary. Make product representation a uniform
 backend contract, not a favor granted to destructured function parameters.**
 
-Here, *inline* means that the product itself does not require a separate heap
+Here, _inline_ means that the product itself does not require a separate heap
 object in the direct internal representation. It does not mean function
 inlining, a promise of machine registers, or that evaluating its fields is free.
 The motivating intent is a cheap inline aggregate rather than a heap-backed
@@ -22,8 +22,8 @@ collection.
 
 The current implementation is closer to this model than its terminology makes
 apparent. Calling `(a, b)` a tuple does not, by itself, introduce an allocation.
-The useful distinction is **product versus collection**, not **tuple versus
-fast argument pack**.
+The useful distinction is **product versus collection**, not **tuple versus fast
+argument pack**.
 
 ## Overall assessment
 
@@ -31,9 +31,8 @@ The architectural direction is worth preserving. There is one semantic compiler
 in Rust/Wasm, one Baba syntax contract, unary application, structural products,
 ordinary type values, and ownership analysis separate from algebraic subtyping.
 The rule that surface conveniences elaborate into existing forms is especially
-valuable: a convenient spelling need not introduce another runtime concept.
-See [AGENTS.md](../AGENTS.md) and the
-[compiler specification](../spec/COMPILER.md).
+valuable: a convenient spelling need not introduce another runtime concept. See
+[AGENTS.md](../AGENTS.md) and the [compiler specification](../spec/COMPILER.md).
 
 The weakness is the explanation connecting those layers. A reader must currently
 assemble the aggregate model from the language reference, examples, Runtime HIR,
@@ -64,14 +63,14 @@ A tuple is an ordinary value: it can be bound, projected, returned, nested, and
 matched. [`examples/data.blot`](../examples/data.blot) explicitly rejects a
 stored-tuple versus transient-pack distinction.
 
-Square brackets already have a different, definite meaning: a homogeneous
-array. Homogeneous means one element constraint for every position; it does not
-require every element to have the same singleton type. An array can have a union
-element type. In a type-value expression, `[Int, Text]` computes `[Int | Text]`,
-not a two-field product. Array length is not encoded in that type.
+Square brackets already have a different, definite meaning: a homogeneous array.
+Homogeneous means one element constraint for every position; it does not require
+every element to have the same singleton type. An array can have a union element
+type. In a type-value expression, `[Int, Text]` computes `[Int | Text]`, not a
+two-field product. Array length is not encoded in that type.
 
-[`LANGUAGE.md` section 6.3](../LANGUAGE.md#63-functions-and-application)
-defines one parameter pattern per lambda. Thus:
+[`LANGUAGE.md` section 6.3](../LANGUAGE.md#63-functions-and-application) defines
+one parameter pattern per lambda. Thus:
 
 ```blot
 let subtract = fn pair => pair.0 - pair.1
@@ -115,16 +114,16 @@ layout(Indirect(T))       = [i32 pointer]
 ```
 
 This is a description of target representation, not a new source type system.
-See [Runtime HIR](../spec/RUNTIME.md) for the complete relation and admissibility
-rules. The evaluator's own `Value::Shape` bookkeeping in
+See [Runtime HIR](../spec/RUNTIME.md) for the complete relation and
+admissibility rules. The evaluator's own `Value::Shape` bookkeeping in
 [`compiler/src/value.rs`](../compiler/src/value.rs) is not evidence of a tuple
 allocation in the generated program.
 
 ### Storage and boundary costs still exist
 
 Products do not eliminate the costs of their components. Constructing text or a
-nonempty dynamic array may allocate; copying many flattened fields takes work;
-a Wasm engine may spill locals. Recursive representations and some runtime
+nonempty dynamic array may allocate; copying many flattened fields takes work; a
+Wasm engine may spill locals. Recursive representations and some runtime
 closure-choice captures require explicit indirection. A simple known capture in
 the test does not establish that every escaping closure is allocation-free.
 
@@ -134,8 +133,8 @@ at this source occurrence": the empty array is allocation-free and closed
 literals can be pooled.
 
 The public ABI is another real boundary. ABI 2 flattens parameters but uses
-canonical indirect result storage where its result-lowering rules require it.
-An internal tuple result can therefore be inline even when exporting that value
+canonical indirect result storage where its result-lowering rules require it. An
+internal tuple result can therefore be inline even when exporting that value
 requires a caller-facing result buffer. That buffer is not evidence that tuples
 have different source meanings in parameter and result positions. Preserve
 [`docs/abi.md`](abi.md); do not change ABI bytes or signatures under the name of
@@ -162,15 +161,14 @@ real storage boundary requires indirection, name that boundary and its cost.
 
 For demanded strict expressions, members still evaluate in source order and
 function position before its argument. Flattening must preserve traps, effects,
-and ownership transfers; it is not permission to drop a field computation
-merely because its final value is not projected. Ownership of a product follows
-its fields. Calling it inline must never imply that a linear field becomes
-copyable.
+and ownership transfers; it is not permission to drop a field computation merely
+because its final value is not projected. Ownership of a product follows its
+fields. Calling it inline must never imply that a linear field becomes copyable.
 
-Conversions should be ordinary, explicit computations. For example, converting
-a homogeneous pair to an array constructs `[pair.0, pair.1]`. Do not silently
-convert an array into a tuple because a callee happens to use a tuple pattern.
-A pair of differently typed values belongs in a product; an array of such pairs
+Conversions should be ordinary, explicit computations. For example, converting a
+homogeneous pair to an array constructs `[pair.0, pair.1]`. Do not silently
+convert an array into a tuple because a callee happens to use a tuple pattern. A
+pair of differently typed values belongs in a product; an array of such pairs
 can still have one homogeneous product element type.
 
 ### Why not restore two tuple-like syntaxes?
@@ -194,10 +192,10 @@ representation honestly.
 
 ## What this PR establishes
 
-[`src/node/inline_products.test.ts`](../src/node/inline_products.test.ts) uses the
-real Rust/Wasm compiler and host-supplied runtime arguments. It exercises direct
-and named tuple parameters, a bound alias, nested tuple/record values, both
-branches of a product choice, a known closure capture, a recursive helper
+[`src/node/inline_products.test.ts`](../src/node/inline_products.test.ts) uses
+the real Rust/Wasm compiler and host-supplied runtime arguments. It exercises
+direct and named tuple parameters, a bound alias, nested tuple/record values,
+both branches of a product choice, a known closure capture, a recursive helper
 returning a product, and a mixed `F64`/`Int` product.
 
 The HIR assertions require a residual direct call and an internal product
@@ -209,9 +207,9 @@ The generated Wasm must return the expected scalars without modifying or growing
 linear memory. The test fills memory with a sentinel and compares its bytes
 after each call: page-count-only checks would miss transient allocations whose
 heap cursor is restored at the export boundary. Scalar public results keep
-canonical indirect-result buffers outside this test's claim. Two rejection
-cases separately pin that arrays and tuples do not implicitly substitute for
-one another.
+canonical indirect-result buffers outside this test's claim. Two rejection cases
+separately pin that arrays and tuples do not implicitly substitute for one
+another.
 
 These are focused regression observations, not a timing benchmark, a proof of
 zero machine instructions, or an allocation claim about arbitrary closures,
