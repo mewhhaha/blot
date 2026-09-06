@@ -1,0 +1,40 @@
+// Check both restored values and which split path ran. A split that always
+// fails must not pass merely because failure also returns the original array.
+open import "blot:prelude"
+
+// After freezing, append a path marker: 1 = joined, 2 = inner bounds failure,
+// 3 = outer bounds failure. This observation is separate from the round trip.
+let round_trip = fn (values, outer_at, inner_at) => do:
+  let store = Slice.copy values
+  return case Slice.split ((!store), outer_at) of
+    #Split (!left, !right, !outer) => case Slice.split ((!right), inner_at) of
+        #Split (!middle, !last, !inner) => do:
+          let right = Slice.join ((!inner), (!middle), (!last))
+          let whole = Slice.join ((!outer), (!left), (!right))
+          return @array.push (Slice.freeze (!whole)) 1
+
+        #SplitOutOfBounds !right_original => do:
+          let whole = Slice.join ((!outer), (!left), (!right_original))
+          return @array.push (Slice.freeze (!whole)) 2
+
+    #SplitOutOfBounds !original => @array.push (Slice.freeze (!original)) 3
+
+// For length three: outer cuts 0..3 and all cuts of the right child (ten pairs).
+// Then two invalid outer cuts, two invalid inner cuts, and the empty array.
+return [
+  round_trip ([10, 20, 30], 0, 0),
+  round_trip ([10, 20, 30], 0, 1),
+  round_trip ([10, 20, 30], 0, 2),
+  round_trip ([10, 20, 30], 0, 3),
+  round_trip ([10, 20, 30], 1, 0),
+  round_trip ([10, 20, 30], 1, 1),
+  round_trip ([10, 20, 30], 1, 2),
+  round_trip ([10, 20, 30], 2, 0),
+  round_trip ([10, 20, 30], 2, 1),
+  round_trip ([10, 20, 30], 3, 0),
+  round_trip ([10, 20, 30], -1, 0),
+  round_trip ([10, 20, 30], 4, 0),
+  round_trip ([10, 20, 30], 1, -1),
+  round_trip ([10, 20, 30], 1, 3),
+  round_trip ([], 0, 0)
+]

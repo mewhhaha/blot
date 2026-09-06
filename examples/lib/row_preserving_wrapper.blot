@@ -1,0 +1,13 @@
+// This module cannot name Clock or Meter: the callback row stays abstract.
+open import "blot:prelude"
+
+const Console = @effect { .write = Text -> Unit; }
+
+let apply_logged ::
+  (Int -> Int ~ { ..e }) ->
+  Int -> Int ~ { Console, ..e }
+let apply_logged = fn transform => fn value => do:
+  use Console.write "call"
+  return transform (transform value)
+
+return { .Console = Console; .apply_logged = apply_logged; }

@@ -1,0 +1,65 @@
+// The same imported signature is instantiated with two unrelated effect rows
+// and then an empty row. Closed signatures catch leakage between those uses.
+open import "blot:prelude"
+
+const Logged = import "./lib/row_preserving_wrapper.blot"
+const Console = Logged.Console
+const Clock = @effect { .now = Unit -> Int; }
+const Meter = @effect { .read = Unit -> Int; }
+
+let clock_program :: Unit -> Int ~ { Console, Clock }
+let clock_program = fn () => Logged.apply_logged (fn n => do:
+  use tick <- Clock.now ()
+  return n + tick
+) 40
+
+let meter_program :: Unit -> Int ~ { Console, Meter }
+let meter_program = fn () => Logged.apply_logged (fn n => do:
+  use amount <- Meter.read ()
+  return n + amount
+) 40
+
+let pure_program :: Unit -> Int ~ { Console }
+let pure_program = fn () => Logged.apply_logged (fn n => n + 1) 40
+
+let fake_console =
+  {
+    .write = fn (_, ?resume) => do:
+      use result <- resume ()
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+let fake_clock =
+  {
+    .now = fn ((), ?resume) => do:
+      use result <- resume 1
+      return result
+    ;
+  }
+
+let fake_meter =
+  {
+    .read = fn ((), ?resume) => do:
+      use result <- resume 2
+      return result
+    ;
+  }
+
+let clock_handled =
+  clock_program
+    |> @handle (Console, fake_console)
+    |> @handle (Clock, fake_clock)
+let meter_handled =
+  meter_program
+    |> @handle (Console, fake_console)
+    |> @handle (Meter, fake_meter)
+let pure_handled = pure_program |> @handle (Console, fake_console)
+
+use clock_answer <- clock_handled
+use meter_answer <- meter_handled
+use pure_answer <- pure_handled
+
+// Results for the Clock, Meter, and pure instantiations, respectively.
+return [clock_answer, meter_answer, pure_answer]

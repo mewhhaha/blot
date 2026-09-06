@@ -823,6 +823,45 @@ surrounding target. Its branches are values, so an indented branch may contain
 statements; a return in that block supplies the branch, and therefore the
 expression, rather than escaping farther.
 
+### 4.9 One control discipline
+
+`for` with `break`, `return`, `use`, and `@handle` steps compose through
+existing computation forms rather than adding a second control mechanism. Their
+elaborations differ: loop and return tags are eliminated by `case`, `use`
+sequences a computation, and a handler step saturates an ordinary `@handle`
+call.
+
+- `for` becomes `rec`/`case` recursion over its iterator with the rebound names
+  threaded through as the accumulator record (§9). No loop node reaches
+  inference, ownership, evaluation, or the backend.
+- `break` carries the accumulator out of the nearest `for` as a tagged result
+  eliminated by a `case` at the loop boundary (§9.1).
+- `return` carries its value through the repeated body to the nearest enclosing
+  module or explicit `do` scope, where a `case` eliminates the tag (§4.8).
+- `use pattern <- expression` sequences the already applied expression exactly
+  once and binds its result (§4.5). It is the only declaration form that admits
+  an effectful expression.
+- A two-argument `@handle (effect, handler)` step saturates to the ordinary
+  three-argument call around the computation on its left (§12.2).
+
+Loop control and handler-step syntax do not require new downstream forms.
+Inference, ownership, evaluation, and the backend use ordinary recursion,
+records, variants, and `case`, together with the existing computation sequencing
+and effect-handling rules. There is no second application rule or loop node;
+this does not erase ordinary effects or their handler semantics.
+
+The value-conditional scope rule bounds this discipline. An expression `if` or
+`case` introduces a result scope whose `case` eliminates only that scope's tag,
+so `break` cannot cross it and `return` supplies the branch value rather than
+escaping farther.
+
+`examples/control_transformers.blot` compares the observable results of a loop
+with `break` and a `rec`/`case` fold, an early `return` and a `case`, and a
+handler step and its saturated `@handle` call. The handler also counts requests
+to check that the sequenced operation runs once. These are executable
+regressions, not a proof of equivalence for every program or a literal dump of
+the lowered AST.
+
 ## 5. Patterns
 
 Patterns occur in bindings, lambda parameters, case arms, `for` binders, module
@@ -1373,6 +1412,13 @@ without an outlineable interface may remain staged at a known application until
 their concrete arguments resolve the operations. This does not create a runtime
 dictionary, bypass checking, or permit an unresolved recursive or development
 boundary to be emitted.
+
+A module's fixity header maps each operator form and spelling to one precedence
+and one target, with an associativity for infix entries. Prefix and infix forms
+are distinct: the standard `-` is prefix `Op.negate` and infix `Op.sub`.
+Overriding a standard entry replaces that form's entry; declaring the same form
+and spelling twice is refused before any expression is folded.
+`examples/operators.blot` declares its own spelling against the standard header.
 
 ## 8. Conditional control flow
 
@@ -2651,6 +2697,17 @@ remains the `Slice` itself; an invalid range performs no Store access and
 returns the unchanged authority. This keeps the helpers in ordinary prelude
 source rather than adding another `@region` primitive.
 
+Split, join, and freeze compose into round trips. Matching witnesses restore
+parent authority when nested splits are rejoined. With no intervening element
+updates, freezing the restored root yields the original array. Split and join
+copy no elements; the initial `Slice.copy` retains its separately specified
+acquisition semantics. `examples/region_round_trip.blot` checks all ten
+two-level split positions of a three-element array, empty regions, and invalid
+positions. Its result markers distinguish successful joins from bounds failures,
+so rejecting every split cannot accidentally satisfy the golden result. The
+value checks do not themselves measure Store allocation or prove arbitrary-depth
+correctness.
+
 ### 11.4 Owned ordered text maps
 
 `OrderedTextMap` is an ordinary prelude adapter over `Slice`, not a second
@@ -2933,6 +2990,15 @@ Reflection (§10.4) describes an arrow's `.domain`, `.codomain`, and `.effects`,
 but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
 Open row tails remain type-checking evidence and do not add a runtime value,
 Runtime-HIR representation, or ABI field.
+
+Instantiating a tail-carrying scheme freshens its row variable, preserving the
+callback's effects without granting the wrapper authority to name or handle
+those identities. `examples/row_preserving_wrapper.blot` imports a wrapper that
+adds `Console` from a module that does not name either callback effect. Separate
+uses supply `Clock`, `Meter`, and a pure callback, with closed signatures
+checking that the instantiated rows do not leak into one another. The caller
+discharges the named effects using their respective handlers; one handler does
+not discharge an entire row.
 
 ## 13. Primitive namespace
 

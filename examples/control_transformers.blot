@@ -1,0 +1,76 @@
+// Surface control elaborates to ordinary recursion and cases. Each pair below
+// compares observable results, not a literal lowered AST or a general proof:
+// a loop with `break` next to its `rec`/`case` fold, a
+// `do` block with early `return` next to its `case` equivalent, and a handler
+// step next to its saturated `@handle` call.
+
+open import "blot:prelude"
+
+// A loop is a fold: the names rebound with `:=` are the accumulator, and
+// `break` carries that accumulator out of the nearest `for`.
+let loop_sum = 0
+for value in Iter.range (0, 5):
+  loop_sum := loop_sum + value
+  if value >= 3:
+    break
+
+// The same fold written as ordinary recursion over the same iterator. The
+// explicit `rec` threads the accumulator and stops on the same condition.
+let source = Iter.range (0, 5)
+let rec walk = fn (state, carried) => case source.step state of
+  #None => carried
+  #Some pair => case pair.0 >= 3 of
+      #True => carried + pair.0
+      #False => walk (pair.1, carried + pair.0)
+
+let folded_sum = walk (source.state, 0)
+
+// Early `return` exits the nearest `do` with a tagged result the boundary
+// eliminates; the `case` below decides the same value directly.
+let describe = fn total => do:
+  if total >= 6:
+    return "reached"
+
+  return "short"
+
+let choose = fn total => case total >= 6 of
+  #True => "reached"
+  #False => "short"
+
+// A handler step is a computation transformer awaiting its computation: piping
+// saturates it to the ordinary three-argument `@handle` call.
+const Bump = @effect { .add = Int -> Int; }
+
+let program = fn () => do:
+  use doubled <- Bump.add 5
+  return doubled + 1
+
+// The handler returns (answer, request count). Duplicating the `use` request
+// would change the count even if it did not change the answer.
+let adding =
+  {
+    .add = fn (value, ?resume) => do:
+      use rest <- resume (value + 10)
+      return (rest.0, rest.1 + 1)
+    ;
+    .return = fn value => (value, 0);
+  }
+
+let via_step = program |> @handle (Bump, adding)
+let called = @handle (Bump, program, adding)
+use stepped <- via_step
+
+// Numeric observations keep one runtime export and a common display in both
+// executions: sums; the two reached cases; the two short cases; then each
+// handler's (answer, request count).
+let observed = fn condition => case condition of
+  #True => 1
+  #False => 0
+
+return [
+  [loop_sum, folded_sum],
+  [observed (describe loop_sum == "reached"), observed (choose loop_sum == "reached")],
+  [observed (describe 0 == "short"), observed (choose 0 == "short")],
+  [stepped.0, stepped.1],
+  [called.0, called.1]
+]

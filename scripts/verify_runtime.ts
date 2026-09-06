@@ -3,6 +3,9 @@ import { runArtifact } from "../src/node/run.ts";
 
 const cases = [
   "examples/minimal.blot",
+  "examples/control_transformers.blot",
+  "examples/row_preserving_wrapper.blot",
+  "examples/region_round_trip.blot",
   "examples/owned_quicksort.blot",
   "examples/owned_merge_sort.blot",
   "examples/owned_radix_sort_stable.blot",
