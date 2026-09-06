@@ -89,3 +89,12 @@ Baba remains the only lexer/parser. Rust/Wasm remains the semantic authority.
 Ownership remains separate from the type lattice. The main prelude snapshot and
 runtime ABI are unchanged. Reflection does not obtain authority from a field
 name alone; unresolved completion markers never discharge obligations.
+
+## Aggregate and call coherence
+
+The [aggregate coherence review](docs/aggregate-coherence.md) examines tuples,
+arrays, unary calls, and their representation costs. It proposes retaining one
+inline product model rather than introducing transient argument packs, and adds
+focused compiler regressions. It is a proposal, not a replacement for
+`LANGUAGE.md`; its validation provenance and remaining boundary tests are
+explicitly recorded in the review.
