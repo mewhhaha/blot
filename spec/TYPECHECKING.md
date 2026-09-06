@@ -1021,7 +1021,11 @@ authority rather than duplicating it:
   same `..e` identity is reused at each occurrence in that signature header, and
   lowering refuses a tail with fewer than two occurrences before ordinary
   inference. Open effect rows are erased before Runtime HIR and do not alter
-  record subtyping.
+  record subtyping. Instantiating a tail-carrying scheme freshens its row
+  variable at each use, so effects the defining module never names still reach
+  the use site as row evidence and are discharged by the handlers applied there:
+  a wrapper adds its own named effects without learning the tail's contents, and
+  handling the instantiated row discharges both together.
 
 The second theory bounce tightens one implementation consequence. An array
 projection identity includes its parent identity, so rebinding a record

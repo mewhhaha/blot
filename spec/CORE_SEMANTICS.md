@@ -280,6 +280,25 @@ Handling an atom absent from `epsilon_c` is valid. Operation clauses are
 unreachable for that computation, while the return clause may still transform
 the normal result.
 
+### 8.1 Surface control elaborates to handle, bind, and case
+
+Surface control reaches the Core judgment through elaboration, not through new
+Core forms:
+
+- `for` over an iterator becomes recursion with the accumulator threaded as an
+  argument, decided by `case` on each step result;
+- `break` and `return` become `return` of a boundary-tagged variant eliminated
+  by `case` at the nearest loop, `do`, or module boundary;
+- `use x <- c` becomes `bind x <- c`, sequencing the already applied computation
+  exactly once;
+- a two-argument `@handle` step becomes `handle ell c with h` around the
+  computation on its left.
+
+Elaboration respects the value-conditional scope rule: an expression `if` or
+`case` introduces a result scope whose elimination covers only that scope, so a
+loop tag cannot be produced inside it and a scope tag produced inside it cannot
+escape it.
+
 ## 9. One-shot continuations
 
 A captured continuation can be consumed at most once. Ownership assigns its
@@ -350,8 +369,9 @@ This boundary owes:
 6. generative ordinary-effect identity;
 7. subtraction-based handler rows;
 8. one-shot continuation use and explicit cancellation;
-9. preservation and one-step progress; and
-10. maximal-execution classification including divergence.
+9. preservation and one-step progress;
+10. maximal-execution classification including divergence; and
+11. surface control elaboration into recursion, bind, handle, and case.
 
 Maintained regressions should distinguish:
 
@@ -361,6 +381,8 @@ Maintained regressions should distinguish:
 - nested imports under different parent instances;
 - re-performing a handled effect from discharging it;
 - handling an absent effect with a transforming return clause;
+- a surface loop with `break` from its `rec`/`case` fold, and a handler step
+  from its saturated call;
 - empty-row calls that return, trap, and diverge; and
 - a consuming use in live code from the same syntax inside a dead declaration.
 

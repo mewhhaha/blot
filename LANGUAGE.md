@@ -823,6 +823,40 @@ surrounding target. Its branches are values, so an indented branch may contain
 statements; a return in that block supplies the branch, and therefore the
 expression, rather than escaping farther.
 
+### 4.9 One control discipline
+
+`for` with `break`, `return`, `use`, and `@handle` steps are one discipline:
+surface computation transformers eliminated during CST lowering by an ordinary
+`case` at a statically known boundary.
+
+- `for` becomes `rec`/`case` recursion over its iterator with the rebound names
+  threaded through as the accumulator record (§9). No loop node reaches
+  inference, ownership, evaluation, or the backend.
+- `break` carries the accumulator out of the nearest `for` as a tagged result
+  eliminated by a `case` at the loop boundary (§9.1).
+- `return` carries its value through the repeated body to the nearest enclosing
+  module or explicit `do` scope, where a `case` eliminates the tag (§4.8).
+- `use pattern <- expression` sequences the already applied expression exactly
+  once and binds its result (§4.5). It is the only declaration form that admits
+  an effectful expression.
+- A two-argument `@handle (effect, handler)` step saturates to the ordinary
+  three-argument call around the computation on its left (§12.2).
+
+Nothing downstream of lowering knows these conveniences existed. Inference,
+ownership, evaluation, and the backend see only functions, records, variants,
+and `case`: there is no second application rule, no loop node, and no ambient
+control stack.
+
+The value-conditional scope rule bounds this discipline. An expression `if` or
+`case` introduces a result scope whose `case` eliminates only that scope's tag,
+so `break` cannot cross it and `return` supplies the branch value rather than
+escaping farther.
+
+`examples/control_transformers.blot` evaluates each surface form next to the
+shape it elaborates to: a loop with `break` next to its `rec`/`case` fold, a
+`do` block with early `return` next to its `case` equivalent, and a handler step
+next to its saturated `@handle` call. Each pair agrees.
+
 ## 5. Patterns
 
 Patterns occur in bindings, lambda parameters, case arms, `for` binders, module
@@ -1373,6 +1407,12 @@ without an outlineable interface may remain staged at a known application until
 their concrete arguments resolve the operations. This does not create a runtime
 dictionary, bypass checking, or permit an unresolved recursive or development
 boundary to be emitted.
+
+A module's fixity header is its operator dictionary: one spelling carries one
+associativity, one precedence, and one target. Overriding a standard entry
+replaces that row; two targets never merge under one spelling, and declaring the
+same form and spelling twice is refused before any expression is folded.
+`examples/operators.blot` declares its own spelling against the standard header.
 
 ## 8. Conditional control flow
 
@@ -2651,6 +2691,12 @@ remains the `Slice` itself; an invalid range performs no Store access and
 returns the unchanged authority. This keeps the helpers in ordinary prelude
 source rather than adding another `@region` primitive.
 
+Split, join, and freeze compose into round trips. Witnesses thread parent
+authority through arbitrary nesting, so rejoining every split restores the exact
+parent and a complete root freezes back to the array the phase started from — no
+element Store is copied along the way. `examples/region_round_trip.blot` is the
+catalog entry.
+
 ### 11.4 Owned ordered text maps
 
 `OrderedTextMap` is an ordinary prelude adapter over `Slice`, not a second
@@ -2933,6 +2979,14 @@ Reflection (§10.4) describes an arrow's `.domain`, `.codomain`, and `.effects`,
 but an effect itself reflects as `#Opaque` — nothing in Blot takes one apart.
 Open row tails remain type-checking evidence and do not add a runtime value,
 Runtime-HIR representation, or ABI field.
+
+Each use of a tail-carrying signature freshens its row variable, so the tail
+preserves whatever the argument actually performs — including effects the
+wrapper never names and cannot construct or handle. Discharging happens where
+the wrapper is applied and handled, not where it is defined: a wrapper adding
+`Console` around a `Clock`-performing callback is handled once for both, with
+neither side naming the other's effect. `examples/row_preserving_wrapper.blot`
+is the catalog entry.
 
 ## 13. Primitive namespace
 

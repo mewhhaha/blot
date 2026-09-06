@@ -1,0 +1,47 @@
+// A wrapper preserves effects it cannot name. The `..e` tail carries the rest
+// of the callback's row through the signature: the wrapper adds `Console`
+// while the callback performs `Clock`, and neither names the other's effect.
+
+open import "blot:prelude"
+
+const Console = @effect { .write = Text -> Unit; }
+const Clock = @effect { .now = Unit -> Int; }
+
+let apply_logged ::
+  (Int -> Int ~ { ..e }) ->
+  Int -> Int ~ { Console, ..e }
+let apply_logged = fn transform => fn value => do:
+  use Console.write "call"
+  return transform (transform value)
+
+let program :: Unit -> Int ~ { Console, Clock }
+let program = fn () => apply_logged (fn n => do:
+  use tick <- Clock.now ()
+  return n + tick
+) 40
+
+let fake_console =
+  {
+    .write = fn (_, ?resume) => do:
+      use result <- resume ()
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+let fake_clock =
+  {
+    .now = fn ((), ?resume) => do:
+      use result <- resume 1
+      return result
+    ;
+  }
+
+let handled =
+  program
+    |> @handle (Console, fake_console)
+    |> @handle (Clock, fake_clock)
+
+use answer <- handled
+
+return answer

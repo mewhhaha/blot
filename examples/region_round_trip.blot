@@ -1,0 +1,21 @@
+// One region discipline across split shapes. Splitting at every boundary and
+// rejoining through the witnesses restores the parent authority exactly, so a
+// complete root freezes back to the array it started from.
+
+open import "blot:prelude"
+
+let store = Slice.copy [10, 20, 30]
+let round_tripped = case Slice.split ((!store), 1) of
+  #Split (!left, !right, !outer) => case Slice.split ((!right), 1) of
+      #Split (!middle, !last, !inner) => do:
+        let right = Slice.join ((!inner), (!middle), (!last))
+        let whole = Slice.join ((!outer), (!left), (!right))
+        return Slice.freeze (!whole)
+
+      #SplitOutOfBounds !right_original => do:
+        let whole = Slice.join ((!outer), (!left), (!right_original))
+        return Slice.freeze (!whole)
+
+  #SplitOutOfBounds !original => Slice.freeze (!original)
+
+return round_tripped
