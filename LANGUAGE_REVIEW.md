@@ -19,11 +19,23 @@ restrictions; unfinished compiler work is separate from this library change.
 - [x] Correct stale explanatory claims in `docs/inference.md`; document module
       contracts and limitations in `docs/language-review-extensions.md`.
 
+## Compiler follow-up
+
+The environment-sensitive residual sharing repair is described in
+[`docs/theory-review-2026-09.md`](docs/theory-review-2026-09.md). Its normative
+contracts are in `LANGUAGE.md`, `spec/STAGING.md` section 8.1, and
+`spec/COMPILER.md` section 9. Mandatory regressions cover static and mixed
+captures, runtime capture positions, transitive environments, and recursion.
+This does not broaden the restricted derivation API or complete the other
+roadmap items below. The validation history below belongs to the original library
+review; the compiler follow-up has its own pull-request checks.
+
 ## Working, restricted prototypes
 
 - [x] Checked scalar field evidence and a nonempty integer-product encoder in
       `blot:derive`. Unsupported ownership shapes are refused. Deferred getters
-      avoid a reproduced static-capture specialization bug; they do not fix it.
+      remain as a conservative library boundary; the general compiler repair is
+      now separate from that workaround.
 - [x] Baba-based expression markers and a bounded completion validator using the
       real Rust/Wasm checker. All markers must be replaced before checking. This
       is not native typed-hole inference, obligation display, or a sandbox.
@@ -32,8 +44,8 @@ restrictions; unfinished compiler work is separate from this library change.
 
 - [ ] Stable operator owner identity, coherent selection across phases/imports,
       and an explicit generic-operation defaulting contract.
-- [ ] Fix static-capture-sensitive residual function sharing before generalizing
-      derivation to unrestricted runtime getter closures.
+- [x] Fix static-capture-sensitive residual function sharing, including dynamic
+      capture-slot correspondence. Generalizing derivation remains separate.
 - [ ] Checked predicate summaries surviving abstraction, proof-loss diagnostics,
       and overflow-safe affine relations with loop-invariant acceptance tests.
 - [ ] Baba-only numeric separators, exponent notation, and radix literals;
@@ -48,11 +60,12 @@ restrictions; unfinished compiler work is separate from this library change.
       record their bounded implementation status in `SUGGESTION.md`.
 - [ ] Complete broader cancellation/host-exit auditing and research evaluations.
 
-The research acceptance criteria and two opt-in failing correctness probes live
-in `experiments/language-review/README.md`. Known wrong output is not made into
-a passing expected-output test.
+The research acceptance criteria and historical opt-in correctness probes live
+in `experiments/language-review/README.md`. The residual-sharing probe is now
+covered by mandatory tests in `src/node/residual_identity.test.ts`. Known wrong
+output is not made into a passing expected-output test.
 
-## Validation
+## Historical library validation
 
 Local validation uses Node 22.16.0 and the actual Rust/Wasm compiler workspace
 published for main commit `bbd33c00275189a45d22ad6c23cb231567d0d583`, with the
