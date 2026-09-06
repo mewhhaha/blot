@@ -3,6 +3,10 @@ use std::rc::Rc;
 
 use serde::Serialize;
 
+#[path = "residual_identity.rs"]
+mod residual_identity;
+use residual_identity::{ResidualEnvironmentKey, residual_environment_key};
+
 use crate::diagnostic::Diagnostic;
 use crate::eval::{
     ApplicationSite, CompilerApplication, Computation, Context, Phase, Runtime, closure_free_names,
@@ -612,6 +616,7 @@ pub(crate) struct ResidualTrace {
 }
 
 struct ResidualFunctionIdentity {
+    environment_key: ResidualEnvironmentKey,
     module: String,
     body: crate::ast::ExpressionId,
     argument_type: usize,
@@ -635,6 +640,7 @@ enum StoreReuseWitness {
 }
 
 struct RecursiveResultIdentity {
+    environment_key: ResidualEnvironmentKey,
     module: String,
     body: crate::ast::ExpressionId,
     argument_type: usize,
@@ -802,6 +808,8 @@ pub(crate) struct ResidualClosure<'a> {
     pub(crate) name: String,
     pub(crate) self_name: Option<&'a str>,
     pub(crate) environment: &'a Environment,
+    pub(crate) module_instances: &'a Rc<crate::eval::ModuleInstanceScope>,
+    pub(crate) effect_scope: &'a Rc<crate::eval::EffectScope>,
     pub(crate) signature: Option<&'a Value>,
     pub(crate) reuse: bool,
     pub(crate) root_application: bool,
@@ -4044,6 +4052,8 @@ impl ResidualTrace {
             name,
             self_name,
             environment,
+            module_instances,
+            effect_scope,
             signature,
             reuse,
             root_application,
@@ -4079,6 +4089,17 @@ impl ResidualTrace {
         {
             return Ok(ResidualFunctionCall::Static);
         }
+        let Some(environment_key) = residual_environment_key(
+            context,
+            lexical_closure,
+            &captures,
+            module_instances,
+            effect_scope,
+            reuse,
+        )?
+        else {
+            return Ok(ResidualFunctionCall::Static);
+        };
         let mut signature = signature;
         while let Some(Value::Forall { body, .. }) = signature {
             signature = Some(body);
@@ -4286,7 +4307,8 @@ impl ResidualTrace {
                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
             {
                 if let Some(identity) = self.recursive_result_ids.iter().find(|identity| {
-                    identity.module == module
+                    identity.environment_key == environment_key
+                        && identity.module == module
                         && identity.body == body
                         && identity.argument_type == caller_argument.type_id
                         && identity.argument_reuse == argument_reuse
@@ -4303,6 +4325,7 @@ impl ResidualTrace {
                         self.insert_type(&key, RuntimeType::Indirect { target_type: 0 });
                     self.pending_recursive_types.insert(result_type);
                     self.recursive_result_ids.push(RecursiveResultIdentity {
+                        environment_key: environment_key.clone(),
                         module: module.to_owned(),
                         body,
                         argument_type: caller_argument.type_id,
@@ -4327,7 +4350,8 @@ impl ResidualTrace {
             .function_ids
             .iter()
             .find(|identity| {
-                identity.module == module
+                identity.environment_key == environment_key
+                    && identity.module == module
                     && identity.body == body
                     && identity.argument_type == caller_argument.type_id
                     && identity.argument_reuse == argument_reuse
@@ -4363,6 +4387,7 @@ impl ResidualTrace {
         let function = self.next_function;
         self.next_function += 1;
         self.function_ids.push(ResidualFunctionIdentity {
+            environment_key,
             module: module.to_owned(),
             body,
             argument_type: caller_argument.type_id,
