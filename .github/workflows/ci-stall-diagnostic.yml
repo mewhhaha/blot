@@ -1,0 +1,73 @@
+name: CI stall diagnostic
+on:
+  push:
+    branches:
+      - maintenance/ci-stall-107-20260906
+permissions:
+  contents: read
+concurrency:
+  group: ci-stall-diagnostic
+  cancel-in-progress: true
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 36c8d482f2f514b9187e22e81801671cba4182fe
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - run: pnpm install --frozen-lockfile
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Build frozen source and test executable
+        run: |
+          set -euo pipefail
+          pnpm compiler:build
+          cargo test --manifest-path compiler/Cargo.toml --no-run
+      - name: Collect portable development inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostic/tools
+          git archive HEAD | tar -x -C diagnostic
+          git bundle create diagnostic/repository.bundle refs/remotes/origin/main refs/remotes/origin/repair/qcore-negative-fixture-20260906
+          cp -a node_modules .pnp.cjs diagnostic/
+          cp generated/compiler/compiler.wasm generated/compiler/compiler-artifact.json diagnostic/generated/compiler/
+          cargo vendor --locked --manifest-path compiler/Cargo.toml diagnostic/vendor > diagnostic/vendor-config.toml
+          cp "$(command -v deno)" diagnostic/tools/deno
+          toolchain="$(rustc --print sysroot)"
+          mkdir diagnostic/rust
+          cp -a "$toolchain/bin" "$toolchain/lib" diagnostic/rust/
+          rm -rf diagnostic/rust/lib/rustlib/src diagnostic/rust/lib/rustlib/*/codegen-backends/*.pdb
+          git rev-parse HEAD > diagnostic/SOURCE_COMMIT
+          tar -czf diagnostic-inputs.tar.gz -C diagnostic .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-stall-development-inputs
+          path: diagnostic-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+      - name: Bound the diagnostic native run without ignoring any tests
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 180s cargo test --manifest-path compiler/Cargo.toml -- --nocapture --test-threads=4 2>&1 | tee native-diagnostic.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-stall-native-log
+          path: native-diagnostic.log
+          if-no-files-found: warn
+          retention-days: 3
