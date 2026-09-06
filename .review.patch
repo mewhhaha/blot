@@ -194,9 +194,9 @@ diff --git a/spec/STAGING.md b/spec/STAGING.md
 index 72fe6d8..1820f61 100644
 --- a/spec/STAGING.md
 +++ b/spec/STAGING.md
-@@ -245,6 +245,53 @@ has no general thunk value merely because the source used a deferred parameter.
- An unresolved deferred closure that escapes known application is a stated target
- refusal, not an implicit new ABI object.
+@@ -255,6 +255,53 @@ or a development boundary does not receive this fallback: outlining it still
+ requires the corresponding settled interface. A present but malformed interface
+ is not treated as a missing one.
  
 +### 8.1 Residual code sharing is an environment judgment
 +

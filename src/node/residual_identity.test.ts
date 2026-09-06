@@ -80,7 +80,7 @@ let run = fn number => do:
 
 test("static and dynamic captures are independently accounted for", async () => {
   await agrees(
-    `const make = fn name => fn bias => fn value => @shape.get value name + bias
+    `const make = fn name => fn bias => fn value => @int.add (@shape.get value name) bias
 let run :: Int -> Int
 let run = fn number => do:
   let left = make "left" number
@@ -93,7 +93,7 @@ let run = fn number => do:
 
 test("same-typed runtime capture permutations retain their meaning", async () => {
   await agrees(
-    `const make = fn left => fn right => fn ignored => left - right
+    `const make = fn left => fn right => fn ignored => @int.sub left right
 let run :: Int -> Int
 let run = fn number => do:
   let next = number + 1
@@ -121,7 +121,7 @@ let run = fn number => left number + right number`,
   );
 });
 
-test("repeated calls in one static environment remain reusable", async () => {
+test("repeated calls preserve corresponding runtime arguments", async () => {
   await agrees(
     `const make = fn name => fn value => @shape.get value name
 const left = make "left"
