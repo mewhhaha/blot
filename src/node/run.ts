@@ -195,7 +195,8 @@ function readMemory(
   if (type.kind === "text") {
     const pointer = view.getUint32(offset, true);
     const length = view.getUint32(offset + 4, true);
-    return new TextDecoder("utf-8", { fatal: true }).decode(
+    // ABI Text has no encoding signature; retain a leading U+FEFF.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
       new Uint8Array(view.buffer, pointer, length),
     );
   }

@@ -1,5 +1,6 @@
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder("utf-8", { fatal: true });
+// Framed strings have no encoding signature: a leading U+FEFF is data.
+const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Internal length-delimited compiler transport; not a semantic cache. */
 export class BinaryEncoder {
