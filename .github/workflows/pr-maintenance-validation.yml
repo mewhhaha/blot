@@ -1,0 +1,54 @@
+name: PR maintenance validation
+on:
+  push:
+    branches:
+      - maintenance/pr-105-106-validation-20260906
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 4aeb8849873948ac605d90fe238475d0a0d47d92
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Build exact-head compiler and native test executable
+        run: |
+          set -euo pipefail
+          deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
+          cargo test --manifest-path compiler/Cargo.toml --no-run --message-format=json > native-test-build.json
+      - name: Assemble validation snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p maintenance-snapshot/tools maintenance-snapshot/native
+          git archive HEAD | tar -x -C maintenance-snapshot
+          cp generated/compiler/compiler.wasm generated/compiler/compiler-artifact.json maintenance-snapshot/generated/compiler/
+          cp "$(command -v deno)" maintenance-snapshot/tools/deno
+          python3 - <<'PY'
+          import json, shutil
+          for line in open('native-test-build.json'):
+              item = json.loads(line)
+              if item.get('reason') == 'compiler-artifact' and item.get('profile', {}).get('test') and item.get('executable'):
+                  shutil.copy2(item['executable'], 'maintenance-snapshot/native/')
+          PY
+          git bundle create maintenance-snapshot/repository.bundle refs/heads/main refs/remotes/origin/perf/linear-layout-text-search-20260906 refs/remotes/origin/codex/review-implementation-20260906 || git bundle create maintenance-snapshot/repository.bundle --all
+          git rev-parse HEAD > maintenance-snapshot/SOURCE_COMMIT
+          tar -czf maintenance-snapshot.tar.gz -C maintenance-snapshot .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr-maintenance-snapshot
+          path: maintenance-snapshot.tar.gz
+          if-no-files-found: error
+          retention-days: 3
