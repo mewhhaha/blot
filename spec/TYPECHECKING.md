@@ -1023,9 +1023,11 @@ authority rather than duplicating it:
   inference. Open effect rows are erased before Runtime HIR and do not alter
   record subtyping. Instantiating a tail-carrying scheme freshens its row
   variable at each use, so effects the defining module never names still reach
-  the use site as row evidence and are discharged by the handlers applied there:
-  a wrapper adds its own named effects without learning the tail's contents, and
-  handling the instantiated row discharges both together.
+  the use site as row evidence. A wrapper can add a named effect without naming
+  the tail's identities; each handler subtracts its own effect according to the
+  ordinary handler-row rule. The imported wrapper in
+  `examples/row_preserving_wrapper.blot` is instantiated independently with two
+  distinct callback effects and an empty callback row.
 
 The second theory bounce tightens one implementation consequence. An array
 projection identity includes its parent identity, so rebinding a record

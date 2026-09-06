@@ -1,24 +1,26 @@
-// A wrapper preserves effects it cannot name. The `..e` tail carries the rest
-// of the callback's row through the signature: the wrapper adds `Console`
-// while the callback performs `Clock`, and neither names the other's effect.
-
+// The same imported signature is instantiated with two unrelated effect rows
+// and then an empty row. Closed signatures catch leakage between those uses.
 open import "blot:prelude"
 
-const Console = @effect { .write = Text -> Unit; }
+const Logged = import "./lib/row_preserving_wrapper.blot"
+const Console = Logged.Console
 const Clock = @effect { .now = Unit -> Int; }
+const Meter = @effect { .read = Unit -> Int; }
 
-let apply_logged ::
-  (Int -> Int ~ { ..e }) ->
-  Int -> Int ~ { Console, ..e }
-let apply_logged = fn transform => fn value => do:
-  use Console.write "call"
-  return transform (transform value)
-
-let program :: Unit -> Int ~ { Console, Clock }
-let program = fn () => apply_logged (fn n => do:
+let clock_program :: Unit -> Int ~ { Console, Clock }
+let clock_program = fn () => Logged.apply_logged (fn n => do:
   use tick <- Clock.now ()
   return n + tick
 ) 40
+
+let meter_program :: Unit -> Int ~ { Console, Meter }
+let meter_program = fn () => Logged.apply_logged (fn n => do:
+  use amount <- Meter.read ()
+  return n + amount
+) 40
+
+let pure_program :: Unit -> Int ~ { Console }
+let pure_program = fn () => Logged.apply_logged (fn n => n + 1) 40
 
 let fake_console =
   {
@@ -37,11 +39,27 @@ let fake_clock =
     ;
   }
 
-let handled =
-  program
+let fake_meter =
+  {
+    .read = fn ((), ?resume) => do:
+      use result <- resume 2
+      return result
+    ;
+  }
+
+let clock_handled =
+  clock_program
     |> @handle (Console, fake_console)
     |> @handle (Clock, fake_clock)
+let meter_handled =
+  meter_program
+    |> @handle (Console, fake_console)
+    |> @handle (Meter, fake_meter)
+let pure_handled = pure_program |> @handle (Console, fake_console)
 
-use answer <- handled
+use clock_answer <- clock_handled
+use meter_answer <- meter_handled
+use pure_answer <- pure_handled
 
-return answer
+// Results for the Clock, Meter, and pure instantiations, respectively.
+return [clock_answer, meter_answer, pure_answer]

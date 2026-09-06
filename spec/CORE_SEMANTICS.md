@@ -287,17 +287,24 @@ Core forms:
 
 - `for` over an iterator becomes recursion with the accumulator threaded as an
   argument, decided by `case` on each step result;
-- `break` and `return` become `return` of a boundary-tagged variant eliminated
-  by `case` at the nearest loop, `do`, or module boundary;
-- `use x <- c` becomes `bind x <- c`, sequencing the already applied computation
-  exactly once;
+- `break` becomes a boundary-tagged result eliminated at the nearest loop; early
+  `return` carries its tagged value through statement conditionals and loops to
+  the enclosing module or explicit `do` result boundary;
+- `use x <- c` becomes a sequencing `bind`: an already applied computation is
+  not applied again, while a suspended nullary effect value is applied to unit
+  exactly once, as in §2.1;
 - a two-argument `@handle` step becomes `handle ell c with h` around the
   computation on its left.
 
 Elaboration respects the value-conditional scope rule: an expression `if` or
-`case` introduces a result scope whose elimination covers only that scope, so a
-loop tag cannot be produced inside it and a scope tag produced inside it cannot
-escape it.
+`case` introduces a result scope that does not inherit outer control targets. A
+`break` cannot target a loop outside that scope, and a branch `return` supplies
+that expression's result. A loop introduced inside the branch may still have its
+own local `break`.
+
+The catalog comparisons are finite observational regressions. They do not
+establish a general surface-to-Core preservation theorem, nor do they replace
+the existing `bind`, `perform`, and `handle` forms with `case`.
 
 ## 9. One-shot continuations
 

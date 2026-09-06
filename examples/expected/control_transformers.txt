@@ -1,1 +1,1 @@
-{ .loop_sum = 6; .folded_sum = 6; .early = "reached"; .chosen = "reached"; .short_early = "short"; .short_chosen = "short"; .stepped = 16; .called = 16; }
+[[6, 6], [1, 1], [1, 1], [16, 1], [16, 1]]
