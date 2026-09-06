@@ -5,6 +5,9 @@ on:
       - maintenance/pr-105-106-validation-20260906
 permissions:
   contents: write
+concurrency:
+  group: pr-maintenance-validation
+  cancel-in-progress: true
 jobs:
   integration:
     runs-on: ubuntu-latest
@@ -65,7 +68,7 @@ jobs:
         run: node scripts/check_abstractions.mjs
       - name: Test performance regressions and execution conformance
         run: |
-          node --import tsx --test src/node/performance_pathologies.test.ts src/node/v8_target.test.ts
+          node --import tsx --test src/node/performance_pathologies.test.ts src/node/v8_wasm.test.ts
           node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/performance_gate.test.ts
           deno run --allow-read scripts/verify_runtime.ts
       - name: Verify distributable package
