@@ -1,0 +1,250 @@
+diff --git a/LANGUAGE.md b/LANGUAGE.md
+index 3385d64..6098fbd 100644
+--- a/LANGUAGE.md
++++ b/LANGUAGE.md
+@@ -893,6 +893,15 @@ Typed Core retains a live host-effect capability when runtime code refers to it.
+ Other compile-time constants are specialized at their uses; Core never leaves an
+ ordinary variable for a host capability whose definition it removed.
+ 
++A function retains the meaning of its captured bindings across specialization.
++Equal function types do not make differently captured compile-time values
++interchangeable. For example, getters constructed with `"left"` and `"right"`
++must still select different fields when applied to a runtime record. Runtime
++captures likewise retain their binding positions and aliasing even when their
++types are equal. Sharing emitted code is permitted only when corresponding
++arguments and captured environments have the same residual meaning; the order
++in which specializations are encountered cannot change the result.
++
+ ### 6.1 Unit, arrays, tuples, and shapes
+ 
+ `()` is the unit value.
+diff --git a/compiler/src/eval.rs b/compiler/src/eval.rs
+index d89ce84..5f909cd 100644
+--- a/compiler/src/eval.rs
++++ b/compiler/src/eval.rs
+@@ -4470,6 +4470,8 @@ fn apply_with_expected(
+                         name,
+                         self_name: self_name.as_deref(),
+                         environment: &environment,
++                        module_instances: &module_instances,
++                        effect_scope: &creation_scope,
+                         signature: signature.as_deref(),
+                         reuse: reuse_assertion.is_some(),
+                         root_application: matches!(
+diff --git a/compiler/src/hir.rs b/compiler/src/hir.rs
+index 9ca9635..ea526dc 100644
+--- a/compiler/src/hir.rs
++++ b/compiler/src/hir.rs
+@@ -3,6 +3,10 @@ use std::rc::Rc;
+ 
+ use serde::Serialize;
+ 
++#[path = "residual_identity.rs"]
++mod residual_identity;
++use residual_identity::{ResidualEnvironmentKey, residual_environment_key};
++
+ use crate::diagnostic::Diagnostic;
+ use crate::eval::{
+     ApplicationSite, CompilerApplication, Computation, Context, Phase, Runtime, closure_free_names,
+@@ -612,6 +616,7 @@ pub(crate) struct ResidualTrace {
+ }
+ 
+ struct ResidualFunctionIdentity {
++    environment_key: ResidualEnvironmentKey,
+     module: String,
+     body: crate::ast::ExpressionId,
+     argument_type: usize,
+@@ -635,6 +640,7 @@ enum StoreReuseWitness {
+ }
+ 
+ struct RecursiveResultIdentity {
++    environment_key: ResidualEnvironmentKey,
+     module: String,
+     body: crate::ast::ExpressionId,
+     argument_type: usize,
+@@ -802,6 +808,8 @@ pub(crate) struct ResidualClosure<'a> {
+     pub(crate) name: String,
+     pub(crate) self_name: Option<&'a str>,
+     pub(crate) environment: &'a Environment,
++    pub(crate) module_instances: &'a Rc<crate::eval::ModuleInstanceScope>,
++    pub(crate) effect_scope: &'a Rc<crate::eval::EffectScope>,
+     pub(crate) signature: Option<&'a Value>,
+     pub(crate) reuse: bool,
+     pub(crate) root_application: bool,
+@@ -4050,6 +4058,8 @@ impl ResidualTrace {
+             name,
+             self_name,
+             environment,
++            module_instances,
++            effect_scope,
+             signature,
+             reuse,
+             root_application,
+@@ -4085,6 +4095,16 @@ impl ResidualTrace {
+         {
+             return Ok(ResidualFunctionCall::Static);
+         }
++        let Some(environment_key) = residual_environment_key(
++            context,
++            lexical_closure,
++            &captures,
++            module_instances,
++            effect_scope,
++            reuse,
++        )? else {
++            return Ok(ResidualFunctionCall::Static);
++        };
+         let mut signature = signature;
+         while let Some(Value::Forall { body, .. }) = signature {
+             signature = Some(body);
+@@ -4285,7 +4305,8 @@ impl ResidualTrace {
+                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
+             {
+                 if let Some(identity) = self.recursive_result_ids.iter().find(|identity| {
+-                    identity.module == module
++                    identity.environment_key == environment_key
++                        && identity.module == module
+                         && identity.body == body
+                         && identity.argument_type == caller_argument.type_id
+                         && identity.argument_reuse == argument_reuse
+@@ -4302,6 +4323,7 @@ impl ResidualTrace {
+                         self.insert_type(&key, RuntimeType::Indirect { target_type: 0 });
+                     self.pending_recursive_types.insert(result_type);
+                     self.recursive_result_ids.push(RecursiveResultIdentity {
++                        environment_key: environment_key.clone(),
+                         module: module.to_owned(),
+                         body,
+                         argument_type: caller_argument.type_id,
+@@ -4326,7 +4348,8 @@ impl ResidualTrace {
+             .function_ids
+             .iter()
+             .find(|identity| {
+-                identity.module == module
++                identity.environment_key == environment_key
++                    && identity.module == module
+                     && identity.body == body
+                     && identity.argument_type == caller_argument.type_id
+                     && identity.argument_reuse == argument_reuse
+@@ -4362,6 +4385,7 @@ impl ResidualTrace {
+         let function = self.next_function;
+         self.next_function += 1;
+         self.function_ids.push(ResidualFunctionIdentity {
++            environment_key,
+             module: module.to_owned(),
+             body,
+             argument_type: caller_argument.type_id,
+diff --git a/experiments/language-review/README.md b/experiments/language-review/README.md
+index 6caf842..b859e3e 100644
+--- a/experiments/language-review/README.md
++++ b/experiments/language-review/README.md
+@@ -7,8 +7,9 @@ baseline examined is `bbd33c00275189a45d22ad6c23cb231567d0d583`.
+ ## Reproduced compiler issues
+ 
+ Run the opt-in probes with `node --import tsx` and the indicated file. They
+-assert the desired semantics and currently fail; they are deliberately not named
+-`.test.ts` and do not redefine wrong output as a regression contract.
++assert the desired semantics and failed on that historical baseline. They are
++not a claim about every subsequent revision. They do not redefine wrong output
++as a regression contract.
+ 
+ `operator_coherence.repro.ts` attaches an alternative `.eq` to raw `@type.int`.
+ The constant comparison emits `false`; the dynamic equivalent returns `1`. The
+@@ -30,8 +31,13 @@ contract, not the behavior delivered by this draft.
+ `compiler/src/hir.rs`: argument/result types and runtime capture types alone do
+ not distinguish different static environments. A correct key must account for
+ relevant transitive static evidence or refuse sharing. The restricted derivation
+-module keeps getters deferred to avoid this case; it does not repair the general
+-specialization cache.
++module keeps getters deferred to avoid this historical case. The compiler repair
++and its current contract are described in `docs/theory-review-2026-09.md` and
++`spec/STAGING.md` section 8.1. Mandatory tests now live in
++`src/node/residual_identity.test.ts`; they also cover reversed encounter order,
++record and transitive captures, mixed static/dynamic captures, runtime capture
++permutations, recursion, and repeated calls. The library workaround is retained;
++this change does not broaden its ownership or derivation contract.
+ 
+ ## Predicate evidence and affine reasoning
+ 
+diff --git a/spec/COMPILER.md b/spec/COMPILER.md
+index 1abfecc..4655aa7 100644
+--- a/spec/COMPILER.md
++++ b/spec/COMPILER.md
+@@ -441,8 +441,18 @@ sibling field.
+ One production preparation builds one residual specialization graph for all
+ runtime function exports. A specialization identity includes its source closure,
+ closed signature, argument and result representations, capture representations,
+-and Store-reuse witness. Equal identities share one function even when reached
+-from different exports. Recursive identities enter the graph before their bodies
++Store-reuse witness, and complete residual environment evidence as specified in
++[`STAGING.md` section 8.1](STAGING.md#81-residual-code-sharing-is-an-environment-judgment).
++The evidence retains transitive static bindings and maps dynamic leaves to their
++actual capture-argument positions, including aliasing and ownership meaning.
++Type vectors alone are not identity evidence. Unsupported state declines sharing
++before argument lowering rather than minting an incomplete key. The same
++environment evidence qualifies recursive result placeholders; result-layout
++settlement cannot cross static environments. This evidence is trace-local, not a
++persistent cache identity or a second type checker.
++
++Equal identities share one function even when reached from different exports.
++Recursive identities enter the graph before their bodies
+ are evaluated. Store authority returned through a recursive aggregate is
+ initially deferred, settled at control-flow joins, and published with the
+ completed identity; a later call must not infer that authority again from the
+diff --git a/spec/STAGING.md b/spec/STAGING.md
+index 72fe6d8..1820f61 100644
+--- a/spec/STAGING.md
++++ b/spec/STAGING.md
+@@ -245,6 +245,53 @@ has no general thunk value merely because the source used a deferred parameter.
+ An unresolved deferred closure that escapes known application is a stated target
+ refusal, not an implicit new ABI object.
+ 
++### 8.1 Residual code sharing is an environment judgment
++
++Representation equality is necessary but not sufficient for sharing a residual
++function. A closure consists of source code and a lexical environment. Two
++closures made from `fn name => fn value => @shape.get value name` have the same
++body and argument/result representations when `name` is `"left"` or `"right"`;
++they do not have the same meaning. Runtime captures also have positions: two
++same-typed captures bound to `left, right` cannot be exchanged merely because
++their capture-type vectors are equal.
++
++For a closure `c`, let `E(c, slots)` be finite environment evidence in which each
++runtime leaf is replaced by its position in the actual capture-argument vector.
++The evidence preserves static values transitively through captured closures,
++lexical type substitutions and signatures, ordered fields, aliasing, runtime
++ownership meaning, and generative creation contexts. The sharing obligation is:
++
++```text
++E(c1, slots1) = E(c2, slots2)
++  and equal source body, closed signature, representations, and reuse witnesses
++  implies equivalent residual bodies under corresponding runtime parameters.
++```
++
++This is a sufficient-condition contract, not a decision procedure for contextual
++equivalence. Different evidence may produce separate functions even when a
++stronger proof could establish equivalence. Closure graph back-references make
++recursive environments finite; caller SSA numbers and environment allocation
++addresses are not semantic components of the key. Addresses may only detect
++visited graph nodes while constructing the trace-local evidence.
++
++The Rust implementation uses exact, tagged structural evidence rather than
++printed values or an unchecked hash. Floating values retain their bits, including
++signed zero and NaN payloads. Captures retain both their runtime type and their
++ownership/reuse meaning. Creation scopes and module-instance stacks retain their
++complete recorded identities. Unsupported mutable authority, deferred demand,
++and continuations yield no reusable environment key: the call remains in the
++existing staging path, subject to its ordinary limits and target policy. This
++decision is made before lowering a call argument, so declining sharing does not
++emit duplicate argument work. It is not a new source rejection or an excuse to
++fall back to a type-only key.
++
++Recursive result placeholders use the same environment evidence as function
++identities. A placeholder for one static environment cannot be settled by a
++branch from another. The evidence is local to one residual trace and is neither
++a serialized cache format nor a source value-equality operation. In particular,
++it does not reuse the separate, first-order compile-time result cache from
++section 4.
++
+ ## 9. Representation closure
+ 
+ Write:
