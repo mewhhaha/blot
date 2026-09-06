@@ -1,9 +1,9 @@
 # Review implementation: scope and evidence
 
-This implementation starts from `55f02bca9c9f8fa15ad162c6a46ccc7dee242cf2`.
-The code-bearing commit is `786732e93812c0eac961084d70a2ef9d7a6741d3`;
-its complete tree `f1cd57f88bae630b0cc87d7a269cdedc5010ae68` matches the
-locally tested source tree. This note adds no source semantics.
+This implementation starts from `55f02bca9c9f8fa15ad162c6a46ccc7dee242cf2`. The
+code-bearing commit is `786732e93812c0eac961084d70a2ef9d7a6741d3`; its complete
+tree `f1cd57f88bae630b0cc87d7a269cdedc5010ae68` matches the locally tested
+source tree. This note adds no source semantics.
 
 ## Implemented
 
@@ -21,14 +21,14 @@ locally tested source tree. This note adds no source semantics.
   preserves source, target, limit, and invariant distinctions.
 - A public synchronous scalar host adapter checks ABI/manifest agreement and
   explicit capability bindings, rejects Promise results and reentrancy, and
-  copies canonical results before post-return cleanup. It deliberately does
-  not implement a suspending guest ABI or an untrusted-code sandbox.
+  copies canonical results before post-return cleanup. It deliberately does not
+  implement a suspending guest ABI or an untrusted-code sandbox.
 - The live-report study now has a loopback browser application with validated
   integer inputs, resident compilation, candidate startup checks, stale
   activation rejection, and last-good-instance retention after failed edits.
 - Release-evidence checking ties a supplied standard CI run, its complete job
-  evidence, and verified compiler bytes to one exact source commit. It is not
-  an authentication mechanism, signed attestation, or automatic publisher.
+  evidence, and verified compiler bytes to one exact source commit. It is not an
+  authentication mechanism, signed attestation, or automatic publisher.
 - The language reference, inference guide, package contract, executable claims,
   and hosted-application documentation describe these implemented boundaries.
 
@@ -36,20 +36,20 @@ locally tested source tree. This note adds no source semantics.
 
 The frozen code tree passed all 95 tests in `scripts/check_abstractions.mjs`.
 Two focused native predicate tests cover ten accepted/rejected source fixtures;
-428 other native tests were filtered out of that focused invocation, not
-claimed to have passed. Rust/Wasm production rebuilding, Rust formatting,
-all-target Clippy with warnings denied, focused strict TypeScript checking,
-formatting/lint checks, seven existing CLI tests, and two deterministic compiler
-performance tests passed. The generated JavaScript package built and its CLI
-ran in plain Node without a TypeScript loader.
+428 other native tests were filtered out of that focused invocation, not claimed
+to have passed. Rust/Wasm production rebuilding, Rust formatting, all-target
+Clippy with warnings denied, focused strict TypeScript checking, formatting/lint
+checks, seven existing CLI tests, and two deterministic compiler performance
+tests passed. The generated JavaScript package built and its CLI ran in plain
+Node without a TypeScript loader.
 
-The local compiler was rebuilt from the actual Rust source with Rust 1.97.1.
-Its compiler-input digest is
-`4b598577bbfb8914c7d1f644c8a8a612f1746e8d6afeb38d54e2901fbe9ac9a1`.
-Its local source-commit metadata predates the final host/documentation edits;
-local results are not substituted for final-head release evidence. The complete
-standard CI and isolated pnpm consumer-package checks must be interpreted at
-the PR revision on which they actually run.
+The local compiler was rebuilt from the actual Rust source with Rust 1.97.1. Its
+compiler-input digest is
+`4b598577bbfb8914c7d1f644c8a8a612f1746e8d6afeb38d54e2901fbe9ac9a1`. Its local
+source-commit metadata predates the final host/documentation edits; local
+results are not substituted for final-head release evidence. The complete
+standard CI and isolated pnpm consumer-package checks must be interpreted at the
+PR revision on which they actually run.
 
 Temporary offline-tool and checksum-verified patch-transport workflows were
 removed from the code-bearing tree. No generated compiler binary or dependency
