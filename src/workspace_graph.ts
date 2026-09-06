@@ -5,7 +5,6 @@ import {
   load,
   type Loaded,
   type LoadedStorage,
-  loadSource,
   refreshLoadedModules,
   type SourceInspector,
 } from "./load.ts";
@@ -149,7 +148,7 @@ export class WorkspaceGraph {
     );
     staged.overlays.delete(absolute);
     staged.dirty.add(absolute);
-    await this.#invalidateKnownChanges(new Set([absolute]), staged);
+    this.#invalidateKnownChanges(new Set([absolute]), staged);
     const loaded: Loaded[] = [];
     for (const root of affectedRoots) {
       loaded.push(await this.#loadCurrent(root, staged));
@@ -239,26 +238,20 @@ export class WorkspaceGraph {
     state: WorkspaceState,
   ): Promise<Loaded> {
     const refreshPackageImports = state.packageRefreshRoots.has(path);
-    const cached = state.loaded.get(path);
-    const overlay = state.overlays.get(path);
-    let loaded: Loaded;
-    if (cached === undefined && overlay !== undefined) {
-      loaded = await loadSource(
-        path,
+    const sourceOverrides = new Map(
+      [...state.overlays].map(([overlayPath, overlay]) => [
+        overlayPath,
         overlay.source,
-        state.loaded,
-        this.#inspect,
-        refreshPackageImports,
-      );
-    } else {
-      loaded = await load(
-        path,
-        state.loaded,
-        [],
-        this.#inspect,
-        refreshPackageImports,
-      );
-    }
+      ]),
+    );
+    const loaded = await load(
+      path,
+      state.loaded,
+      [],
+      this.#inspect,
+      refreshPackageImports,
+      sourceOverrides,
+    );
     state.packageRefreshRoots.delete(path);
     return loaded;
   }
@@ -272,7 +265,7 @@ export class WorkspaceGraph {
       return await this.#loadCurrent(path, state);
     }
 
-    await this.#invalidateKnownChanges(changedInputs, state);
+    this.#invalidateKnownChanges(changedInputs, state);
     const loaded = await this.#loadCurrent(path, state);
     for (const changed of changedInputs) {
       state.dirty.delete(changed);
@@ -280,27 +273,14 @@ export class WorkspaceGraph {
     return loaded;
   }
 
-  async #invalidateKnownChanges(
+  #invalidateKnownChanges(
     changedInputs: ReadonlySet<string>,
     state: WorkspaceState,
-  ): Promise<void> {
+  ): void {
     // Consuming the file dirty set for one root must not hide a resolution
     // change from another open root. Each clears its own pending refresh.
     state.packageRefreshRoots = new Set(state.roots);
-    const invalidatedModules = invalidateLoadedInputs(
-      state.loaded,
-      changedInputs,
-    );
-    for (const modulePath of invalidatedModules) {
-      const overlay = state.overlays.get(modulePath);
-      if (overlay === undefined) continue;
-      await loadSource(
-        modulePath,
-        overlay.source,
-        state.loaded,
-        this.#inspect,
-      );
-    }
+    invalidateLoadedInputs(state.loaded, changedInputs);
   }
 
   #stage(): WorkspaceState {

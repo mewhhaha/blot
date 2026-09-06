@@ -1,0 +1,6 @@
+// Both report views import this module. The label is an independently watched
+// input; an unsaved weight edit must remain authoritative when the label changes.
+const raw = fn source => source.text
+const label = @include "./label.txt" raw
+
+return { .label = label; .weight = 2; }

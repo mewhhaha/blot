@@ -1,0 +1,5 @@
+const config = import "./config.blot"
+
+// Only quantity is required. Callers can carry unrelated fields without a
+// signature that prematurely closes the record's row.
+return fn item => @int.mul item.quantity config.weight

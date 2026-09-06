@@ -238,22 +238,38 @@ export async function refreshLoadedModules(
   }
 
   const changedInputs = new Set<string>();
-  await Promise.all([...inputs].map(async ([path, input]) => {
-    try {
-      if (await readFile(path, "utf8") !== input.source) {
-        changedInputs.add(path);
+  // A wide graph must not open one descriptor per module at once. Share the
+  // iterator between a bounded number of workers, and drain in-flight reads
+  // before propagating a failure or committing invalidation.
+  const pending = inputs.entries();
+  let failure: Error | undefined;
+  const workers = Array.from(
+    { length: Math.min(16, inputs.size) },
+    async () => {
+      for (const [path, input] of pending) {
+        if (failure !== undefined) return;
+        try {
+          if (await readFile(path, "utf8") !== input.source) {
+            changedInputs.add(path);
+          }
+        } catch (error) {
+          if (isNotFound(error)) {
+            changedInputs.add(path);
+            continue;
+          }
+          if (failure === undefined) {
+            failure = new Error(
+              `could not refresh ${input.description} ${JSON.stringify(path)}`,
+              { cause: error },
+            );
+          }
+          return;
+        }
       }
-    } catch (error) {
-      if (isNotFound(error)) {
-        changedInputs.add(path);
-        return;
-      }
-      throw new Error(
-        `could not refresh ${input.description} ${JSON.stringify(path)}`,
-        { cause: error },
-      );
-    }
-  }));
+    },
+  );
+  await Promise.all(workers);
+  if (failure !== undefined) throw failure;
   invalidateLoadedInputs(cache, changedInputs);
 }
 
@@ -283,6 +299,11 @@ export function invalidateLoadedInputs(
   return invalidatedModules;
 }
 
+interface LoadOperation {
+  readonly sourceOverrides: ReadonlyMap<string, string>;
+  readonly rebound: Map<string, Loaded>;
+}
+
 /**
  * Load a graph, optionally re-resolving cached package edges after input changes.
  * Unchanged resolutions retain their immutable loaded-node and AST identities.
@@ -294,6 +315,28 @@ export async function load(
   active: readonly string[] = [],
   inspect?: SourceInspector,
   refreshPackageImports = false,
+  sourceOverrides: ReadonlyMap<string, string> = new Map(),
+): Promise<Loaded> {
+  // A completed-node memo belongs to this traversal, not the resident cache:
+  // another request must observe changed edges, inputs, and editor revisions.
+  const operation: LoadOperation = { sourceOverrides, rebound: new Map() };
+  return await loadRevision(
+    path,
+    cache,
+    active,
+    inspect,
+    refreshPackageImports,
+    operation,
+  );
+}
+
+async function loadRevision(
+  path: string,
+  cache: Map<string, Loaded>,
+  active: readonly string[],
+  inspect: SourceInspector | undefined,
+  refreshPackageImports: boolean,
+  operation: LoadOperation,
 ): Promise<Loaded> {
   const absolute = resolve(path);
   const cycleStart = active.indexOf(absolute);
@@ -305,16 +348,28 @@ export async function load(
       span: { start: 0, end: 0 },
     });
   }
+  // Check the active path before the memo so a shared subgraph never hides
+  // an import cycle. Only fully rebound nodes enter the operation memo.
+  const completed = operation.rebound.get(absolute);
+  if (completed !== undefined) return completed;
   const nextActive = [...active, absolute];
   const cached = cache.get(absolute);
-  if (cached !== undefined) {
-    return await rebindLoadedDependencies(
+  const sourceOverride = operation.sourceOverrides.get(absolute);
+  if (
+    cached !== undefined &&
+    (cached.storage.tag !== "source" || sourceOverride === undefined ||
+      cached.source === sourceOverride)
+  ) {
+    const rebound = await rebindLoadedDependencies(
       cached,
       cache,
       nextActive,
       inspect,
       refreshPackageImports,
+      operation,
     );
+    operation.rebound.set(absolute, rebound);
+    return rebound;
   }
 
   if (absolute.endsWith(".blotc")) {
@@ -324,10 +379,12 @@ export async function load(
       active,
       inspect,
       refreshPackageImports,
+      operation,
     );
   }
 
-  const source = await readFile(absolute, "utf8");
+  let source = sourceOverride;
+  if (source === undefined) source = await readFile(absolute, "utf8");
   return await loadSourceRevision(
     absolute,
     source,
@@ -336,6 +393,7 @@ export async function load(
     false,
     inspect,
     refreshPackageImports,
+    operation,
   );
 }
 
@@ -345,6 +403,7 @@ async function rebindLoadedDependencies(
   active: readonly string[],
   inspect: SourceInspector | undefined,
   refreshPackageImports: boolean,
+  operation: LoadOperation,
 ): Promise<Loaded> {
   let changed = false;
   const dependencies = new Map<string, Loaded>();
@@ -365,23 +424,16 @@ async function rebindLoadedDependencies(
         active,
         inspect,
         refreshPackageImports,
+        operation,
       );
     } else {
-      const cycleStart = active.indexOf(dependency.path);
-      if (cycleStart >= 0) {
-        const cycle = [...active.slice(cycleStart), dependency.path];
-        throw new BlotError({
-          code: "BLOT_IMPORT_CYCLE",
-          message: `Import cycle: ${cycle.join(" -> ")}.`,
-          span: { start: 0, end: 0 },
-        });
-      }
-      dependency = await rebindLoadedDependencies(
-        dependency,
+      dependency = await loadRevision(
+        dependency.path,
         cache,
-        [...active, dependency.path],
+        active,
         inspect,
         refreshPackageImports,
+        operation,
       );
     }
     dependencies.set(specifier, dependency);
@@ -414,8 +466,10 @@ export async function loadSource(
   cache: Map<string, Loaded> = new Map(),
   inspect?: SourceInspector,
   refreshPackageImports = false,
+  sourceOverrides: ReadonlyMap<string, string> = new Map(),
 ): Promise<Loaded> {
   const absolute = resolve(path);
+  const operation: LoadOperation = { sourceOverrides, rebound: new Map() };
   return await loadSourceRevision(
     absolute,
     source,
@@ -424,6 +478,7 @@ export async function loadSource(
     false,
     inspect,
     refreshPackageImports,
+    operation,
   );
 }
 
@@ -444,6 +499,7 @@ export async function loadUncheckedSource(
     true,
     undefined,
     false,
+    { sourceOverrides: new Map(), rebound: new Map() },
   );
 }
 
@@ -455,6 +511,7 @@ async function loadSourceRevision(
   skipSourceValidation: boolean,
   inspect: SourceInspector | undefined,
   refreshPackageImports: boolean,
+  operation: LoadOperation,
 ): Promise<Loaded> {
   const parsed = skipSourceValidation
     ? await parseConcrete(source)
@@ -508,6 +565,7 @@ async function loadSourceRevision(
       active,
       inspect,
       refreshPackageImports,
+      operation,
     );
     dependencies.set(specifier, dependency);
   }
@@ -557,6 +615,7 @@ async function loadSourceRevision(
   };
 
   cache.set(absolute, loaded);
+  operation.rebound.set(absolute, loaded);
   return loaded;
 }
 
@@ -567,37 +626,41 @@ async function loadImport(
   active: readonly string[],
   inspect: SourceInspector | undefined,
   refreshPackageImports: boolean,
+  operation: LoadOperation,
 ): Promise<Loaded> {
   if (!isPackageSpecifier(specifier)) {
-    return await load(
+    return await loadRevision(
       resolvePath(specifier, importer),
       cache,
       active,
       inspect,
       refreshPackageImports,
+      operation,
     );
   }
   const exported = await resolvePackageExport(specifier, importer);
   if (exported.built !== undefined) {
     try {
-      return await load(
+      return await loadRevision(
         exported.built,
         cache,
         active,
         inspect,
         refreshPackageImports,
+        operation,
       );
     } catch (error) {
       if (!(error instanceof PackageArtifactError)) throw error;
     }
   }
   try {
-    return await load(
+    return await loadRevision(
       exported.source,
       cache,
       active,
       inspect,
       refreshPackageImports,
+      operation,
     );
   } catch (cause) {
     if (!(isNotFound(cause))) throw cause;
@@ -618,6 +681,7 @@ async function loadModuleCapsule(
   active: readonly string[],
   inspect: SourceInspector | undefined,
   refreshPackageImports: boolean,
+  operation: LoadOperation,
 ): Promise<Loaded> {
   let source: string;
   try {
@@ -684,6 +748,7 @@ async function loadModuleCapsule(
           [...active, path],
           inspect,
           refreshPackageImports,
+          operation,
         );
       }
       dependencies.set(imported.specifier, dependency);
@@ -705,10 +770,12 @@ async function loadModuleCapsule(
     };
     loadedByIdentifier.set(identifier, loaded);
     cache.set(modulePath, loaded);
+    operation.rebound.set(modulePath, loaded);
     return loaded;
   };
   const root = await build(capsule.root, []);
   cache.set(path, root);
+  operation.rebound.set(path, root);
   return root;
 }
 

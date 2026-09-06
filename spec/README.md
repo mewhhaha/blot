@@ -50,6 +50,7 @@ semantics.
 | [`docs/wasm-target-profile.md`](../docs/wasm-target-profile.md) | Operational V8/Wasm 3 feature profile and engine matrix                |
 | [`CORRECTNESS.md`](CORRECTNESS.md)                              | Pass adequacy and the whole-compiler correctness obligation            |
 | [`INCREMENTAL.md`](INCREMENTAL.md)                              | Revision identity, invalidation, and certified cache reuse             |
+| [`WORKSPACE_GRAPH.md`](WORKSPACE_GRAPH.md)                      | Effective editor revisions, host traversal, and bounded refresh work |
 | [`PACKAGES.md`](PACKAGES.md)                                    | Package resolution, portable module capsules, and source fallback      |
 | [`COST_MODEL.md`](COST_MODEL.md)                                | Work model, benchmark boundaries, and optimization acceptance          |
 

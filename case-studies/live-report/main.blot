@@ -1,0 +1,18 @@
+const score = import "./score.blot"
+const heading = import "./heading.blot"
+
+let item = { .name = "widgets"; .quantity = 21; .sku = "W-21"; }
+
+// The public scalar ABI is explicit; the two library views remain inferred.
+let runtime_score :: @type.int -> @type.int
+let runtime_score = fn quantity => score {
+  .quantity = quantity;
+  .sku = "runtime";
+}
+
+return {
+  .heading = heading item;
+  // Keep quantity as a runtime input: checking constants alone would not
+  // exercise the imported function's inferred requirement or residual call.
+  .score = runtime_score;
+}

@@ -1,0 +1,11 @@
+// Independent projections remain polymorphic across differently shaped rows.
+// The explicit result record selects a view; it does not promise to preserve
+// fields such as bin and priority that the view never returns.
+const quantity = fn row => row.quantity
+const label = fn row => row.label
+const view = fn row => { .label = label row; .quantity = quantity row; }
+
+let bolts = view { .label = "bolts"; .quantity = 6; .bin = "A"; }
+let washers = view { .label = "washers"; .quantity = 7; .priority = #Urgent; }
+
+return @int.mul bolts.quantity washers.quantity
