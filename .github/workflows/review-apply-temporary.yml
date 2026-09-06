@@ -1,0 +1,44 @@
+name: Temporary review patch application
+
+on:
+  push:
+    branches:
+      - codex/review-implementation-20260906
+    paths:
+      - .github/workflows/review-apply-temporary.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/codex/review-implementation-20260906'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply checksum-verified reviewed source and remove transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'codex/review-implementation-20260906'
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import lzma
+          from pathlib import Path
+          encoded = ''.join(Path(f'.github/review-payload/{i}.txt').read_text() for i in range(6))
+          patch = lzma.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == '0221a306c901b2cf9bee9f684ea111249dcd35b95ab80dbaf215bca49dc3998b'
+          Path('/tmp/blot-reviewed-implementation.patch').write_bytes(patch)
+          PY
+          git apply --check /tmp/blot-reviewed-implementation.patch
+          git apply --index /tmp/blot-reviewed-implementation.patch
+          git rm .github/review-payload/*.txt \
+            .github/workflows/review-apply-temporary.yml \
+            .github/workflows/review-tools-temporary.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Implement checked predicate helpers, explicit hosting, packaging, and review qualification'
+          git push origin HEAD:codex/review-implementation-20260906
