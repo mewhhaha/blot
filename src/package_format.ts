@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "@std/path";
+import { dirname, isAbsolute, resolve } from "@std/path";
+import { relativeWithinRoot } from "./host_paths.ts";
 import { compareCodeUnits } from "./text_order.ts";
 import {
   decodePortableModule,
@@ -617,11 +618,7 @@ function confinedTarget(
     );
   }
   const absolute = resolve(packageRoot, target);
-  const pathFromRoot = relative(packageRoot, absolute);
-  if (
-    pathFromRoot === ".." || pathFromRoot.startsWith("../") ||
-    pathFromRoot.startsWith("..\\")
-  ) {
+  if (relativeWithinRoot(packageRoot, absolute) === null) {
     throw new PackageArtifactError(
       `export ${JSON.stringify(exportName)} in ${
         JSON.stringify(manifestPath)

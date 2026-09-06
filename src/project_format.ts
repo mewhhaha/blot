@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "@std/path";
+import { dirname, isAbsolute, resolve } from "@std/path";
+import { relativeWithinRoot } from "./host_paths.ts";
 
 export const PROJECT_SCHEMA = "blot-project";
 export const PROJECT_FORMAT_VERSION = 1;
@@ -174,11 +175,7 @@ function confinedSource(
     );
   }
   const source = resolve(projectRoot, target);
-  const fromRoot = relative(projectRoot, source);
-  if (
-    fromRoot === ".." || fromRoot.startsWith(`..${separator(fromRoot)}`) ||
-    isAbsolute(fromRoot)
-  ) {
+  if (relativeWithinRoot(projectRoot, source) === null) {
     throw new ProjectManifestError(
       `unit ${JSON.stringify(unit)} in ${
         JSON.stringify(manifestPath)
@@ -186,11 +183,6 @@ function confinedSource(
     );
   }
   return source;
-}
-
-function separator(path: string): string {
-  if (path.includes("\\")) return "\\";
-  return "/";
 }
 
 function record(value: unknown, location: string): Record<string, unknown> {

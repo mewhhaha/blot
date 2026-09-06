@@ -45,6 +45,12 @@ meaning. A bare specifier selects `.`; a package subpath selects the
 corresponding `./subpath` export. Export targets are relative paths confined to
 the package directory.
 
+Confinement is lexical and uses the host path rules after resolving the target:
+a parent-relative result or a result on another Windows drive or UNC share is
+outside the root. A prefix match on the root's spelling is not sufficient.
+Project unit roots use this same check. It does not resolve symlinks and is not
+a filesystem sandbox; filesystem permissions remain the host's responsibility.
+
 Package names, subpaths, and the portion of an export key after `./` consist of
 nonempty `/`-separated segments. A segment cannot be `.` or `..` and cannot
 contain a backslash or NUL. A scoped name requires a nonempty scope after `@`
@@ -74,6 +80,11 @@ host semantic pass. An absolute import, or a relative import that escapes the
 package, is rejected rather than capturing an accidental build-machine path.
 External package edges remain logical so the consumer's package installation can
 share them and select their versions normally.
+
+Package-owned module names use `/` for actual host path separators. Literal
+backslashes in POSIX filenames remain literal: `nested/main.blot` and
+`nested\main.blot` must not collapse to one capsule module name. This rule is
+about physical source paths, not the stricter package specifier segments above.
 
 Loading validates the schema, compression, canonical hash, arena references,
 spans, graph acyclicity, import uniqueness, include uniqueness, and agreement
