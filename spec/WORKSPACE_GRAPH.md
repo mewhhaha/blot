@@ -29,9 +29,9 @@ node for every importer in that operation. Unchanged importer source retains its
 AST identity when only its dependency wrappers change.
 
 A full input refresh bounds concurrent filesystem reads independently of the
-number of modules and includes. The implementation currently permits at most
-16 reads from one refresh operation. Changed or missing inputs are collected
-before invalidation. Unexpected read errors drain in-flight work and fail before
+number of modules and includes. The implementation currently permits at most 16
+reads from one refresh operation. Changed or missing inputs are collected before
+invalidation. Unexpected read errors drain in-flight work and fail before
 publishing invalidation; they are host failures, not evidence of source-language
 rejection. This bound does not reserve descriptors against other host activity.
 
@@ -42,4 +42,3 @@ are outside its timed boundary. Raw wall-clock samples are observations;
 deterministic expansion counts are the regression gate. One expansion per node
 does not bound active-path scan/copy cost, source-resolution cost, or semantic
 inference work. Its fixture identities never authorize semantic cache reuse.
-

@@ -20,7 +20,8 @@ for (const argument of process.argv.slice(2)) {
   }
 }
 if (
-  depths.length === 0 || depths.some((depth) =>
+  depths.length === 0 ||
+  depths.some((depth) =>
     !Number.isSafeInteger(depth) || depth < 1 || depth > 32
   )
 ) {
@@ -30,10 +31,12 @@ if (!Number.isSafeInteger(samples) || samples < 1 || samples % 2 === 0) {
   throw new RangeError("--samples must be a positive odd integer");
 }
 
-const manifest = JSON.parse(await readFile(
-  new URL("../../generated/compiler/compiler-artifact.json", import.meta.url),
-  "utf8",
-));
+const manifest = JSON.parse(
+  await readFile(
+    new URL("../../generated/compiler/compiler-artifact.json", import.meta.url),
+    "utf8",
+  ),
+);
 const results = [];
 for (const depth of depths) {
   const directory = await mkdtemp(join(tmpdir(), "blot-diamond-bench-"));
@@ -76,13 +79,17 @@ for (const depth of depths) {
     await rm(directory, { recursive: true, force: true });
   }
 }
-console.log(JSON.stringify({
-  schema: "blot-workspace-graph-benchmark-v1",
-  boundary:
-    "retained host dependency traversal; excludes filesystem, parsing, checking and emission",
-  node: process.version,
-  compilerSourceCommit: manifest.sourceCommit,
-  compilerSha256: manifest.sha256,
-  samples,
-  results,
-}, null, 2));
+console.log(JSON.stringify(
+  {
+    schema: "blot-workspace-graph-benchmark-v1",
+    boundary:
+      "retained host dependency traversal; excludes filesystem, parsing, checking and emission",
+    node: process.version,
+    compilerSourceCommit: manifest.sourceCommit,
+    compilerSha256: manifest.sha256,
+    samples,
+    results,
+  },
+  null,
+  2,
+));

@@ -26,12 +26,15 @@ async function withManifest(
 }
 
 async function projectSource(path: string, target: string): Promise<string> {
-  await writeFile(path, JSON.stringify({
-    schema: "blot-project",
-    version: PROJECT_FORMAT_VERSION,
-    entryUnit: "main",
-    units: { main: target },
-  }));
+  await writeFile(
+    path,
+    JSON.stringify({
+      schema: "blot-project",
+      version: PROJECT_FORMAT_VERSION,
+      entryUnit: "main",
+      units: { main: target },
+    }),
+  );
   const manifest = await readProjectManifest(path);
   const source = manifest.units.get(manifest.entryUnit);
   assert.ok(source !== undefined);
@@ -43,11 +46,14 @@ async function packageTargets(
   source: string,
   built = "./dist/main.blotc",
 ): Promise<{ readonly source: string; readonly built?: string }> {
-  await writeFile(path, JSON.stringify({
-    schema: "blot-package",
-    version: PACKAGE_FORMAT_VERSION,
-    exports: { ".": { source, built } },
-  }));
+  await writeFile(
+    path,
+    JSON.stringify({
+      schema: "blot-package",
+      version: PACKAGE_FORMAT_VERSION,
+      exports: { ".": { source, built } },
+    }),
+  );
   const manifest = await readPackageManifest(path);
   const exported = manifest.exports.get(".");
   assert.ok(exported !== undefined);
@@ -137,12 +143,15 @@ test("absolute manifest targets remain rejected even inside the root", async () 
 
 test("normalized project aliases still count as repeated roots", async () => {
   await withManifest(async (path) => {
-    await writeFile(path, JSON.stringify({
-      schema: "blot-project",
-      version: PROJECT_FORMAT_VERSION,
-      entryUnit: "main",
-      units: { main: "./main.blot", alias: "./src/../main.blot" },
-    }));
+    await writeFile(
+      path,
+      JSON.stringify({
+        schema: "blot-project",
+        version: PROJECT_FORMAT_VERSION,
+        entryUnit: "main",
+        units: { main: "./main.blot", alias: "./src/../main.blot" },
+      }),
+    );
     await assert.rejects(() => readProjectManifest(path), {
       name: "ProjectManifestError",
       message: /repeat source/,

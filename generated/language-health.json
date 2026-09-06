@@ -232,6 +232,7 @@
     "BLOT_JSON_NOT_COMPTIME",
     "BLOT_JSON_NUMBER",
     "BLOT_JSON_PARSE",
+    "BLOT_LIMIT",
     "BLOT_LINEAR_ARGUMENT_NOT_OWNED",
     "BLOT_LINEAR_ARRAY_OVERWRITE",
     "BLOT_LINEAR_ARRAY_READ",
@@ -738,7 +739,7 @@
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14546
+      "lines": 14571
     },
     {
       "path": "compiler/src/session.rs",
@@ -746,11 +747,11 @@
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8039
+      "lines": 7953
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6809
+      "lines": 6811
     },
     {
       "path": "compiler/src/ownership.rs",

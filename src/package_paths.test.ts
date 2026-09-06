@@ -27,13 +27,16 @@ test("capsules keep distinct POSIX filenames distinct", {
         "return a + b\n",
     );
     const manifestPath = join(root, "blot.json");
-    await writeFile(manifestPath, JSON.stringify({
-      schema: "blot-package",
-      version: PACKAGE_FORMAT_VERSION,
-      exports: {
-        ".": { source: "./main.blot", built: "./dist/main.blotc" },
-      },
-    }));
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        schema: "blot-package",
+        version: PACKAGE_FORMAT_VERSION,
+        exports: {
+          ".": { source: "./main.blot", built: "./dist/main.blotc" },
+        },
+      }),
+    );
     const before = await compiler.evaluate(join(root, "main.blot"));
     assert.deepEqual(before.value, { tag: "int", value: "42" });
 
@@ -86,11 +89,14 @@ test("package graph confinement still rejects escaping relative imports", async 
       'return import "../outside.blot"\n',
     );
     const manifestPath = join(root, "blot.json");
-    await writeFile(manifestPath, JSON.stringify({
-      schema: "blot-package",
-      version: PACKAGE_FORMAT_VERSION,
-      exports: { ".": { source: "./main.blot", built: "./main.blotc" } },
-    }));
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        schema: "blot-package",
+        version: PACKAGE_FORMAT_VERSION,
+        exports: { ".": { source: "./main.blot", built: "./main.blotc" } },
+      }),
+    );
     const target = join(root, "main.blotc");
     await writeFile(target, "previous artifact\n");
     await assert.rejects(() => buildPackage(manifestPath), {
