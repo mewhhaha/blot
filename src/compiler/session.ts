@@ -568,7 +568,7 @@ export class Compiler implements CompilerHost {
     return await this.#request(async () => {
       const absolute = resolve(path);
       const revision = await this.#sync(absolute);
-      if (revision.hir !== undefined) return revision.hir;
+      if (revision.hir !== undefined) return structuredClone(revision.hir);
       const result = this.#compiler.prepareCompilerSessionRuntimeHir(
         this.#handle,
         absolute,
@@ -576,8 +576,9 @@ export class Compiler implements CompilerHost {
       if (!result.ok) {
         this.#throwFailure(result, absolute, "Runtime HIR preparation");
       }
+      // Keep the validated resident graph private, including on the first read.
       revision.hir = result.module;
-      return revision.hir;
+      return structuredClone(revision.hir);
     });
   }
 
@@ -1207,7 +1208,10 @@ function requireSameDependencies(
 ): void {
   const compiler = [...new Set(compilerDependencies)].sort();
   const resolved = [...new Set(resolvedDependencies)].sort();
-  if (compiler.join("\0") === resolved.join("\0")) return;
+  if (
+    compiler.length === resolved.length &&
+    compiler.every((specifier, index) => specifier === resolved[index])
+  ) return;
   throw new CompilerInvariantFailure(
     "source-graph agreement",
     new Error(
