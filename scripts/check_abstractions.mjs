@@ -6,6 +6,7 @@ const suites = [
   "src/node/refactoring.test.ts",
   "src/node/predicate_helpers.test.ts",
   "src/node/host.test.ts",
+  "src/node/host_async.test.ts",
   "src/node/live_report_host.test.ts",
   "src/node/run.test.ts",
   "src/node/cli_tools.test.ts",

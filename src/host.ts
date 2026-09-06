@@ -105,6 +105,15 @@ export async function instantiateArtifact(
         throw new TypeError("host import arity mismatch");
       }
       const result = operation(...arguments_);
+      // Invalid objects may be rejected Promises, including cross-realm
+      // Promises or thenables. Observe their rejection before refusing the
+      // synchronous call so a caught contract error cannot later crash Node.
+      if (
+        (typeof result === "object" && result !== null) ||
+        typeof result === "function"
+      ) {
+        void Promise.resolve(result).catch(() => {});
+      }
       // In particular, a Promise must not silently become a Unit result.
       const lowered = lowerScalar(imported.function.result, result);
       if (lowered.length === 0) return undefined;
