@@ -1,33 +1,26 @@
-name: Isolated performance validation
+name: Finalize performance evidence
 on:
   push:
     branches: [validation/performance-pathologies-20260906]
 permissions:
   contents: write
 jobs:
-  candidate:
+  evidence:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Apply verified candidate on exact main
+      - name: Select tested clean branch
         run: |
-          python3 - <<'PY'
-          import base64, gzip, hashlib, pathlib, os
-          data = base64.b64encode(pathlib.Path('.validation/candidate.patch.gz').read_bytes()).decode()
-          for start, end, replacement in reversed([[2608,2612,''],[6448,6459,''],[7247,7248,'K'],[10067,10069,''],[19468,19468,'=']]):
-              data = data[:start] + replacement + data[end:]
-          patch = gzip.decompress(base64.b64decode(data))
-          assert hashlib.sha256(patch).hexdigest() == 'c4f4d3afd0240c1e0991881828afa3d7bf51b29d06da052d309c08b7445b0c1b'
-          pathlib.Path(os.environ['RUNNER_TEMP'], 'candidate.patch').write_bytes(patch)
-          PY
-          git switch -c perf/linear-layout-text-search-20260906 55f02bca9c9f8fa15ad162c6a46ccc7dee242cf2
-          git apply --check "$RUNNER_TEMP/candidate.patch"
-          git apply "$RUNNER_TEMP/candidate.patch"
-          sed -i 's/## 11\. Adversarial/## 8. Adversarial/' spec/COST_MODEL.md
-          sed -i 's/#11-adversarial/#8-adversarial/' experiments/performance-pathologies/README.md
+          cp .validation/before.json "$RUNNER_TEMP/before.json"
+          cp .validation/after.json "$RUNNER_TEMP/after.json"
+          git switch perf/linear-layout-text-search-20260906
+          test "$(git rev-parse HEAD)" = e6b9dd6c09ab4022506944adff3e19aac581fc93
+          mkdir -p experiments/performance-pathologies/results
+          cp "$RUNNER_TEMP/before.json" experiments/performance-pathologies/results/before.json
+          cp "$RUNNER_TEMP/after.json" experiments/performance-pathologies/results/after.json
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -36,89 +29,52 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.97.1
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
-      - name: Format and commit clean candidate
+      - name: Refresh generated health and document observations
         run: |
-          cargo fmt --manifest-path compiler/Cargo.toml
-          deno fmt spec/COST_MODEL.md experiments/performance-pathologies src/node/performance_pathologies.test.ts
-          git add compiler/src/backend.rs compiler/src/backend examples/pathological_nested_record_layout.blot examples/pathological_text_search.blot examples/expected/pathological_nested_record_layout.txt examples/expected/pathological_text_search.txt experiments/performance-pathologies spec/COST_MODEL.md src/node/performance_pathologies.test.ts
+          deno run --allow-read --allow-write scripts/generate_language_health.ts
+          cat >> experiments/performance-pathologies/README.md <<'EOF'
+
+          ## Recorded comparison
+
+          The checked-in [before](results/before.json) and [after](results/after.json)
+          samples were recorded on September 6, 2026, on the same Linux x64 host,
+          Intel Xeon Platinum 8370C, Node 22.16.0 / V8 12.4.254.21-node.26. Both
+          compiler artifacts were rebuilt with Rust 1.97.1 in production mode. The
+          baseline artifact's commit is `2453ecb`, which adds only an isolated
+          validation workflow to main `55f02bc`; the candidate is `e6b9dd6`.
+          The reports retain exact compiler/input digests and workload source hashes.
+
+          ```sh
+          node --import tsx experiments/performance-pathologies/benchmark.ts \
+            --depths=10,12,14 --sizes=32768 --samples=3
+          ```
+
+          | Workload | Before median (ms) | After median (ms) |
+          | --- | ---: | ---: |
+          | Compile depth-10 record | 48.417 | 24.499 |
+          | Compile depth-12 record | 276.573 | 30.674 |
+          | Compile depth-14 record | 2331.645 | 30.940 |
+          | Contains, 32768-byte text / 4097-byte late-mismatch query | 88.121 | 0.052 |
+          | Find from scalar zero, same inputs | 85.467 | 0.052 |
+
+          These are medians of three raw samples, not confidence intervals or CI
+          thresholds. JIT warmup and shared-host noise remain visible in the reports.
+          Both record leaves and every search result were checked; record output
+          sizes are unchanged. These targeted results do not predict speedups for
+          unrelated programs or eliminate other compiler/runtime pathologies.
+          EOF
+          deno fmt generated/language-health.json experiments/performance-pathologies
+          deno run --allow-read scripts/generate_language_health.ts --check
+          deno fmt --check generated/language-health.json experiments/performance-pathologies src/node/performance_pathologies.test.ts spec/COST_MODEL.md
+          deno lint experiments/performance-pathologies/*.ts src/node/performance_pathologies.test.ts
+          pnpm current:check
+      - name: Publish evidence without changing tested compiler sources
+        run: |
+          git add generated/language-health.json experiments/performance-pathologies
           git diff --cached --check
+          git diff --exit-code -- compiler src generated/compiler
           git config user.name 'Blot performance review'
           git config user.email 'performance@users.noreply.github.com'
-          git commit -m 'Bound canonical layout work and share allocation-free linear text search'
-      - name: Rust backend regression tests
-        run: |
-          cargo test --manifest-path compiler/Cargo.toml backend::
-      - name: Verify regressions reject original algorithms
-        run: |
-          cp compiler/src/backend.rs "$RUNNER_TEMP/backend.rs"
-          cp compiler/src/backend/text_search.rs "$RUNNER_TEMP/text_search.rs"
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          p = Path('compiler/src/backend.rs')
-          s = p.read_text().replace('.map(|field| field.layout.alignment)', '.map(|field| memory_layout(field.type_).alignment)').replace('.map(|field| field.offset + field.layout.size)', '.map(|field| field.offset + memory_layout(field.type_).size)')
-          p.write_text(s)
-          old = subprocess.check_output(['git', 'show', '55f02bca9c9f8fa15ad162c6a46ccc7dee242cf2:compiler/src/backend.rs'], text=True)
-          old = old[old.index('fn text_find_from_function()'):old.index('fn text_compare_function()')]
-          old = old.replace('fn text_find_from_function()', 'pub(super) fn function()')
-          Path('compiler/src/backend/text_search.rs').write_text('use wasm_encoder::{BlockType, Function, ValType};\n' + old + '\n#[cfg(test)]\nmod tests;\n')
-          PY
-          if cargo test --manifest-path compiler/Cargo.toml nested_record_memory_layout_visits_each_type_once > "$RUNNER_TEMP/layout-negative.log" 2>&1; then exit 1; fi
-          cat "$RUNNER_TEMP/layout-negative.log"
-          grep 'left: 4' "$RUNNER_TEMP/layout-negative.log"
-          if cargo test --manifest-path compiler/Cargo.toml emitted_search_has_linear_work_on_periodic_and_late_mismatch_inputs > "$RUNNER_TEMP/search-negative.log" 2>&1; then exit 1; fi
-          cat "$RUNNER_TEMP/search-negative.log"
-          grep -E 'linear instruction budget|byte loads' "$RUNNER_TEMP/search-negative.log"
-          cp "$RUNNER_TEMP/backend.rs" compiler/src/backend.rs
-          cp "$RUNNER_TEMP/text_search.rs" compiler/src/backend/text_search.rs
-          git diff --exit-code -- compiler
-      - name: Rust lint
-        run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-      - name: Build exact candidate compiler
-        run: deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
-      - run: git diff --exit-code -- generated/compiler/prelude.snapshot
-      - name: Pack exact candidate workspace
-        run: |
-          git ls-files -z > "$RUNNER_TEMP/files"
-          printf 'generated/compiler/compiler.wasm\0generated/compiler/compiler-artifact.json\0.pnp.cjs\0node_modules\0' >> "$RUNNER_TEMP/files"
-          tar -czf "$RUNNER_TEMP/performance-candidate.tar.gz" --null -T "$RUNNER_TEMP/files"
-          git rev-parse HEAD
-          git rev-parse HEAD^{tree}
-      - uses: actions/upload-artifact@v7
-        with:
-          name: performance-candidate
-          path: ${{ runner.temp }}/performance-candidate.tar.gz
-          retention-days: 7
-      - name: New end-to-end pathologies
-        run: node --import tsx --test src/node/performance_pathologies.test.ts
-      - name: Existing deterministic gates
-        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/performance_gate.test.ts
-      - name: Scoped formatting, lint and checking
-        run: |
-          cargo fmt --manifest-path compiler/Cargo.toml -- --check
-          deno fmt --check spec/COST_MODEL.md experiments/performance-pathologies src/node/performance_pathologies.test.ts
-          deno lint experiments/performance-pathologies/*.ts src/node/performance_pathologies.test.ts
-          deno check experiments/performance-pathologies/*.ts src/node/performance_pathologies.test.ts
-          pnpm current:check
-      - name: Publish tested clean branch
-        run: git push origin HEAD:refs/heads/perf/linear-layout-text-search-20260906
-      - name: Complete Node suite
-        run: pnpm test:node
-      - name: Complete Rust suite
-        if: always()
-        run: cargo test --manifest-path compiler/Cargo.toml
-      - name: Complete example catalog
-        if: always()
-        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test examples.test.ts
-      - name: Package check
-        if: always()
-        run: pnpm package:check
-      - name: Full TypeScript checking
-        if: always()
-        run: deno check .
+          git commit -m 'Record before-after evidence and refresh generated language health'
+          git push origin HEAD:refs/heads/perf/linear-layout-text-search-20260906
