@@ -3,13 +3,29 @@ on:
   push:
     branches: [validation/performance-pathologies-20260906]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  baseline:
+  candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Preserve transported payload
+        run: cp .validation/candidate.patch.gz "$RUNNER_TEMP/candidate.patch.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: transported-payload
+          path: ${{ runner.temp }}/candidate.patch.gz
+          retention-days: 1
+      - name: Apply verified candidate on exact main
+        run: |
+          gzip -dc "$RUNNER_TEMP/candidate.patch.gz" > "$RUNNER_TEMP/candidate.patch"
+          echo 'c4f4d3afd0240c1e0991881828afa3d7bf51b29d06da052d309c08b7445b0c1b  '"$RUNNER_TEMP/candidate.patch" | sha256sum -c -
+          git switch -c perf/linear-layout-text-search-20260906 55f02bca9c9f8fa15ad162c6a46ccc7dee242cf2
+          git apply --check "$RUNNER_TEMP/candidate.patch"
+          git apply "$RUNNER_TEMP/candidate.patch"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
@@ -24,21 +40,55 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - run: pnpm install --frozen-lockfile
-      - run: deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
-      - name: Pack exact runnable baseline
+      - name: Format and commit clean candidate
         run: |
-          mkdir -p validation-tools
-          cp "$(command -v deno)" validation-tools/deno
+          cargo fmt --manifest-path compiler/Cargo.toml
+          deno fmt spec/COST_MODEL.md experiments/performance-pathologies src/node/performance_pathologies.test.ts
+          git add compiler/src/backend.rs compiler/src/backend examples/pathological_nested_record_layout.blot examples/pathological_text_search.blot examples/expected/pathological_nested_record_layout.txt examples/expected/pathological_text_search.txt experiments/performance-pathologies spec/COST_MODEL.md src/node/performance_pathologies.test.ts
+          git diff --cached --check
+          git config user.name 'Blot performance review'
+          git config user.email 'performance@users.noreply.github.com'
+          git commit -m 'Bound canonical layout work and share allocation-free linear text search'
+      - name: Rust backend regression tests
+        run: cargo test --manifest-path compiler/Cargo.toml backend::
+      - name: Rust lint
+        run: cargo clippy --manifest-path compiler/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+      - name: Build exact candidate compiler
+        run: deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts
+      - run: git diff --exit-code -- generated/compiler/prelude.snapshot
+      - name: Pack exact candidate workspace
+        run: |
           git ls-files -z > "$RUNNER_TEMP/files"
-          printf 'generated/compiler/compiler.wasm\0generated/compiler/compiler-artifact.json\0.pnp.cjs\0node_modules\0validation-tools\0' >> "$RUNNER_TEMP/files"
-          tar -czf performance-baseline.tar.gz --null -T "$RUNNER_TEMP/files"
+          printf 'generated/compiler/compiler.wasm\0generated/compiler/compiler-artifact.json\0.pnp.cjs\0node_modules\0' >> "$RUNNER_TEMP/files"
+          tar -czf "$RUNNER_TEMP/performance-candidate.tar.gz" --null -T "$RUNNER_TEMP/files"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
       - uses: actions/upload-artifact@v7
         with:
-          name: performance-baseline
-          path: performance-baseline.tar.gz
+          name: performance-candidate
+          path: ${{ runner.temp }}/performance-candidate.tar.gz
           retention-days: 7
-      - name: Baseline Node tests
-        run: pnpm test:node
-      - name: Baseline deterministic gates
-        if: always()
+      - name: New end-to-end pathologies
+        run: node --import tsx --test src/node/performance_pathologies.test.ts
+      - name: Existing deterministic gates
         run: node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/performance_gate.test.ts
+      - name: Scoped formatting, lint and checking
+        run: |
+          cargo fmt --manifest-path compiler/Cargo.toml -- --check
+          deno fmt --check spec/COST_MODEL.md experiments/performance-pathologies src/node/performance_pathologies.test.ts
+          deno lint experiments/performance-pathologies/*.ts src/node/performance_pathologies.test.ts
+          deno check experiments/performance-pathologies/*.ts src/node/performance_pathologies.test.ts
+          pnpm current:check
+      - name: Publish tested clean branch
+        run: git push origin HEAD:refs/heads/perf/linear-layout-text-search-20260906
+      - name: Complete Node suite
+        run: pnpm test:node
+      - name: Complete example catalog
+        if: always()
+        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test examples.test.ts
+      - name: Package check
+        if: always()
+        run: pnpm package:check
+      - name: Full TypeScript checking
+        if: always()
+        run: deno check .
