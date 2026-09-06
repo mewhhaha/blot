@@ -64,7 +64,9 @@
     "current:generate": "node --import tsx scripts/generate_current_implementation.ts",
     "current:check": "node --import tsx scripts/generate_current_implementation.ts --check",
     "generate:health": "deno run --allow-read --allow-write scripts/generate_language_health.ts",
-    "health": "deno run --allow-read scripts/generate_language_health.ts --check"
+    "health": "deno run --allow-read scripts/generate_language_health.ts --check",
+    "test:abstractions": "node scripts/check_abstractions.mjs",
+    "release:check": "tsx scripts/release_evidence.ts"
   },
   "dependencies": {
     "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
@@ -81,5 +83,8 @@
   "engines": {
     "node": ">=22.16.0"
   },
-  "packageManager": "pnpm@11.21.0"
+  "packageManager": "pnpm@11.21.0",
+  "bin": {
+    "blot": "./dist/src/node/cli.js"
+  }
 }

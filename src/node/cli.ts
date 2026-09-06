@@ -2,10 +2,10 @@
 
 import { readFile, watch, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { Compiler } from "../compiler.ts";
+import { Compiler, explanationAt } from "../compiler.ts";
 import { DevelopmentProject } from "../development.ts";
-import { BlotError, render } from "../diagnostic.ts";
-import { LoadError } from "../load.ts";
+import { render } from "../diagnostic.ts";
+import { buildPackage } from "../package.ts";
 import { parse } from "../syntax/parse.ts";
 import {
   fixLintSource,
@@ -15,89 +15,154 @@ import {
   parseLintArguments,
 } from "../tooling/lint_command.ts";
 import { runArtifact } from "./run.ts";
+import {
+  parseExplainArguments,
+  renderExplanation,
+  sourceOffset,
+} from "./explain.ts";
+import { renderFailure } from "./report.ts";
 
-const [command, ...paths] = process.argv.slice(2);
-if (
-  command === undefined ||
-  paths.length === 0 ||
-  !["build", "check", "ast", "run", "dev", "lint"].includes(command)
-) {
-  console.error(
-    "usage: pnpm blot <build|check|ast|run|lint|dev> <path>...",
-  );
-  console.error("       pnpm blot lint [--check|--fix] <file.blot>...");
-  console.error("       pnpm blot dev <blot.json>");
-  process.exitCode = 2;
-} else if (command === "lint") {
-  const invocation = parseLintArguments(paths);
-  if (!invocation.ok) {
-    console.error(invocation.message);
-    process.exitCode = 2;
-  } else {
-    const failed = await lintFiles(invocation.mode, invocation.paths);
-    if (failed) process.exitCode = 1;
+try {
+  await main(process.argv.slice(2));
+} catch (error) {
+  report("blot", error);
+  process.exitCode = 1;
+}
+
+async function main(arguments_: readonly string[]): Promise<void> {
+  const [command, ...paths] = arguments_;
+  if ((command === "--help" || command === "help") && paths.length === 0) {
+    console.log(
+      "usage: blot <build|check|ast|run|lint|dev|pack|explain> <path>...",
+    );
+    console.log("       blot pack <blot.json>");
+    console.log("       blot explain [--json] <file.blot> <line>:<column>");
+    return;
   }
-} else if (command === "ast") {
-  let failed = false;
-  for (const path of paths) {
-    try {
-      const source = await readFile(resolve(path), "utf8");
-      const parsed = await parse(source);
-      if (!parsed.ok) {
-        for (const diagnostic of parsed.diagnostics) {
-          console.error(render(path, source, diagnostic));
-        }
-        failed = true;
-        continue;
+  if (
+    command === undefined ||
+    paths.length === 0 ||
+    !["build", "check", "ast", "run", "dev", "lint", "pack", "explain"]
+      .includes(command)
+  ) {
+    console.error(
+      "usage: blot <build|check|ast|run|lint|dev|pack|explain> <path>...",
+    );
+    console.error("       pnpm blot lint [--check|--fix] <file.blot>...");
+    console.error("       pnpm blot dev <blot.json>");
+    process.exitCode = 2;
+  } else if (command === "pack") {
+    if (paths.length !== 1 || paths[0].startsWith("--")) {
+      console.error("usage: blot pack <blot.json>");
+      process.exitCode = 2;
+    } else {
+      for (const artifact of await buildPackage(paths[0])) {
+        console.log(
+          `${artifact.name}: ${artifact.built}, ${artifact.bytes} bytes, ${artifact.modules} modules`,
+        );
       }
-      console.log(JSON.stringify(parsed.module, bigintJson, 2));
-    } catch (error) {
-      failed = true;
-      report(path, error);
     }
-  }
-  if (failed) process.exitCode = 1;
-} else if (command === "dev") {
-  if (paths.length !== 1) {
-    console.error("usage: pnpm blot dev <blot.json>");
-    process.exitCode = 2;
-  } else await watchDevelopmentProject(paths[0]);
-} else {
-  const compiler = await Compiler.create();
-  let failed = false;
-  try {
+  } else if (command === "explain") {
+    const invocation = parseExplainArguments(paths);
+    if (!invocation.ok) {
+      console.error(invocation.message);
+      process.exitCode = 2;
+      return;
+    }
+    const source = await readFile(resolve(invocation.path), "utf8");
+    const offset = sourceOffset(source, invocation.location);
+    const compiler = await Compiler.create();
+    try {
+      // Analyze the exact snapshot whose cursor was resolved above.
+      const analysis = await compiler.analyzeSource(invocation.path, source);
+      const explanation = explanationAt(analysis, offset);
+      if (invocation.json) {
+        console.log(
+          JSON.stringify({
+            path: invocation.path,
+            location: invocation.location,
+            explanation,
+          }),
+        );
+      } else {
+        console.log(
+          renderExplanation(invocation.path, invocation.location, explanation),
+        );
+      }
+    } finally {
+      compiler.destroy();
+    }
+  } else if (command === "lint") {
+    const invocation = parseLintArguments(paths);
+    if (!invocation.ok) {
+      console.error(invocation.message);
+      process.exitCode = 2;
+    } else {
+      const failed = await lintFiles(invocation.mode, invocation.paths);
+      if (failed) process.exitCode = 1;
+    }
+  } else if (command === "ast") {
+    let failed = false;
     for (const path of paths) {
       try {
-        if (command === "run") {
-          const artifact = await compiler.compile(path);
-          console.log(await runArtifact(artifact));
-        } else if (command === "build") {
-          const artifact = await compiler.compile(path);
-          let output = `${path}.wasm`;
-          if (path.endsWith(".blot")) output = path.slice(0, -5) + ".wasm";
-          const manifest = `${output}.json`;
-          await writeFile(output, artifact.wasm);
-          await writeFile(manifest, artifact.manifestBytes);
-          let imports = "";
-          if (artifact.capabilities.length > 0) {
-            imports = `, imports { ${artifact.capabilities.join(", ")} }`;
+        const source = await readFile(resolve(path), "utf8");
+        const parsed = await parse(source);
+        if (!parsed.ok) {
+          for (const diagnostic of parsed.diagnostics) {
+            console.error(render(path, source, diagnostic));
           }
-          console.log(
-            `${output}: ${artifact.wasm.byteLength} bytes${imports}, manifest ${manifest}`,
-          );
-        } else if (command === "check") {
-          const checked = await compiler.check(path);
-          console.log(`${path}: ${checked.type}${checked.effects}`);
+          failed = true;
+          continue;
         }
+        console.log(JSON.stringify(parsed.module, bigintJson, 2));
       } catch (error) {
         failed = true;
         report(path, error);
       }
     }
-  } finally {
-    compiler.destroy();
+    if (failed) process.exitCode = 1;
+  } else if (command === "dev") {
+    if (paths.length !== 1) {
+      console.error("usage: pnpm blot dev <blot.json>");
+      process.exitCode = 2;
+    } else await watchDevelopmentProject(paths[0]);
+  } else {
+    const compiler = await Compiler.create();
+    let failed = false;
+    try {
+      for (const path of paths) {
+        try {
+          if (command === "run") {
+            const artifact = await compiler.compile(path);
+            console.log(await runArtifact(artifact));
+          } else if (command === "build") {
+            const artifact = await compiler.compile(path);
+            let output = `${path}.wasm`;
+            if (path.endsWith(".blot")) output = path.slice(0, -5) + ".wasm";
+            const manifest = `${output}.json`;
+            await writeFile(output, artifact.wasm);
+            await writeFile(manifest, artifact.manifestBytes);
+            let imports = "";
+            if (artifact.capabilities.length > 0) {
+              imports = `, imports { ${artifact.capabilities.join(", ")} }`;
+            }
+            console.log(
+              `${output}: ${artifact.wasm.byteLength} bytes${imports}, manifest ${manifest}`,
+            );
+          } else if (command === "check") {
+            const checked = await compiler.check(path);
+            console.log(`${path}: ${checked.type}${checked.effects}`);
+          }
+        } catch (error) {
+          failed = true;
+          report(path, error);
+        }
+      }
+    } finally {
+      compiler.destroy();
+    }
+    if (failed) process.exitCode = 1;
   }
-  if (failed) process.exitCode = 1;
 }
 
 async function lintFiles(
@@ -237,17 +302,5 @@ function bigintJson(_key: string, value: unknown): unknown {
 }
 
 function report(path: string, error: unknown): void {
-  if (error instanceof LoadError) {
-    console.error(error.message);
-    return;
-  }
-  if (error instanceof BlotError && error.origin !== null) {
-    console.error(
-      render(error.origin.path, error.origin.source, error.diagnostic),
-    );
-    return;
-  }
-  let message = String(error);
-  if (error instanceof Error) message = error.message;
-  console.error(`${path}: ${message}`);
+  console.error(renderFailure(path, error));
 }

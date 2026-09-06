@@ -90,15 +90,19 @@ vocabulary. Generic numeric and comparison operations resolve an attached member
 using the inferred operand domain. Nothing becomes available without the
 appropriate import and `open`.
 
-There is an important current limit: unresolved arithmetic/comparison operands
-default to `Int` in the checker. Extracting an unconstrained equality helper
-therefore does not imply a polymorphic equality requirement:
+Qualified operation requirements now survive ordinary helper extraction and
+resolve from actual argument evidence. For example, the executable claims cover
+this helper at text arguments as well as direct text equality:
 
 ```blot
 let same = fn left => fn right => left == right
 ```
 
-Use an explicit operation argument when different interpretations are needed:
+The earlier statement that every unresolved operation defaults to `Int` is
+stale. This is not a claim that the operator integration is fully validated:
+issue #96 still tracks unsettled residual interfaces and an engine scaling
+failure. Use an explicit operation argument to select a deliberate
+interpretation:
 
 ```blot
 let same_with = fn equal => fn left => fn right => equal left right
@@ -126,14 +130,22 @@ checked implementation evidence, not a function's name or an operator's
 spelling. A shadowed comparison does not automatically establish ordinary
 integer equality. Demand behavior matters for short-circuit certificates.
 
-The current relational analysis can establish bounds for direct checks such as
-`index >= 0 && index < @array.len values`. It does not generally export that
-relationship through an arbitrary helper returning `Bool`. The
-`predicate-helper-loses-bounds` claim records that limitation explicitly.
+The relational analysis establishes bounds for direct checks and a restricted
+known helper such as `fn (index, length) => index >= 0 && index < length`.
+`predicate-helper-retains-bounds` is now an accepted executable claim. The Rust
+analysis projects comparisons onto caller identities through actual lexical
+environments, including imported and source-free capsule helpers. It does not
+recognize helper names, reuse a summary across different captures, or trust a
+parameter merely because it shadows a known comparison.
 
-General range arithmetic and helper predicate summaries remain separate work. In
-particular, `index < length` and `next = index + 1` imply `next <= length`, not
-`next < length`. Retaining an affine relation cannot justify carrying an
+Expansion is bounded to 128 steps and refuses unsupported syntax without adding
+facts. Recursive helpers, declaration-bearing bodies, runtime predicate choices,
+and general arithmetic summaries remain outside that fragment. The exact
+contract is in `LANGUAGE.md` and `spec/SAFETY.md`.
+
+General range arithmetic and broader predicate summaries remain separate work.
+In particular, `index < length` and `next = index + 1` imply `next <= length`,
+not `next < length`. Retaining an affine relation cannot justify carrying an
 obsolete strict bounds fact into another iteration. A loop requires an
 appropriate invariant or a fresh check.
 

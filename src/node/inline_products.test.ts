@@ -149,10 +149,12 @@ test("products stay inline beyond destructured arguments", async (t) => {
   });
 });
 
-for (const [parameterType, argument] of [
-  ["(Int, Int)", "[1, 2]"],
-  ["[Int]", "(1, 2)"],
-] as const) {
+for (
+  const [parameterType, argument] of [
+    ["(Int, Int)", "[1, 2]"],
+    ["[Int]", "(1, 2)"],
+  ] as const
+) {
   test(`${argument} does not implicitly convert to ${parameterType}`, async () => {
     await withSource(
       `open import "blot:prelude"

@@ -94,7 +94,10 @@ test("a source-free capsule preserves an inferred structural helper", async () =
     const packageRoot = join(directory, "node_modules", "@test", "addition");
     await mkdir(packageRoot, { recursive: true });
     const library = join(packageRoot, "mod.blot");
-    await writeFile(library, "return fn pair => @int.add pair.left pair.right\n");
+    await writeFile(
+      library,
+      "return fn pair => @int.add pair.left pair.right\n",
+    );
     const manifest = join(packageRoot, "blot.json");
     await writeFile(
       manifest,
@@ -123,7 +126,11 @@ return run
         type: "Int -> Int",
         effects: "",
       });
-      assert.deepEqual(await runScalars(await compiler.compile(path)), [4n, 7n, 49n]);
+      assert.deepEqual(await runScalars(await compiler.compile(path)), [
+        4n,
+        7n,
+        49n,
+      ]);
     } finally {
       compiler.destroy();
     }
@@ -147,7 +154,11 @@ let run = fn number => offset number
 return run
 `,
     );
-    assert.deepEqual(await runScalars(await compiler.compile(path)), [4n, 7n, 49n]);
+    assert.deepEqual(await runScalars(await compiler.compile(path)), [
+      4n,
+      7n,
+      49n,
+    ]);
     await writeFile(helper, "return fn number => @int.add number 9\n");
     await compiler.markChanged(helper);
     const resident = await compiler.compile(path);
@@ -170,7 +181,9 @@ return run
 
 for (const imported of [false, true]) {
   test(`qualified equality survives helper extraction (imported=${imported})`, async () => {
-    const directory = await mkdtemp(join(tmpdir(), "blot-refactoring-operator-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "blot-refactoring-operator-"),
+    );
     const compiler = await Compiler.create();
     try {
       await writeFile(
@@ -190,13 +203,17 @@ let run = fn number => case same number 42 of
 return run
 `,
       );
-      assert.deepEqual(await runScalars(await compiler.compile(path)), [0n, 0n, 1n]);
+      assert.deepEqual(await runScalars(await compiler.compile(path)), [
+        0n,
+        0n,
+        1n,
+      ]);
       const evaluation = join(directory, "evaluate.blot");
       await writeFile(
         evaluation,
-        `${prelude}${declaration}\nreturn same "same" "same"\n`,
+        `${prelude}${declaration}\nreturn case same "same" "same" of\n  #True => 1\n  #False => 0\n`,
       );
-      assert.equal((await compiler.evaluate(evaluation)).display, "true");
+      assert.equal((await compiler.evaluate(evaluation)).display, "1");
     } finally {
       compiler.destroy();
       await rm(directory, { recursive: true, force: true });
