@@ -13,7 +13,8 @@ import type {
   LintRuleContext,
   LintVisitors,
 } from "./types.ts";
-import { lineComments, spanKey } from "./syntax.ts";
+import { lineComments } from "./syntax.ts";
+import { ConcreteIndex } from "./concrete_index.ts";
 
 export function lintModule(
   module: Module,
@@ -27,7 +28,11 @@ export function lintModule(
   } = {},
 ): readonly LintDiagnostic[] {
   const diagnostics: LintDiagnostic[] = [];
-  const concrete = collectConcrete(cst);
+  let concrete: ConcreteIndex | undefined;
+  const concreteIndex = (): ConcreteIndex => {
+    if (concrete === undefined) concrete = new ConcreteIndex(cst);
+    return concrete;
+  };
   const visitors = rules.map((rule) => {
     const context: LintRuleContext = {
       module,
@@ -43,7 +48,7 @@ export function lintModule(
           severity: rule.severity,
           message: report.message,
           span: report.span,
-          fix: report.fix ?? null,
+          fix: report.fix || null,
         }),
       fix: (span, title, replacement, validation = "parse") => {
         const replaced = source.slice(span.start, span.end);
@@ -70,53 +75,23 @@ export function lintModule(
         };
       },
       hasConcreteOrigin: (node, ruleName) =>
-        concrete.spans.get(ruleName)?.has(spanKey(node.span)) === true,
+        concreteIndex().hasOrigin(node.span, ruleName),
       concreteHasDescendant: (node, ruleName, descendantName) =>
-        concrete.descendants.get(`${ruleName}:${spanKey(node.span)}`)?.has(
-          descendantName,
-        ) === true,
+        concreteIndex().hasDescendant(node.span, ruleName, descendantName),
     };
-    return { rule, visitors: rule.create(context) };
+    return rule.create(context);
   });
 
-  visitModule(module, visitors.map((entry) => entry.visitors));
-  visitConcrete(cst, [], visitors.map((entry) => entry.visitors));
+  const astVisitors = visitors.filter((visitor) =>
+    visitor.module !== undefined || visitor.declaration !== undefined ||
+    visitor.expression !== undefined || visitor.pattern !== undefined
+  );
+  const concreteVisitors = visitors.filter((visitor) =>
+    visitor.concrete !== undefined
+  );
+  if (astVisitors.length > 0) visitModule(module, astVisitors);
+  if (concreteVisitors.length > 0) visitConcrete(cst, [], concreteVisitors);
   return diagnostics;
-}
-
-function collectConcrete(
-  cst: Rule,
-): {
-  readonly spans: ReadonlyMap<string, ReadonlySet<string>>;
-  readonly descendants: ReadonlyMap<string, ReadonlySet<string>>;
-} {
-  const spans = new Map<string, Set<string>>();
-  const descendants = new Map<string, Set<string>>();
-  const visit = (rule: Rule): ReadonlySet<string> => {
-    let named = spans.get(rule.name);
-    if (named === undefined) {
-      named = new Set();
-      spans.set(rule.name, named);
-    }
-    named.add(spanKey(rule.span));
-
-    const below = new Set<string>();
-    for (const child of rule.children()) {
-      if (child.type !== "rule") continue;
-      below.add(child.name);
-      for (const name of visit(child)) below.add(name);
-    }
-    const key = `${rule.name}:${spanKey(rule.span)}`;
-    let recorded = descendants.get(key);
-    if (recorded === undefined) {
-      recorded = new Set();
-      descendants.set(key, recorded);
-    }
-    for (const name of below) recorded.add(name);
-    return below;
-  };
-  visit(cst);
-  return { spans, descendants };
 }
 
 function visitModule(module: Module, visitors: readonly LintVisitors[]): void {

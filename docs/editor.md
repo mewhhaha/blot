@@ -116,9 +116,20 @@ leaves the original file unchanged.
 
 Lints are independent rules over the lowered AST. A rule registers typed module,
 declaration, expression, or pattern visitors and may also inspect the compact
-CST when surface syntax matters. The runner traverses each tree once, supplies
-parent and ancestor paths, and owns reporting and source-safe fixes; adding a
-rule does not add another recursive compiler pass.
+CST when surface syntax matters. The runner visits each tree once for registered
+callbacks, skips trees with no visitors, supplies parent and ancestor paths,
+and owns reporting and source-safe fixes. AST callbacks still run before CST
+callbacks, in rule-registration order.
+
+Source-origin queries lazily build one index per lint invocation. A separate
+iterative traversal records preorder positions and exclusive subtree ends,
+using linear space rather than copying every descendant-name set into every
+ancestor. Descendant queries binary-search the requested rule's positions and
+exclude the origin itself. Equal rule names and source spans retain the union
+of their concrete origins; overlapping spans alone do not establish ancestry.
+Selections without concrete callbacks or source-origin queries pay no CST
+indexing or traversal cost. These are syntax lookups, not new semantic facts
+or another compiler pass.
 
 The default correctness and readability rules report:
 
