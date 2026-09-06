@@ -1,0 +1,3 @@
+const config = import "./config.blot"
+
+return fn item => @text.concat config.label (@text.concat ": " item.name)
