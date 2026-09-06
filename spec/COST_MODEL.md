@@ -491,3 +491,34 @@ the same warmed engine as Blot.
 
 A faster result that changes a trap, effect trace, manifest, accepted program,
 or cache invalidation boundary implements a different compiler judgment.
+
+## 8. Adversarial canonical layouts and substring search
+
+A single canonical memory-layout query visits each occurrence in its `AbiType`
+structure once. Record planning borrows child types rather than cloning their
+subtrees, computes each child's size and alignment once, and reuses that result
+for offsets, enclosing alignment, and trailing padding. Sorting a record of
+width `w` still costs `O(w log w)` name comparisons. This is a local
+layout-query bound, not a claim that all adapter emission, inference, or
+compilation is linear: separate consumers may still request layouts
+independently. Canonical field order, empty-record layout, variant payload
+alignment, and public ABI bytes do not change.
+
+The Wasm helpers for `@text.contains` and `@text.find_from` share an
+allocation-free Two-Way byte search. For one invocation, preprocessing and
+search perform `O(n + m)` byte work for `n` remaining haystack bytes and `m`
+query bytes, using constant auxiliary space. Repeated prefixes and periodic
+queries must not make that invocation retry a query-sized prefix at every
+haystack position. The helper neither writes the input slices nor allocates
+scratch storage. Empty queries match at the supplied start; nonempty queries
+return the first match or absence. Existing UTF-8 validation and scalar-to-byte
+/ byte-to-scalar adapters preserve source scalar indices and add their own
+linear scans. A series of separate `find_from` calls may rescan prefixes through
+those adapters; this contract does not claim every composite text operation is
+linear.
+
+Deterministic regression checks count layout visits and execute the emitted
+search instructions with bounded byte loads. Integration tests also compile
+nested public records and execute actual generated Wasm on repetitive, periodic,
+empty, overlapping, and multibyte inputs. Wall-clock samples are supporting
+measurements, not CI correctness thresholds.
