@@ -1,0 +1,57 @@
+name: Abstraction contracts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  abstractions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm compiler:build
+      - name: Verify prelude snapshot freshness
+        run: git diff --exit-code -- generated/compiler/prelude.snapshot
+      - name: Pack exact diagnostic workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            git ls-files -z
+            printf 'generated/compiler/compiler.wasm\0'
+            printf 'generated/compiler/compiler-artifact.json\0'
+            printf '.pnp.cjs\0'
+            printf 'node_modules\0'
+          } > "$RUNNER_TEMP/blot-abstraction-workspace.files"
+          tar --create --gzip --file=blot-abstraction-workspace.tar.gz \
+            --null --files-from="$RUNNER_TEMP/blot-abstraction-workspace.files"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: blot-abstraction-workspace-${{ github.sha }}
+          path: blot-abstraction-workspace.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Qualify refactoring and revision contracts
+        run: node scripts/check_abstractions.mjs
