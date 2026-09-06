@@ -92,11 +92,24 @@ Deno.test("QCore schema rejects a field with no declared type", () => {
 });
 
 Deno.test("QCore schema rejects non-dense constructor tags", () => {
-  const malformedSource = schemaSource.replace(
-    '"name": "Prop", "tag": 1',
-    '"name": "Prop", "tag": 3',
-  );
-  const malformedSchema: unknown = JSON.parse(malformedSource);
+  const schema = decodeQCoreSchema(JSON.parse(schemaSource));
+  let changed = 0;
+  const malformedSchema = {
+    ...schema,
+    unions: schema.unions.map((union) => ({
+      name: union.name,
+      tag_type: union.tagType,
+      variants: union.variants.map((variant) => {
+        if (union.name !== "Universe" || variant.name !== "Prop") {
+          return variant;
+        }
+        assertEquals(variant.tag, 1);
+        changed += 1;
+        return { ...variant, tag: 3 };
+      }),
+    })),
+  };
+  assertEquals(changed, 1, "the negative fixture must change exactly one tag");
 
   assertThrows(
     () => decodeQCoreSchema(malformedSchema),
