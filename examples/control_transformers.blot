@@ -69,7 +69,10 @@ let observed = fn condition => case condition of
 
 return [
   [loop_sum, folded_sum],
-  [observed (describe loop_sum == "reached"), observed (choose loop_sum == "reached")],
+  [
+    observed (describe loop_sum == "reached"),
+    observed (choose loop_sum == "reached")
+  ],
   [observed (describe 0 == "short"), observed (choose 0 == "short")],
   [stepped.0, stepped.1],
   [called.0, called.1]

@@ -2385,6 +2385,24 @@ fn dynamic_export_function(
     } else {
         None
     };
+    // Preserve the incoming canonical lanes while translating field and tag
+    // order into the private runtime representation. In-place retagging can
+    // otherwise overwrite a tag needed by a later branch or product field.
+    let translate_arguments = public_export
+        .parameter_runtime_types
+        .iter()
+        .any(|type_| public_flat_needs_translation(module, *type_));
+    let canonical_arguments = if translate_arguments {
+        let saved = (0..parameter_count)
+            .map(|index| parameter_count + local_types.len() as u32 + index)
+            .collect::<Vec<_>>();
+        for public_type in public_export.parameter_types {
+            local_types.extend(flattened_type(public_type));
+        }
+        saved
+    } else {
+        Vec::new()
+    };
     let facts = FunctionEmissionFacts {
         runtime_layouts,
         value_locals: &value_locals,
@@ -2392,6 +2410,33 @@ fn dynamic_export_function(
     };
     let mut wasm_function = Function::new(compact_local_declarations(&local_types));
     let mut instructions = wasm_function.instructions();
+    for (index, saved) in canonical_arguments.iter().enumerate() {
+        instructions.local_get(index as u32).local_set(*saved);
+    }
+    let mut offset = 0;
+    for ((parameter, runtime_type), public_type) in entry
+        .parameters
+        .iter()
+        .zip(public_export.parameter_runtime_types)
+        .zip(public_export.parameter_types)
+    {
+        if !translate_arguments {
+            break;
+        }
+        let destination = locals_for(module, &value_locals, parameter.value)?;
+        let width = destination.len();
+        emit_translate_public_flat_value(
+            &mut instructions,
+            module,
+            runtime_layouts,
+            *runtime_type,
+            public_type,
+            &canonical_arguments[offset..offset + width],
+            destination,
+            false,
+        )?;
+        offset += width;
+    }
     begin_call(&mut instructions, public_export.call_id);
     let canonical_result = CanonicalResult {
         type_: public_export.result_type,
@@ -4579,8 +4624,25 @@ fn emit_canonical_return(
     let result = locals_for(module, value_locals, value)?;
     let flattened = flattened_type(canonical_result.type_);
     if flattened.len() <= 1 {
-        finish_call(instructions);
-        emit_local_values(instructions, result);
+        if flattened == [ValType::I32]
+            && public_flat_needs_translation(module, canonical_result.runtime_type)
+        {
+            emit_translate_public_flat_value(
+                instructions,
+                module,
+                facts.runtime_layouts,
+                canonical_result.runtime_type,
+                canonical_result.type_,
+                result,
+                &[canonical_result.pointer],
+                true,
+            )?;
+            finish_call(instructions);
+            instructions.local_get(canonical_result.pointer);
+        } else {
+            finish_call(instructions);
+            emit_local_values(instructions, result);
+        }
         return Ok(());
     }
     let layout = memory_layout(canonical_result.type_);
@@ -5614,6 +5676,187 @@ fn emit_load_canonical_result(
             emit_load_canonical_result(instructions, inner, destination, pointer, offset)
         }
     }
+}
+
+fn public_flat_needs_translation(module: &RuntimeModule, runtime_type: usize) -> bool {
+    match &module.types[runtime_type] {
+        // Canonical Boolean lanes are exactly 0 or 1, including at entry.
+        RuntimeType::Boolean => true,
+        RuntimeType::Sum { cases, .. } => {
+            cases.windows(2).any(|pair| pair[0].name > pair[1].name)
+                || cases
+                    .iter()
+                    .any(|case_| public_flat_needs_translation(module, case_.payload_type))
+        }
+        RuntimeType::Product { fields, .. } => {
+            fields.windows(2).any(|pair| pair[0].name > pair[1].name)
+                || fields
+                    .iter()
+                    .any(|field| public_flat_needs_translation(module, field.type_id))
+        }
+        RuntimeType::Sealed {
+            representation_type,
+            ..
+        } => public_flat_needs_translation(module, *representation_type),
+        _ => false,
+    }
+}
+
+/// Translate flat public values without assuming that canonical constructor
+/// order is the private runtime order. Source and destination lanes are disjoint.
+#[allow(clippy::too_many_arguments)]
+fn emit_translate_public_flat_value(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
+    runtime_type_id: usize,
+    public_type: &AbiType,
+    source: &[u32],
+    destination: &[u32],
+    to_public: bool,
+) -> Result<(), String> {
+    let runtime_type = module
+        .types
+        .get(runtime_type_id)
+        .ok_or_else(|| format!("unknown runtime type {runtime_type_id}"))?;
+    match (runtime_type, public_type) {
+        (RuntimeType::Boolean, AbiType::Boolean) => {
+            instructions
+                .local_get(source[0])
+                .i32_const(1)
+                .i32_gt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
+                .local_get(source[0])
+                .local_set(destination[0]);
+        }
+        (
+            RuntimeType::Product { fields, .. },
+            AbiType::Record {
+                fields: public_fields,
+            },
+        ) => {
+            let mut runtime_offset = 0;
+            for field in fields {
+                let runtime_width = runtime_layouts.flattened(module, field.type_id)?.len();
+                let mut public_offset = 0;
+                let mut matched = None;
+                for public_field in public_fields {
+                    let width = flattened_type(&public_field.type_).len();
+                    if public_field.name == field.name {
+                        matched = Some((public_field, public_offset, width));
+                        break;
+                    }
+                    public_offset += width;
+                }
+                let (public_field, public_offset, public_width) =
+                    matched.ok_or_else(|| format!("public record omitted field {}", field.name))?;
+                let (source_range, destination_range) = if to_public {
+                    (
+                        runtime_offset..runtime_offset + runtime_width,
+                        public_offset..public_offset + public_width,
+                    )
+                } else {
+                    (
+                        public_offset..public_offset + public_width,
+                        runtime_offset..runtime_offset + runtime_width,
+                    )
+                };
+                emit_translate_public_flat_value(
+                    instructions,
+                    module,
+                    runtime_layouts,
+                    field.type_id,
+                    &public_field.type_,
+                    &source[source_range],
+                    &destination[destination_range],
+                    to_public,
+                )?;
+                runtime_offset += runtime_width;
+            }
+        }
+        (
+            RuntimeType::Sum { cases, .. },
+            AbiType::Variant {
+                cases: public_cases,
+            },
+        ) => {
+            instructions
+                .local_get(source[0])
+                .i32_const(cases.len() as i32)
+                .i32_ge_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end();
+            let lane_types = if to_public {
+                flattened_type(public_type)
+            } else {
+                runtime_layouts.flattened(module, runtime_type_id)?.to_vec()
+            };
+            for (local, type_) in destination[1..].iter().zip(&lane_types[1..]) {
+                emit_zero_local(instructions, *type_, *local)?;
+            }
+            for (runtime_index, case_) in cases.iter().enumerate() {
+                let public_index = public_cases
+                    .iter()
+                    .position(|item| item.name == case_.name)
+                    .ok_or_else(|| format!("public variant omitted case {}", case_.name))?;
+                let (from, to) = if to_public {
+                    (runtime_index, public_index)
+                } else {
+                    (public_index, runtime_index)
+                };
+                instructions
+                    .local_get(source[0])
+                    .i32_const(from as i32)
+                    .i32_eq()
+                    .if_(BlockType::Empty);
+                instructions.i32_const(to as i32).local_set(destination[0]);
+                if let Some(payload) = &public_cases[public_index].payload {
+                    let width = flattened_type(payload).len();
+                    emit_translate_public_flat_value(
+                        instructions,
+                        module,
+                        runtime_layouts,
+                        case_.payload_type,
+                        payload,
+                        &source[1..1 + width],
+                        &destination[1..1 + width],
+                        to_public,
+                    )?;
+                }
+                instructions.end();
+            }
+        }
+        (
+            RuntimeType::Sealed {
+                representation_type,
+                ..
+            },
+            AbiType::Sealed { inner, .. },
+        ) => {
+            emit_translate_public_flat_value(
+                instructions,
+                module,
+                runtime_layouts,
+                *representation_type,
+                inner,
+                source,
+                destination,
+                to_public,
+            )?;
+        }
+        _ => {
+            if source.len() != destination.len() {
+                return Err("incompatible public flat value width".to_owned());
+            }
+            for (from, to) in source.iter().zip(destination) {
+                instructions.local_get(*from).local_set(*to);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn emit_store_public_result(

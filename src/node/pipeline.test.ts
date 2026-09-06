@@ -436,7 +436,9 @@ test("a module may directly return an effectful computation", async () => {
   try {
     await writeFile(
       path,
-      'module with init\n\nopen import "blot:prelude"\n\nreturn init.read () + 1\n',
+      // The test requires an i64 host ABI. An extensible member requirement
+      // alone cannot choose the receiver domain of an unknown host result.
+      'module with init\n\nopen import "blot:prelude"\n\nlet read :: Unit -> Int\nlet read = init.read\nreturn read () + 1\n',
     );
     const artifact = await compiler.compile(path);
     const manifest = decodeManifest(artifact.manifestBytes);

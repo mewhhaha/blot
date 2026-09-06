@@ -1398,6 +1398,26 @@ An opposite-polarity back edge makes both occurrences ineligible. Thus a cached
 settlement is always a completed polar observation, never the provisional top or
 bottom used to cut a cycle.
 
+Constraint interning and expansion preserve immutable shared children.
+Traversals over qualified requirements and free variables visit each shared node
+once per query; equality memoization also includes the quantifier scope. A
+shared requirement prefix may be reused across residual bodies only with the
+same bound graph. Requirement reachability caches complete strongly connected
+components, never a partial traversal of a cycle. New bounds, newly admitted or
+discharged requirements, and speculative rollback invalidate affected
+observations.
+
+A source-specialized call's selected result remains constrained into the
+original application result. Selecting a source body must not disconnect the
+result variable from array-element, member, or later caller constraints.
+
+Editor expression analysis retains immutable settled positive and negative views
+and the residual signature needed for display. String rendering and diagnostic
+normalization happen when requested, not eagerly for every private expression
+during compilation. This does not omit metadata or change the semantic
+specialization key; the retained recipe is independent of the next request's
+transient arena.
+
 Closure certificates normally retain the quantified residual signature. A
 compiler-generated closure whose residual signature cannot be reified, or a
 case-lowered closure whose signature exceeds the fixed per-root reference
@@ -1571,3 +1591,21 @@ another upper edge. Only the receiver's upper edges provide this evidence:
 lookup does not project a numeric element or field out of a container, nor use
 an unconstrained cycle as a default. The chosen member's complete signature is
 still constrained against the pending requirement.
+
+### Specialized source reflection and nominal carriers
+
+A source-defined constructor may inspect its argument's checked record type with
+a compile-time requirement predicate. The requirement is retained while a
+generic subject is open and checked at the concrete application; it is not
+satisfied by assigning an arbitrary narrow type to `@shape.names`. Struct
+construction rejects extra, missing, and incorrectly typed fields.
+
+Specializing a computed-field application can retain the more precise type of
+its successfully evaluated closed result after checking that result against the
+inferred result. Knowing such a value does not change the source parameter's
+runtime phase. Parameters shadow captured names in the value environment as well
+as in the type environment.
+
+An evaluated sealed value must have exactly the carrier identity required by a
+signed declaration. An unconstrained result from an attached constructor is not
+evidence that two same-named seals have the same carrier.

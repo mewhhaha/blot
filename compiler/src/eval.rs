@@ -588,11 +588,11 @@ enum ResidentOperatorMember {
     },
     Closure {
         module: String,
-        module_instances: Weak<ModuleInstanceScope>,
-        effect_scope: Weak<EffectScope>,
+        module_instances: Rc<ModuleInstanceScope>,
+        effect_scope: Rc<EffectScope>,
         parameter: PatternId,
         body: ExpressionId,
-        environment: Weak<Env>,
+        environment: Environment,
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
         signature: Option<Box<Value>>,
@@ -628,11 +628,11 @@ impl ResidentOperatorMember {
                 ..
             } => Some(Self::Closure {
                 module: module.as_str().to_owned(),
-                module_instances: Rc::downgrade(module_instances),
-                effect_scope: Rc::downgrade(effect_scope),
+                module_instances: module_instances.clone(),
+                effect_scope: effect_scope.clone(),
                 parameter: *parameter,
                 body: *body,
-                environment: Rc::downgrade(environment),
+                environment: environment.clone(),
                 self_name: self_name.clone(),
                 imports: imports.clone(),
                 signature: signature.clone(),
@@ -668,11 +668,11 @@ impl ResidentOperatorMember {
                 deferred,
             } => Some(Value::Closure {
                 module: Rc::new(module.clone()),
-                module_instances: module_instances.upgrade()?,
-                effect_scope: effect_scope.upgrade()?,
+                module_instances: module_instances.clone(),
+                effect_scope: effect_scope.clone(),
                 parameter: *parameter,
                 body: *body,
-                environment: environment.upgrade()?,
+                environment: environment.clone(),
                 self_name: self_name.clone(),
                 imports: imports.clone(),
                 signature: signature.clone(),
@@ -1726,6 +1726,7 @@ pub struct Runtime {
     signature_holes: Option<Rc<SignatureHoles>>,
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
+    instance_facts: Vec<Rc<crate::typecheck::ResidualInstanceFacts>>,
     checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
     comptime_call_results: Rc<RefCell<HashMap<ComptimeCallKey, Value>>>,
 }
@@ -1753,6 +1754,34 @@ struct BranchProgress {
 }
 
 impl Runtime {
+    fn expression_type(
+        &self,
+        context: &Context,
+        module: &str,
+        expression: ExpressionId,
+    ) -> Option<Value> {
+        self.instance_facts
+            .iter()
+            .rev()
+            .filter(|facts| facts.module == module)
+            .find_map(|facts| facts.expression_types.get(&expression).cloned())
+            .or_else(|| context.expression_type(module, expression))
+    }
+
+    fn closure_signature(
+        &self,
+        context: &Context,
+        module: &str,
+        body: ExpressionId,
+    ) -> Option<Value> {
+        self.instance_facts
+            .iter()
+            .rev()
+            .filter(|facts| facts.module == module)
+            .find_map(|facts| facts.closure_signatures.get(&body).cloned())
+            .or_else(|| context.closure_signature(module, body))
+    }
+
     pub fn new(phase: Phase, module: String) -> Self {
         let limit = 1_000_000;
         Self {
@@ -1765,6 +1794,7 @@ impl Runtime {
             signature_holes: None,
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
+            instance_facts: Vec::new(),
             checked_arguments: Rc::new(RefCell::new(HashMap::new())),
             comptime_call_results: Rc::new(RefCell::new(HashMap::new())),
         }
@@ -1800,6 +1830,7 @@ impl Runtime {
             signature_holes: self.signature_holes.clone(),
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
+            instance_facts: self.instance_facts.clone(),
             checked_arguments: self.checked_arguments.clone(),
             comptime_call_results: self.comptime_call_results.clone(),
         }
@@ -2257,9 +2288,10 @@ pub fn evaluate_expression(
     if let Some(variable) = signature_hole {
         return Computation::value(Value::TypeVariable(variable));
     }
-    let checked_representation = context
-        .expression_type(module_path.as_str(), expression_id)
+    let checked_representation = runtime
+        .expression_type(&context, module_path.as_str(), expression_id)
         .map(|type_| substitute_signature(&type_, &environment));
+    let is_definition = !matches!(expression, Expression::Var { .. });
     let representation_trace = runtime.residual.clone();
     let origin = module_path.clone();
     let computation = match expression {
@@ -2388,13 +2420,13 @@ pub fn evaluate_expression(
                 Ok(application) => application,
                 Err(error) => return Computation::error(error),
             };
-            let expected_result = context
-                .expression_type(module_path.as_str(), expression_id)
+            let expected_result = runtime
+                .expression_type(&context, module_path.as_str(), expression_id)
                 .map(|type_| substitute_signature(&type_, &environment));
             let function = *function;
             let argument = *argument;
-            let inferred_argument = context
-                .expression_type(module_path.as_str(), argument)
+            let inferred_argument = runtime
+                .expression_type(&context, module_path.as_str(), argument)
                 .map(|type_| substitute_signature(&type_, &environment));
             let expected_argument = inferred_argument
                 .clone()
@@ -2520,8 +2552,8 @@ pub fn evaluate_expression(
             ..
         } => {
             capture_env(&environment);
-            let signature = context
-                .closure_signature(module_path.as_str(), *body)
+            let signature = runtime
+                .closure_signature(&context, module_path.as_str(), *body)
                 .map(Box::new);
             Computation::value(Value::Closure {
                 module: module_path,
@@ -2684,6 +2716,9 @@ pub fn evaluate_expression(
                 trace
                     .borrow_mut()
                     .record_checked_aggregate_representation(&value, type_);
+                if is_definition {
+                    trace.borrow_mut().record_checked_value(&value, type_);
+                }
             }
             Computation::value(value)
         })
@@ -3296,11 +3331,10 @@ fn evaluate_sum_case(
         .iter()
         .map(|case_name| {
             arms.iter()
-                .find(|arm| {
-                    matches!(
-                        &loaded.arena.patterns[arm.pattern.0 as usize],
-                        Pattern::Constructor { name, .. } if name == case_name
-                    )
+                .find(|arm| match &loaded.arena.patterns[arm.pattern.0 as usize] {
+                    Pattern::Constructor { name, .. } => name == case_name,
+                    Pattern::Wildcard { .. } | Pattern::Name { .. } => true,
+                    _ => false,
                 })
                 .cloned()
         })
@@ -3308,7 +3342,7 @@ fn evaluate_sum_case(
     let Some(selected) = selected else {
         return Computation::error(Diagnostic::new(
             "BLOT_UNSUPPORTED_LOWERING",
-            "A dynamic sum case must cover every constructor explicitly.",
+            "A dynamic sum case must cover every constructor.",
             span,
         ));
     };
@@ -4021,6 +4055,7 @@ fn evaluate_declarations(
                         trace
                             .borrow_mut()
                             .record_checked_aggregate_representation(&value, &signature);
+                        trace.borrow_mut().record_checked_value(&value, &signature);
                     }
                 }
                 if recursive {
@@ -4479,15 +4514,18 @@ fn apply_with_expected(
             let mut argument = argument;
             let mut environment = environment;
             let mut residual_compilation = None;
+            let mut instance_facts = None;
             let recursive_signature = self_name
                 .as_deref()
                 .and_then(|name| lookup_signature(&environment, name));
-            let inferred_signature = context.closure_signature(closure_module.as_str(), body);
+            let inferred_signature =
+                runtime.closure_signature(&context, closure_module.as_str(), body);
             let signature = signature
                 .or_else(|| recursive_signature.map(Box::new))
                 .or_else(|| inferred_signature.map(Box::new));
-            let signature =
+            let mut signature =
                 signature.map(|signature| Box::new(substitute_signature(&signature, &environment)));
+
             let memoized_closure = (runtime.residual.is_none()
                 && memoizable_comptime_signature(signature.as_deref()))
             .then(|| ComptimeClosureIdentity {
@@ -4539,6 +4577,10 @@ fn apply_with_expected(
                         return Computation::value(value);
                     }
                     Ok(crate::hir::ResidualFunctionCall::Compile(compilation)) => {
+                        instance_facts = compilation.instance_facts.clone();
+                        if let Some(facts) = &instance_facts {
+                            signature = Some(Box::new(facts.signature.clone()));
+                        }
                         argument = compilation.argument.clone();
                         environment = compilation.environment.clone();
                         residual_compilation = Some((trace, compilation));
@@ -4551,7 +4593,15 @@ fn apply_with_expected(
                 domain, codomain, ..
             }) = signature.as_deref().map(signature_body)
             {
-                let signature_argument = expected_argument.as_ref().unwrap_or(&argument);
+                let actual_type = runtime
+                    .residual
+                    .as_ref()
+                    .and_then(|trace| trace.borrow().conservative_value_type(&argument));
+                let signature_argument = expected_argument
+                    .as_ref()
+                    .filter(|type_| !crate::value::contains_type_variables(type_))
+                    .or(actual_type.as_ref())
+                    .unwrap_or(&argument);
                 record_signature_substitutions(&scope, domain, signature_argument);
                 if let Some(expected_result) = &expected_result {
                     record_signature_substitutions(&scope, codomain, expected_result);
@@ -4591,6 +4641,14 @@ fn apply_with_expected(
                     Err(error) => return Computation::error(error),
                 }
             }
+            if let Some(Value::Arrow { domain, .. }) = signature.as_deref().map(signature_body)
+                && let Some(trace) = &runtime.residual
+            {
+                let checked_domain = substitute_signature(domain, &scope);
+                trace
+                    .borrow_mut()
+                    .record_checked_value(&argument, &checked_domain);
+            }
             let memo_key = memoized_closure.and_then(|closure| {
                 Some(ComptimeCallKey {
                     closure,
@@ -4620,6 +4678,9 @@ fn apply_with_expected(
                 ));
             }
             let mut closure_runtime = runtime;
+            if let Some(facts) = instance_facts {
+                closure_runtime.instance_facts.push(facts);
+            }
             let comptime_call_results = closure_runtime.comptime_call_results.clone();
             closure_runtime.module = closure_module.clone();
             closure_runtime.module_instances = module_instances;
@@ -5818,7 +5879,7 @@ fn signature_body(mut signature: &Value) -> &Value {
     signature
 }
 
-fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
+pub(crate) fn substitute_signature(signature: &Value, environment: &Environment) -> Value {
     fn substitution(environment: &Environment, variable: u32) -> Option<Value> {
         let mut scope = Some(environment.clone());
         while let Some(current) = scope {
@@ -6793,6 +6854,42 @@ mod operator_projection_regression_tests {
                 assert_eq!(error.code, "BLOT_NO_FIELD");
             }
         }
+    }
+
+    #[test]
+    fn attached_closure_lives_exactly_as_long_as_its_resident_owner() {
+        let environment = child_env(None);
+        let weak_environment = Rc::downgrade(&environment);
+        let module_instances = Rc::new(Vec::new());
+        let weak_instances = Rc::downgrade(&module_instances);
+        let effect_scope = Rc::new(Vec::new());
+        let weak_scope = Rc::downgrade(&effect_scope);
+        let value = Value::Closure {
+            module: Rc::new("members.blot".to_owned()),
+            module_instances,
+            effect_scope,
+            parameter: PatternId(0),
+            body: ExpressionId(0),
+            environment,
+            self_name: None,
+            imports: None,
+            signature: None,
+            reuse_assertion: None,
+            deferred: false,
+        };
+        let member = ResidentOperatorMember::capture(&value).unwrap();
+        drop(value);
+        let recovered = member
+            .materialize()
+            .expect("the resident attachment owns its closure");
+        assert!(weak_environment.upgrade().is_some());
+        assert!(weak_instances.upgrade().is_some());
+        assert!(weak_scope.upgrade().is_some());
+        drop(recovered);
+        drop(member);
+        assert!(weak_environment.upgrade().is_none());
+        assert!(weak_instances.upgrade().is_none());
+        assert!(weak_scope.upgrade().is_none());
     }
 
     #[test]

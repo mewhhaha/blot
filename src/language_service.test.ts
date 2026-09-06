@@ -323,7 +323,7 @@ Deno.test("each signature hole receives its inferred type", async () => {
   const uri = "untitled:signature-hole-hints.blot";
   const source = `open import "blot:prelude"
 let increment :: _ -> _
-let increment = fn value => value + 1
+let increment = fn value => Int.add value 1
 return increment
 `;
   try {

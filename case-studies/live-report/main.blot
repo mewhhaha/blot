@@ -15,4 +15,4 @@ return {
   // Keep quantity as a runtime input: checking constants alone would not
   // exercise the imported function's inferred requirement or residual call.
   .score = runtime_score;
-}
+  }

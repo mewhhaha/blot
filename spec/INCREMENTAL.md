@@ -498,6 +498,18 @@ prior facts and publishes new ones only with the successful snapshot. They
 cannot leak from a failed installation, another module's same-spelled effect, or
 another compiler session.
 
+The public semantic boundary includes the result, parameter, and effect roots.
+Computing that identity must not serialize or apply the complete-certificate
+budget to unrelated private expression facts. Exporting the full certificate
+still validates every private root and the existing aggregate budgets; this
+separation does not enlarge portable artifact limits.
+
+A resident operator attachment owns its callable environment, module-instance
+scope, and effect scope for the attachment's lifetime. Dropping a temporary
+evaluated module value must not silently remove an attached member. Removing or
+replacing the owning module releases that attachment under the ordinary resident
+invalidation rules; ownership is not transferred into a global cache.
+
 The cached-interface path requires all three of an eligible compile-time
 environment, a certificate with no generative effect label or opaque effect
 identity, and a validated AST containing no `@effect` or `@effect.host`

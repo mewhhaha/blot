@@ -6158,6 +6158,32 @@ mod tests {
     }
 
     #[test]
+    fn module_effectful_operator_result_retains_source_domain() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session.add_source("main.blot".to_owned(), source(
+            "module with init\n\nopen import \"blot:prelude\"\n\nlet read :: Unit -> Int\nlet read = init.read\nreturn read () + 1\n",
+        )).unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
     fn module_capability_signatures_follow_monomorphic_effect_results() {
         let mut session = CompilerSession::default();
         session
@@ -8429,6 +8455,143 @@ return F32.add (-1) 2.5
     }
 
     #[test]
+    fn source_defined_struct_checks_reflected_field_names() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+const Point = struct { .x = I32; .y = I32; }
+let p :: Point
+let p = Point.new { .y = 20; .x = 10; }
+return (Point.x p, Point.y p)
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(evaluated["display"], "(10, 20)", "{evaluated}");
+            session.compile_module("main.blot").unwrap();
+        });
+    }
+
+    #[test]
+    fn source_defined_struct_refuses_extra_missing_and_wrongly_typed_fields() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            for argument in [
+                "{ .x = 1; .y = 2; .z = 3; }",
+                "{ .x = 1; }",
+                "{ .x = \"wrong\"; .y = 2; }",
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                    .unwrap();
+                session.add_source("main.blot".to_owned(), source(&format!(
+                    "open import \"blot:prelude\"\nconst Point = struct {{ .x = I32; .y = I32; }}\nreturn Point.new {argument}\n"
+                ))).unwrap();
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], false, "{argument}: {checked}");
+            }
+        });
+    }
+
+    #[test]
+    fn an_attached_constructor_cannot_forge_a_sealed_carrier() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../examples/rejected/semantics/seal_carrier_mismatch.blot"
+                    )),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], false, "{checked}");
+            assert_eq!(
+                checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                "{checked}"
+            );
+        });
+    }
+
+    #[test]
+    fn tuple_case_keeps_dynamic_boolean_and_integer_decisions() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"const Int = @type.int
+const Bool = @type.union #True #False
+let pick :: (Bool, Int) -> Int
+let pick = fn (trunk, y) => case (trunk, @int.rem y 3) of
+  (#True, _) => 10
+  (_, 0) => 20
+  (_, 1) => 30
+  _ => 40
+return { .pick = pick; }
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let wasm = session.compile_module("main.blot").unwrap();
+            assert!(!wasm.wasm.is_empty());
+        });
+    }
+
+    #[test]
     fn dynamic_integer_case_lowers_every_literal_before_the_wildcard() {
         let mut session = CompilerSession::default();
         session
@@ -9596,6 +9759,155 @@ return F32.add (-1) 2.5
             session
                 .compile_module("main.blot")
                 .expect("frame loop should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn qualified_array_element_helpers_preserve_each_numeric_domain() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+const element :: @forall (fn T => ([T], Int) -> T)
+const element = fn (&values, index) => do:
+  return case Array.get ((&values), index) of
+    #Some value => value
+    #None => @panic "missing element"
+const twice_first = fn &values => do:
+  let value = element ((&values), 0)
+  return value + value
+return (twice_first [2], twice_first [2.0], twice_first [@f32.of_int 2])
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(
+                checked["type"], "{ .0 = Int; .1 = F64; .2 = F32 }",
+                "{checked}"
+            );
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(evaluated["display"], "(4, 4, 4f32)", "{evaluated}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("mixed domains must emit Wasm");
+        });
+    }
+
+    #[test]
+    fn residual_nested_loops_do_not_read_outer_parameter_values() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+const directions = [{ .x = 1; }, { .x = 2; }]
+let run :: Int -> Int
+let run = fn count => do:
+  let voxels = 0
+  for x in Iter.range (0, count):
+    let branch = False
+    for direction in Iter.items (Array.copy (&directions)):
+      branch := branch || x < direction.x
+    if branch:
+      voxels := voxels + 1
+  return voxels
+return { .run = run; }
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("nested loop captures must emit Wasm");
+        });
+    }
+
+    #[test]
+    fn residual_effectful_array_iteration_keeps_captured_element_evidence() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(
+                        r#"open import "blot:prelude"
+const Canvas = @effect.host {
+  .enabled = Unit -> Bool;
+  .seed = Unit -> Int;
+  .voxel = { .x = Int; .color = Int; } -> Unit;
+}
+const upload = fn (start, &voxels) => do:
+  use enabled <- Canvas.enabled ()
+  if enabled:
+    let count = Array.length (&voxels)
+    for index in Iter.range (start, count):
+      let voxel = Array.expect_get ((&voxels), index)
+      use Canvas.voxel { .x = voxel.x * 225; .color = voxel.color; }
+use seed <- Canvas.seed ()
+let voxels = [{ .x = seed; .color = seed; }]
+use upload (seed, (&voxels))
+return ()
+"#,
+                    ),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("captured elements must emit Wasm");
         });
     }
 

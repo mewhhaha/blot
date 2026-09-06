@@ -934,6 +934,27 @@ Typed Core retains a live host-effect capability when runtime code refers to it.
 Other compile-time constants are specialized at their uses; Core never leaves an
 ordinary variable for a host capability whose definition it removed.
 
+When a recursive or development-boundary call needs a concrete interface,
+specialization may apply the ordinary source checker to its checked body using
+the actual argument and lexical capture evidence. It must discharge the same
+member, effect, refinement, and ownership obligations before emitting runtime
+code; an unresolved interface is still refused. Parameter shadowing also applies
+during this check: a runtime parameter never reads an outer value with the same
+name. A call's result keeps its original relationship to the caller's
+constraints, including polymorphic array element types. A machine representation
+alone does not prove a refinement or confer ownership.
+
+A host operation used through a source-defined operator needs enough type
+evidence to fix its ABI. For example, `init.read () + 1` alone does not prove
+that an otherwise unknown `init.read` returns `Int`: the receiver may define a
+different `.add` member. Giving the operation a `Unit -> Int` signature supplies
+that evidence without defaulting unconstrained types.
+
+A tuple expression used as a case subject is strict: all components are
+evaluated once in order before a row is selected, including components ignored
+by that row. Scalar field patterns still test runtime values; an unknown runtime
+field is not a compile-time mismatch. Catch-all rows follow source order.
+
 A function retains the meaning of its captured bindings across specialization.
 Equal function types do not make differently captured compile-time values
 interchangeable. For example, getters constructed with `"left"` and `"right"`
@@ -4012,3 +4033,8 @@ ABI support. See `docs/hosted-applications.md` for the adapter contract and its
 explicit non-sandbox and non-suspending boundaries. `blot pack` uses the
 existing package semantics, and `blot explain` displays existing Rust compiler
 facts; neither adds an alternative semantic compiler.
+
+A `struct` constructor checks field names on the specialized source record and
+rejects extra, missing, or wrongly typed fields. Evaluating an attached
+constructor does not erase a seal's invariant carrier identity. Equal displayed
+seal names alone do not satisfy a signed declaration.

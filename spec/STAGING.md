@@ -251,9 +251,29 @@ is specialization of its checked body with actual arguments, not invention of a
 runtime function signature or erasure of qualified member requirements. Every
 operation and aggregate that reaches Runtime HIR still requires its resolved
 member, checked ownership facts, and closed representation. A recursive helper
-or a development boundary does not receive this fallback: outlining it still
-requires the corresponding settled interface. A present but malformed interface
-is not treated as a missing one.
+or a development boundary cannot use this inlining fallback. When its source
+signature is not reifiable, the ordinary Rust source checker may derive an
+instance signature from the actual argument and checked lexical captures.
+Outlining still requires that derived interface to be settled; unresolved member
+requirements, effects, or representations remain refusals. A present but
+malformed interface is not treated as a missing one.
+
+Instance checking closes the value environment over lexical free names,
+excluding the parameter and recursive self binding. An unknown parameter must
+never read an outer value with the same spelling, including generated loop
+accumulator names. Checked expression and nested-closure facts belong to that
+instance and are restored when leaving it, rather than overwriting facts for
+other calls of the same source body.
+
+Source type evidence, including refinements, is retained across runtime
+parameter and capture renaming. An unrefined physical carrier may identify an
+integer, floating-point, collection, or recursive aggregate representation, but
+cannot supply a source refinement, nominal seal, or ownership permission.
+Captured record fields retain closed callable signatures independently: an
+unknown field does not erase another field's quantified contract. Free
+representation holes are not genuine quantified binders and must not be admitted
+as rigid source evidence. Sum arguments are lowered against their
+call-site-substituted representation, not the original open signature spelling.
 
 ### 8.1 Residual code sharing is an environment judgment
 
@@ -411,3 +431,12 @@ Staging and specialization owe:
 Tests and validation passes provide finite evidence for these obligations. A
 successful build does not by itself prove phase safety or the whole-compiler
 observation theorem.
+
+### Strict tuple case decisions
+
+A case whose subject is a tuple expression evaluates the complete tuple once
+before selecting a row, even when the first row ignores a later field. Scalar
+constructor/integer field probes are lowered to the existing scalar decision
+matrix; runtime fields are not treated as failed compile-time matches. This
+normalization does not flatten arbitrary product values or add support for new
+payload-pattern forms. Sum dispatch includes catch-all rows in source order.

@@ -552,3 +552,10 @@ The runtime boundary owes:
 Passing Wasm validation establishes target well-formedness, not source-language
 correctness. ABI round trips, differential execution, and validation tests are
 separate evidence for the obligations above.
+
+Public flat function arguments use canonical field and constructor order, not
+the private Runtime HIR order. The entry adapter translates by field and
+constructor name before running the body. Direct one-lane variant results
+likewise translate back to canonical tags; a single i32 lane is not evidence
+that the public and internal tag meanings agree. These translations do not
+change the ABI version or the source constructor meanings.
