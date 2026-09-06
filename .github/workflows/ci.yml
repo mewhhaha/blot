@@ -64,6 +64,8 @@ jobs:
           --allow-run=cargo,git,rustc
           --allow-env
           scripts/build_compiler.ts
+      - name: Check tracked prelude snapshot freshness
+        run: git diff --exit-code -- generated/compiler/prelude.snapshot
       - name: Upload Rust compiler artifact
         uses: actions/upload-artifact@v7
         with:

@@ -426,6 +426,19 @@ with no significant regression at another boundary; relabeling the same work is
 rejected. The benchmark contract and reproduction commands are recorded in
 [`experiments/compiler-bench/README.md`](../experiments/compiler-bench/README.md).
 
+The focused host-boundary comparison in
+[`experiments/host-boundary-bench/README.md`](../experiments/host-boundary-bench/README.md)
+measures transport encoding and decoding separately from compiler work. Its
+resident-compiler boundary includes a fresh semantic session, source transfer,
+compilation, artifact extraction, and session teardown, with the same validated
+Rust/Wasm artifact for both hosts. Its `runArtifact` boundary includes guest
+instantiation, result decoding, post-return, and formatting; it is not a warmed
+guest-execution measurement. Small inputs and shallow results are control cases.
+Exact frame bytes, emitted Wasm and manifest bytes, and decoded observations
+must agree before timing. Every sample and both input-identity captures are
+retained; these focused results do not establish whole-corpus optimality or
+replace the compiler and conformance gates.
+
 ## 6. Prelude economics
 
 The prelude is an ordinary, comparatively large source module imported by most

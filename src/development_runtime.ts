@@ -1,3 +1,4 @@
+import { AbiMemoryLayouts } from "./compiler/backend/runtime/memory_layout.ts";
 import type {
   BlotAbiFunction,
   BlotAbiType,
@@ -9,6 +10,8 @@ import type {
 } from "./development.ts";
 import type { DevelopmentUnitArtifact } from "./compiler/session.ts";
 import { developmentRevision } from "./development_identity.ts";
+
+const memoryLayouts = new AbiMemoryLayouts();
 
 type WasmValue = number | bigint;
 type Reallocate = (
@@ -1138,86 +1141,117 @@ function invokeLink(
     );
   }
 
-  let offset = 0;
-  const providerArguments: WasmValue[] = [];
-  for (const parameter of function_.parameters) {
-    const width = flattenedAbiType(parameter).length;
-    providerArguments.push(...copyFlatValue(
-      parameter,
-      arguments_.slice(offset, offset + width),
-      consumerMemory,
-      providerMemory,
-      providerReallocate,
-      allocations,
-    ));
-    offset += width;
-  }
-
-  const callable = requiredExportedFunction(provider.instance, exportName);
-  let providerResultPointer: number | undefined;
+  let resultReallocate: Reallocate | undefined;
+  const resultAllocations: Allocation[] = [];
   try {
-    const raw = callable(...providerArguments);
-    if (resultWidth === 0) return undefined;
-    if (resultWidth === 1) {
-      if (!isWasmValue(raw)) {
+    let providerResultPointer: number | undefined;
+    try {
+      let offset = 0;
+      const providerArguments: WasmValue[] = [];
+      for (const parameter of function_.parameters) {
+        const width = flattenedAbiType(parameter).length;
+        providerArguments.push(...copyFlatValue(
+          parameter,
+          arguments_.slice(offset, offset + width),
+          consumerMemory,
+          providerMemory,
+          providerReallocate,
+          allocations,
+        ));
+        offset += width;
+      }
+
+      const callable = requiredExportedFunction(provider.instance, exportName);
+      const raw = callable(...providerArguments);
+      if (resultWidth === 0) return undefined;
+      if (resultWidth === 1) {
+        if (!isWasmValue(raw)) {
+          throw new Error(
+            `development export ${
+              JSON.stringify(exportName)
+            } returned an invalid direct value`,
+          );
+        }
+        resultReallocate = requiredReallocateFromInstance(
+          consumer,
+          consumerName,
+        );
+        return copyFlatValue(
+          function_.result,
+          [raw],
+          providerMemory,
+          consumerMemory,
+          resultReallocate,
+          resultAllocations,
+        )[0];
+      }
+      if (typeof raw !== "number") {
         throw new Error(
           `development export ${
             JSON.stringify(exportName)
-          } returned an invalid direct value`,
+          } omitted its result pointer`,
         );
       }
-      return copyFlatValue(
+      providerResultPointer = raw;
+      const resultPointer = arguments_[arguments_.length - 1];
+      if (typeof resultPointer !== "number") {
+        throw new Error(
+          `development link ${
+            JSON.stringify(exportName)
+          } received an invalid caller result pointer`,
+        );
+      }
+      resultReallocate = requiredReallocateFromInstance(consumer, consumerName);
+      copyMemoryValue(
         function_.result,
-        [raw],
         providerMemory,
+        raw,
         consumerMemory,
-        requiredReallocateFromInstance(consumer, consumerName),
-        [],
-      )[0];
-    }
-    if (typeof raw !== "number") {
-      throw new Error(
-        `development export ${
-          JSON.stringify(exportName)
-        } omitted its result pointer`,
+        resultPointer,
+        resultReallocate,
+        resultAllocations,
       );
+      return undefined;
+    } finally {
+      try {
+        if (
+          exported.postReturn !== null && providerResultPointer !== undefined
+        ) {
+          const postReturn = requiredExportedFunction(
+            provider.instance,
+            exported.postReturn,
+          );
+          postReturn(providerResultPointer);
+        }
+      } finally {
+        releaseAllocations(providerReallocate, allocations);
+      }
     }
-    providerResultPointer = raw;
-    const resultPointer = arguments_[arguments_.length - 1];
-    if (typeof resultPointer !== "number") {
-      throw new Error(
-        `development link ${
-          JSON.stringify(exportName)
-        } received an invalid caller result pointer`,
-      );
+  } catch (error) {
+    // A partially copied result is not transferred when the call or cleanup traps.
+    if (resultReallocate !== undefined) {
+      releaseAllocations(resultReallocate, resultAllocations);
     }
-    copyMemoryValue(
-      function_.result,
-      providerMemory,
-      raw,
-      consumerMemory,
-      resultPointer,
-      requiredReallocateFromInstance(consumer, consumerName),
-      [],
-    );
-    return undefined;
-  } finally {
-    if (exported.postReturn !== null && providerResultPointer !== undefined) {
-      const postReturn = requiredExportedFunction(
-        provider.instance,
-        exported.postReturn,
-      );
-      postReturn(providerResultPointer);
-    }
-    for (const allocation of allocations.reverse()) {
-      providerReallocate(
-        allocation.pointer,
-        allocation.size,
-        allocation.alignment,
-        0,
-      );
+    throw error;
+  }
+}
+
+function releaseAllocations(
+  reallocate: Reallocate,
+  allocations: readonly Allocation[],
+): void {
+  let failed = false;
+  let failure: unknown;
+  for (let index = allocations.length - 1; index >= 0; index -= 1) {
+    const allocation = allocations[index];
+    try {
+      reallocate(allocation.pointer, allocation.size, allocation.alignment, 0);
+    } catch (error) {
+      if (!failed) failure = error;
+      failed = true;
     }
   }
+  if (failed) throw failure;
 }
 
 function copyFlatValue(
@@ -1260,7 +1294,7 @@ function copyFlatValue(
   if (type.kind === "array") {
     const pointer = requiredPointer(values[0], "array pointer");
     const length = requiredLength(values[1], "array length");
-    const element = memoryLayout(type.element);
+    const element = memoryLayouts.get(type.element);
     const size = checkedSize(length, element.size, "array allocation");
     const copied = allocate(
       targetReallocate,
@@ -1330,7 +1364,7 @@ function copyMemoryValue(
   targetReallocate: Reallocate,
   allocations: Allocation[],
 ): void {
-  const layout = memoryLayout(type);
+  const layout = memoryLayouts.get(type);
   requireMemoryRange(sourceMemory, sourcePointer, layout.size, "source value");
   requireMemoryRange(targetMemory, targetPointer, layout.size, "target value");
   if (type.kind === "unit") return;
@@ -1399,7 +1433,7 @@ function copyMemoryValue(
     const source = readView(sourceMemory);
     const pointer = source.getUint32(sourcePointer, true);
     const length = source.getUint32(sourcePointer + 4, true);
-    const element = memoryLayout(type.element);
+    const element = memoryLayouts.get(type.element);
     const size = checkedSize(length, element.size, "array allocation");
     const copied = allocate(
       targetReallocate,
@@ -1424,7 +1458,7 @@ function copyMemoryValue(
     return;
   }
   if (type.kind === "record") {
-    for (const field of recordLayout(type)) {
+    for (const field of memoryLayouts.get(type).fields) {
       copyMemoryValue(
         field.type,
         sourceMemory,
@@ -1437,7 +1471,7 @@ function copyMemoryValue(
     }
     return;
   }
-  const variant = variantLayout(type);
+  const variant = memoryLayouts.get(type);
   const source = readView(sourceMemory);
   let tag: number;
   if (variant.discriminantSize === 1) tag = source.getUint8(sourcePointer);
@@ -1544,70 +1578,6 @@ function requiredExportedFunction(
   return value as (...arguments_: WasmValue[]) => unknown;
 }
 
-function memoryLayout(type: BlotAbiType): { alignment: number; size: number } {
-  if (type.kind === "unit") return { alignment: 1, size: 0 };
-  if (type.kind === "boolean") return { alignment: 1, size: 1 };
-  if (type.kind === "float-32") return { alignment: 4, size: 4 };
-  if (type.kind === "signed-integer-64" || type.kind === "float-64") {
-    return { alignment: 8, size: 8 };
-  }
-  if (type.kind === "text" || type.kind === "array") {
-    return { alignment: 4, size: 8 };
-  }
-  if (type.kind === "sealed") return memoryLayout(type.inner);
-  if (type.kind === "record") {
-    const fields = recordLayout(type);
-    const alignment = fields.reduce(
-      (maximum, field) => Math.max(maximum, memoryLayout(field.type).alignment),
-      1,
-    );
-    const end = fields.reduce(
-      (maximum, field) =>
-        Math.max(
-          maximum,
-          field.offset + memoryLayout(field.type).size,
-        ),
-      0,
-    );
-    return { alignment, size: alignTo(end, alignment) };
-  }
-  const variant = variantLayout(type);
-  return { alignment: variant.alignment, size: variant.size };
-}
-
-function recordLayout(type: Extract<BlotAbiType, { kind: "record" }>) {
-  let offset = 0;
-  return type.fields.map((field) => {
-    const layout = memoryLayout(field.type);
-    offset = alignTo(offset, layout.alignment);
-    const result = { ...field, offset };
-    offset += layout.size;
-    return result;
-  });
-}
-
-function variantLayout(type: Extract<BlotAbiType, { kind: "variant" }>) {
-  let discriminantSize = 4;
-  if (type.cases.length <= 65_536) discriminantSize = 2;
-  if (type.cases.length <= 256) discriminantSize = 1;
-  let payloadAlignment = 1;
-  let payloadSize = 0;
-  for (const case_ of type.cases) {
-    if (case_.payload === undefined) continue;
-    const layout = memoryLayout(case_.payload);
-    payloadAlignment = Math.max(payloadAlignment, layout.alignment);
-    payloadSize = Math.max(payloadSize, layout.size);
-  }
-  const alignment = Math.max(discriminantSize, payloadAlignment);
-  const payloadOffset = alignTo(discriminantSize, payloadAlignment);
-  return {
-    discriminantSize,
-    payloadOffset,
-    alignment,
-    size: alignTo(payloadOffset + payloadSize, alignment),
-  };
-}
-
 function requiredPointer(
   value: WasmValue | undefined,
   position: string,
@@ -1665,10 +1635,6 @@ function checkedSize(count: number, size: number, position: string): number {
     throw new RangeError(`${position} ${count} * ${size} exceeds memory32`);
   }
   return result;
-}
-
-function alignTo(value: number, alignment: number): number {
-  return Math.ceil(value / alignment) * alignment;
 }
 
 function readView(memory: WebAssembly.Memory): DataView {
