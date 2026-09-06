@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "@std/path";
 import { compareCodeUnits } from "./text_order.ts";
+import { relativeWithinRoot } from "./host_paths.ts";
 import { Compiler } from "./compiler/session.ts";
 import { load, type Loaded, refreshLoadedModules } from "./load.ts";
 import {
@@ -171,14 +172,14 @@ function moduleCapsule(
 }
 
 function packageRelativeName(packageRoot: string, path: string): string {
-  const fromRoot = relative(packageRoot, path).replaceAll("\\", "/");
-  if (fromRoot.length === 0) return ".";
-  if (fromRoot !== ".." && !fromRoot.startsWith("../")) {
-    return `./${fromRoot}`;
+  const fromRoot = relativeWithinRoot(packageRoot, path);
+  if (fromRoot === null) {
+    throw new Error(
+      `package-owned module ${JSON.stringify(path)} is outside ${
+        JSON.stringify(packageRoot)
+      }`,
+    );
   }
-  throw new Error(
-    `package-owned module ${JSON.stringify(path)} is outside ${
-      JSON.stringify(packageRoot)
-    }`,
-  );
+  if (fromRoot.length === 0) return ".";
+  return `./${fromRoot}`;
 }

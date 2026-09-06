@@ -26,7 +26,10 @@ A project uses a `blot-project` manifest:
 Unit names start with a lowercase letter and may contain lowercase letters,
 digits, and `-`. Every source path must be a relative `.blot` path confined to
 the manifest directory. Two units cannot name the same root, and `entryUnit`
-must name one declared unit.
+must name one declared unit. Confinement uses the same host-native, lexical
+path check as [package exports](../spec/PACKAGES.md#2-logical-and-physical-identity):
+filename characters cannot choose the separator, and another Windows drive or
+UNC share is outside the root. This is not a symlink-resolving filesystem sandbox.
 
 The configured roots are reload boundaries, not a second module system. Source
 still uses ordinary relative imports:
