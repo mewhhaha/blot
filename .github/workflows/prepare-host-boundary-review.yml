@@ -1,0 +1,48 @@
+name: Prepare host-boundary review
+on:
+  push:
+    branches: [review/prepare-host-boundaries-20260906]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Materialize the reviewed patch and check formatting and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach 03de7962b8e72365c4bb918e60309bb98f6d9cdd
+          python3 - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          encoded = '''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'''
+          patch = gzip.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == 'ab4837fb0789fb12bd6013a688be7861ae911038c23f85bb4b8bc69ffc28ca3c'
+          Path('/tmp/host-boundary-review.patch').write_bytes(patch)
+          PY
+          git apply --index /tmp/host-boundary-review.patch
+          files=(src/compiler/session.ts src/compiler/binary_frame.ts src/compiler/binary_frame.test.ts src/compiler/host_boundaries.test.ts src/node/run.ts src/node/run.test.ts spec/COHERENCE.md docs/theory-implementation-review-2026-09-06.md)
+          deno fmt "${files[@]}"
+          deno fmt --check "${files[@]}"
+          deno lint src/compiler/session.ts src/compiler/binary_frame.ts src/compiler/binary_frame.test.ts src/compiler/host_boundaries.test.ts src/node/run.ts src/node/run.test.ts
+          git add "${files[@]}"
+          git diff --cached --check
+          git -c user.name='Blot review' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Preserve host text, HIR snapshot ownership, and dependency agreement'
+          git push origin HEAD:refs/heads/review/host-boundary-integrity
+          mkdir -p /tmp/host-boundary-review
+          git rev-parse HEAD > /tmp/host-boundary-review/commit.txt
+          git archive HEAD "${files[@]}" > /tmp/host-boundary-review/source.tar
+          git diff 03de7962b8e72365c4bb918e60309bb98f6d9cdd HEAD --binary > /tmp/host-boundary-review/review.patch
+      - uses: actions/upload-artifact@v7
+        with:
+          name: host-boundary-review
+          path: /tmp/host-boundary-review/
+          retention-days: 7
