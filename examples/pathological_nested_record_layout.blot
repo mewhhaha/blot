@@ -1,0 +1,8 @@
+// PATHOLOGICAL BUT SUPPORTED: a one-field wrapper has one child layout,
+// not three independently recomputed layouts. Two leaves require an indirect
+// canonical result and keep the layout path live in the emitted export.
+open import "blot:prelude"
+let nested :: Int -> { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .a = Int; .b = Int; }; }; }; }; }; }; }; }; }; }; }; }; }
+let nested = fn input => { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .child = { .a = input; .b = input + 1; }; }; }; }; }; }; }; }; }; }; }; }; }
+let example = nested 41
+return { .value = example.child.child.child.child.child.child.child.child.child.child.child.child.b; .nested = nested; }

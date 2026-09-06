@@ -21,6 +21,7 @@ import { CompilerWasm } from "../../src/compiler/wasm.ts";
 import { runArtifact } from "../../src/node/run.ts";
 import { indirectResultFixture } from "../../test_support/indirect_result_fixture.ts";
 
+const collectGarbage: unknown = Reflect.get(globalThis, "gc");
 const candidateRoot = fileURLToPath(new URL("../../", import.meta.url));
 const baselineArgument = process.argv[2];
 if (baselineArgument === undefined) {
@@ -218,7 +219,7 @@ try {
       warmups,
       aggregation:
         "median of per-invocation milliseconds; alternating baseline/candidate order",
-      gcBeforeEachSample: typeof globalThis.gc === "function",
+      gcBeforeEachSample: typeof collectGarbage === "function",
       setup:
         "module loading, fixture creation, Wasm compiler instantiation, and parity checks are outside timing",
       runtimeBoundary:
@@ -262,7 +263,7 @@ async function measure(
     for (const side of order) {
       let operation = before;
       if (side === "candidate") operation = after;
-      globalThis.gc?.();
+      if (typeof collectGarbage === "function") collectGarbage.call(globalThis);
       let sink = 0;
       const start = performance.now();
       for (let invocation = 0; invocation < invocations; invocation += 1) {
