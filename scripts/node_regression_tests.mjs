@@ -16,6 +16,11 @@ if (configuredTimeout !== undefined) {
 }
 
 const tests = await discoverRegressionTests(".");
+if (tests.length === 0) {
+  throw new Error(
+    "No regression tests were discovered; refusing an empty successful run.",
+  );
+}
 
 for (const [index, test] of tests.entries()) {
   console.log(
