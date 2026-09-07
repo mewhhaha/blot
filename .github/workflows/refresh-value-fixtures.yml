@@ -1,0 +1,77 @@
+name: Refresh value-pathology fixtures
+
+on:
+  push:
+    branches:
+      - fix/value-type-pathologies-20260907
+    paths:
+      - .github/workflows/refresh-value-fixtures.yml
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: github.repository == 'mewhhaha/blot' && github.ref == 'refs/heads/fix/value-type-pathologies-20260907'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.19.0
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: pnpm install --frozen-lockfile
+      - name: Rebuild compiler and generated prelude through the standard build
+        run: pnpm compiler:build
+      - name: Commit only the regenerated tracked snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --stat
+          python3 - <<'PY'
+          import subprocess
+          changed = subprocess.check_output(['git', 'diff', '--name-only']).decode().splitlines()
+          assert set(changed) <= {'generated/compiler/prelude.snapshot'}, changed
+          PY
+          git add -- generated/compiler/prelude.snapshot
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'build: regenerate prelude snapshot after exact aggregate type correction'
+            git push origin HEAD:refs/heads/fix/value-type-pathologies-20260907
+          fi
+          git diff --exit-code -- generated/compiler/prelude.snapshot
+      - name: Package diagnostic source, compiler, and formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/value-diagnostics"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/value-diagnostics/source.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/value-diagnostics/commit.txt"
+          cp generated/compiler/compiler.wasm generated/compiler/compiler-artifact.json "$RUNNER_TEMP/value-diagnostics/"
+          cp "$(command -v deno)" "$RUNNER_TEMP/value-diagnostics/deno"
+          cd "$RUNNER_TEMP/value-diagnostics"
+          sha256sum source.tar.gz compiler.wasm compiler-artifact.json deno > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: value-pathology-diagnostics
+          path: ${{ runner.temp }}/value-diagnostics/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Test native exact conversion and value graph contracts
+        run: cargo test --manifest-path compiler/Cargo.toml value_ -- --nocapture
+      - name: Test all source value-pathology fixtures
+        run: node --import ./src/node/deno_test_compat.mjs --import tsx --test src/compiler/value_pathologies.test.ts
