@@ -1,0 +1,10 @@
+// Callable values retain their inferred types through structural containers.
+open import "blot:prelude"
+const increment = fn number => @int.add number 1
+const outer = #Outer (#Inner increment)
+const box = case outer of
+  #Outer inner => inner
+let result :: Int
+let result = case box of
+  #Inner call => call 41
+return result

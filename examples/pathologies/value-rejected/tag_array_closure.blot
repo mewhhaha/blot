@@ -1,0 +1,6 @@
+// A tagged array retains every element type.
+open import "blot:prelude"
+const values = #Some [1, fn item => item]
+let rejected :: #Some [1]
+let rejected = values
+return rejected

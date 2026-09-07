@@ -1,0 +1,7 @@
+// Constructor payloads retain curried callback signatures.
+open import "blot:prelude"
+const box = #Some (fn left => fn right => @int.add left right)
+let result :: Int
+let result = case box of
+  #Some call => call 40 2
+return result

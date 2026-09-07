@@ -1,0 +1,6 @@
+// A callable constructor payload cannot satisfy unit.
+open import "blot:prelude"
+const value = #Some (fn item => item)
+let rejected :: #Some Unit
+let rejected = value
+return rejected

@@ -1609,3 +1609,30 @@ as in the type environment.
 An evaluated sealed value must have exactly the carrier identity required by a
 signed declaration. An unconstrained result from an attached constructor is not
 evidence that two same-named seals have the same carrier.
+
+## Exact value conversion and shared graphs
+
+An optional exact conversion of an evaluated constant succeeds only when every
+structural child converts. Unsupported array, region, or union members refuse
+the whole conversion. A present but unsupported constructor payload is not unit.
+Refusal leaves the already-inferred source type intact; a canonical-signature
+consumer reports its ordinary source diagnostic. This distinction prevents
+functions hidden inside constants from disappearing before subtype checking.
+
+One conversion memoizes immutable record storage within that call. It preserves
+sharing in the resulting type rows, but does not cache a record whose conversion
+allocated fresh inference variables, including empty-array element variables.
+Thus repeated structural paths do not couple independent fresh instantiations.
+No storage address enters a semantic identity, interface, or persistent cache.
+
+Compile-time instance-reusability and type-variable collection traverse value
+DAGs with explicit work stacks and call-local visited sets. For V distinct
+values and E edges, visitation uses expected O(V + E) hash-table work;
+variable-set insertion additionally has its ordinary ordered-set cost. These
+bounds do not claim that every compiler pass, or an explicitly expanded printed
+type, is linear.
+
+Native regression tests use depth-30 shared diamonds and count visits rather
+than timing the machine. Source regressions preserve principal types, evaluator
+observations, and Wasm results for valid programs, and ensure invalid programs
+parse before reporting a source type diagnostic.

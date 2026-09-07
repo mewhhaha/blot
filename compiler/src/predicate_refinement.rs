@@ -75,14 +75,12 @@ pub fn refine(
     .map_err(|error| error.at(module))?;
     let refined = intersection(&base_intervals, &accepted);
     if refined.is_empty() {
-        return Err(
-            Diagnostic::new(
-                "BLOT_EMPTY_REFINEMENT",
-                "The predicate accepts no value from its base integer type.",
-                predicate_span,
-            )
-            .at(module),
-        );
+        return Err(Diagnostic::new(
+            "BLOT_EMPTY_REFINEMENT",
+            "The predicate accepts no value from its base integer type.",
+            predicate_span,
+        )
+        .at(module));
     }
     Ok(preserve_extensions(base, interval_value(refined)))
 }

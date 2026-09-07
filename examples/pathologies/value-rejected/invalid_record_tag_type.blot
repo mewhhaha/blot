@@ -1,0 +1,6 @@
+// A canonical record requires a canonical payload type.
+open import "blot:prelude"
+const Invalid = { .box = #Some @int.add; }
+let rejected :: Invalid
+let rejected = { .box = #Some (); }
+return rejected

@@ -1,0 +1,6 @@
+// A primitive must not disappear from a constant array.
+open import "blot:prelude"
+const values = [1, @int.add]
+let rejected :: [1]
+let rejected = values
+return rejected

@@ -4,6 +4,8 @@ use std::cell::{Cell, RefCell};
 mod member_constraints;
 #[path = "runtime_signature.rs"]
 mod runtime_signature;
+#[path = "value_bridge.rs"]
+mod value_bridge;
 pub(crate) struct ResidualInstanceFacts {
     pub(crate) module: String,
     pub(crate) signature: Value,
@@ -10506,129 +10508,7 @@ impl Checker {
     }
 
     fn bridge(&self, value: &Value) -> Option<Type> {
-        match value {
-            Value::Int(value) => Some(Type::Range {
-                domain: Domain::Int,
-                low: Some(Scalar::Int(value.clone())),
-                high: Some(Scalar::Int(value.clone())),
-            }),
-            Value::Float(_) => Some(float_type()),
-            Value::Float32(_) => Some(float32_type()),
-            Value::Text(value) => Some(Type::Range {
-                domain: Domain::Text,
-                low: Some(Scalar::Text(value.clone())),
-                high: Some(Scalar::Text(value.clone())),
-            }),
-            Value::Unit => Some(Type::Unit),
-            Value::Shape(fields) => Some(Type::Record(
-                fields
-                    .iter()
-                    .map(|(name, value)| Some((name.clone(), self.bridge(value)?)))
-                    .collect::<Option<Vec<_>>>()?
-                    .into(),
-            )),
-            Value::RegionType(element) => Some(Type::Region(Rc::new(self.bridge(element)?))),
-            Value::ScratchType(element) => Some(Type::Scratch(Rc::new(self.bridge(element)?))),
-            Value::Scratch { values, .. } => Some(Type::Scratch(Rc::new(join_types(
-                values
-                    .iter()
-                    .map(|value| self.bridge(value))
-                    .collect::<Option<Vec<_>>>()?,
-            )))),
-            Value::Region { store, start, end } => Some(Type::Region(Rc::new(union_types(
-                store.borrow()[*start..*end]
-                    .iter()
-                    .filter_map(|value| self.bridge(value))
-                    .collect(),
-            )))),
-            Value::RegionRejoin { .. } => Some(Type::Opaque("Rejoin".to_owned())),
-            Value::Array(elements) => Some(Type::Array(Rc::new(union_types(
-                elements
-                    .iter()
-                    .filter_map(|value| self.bridge(value))
-                    .collect(),
-            )))),
-            Value::EmptyArray { .. } => {
-                Some(Type::Array(Rc::new(self.fresh_empty_array_element())))
-            }
-            Value::Tag { name, payload } => Some(Type::Variant {
-                cases: vec![(
-                    name.clone(),
-                    payload
-                        .as_deref()
-                        .and_then(|value| self.bridge(value))
-                        .unwrap_or(Type::Unit),
-                )]
-                .into(),
-                open: false,
-            }),
-            Value::Range { low, high, domain } => Some(Type::Range {
-                domain: match domain.unwrap_or_else(|| {
-                    if matches!(**low, Value::Text(_)) || matches!(**high, Value::Text(_)) {
-                        ValueDomain::Text
-                    } else {
-                        ValueDomain::Int
-                    }
-                }) {
-                    ValueDomain::Int => Domain::Int,
-                    ValueDomain::Text => Domain::Text,
-                    ValueDomain::Float => Domain::Float,
-                    ValueDomain::Float32 => Domain::Float32,
-                },
-                low: scalar_bound(low),
-                high: scalar_bound(high),
-            }),
-            Value::Union(members) => Some(join_types(
-                members
-                    .iter()
-                    .filter_map(|member| self.bridge(member))
-                    .collect(),
-            )),
-            Value::Unbounded => Some(Type::Top),
-            Value::Arrow {
-                deferred,
-                domain,
-                codomain,
-                effects,
-                effect_tail,
-            } => {
-                let labels = effects
-                    .iter()
-                    .filter_map(effect_label)
-                    .collect::<BTreeSet<_>>();
-                let effects = match effect_tail {
-                    Some(tail) => Type::OpenEffects {
-                        labels,
-                        tail: Rc::new(Type::Rigid(*tail)),
-                    },
-                    None => Type::Effects(labels),
-                };
-                Some(Type::Function {
-                    deferred: *deferred,
-                    parameter: Rc::new(self.bridge(domain)?),
-                    effects: Rc::new(effects),
-                    result: Rc::new(self.bridge(codomain)?),
-                })
-            }
-            Value::Forall { variable, body } => Some(Type::Forall {
-                variables: vec![*variable],
-                body: Rc::new(self.bridge(body)?),
-            }),
-            Value::Effect { id, name, .. } => Some(Type::Opaque(format!("Effect:{id}:{name}"))),
-            Value::Extended { inner, .. } => self.bridge(inner),
-            Value::Sealed { name, inner } => sealed_type(name, &self.bridge(inner)?),
-            Value::OpaqueType(name) => Some(Type::Opaque(name.clone())),
-            Value::Vector(_) => Some(Type::Opaque("F32x4".to_owned())),
-            Value::VectorMask(_) => Some(Type::Opaque("F32x4Mask".to_owned())),
-            Value::IntegerVector { bits, lanes } => {
-                Some(Type::Opaque(format!("I{bits}x{}", lanes.len())))
-            }
-            Value::IntegerVectorMask { bits, lanes } => {
-                Some(Type::Opaque(format!("I{bits}x{}Mask", lanes.len())))
-            }
-            Value::TypeVariable(id) => Some(Type::Rigid(*id)),
-            _ => None,
-        }
+        value_bridge::bridge(self, value)
     }
 
     fn bridge_closed_attached_signature(&self, value: &Value) -> Option<Type> {

@@ -1,0 +1,6 @@
+// Nested invalid type payloads fail the whole signature.
+open import "blot:prelude"
+const Invalid = #Outer (#Some @int.add)
+let rejected :: Invalid
+let rejected = #Outer (#Some ())
+return rejected

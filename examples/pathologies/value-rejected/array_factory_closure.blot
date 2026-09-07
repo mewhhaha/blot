@@ -1,0 +1,6 @@
+// A factory does not authorize array-member erasure.
+open import "blot:prelude"
+const values = (fn callback => [1, callback]) (fn item => item)
+let rejected :: [1]
+let rejected = values
+return rejected

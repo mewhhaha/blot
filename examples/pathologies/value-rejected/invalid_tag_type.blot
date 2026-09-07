@@ -1,0 +1,6 @@
+// An unsupported type payload is not unit.
+open import "blot:prelude"
+const Invalid = #Some @int.add
+let rejected :: Invalid
+let rejected = #Some ()
+return rejected

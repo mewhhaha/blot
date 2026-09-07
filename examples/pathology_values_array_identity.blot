@@ -1,0 +1,7 @@
+// An array can carry a generically inferred identity callback.
+open import "blot:prelude"
+const callbacks = [fn item => item]
+const call = @array.get callbacks 0
+let result :: Int
+let result = call 42
+return result

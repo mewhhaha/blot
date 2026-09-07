@@ -1,0 +1,6 @@
+// Nested constructor payloads cannot collapse to unit.
+open import "blot:prelude"
+const value = #Outer (#Some (fn item => item))
+let rejected :: #Outer (#Some Unit)
+let rejected = value
+return rejected

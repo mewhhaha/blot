@@ -1,0 +1,7 @@
+// Curried callbacks retain both arguments in an array.
+open import "blot:prelude"
+const callbacks = [fn left => fn right => @int.add left right]
+const call = @array.get callbacks 0
+let result :: Int
+let result = call 40 2
+return result

@@ -1,3 +1,6 @@
+#[path = "value_graph.rs"]
+mod graph;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
@@ -821,6 +824,11 @@ struct OrderedFieldStorage {
 }
 
 impl OrderedFields {
+    /// A call-local key for immutable structural conversion, not source identity.
+    pub(crate) fn storage_identity(&self) -> *const () {
+        Rc::as_ptr(&self.0).cast()
+    }
+
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.1, &other.1)
     }
@@ -1100,67 +1108,7 @@ pub enum Value {
 }
 
 pub(crate) fn reusable_across_module_instances(value: &Value) -> bool {
-    match value {
-        Value::Int(_)
-        | Value::Float(_)
-        | Value::Float32(_)
-        | Value::Vector(_)
-        | Value::VectorMask(_)
-        | Value::IntegerVector { .. }
-        | Value::IntegerVectorMask { .. }
-        | Value::Text(_)
-        | Value::Unit
-        | Value::ModuleClosure { .. }
-        | Value::Unbounded
-        | Value::TypeVariable(_) => true,
-        Value::Shape(fields) => fields
-            .iter()
-            .all(|(_, value)| reusable_across_module_instances(value)),
-        Value::Array(values) => values.iter().all(reusable_across_module_instances),
-        Value::Union(values) => values.iter().all(reusable_across_module_instances),
-        Value::RegionType(element)
-        | Value::ScratchType(element)
-        | Value::DeferredScratch { capacity: element }
-        | Value::EmptyArray { element }
-        | Value::Forall { body: element, .. } => reusable_across_module_instances(element),
-        Value::Scratch { values, .. } | Value::IndexedStep { elements: values } => {
-            values.iter().all(reusable_across_module_instances)
-        }
-        Value::Tag { payload, .. } => payload
-            .as_deref()
-            .is_none_or(reusable_across_module_instances),
-        Value::Primitive { applied, .. } => applied.iter().all(reusable_across_module_instances),
-        Value::Range { low, high, .. } => {
-            reusable_across_module_instances(low) && reusable_across_module_instances(high)
-        }
-        Value::Arrow {
-            domain,
-            codomain,
-            effects,
-            ..
-        } => {
-            reusable_across_module_instances(domain)
-                && reusable_across_module_instances(codomain)
-                && effects.iter().all(reusable_across_module_instances)
-        }
-        Value::Extended { inner, members } => {
-            reusable_across_module_instances(inner)
-                && members
-                    .iter()
-                    .all(|(_, value)| reusable_across_module_instances(value))
-        }
-        Value::Sealed { inner, .. } => reusable_across_module_instances(inner),
-        Value::OpaqueType(name) => !name.starts_with("Effect:"),
-        Value::Closure { .. }
-        | Value::Deferred { .. }
-        | Value::ClosureChoice { .. }
-        | Value::Region { .. }
-        | Value::RegionRejoin { .. }
-        | Value::Effect { .. }
-        | Value::Operation { .. }
-        | Value::Runtime(_)
-        | Value::Continuation { .. } => false,
-    }
+    graph::reusable_across_module_instances(value)
 }
 
 #[derive(Clone, Debug)]
@@ -1505,76 +1453,7 @@ pub fn substitute_type_variable(
 }
 
 fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32>) {
-    match value {
-        Value::TypeVariable(variable) => {
-            variables.insert(*variable);
-        }
-        Value::Shape(fields) => {
-            for (_, member) in fields {
-                collect_type_variables(member, variables);
-            }
-        }
-        Value::Array(members) => {
-            for member in members {
-                collect_type_variables(member, variables);
-            }
-        }
-        Value::Union(members) => {
-            for member in members {
-                collect_type_variables(member, variables);
-            }
-        }
-        Value::RegionType(element)
-        | Value::ScratchType(element)
-        | Value::EmptyArray { element } => {
-            collect_type_variables(element, variables);
-        }
-        Value::DeferredScratch { capacity } => {
-            collect_type_variables(capacity, variables);
-        }
-        Value::Tag {
-            payload: Some(payload),
-            ..
-        } => collect_type_variables(payload, variables),
-        Value::Range { low, high, .. } => {
-            collect_type_variables(low, variables);
-            collect_type_variables(high, variables);
-        }
-        Value::Arrow {
-            domain,
-            codomain,
-            effects,
-            effect_tail,
-            ..
-        } => {
-            collect_type_variables(domain, variables);
-            collect_type_variables(codomain, variables);
-            for effect in effects {
-                collect_type_variables(effect, variables);
-            }
-            if let Some(tail) = effect_tail {
-                variables.insert(*tail);
-            }
-        }
-        Value::Forall { variable, body } => {
-            variables.insert(*variable);
-            collect_type_variables(body, variables);
-        }
-        Value::Effect { operations, .. } => {
-            for (_, operation) in operations {
-                collect_type_variables(operation, variables);
-            }
-        }
-        Value::Operation { effect, .. } => collect_type_variables(effect, variables),
-        Value::Extended { inner, members } => {
-            collect_type_variables(inner, variables);
-            for (_, member) in members {
-                collect_type_variables(member, variables);
-            }
-        }
-        Value::Sealed { inner, .. } => collect_type_variables(inner, variables),
-        _ => {}
-    }
+    graph::collect_type_variables(value, variables);
 }
 
 pub(crate) fn contains_type_variables(value: &Value) -> bool {

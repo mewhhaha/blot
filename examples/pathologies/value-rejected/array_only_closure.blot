@@ -1,0 +1,6 @@
+// An array of functions is not an array of unit.
+open import "blot:prelude"
+const values = [fn item => item]
+let rejected :: [Unit]
+let rejected = values
+return rejected

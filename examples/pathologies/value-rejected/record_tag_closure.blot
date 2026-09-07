@@ -1,0 +1,6 @@
+// A record cannot conceal a callable constructor payload.
+open import "blot:prelude"
+const value = { .box = #Some (fn item => item); }
+let rejected :: { .box = #Some Unit; }
+let rejected = value
+return rejected

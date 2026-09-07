@@ -1,0 +1,7 @@
+// A primitive constructor payload is not unit.
+open import "blot:prelude"
+const box = #Some @int.add
+let result :: Int
+let result = case box of
+  #Some call => call 40 2
+return result

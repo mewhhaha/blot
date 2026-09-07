@@ -1,0 +1,6 @@
+// Nested invalid array type members fail the signature.
+open import "blot:prelude"
+const Invalid = [[1, @int.add]]
+let rejected :: Invalid
+let rejected = [[1]]
+return rejected

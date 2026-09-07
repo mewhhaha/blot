@@ -1,0 +1,9 @@
+// Constant aliases do not erase payload information.
+open import "blot:prelude"
+const increment = fn number => @int.add number 1
+const original = #Some increment
+const box = original
+let result :: Int
+let result = case box of
+  #Some call => call 41
+return result

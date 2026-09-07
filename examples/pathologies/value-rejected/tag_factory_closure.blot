@@ -1,0 +1,6 @@
+// A factory does not authorize payload erasure.
+open import "blot:prelude"
+const value = (fn callback => #Some callback) (fn item => item)
+let rejected :: #Some Unit
+let rejected = value
+return rejected

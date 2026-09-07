@@ -1,0 +1,8 @@
+// Captured callback state is not mistaken for an exact scalar type.
+open import "blot:prelude"
+const make = fn step => fn number => @int.add number step
+const callbacks = [make 2]
+const call = @array.get callbacks 0
+let result :: Int
+let result = call 40
+return result

@@ -1,0 +1,6 @@
+// Bulk union conversion cannot filter unsupported members.
+open import "blot:prelude"
+const Invalid = @type.union_of [1, @int.add]
+let rejected :: Invalid
+let rejected = 1
+return rejected

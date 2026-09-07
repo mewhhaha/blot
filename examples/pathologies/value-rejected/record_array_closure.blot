@@ -1,0 +1,6 @@
+// Record exactness cannot erase a nested function.
+open import "blot:prelude"
+const values = { .items = [1, fn item => item]; }
+let rejected :: { .items = [1]; }
+let rejected = values
+return rejected

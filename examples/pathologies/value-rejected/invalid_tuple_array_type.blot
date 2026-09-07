@@ -1,0 +1,6 @@
+// A canonical tuple requires every array type member.
+open import "blot:prelude"
+const Invalid = ([1, @int.add], 2)
+let rejected :: Invalid
+let rejected = ([1], 2)
+return rejected
