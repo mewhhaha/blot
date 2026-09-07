@@ -1,9 +1,9 @@
 # Reproducing CI inputs
 
-The **CI source snapshot** workflow publishes
-`blot-validation-source-<commit>` for pull requests and pushes to `main`. It runs
-independently of compiler validation, so a formatting, build, or test failure
-does not hide the exact source that GitHub checked.
+The **CI source snapshot** workflow publishes `blot-validation-source-<commit>`
+for pull requests and pushes to `main`. It runs independently of compiler
+validation, so a formatting, build, or test failure does not hide the exact
+source that GitHub checked.
 
 The artifact contains `source.tar.gz`, `commit.txt`, `tree.txt`, and
 `SHA256SUMS`. The commit is the checked-out CI commit, including GitHub's test
@@ -24,10 +24,10 @@ snapshot, **not** a validated release or the runnable Node workspace. A green
 snapshot job says only that the source was archived; the Rust/Wasm compiler CI
 and other required checks remain authoritative for validation.
 
-Install the pinned dependencies and toolchain described in `README.md`, then
-run the failing command from the compiler CI log. Compiler binaries from another
-run must pass the existing compiler-input, prelude, host ABI, and SHA-256 checks;
-do not bypass artifact validation to make a reproduction run.
+Install the pinned dependencies and toolchain described in `README.md`, then run
+the failing command from the compiler CI log. Compiler binaries from another run
+must pass the existing compiler-input, prelude, host ABI, and SHA-256 checks; do
+not bypass artifact validation to make a reproduction run.
 
 Snapshots expire after 14 days. The existing compiler and runnable-workspace
 artifacts retain their own validation and retention policies.
