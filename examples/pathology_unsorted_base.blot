@@ -1,0 +1,9 @@
+// Unsorted singleton bases retain their exact inhabitant set.
+
+open import "blot:prelude"
+
+const Base = 12 | 0 | 8 | 4
+const Allowed = refine (Base, fn value => value >= 4 && value <= 8)
+let chosen :: Allowed
+let chosen = 8
+return chosen

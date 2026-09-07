@@ -1,0 +1,8 @@
+// Complement preserves separate excluded singleton holes.
+
+open import "blot:prelude"
+
+const Allowed = refine (range (0, 10), fn value => not (value == 2 || value == 4 || value == 6))
+let chosen :: Allowed
+let chosen = 5
+return chosen

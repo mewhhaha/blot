@@ -1,0 +1,6 @@
+// Expected at check: BLOT_EMPTY_REFINEMENT
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => value > 9223372036854775807)
+return Allowed

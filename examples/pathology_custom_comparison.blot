@@ -1,0 +1,12 @@
+// Comparison recognition follows meaning rather than a preferred name.
+
+open import "blot:prelude"
+
+const apart = fn left => fn right => case @int.cmp left right of
+  #Less => True
+  #Equal => False
+  #Greater => True
+const Allowed = refine (range (0, 5), fn value => apart value 3)
+let chosen :: Allowed
+let chosen = 4
+return chosen

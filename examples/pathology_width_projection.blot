@@ -1,0 +1,8 @@
+// A structural parameter accepts extra fields without changing its result.
+
+open import "blot:prelude"
+
+const Required = { .count = Int; }
+let count :: Required -> Int
+let count = fn row => row.count
+return count { .count = 42; .label = "extra"; }

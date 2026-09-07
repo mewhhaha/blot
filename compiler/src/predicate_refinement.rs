@@ -4,7 +4,7 @@
 //! domain. Nothing from this module crosses the Runtime HIR boundary.
 
 use std::cmp::Ordering as SortOrdering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -17,7 +17,7 @@ use crate::value::{Domain, Environment, Value, lookup};
 
 const MAX_PREDICATE_NODES: usize = 256;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Interval {
     low: Option<BigInt>,
     high: Option<BigInt>,
@@ -52,11 +52,15 @@ pub fn refine(
         .get(module.as_str())
         .cloned()
         .ok_or_else(|| unsupported(span, "The predicate's module is not loaded."))?;
+    // The primitive may be called through a prelude wrapper. Predicate errors
+    // belong to the closure's source, not the wrapper's application span.
+    let predicate_span = expression_span(&loaded.module, *body);
     let subject = pattern_name(&loaded.module, *parameter).ok_or_else(|| {
         unsupported(
-            span,
+            predicate_span,
             "The predicate parameter must be one unqualified name.",
         )
+        .at(module)
     })?;
     let mut budget = MAX_PREDICATE_NODES;
     let accepted = predicate_intervals(
@@ -65,16 +69,20 @@ pub fn refine(
         *body,
         subject,
         environment,
-        span,
+        predicate_span,
         &mut budget,
-    )?;
+    )
+    .map_err(|error| error.at(module))?;
     let refined = intersection(&base_intervals, &accepted);
     if refined.is_empty() {
-        return Err(Diagnostic::new(
-            "BLOT_EMPTY_REFINEMENT",
-            "The predicate accepts no value from its base integer type.",
-            span,
-        ));
+        return Err(
+            Diagnostic::new(
+                "BLOT_EMPTY_REFINEMENT",
+                "The predicate accepts no value from its base integer type.",
+                predicate_span,
+            )
+            .at(module),
+        );
     }
     Ok(preserve_extensions(base, interval_value(refined)))
 }
@@ -365,43 +373,50 @@ fn mirror(orderings: BTreeSet<Ordering>) -> BTreeSet<Ordering> {
 }
 
 fn base_intervals(base: &Value, span: Span) -> Result<Vec<Interval>, Diagnostic> {
-    match base {
-        Value::Extended { inner, .. } => base_intervals(inner, span),
-        Value::Int(value) => Ok(vec![Interval {
-            low: Some(value.clone()),
-            high: Some(value.clone()),
-        }]),
-        Value::Union(members) => {
-            let mut intervals = Vec::new();
-            for member in members {
-                intervals.extend(base_intervals(member, span)?);
-            }
-            Ok(normalize(intervals))
+    // Union values may share subgraphs. Visit each value once and normalize the
+    // collected leaves once, rather than sorting every nested union prefix.
+    let mut pending = vec![base];
+    let mut seen = HashSet::new();
+    let mut intervals = Vec::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value as *const Value) {
+            continue;
         }
-        Value::Range { low, high, domain } => {
-            let domain = domain.unwrap_or_else(|| {
-                if matches!(**low, Value::Text(_)) || matches!(**high, Value::Text(_)) {
-                    Domain::Text
-                } else {
-                    Domain::Int
+        match value {
+            Value::Extended { inner, .. } => pending.push(inner),
+            Value::Int(value) => intervals.push(Interval {
+                low: Some(value.clone()),
+                high: Some(value.clone()),
+            }),
+            Value::Union(members) => pending.extend(members.iter().rev()),
+            Value::Range { low, high, domain } => {
+                let domain = domain.unwrap_or_else(|| {
+                    if matches!(**low, Value::Text(_)) || matches!(**high, Value::Text(_)) {
+                        Domain::Text
+                    } else {
+                        Domain::Int
+                    }
+                });
+                if domain != Domain::Int {
+                    return Err(unsupported(
+                        span,
+                        "The first predicate-refinement slice accepts integer bases only.",
+                    ));
                 }
-            });
-            if domain != Domain::Int {
+                intervals.push(Interval {
+                    low: bound(low, span)?,
+                    high: bound(high, span)?,
+                });
+            }
+            _ => {
                 return Err(unsupported(
                     span,
-                    "The first predicate-refinement slice accepts integer bases only.",
+                    "The refinement base must be an integer type.",
                 ));
             }
-            Ok(vec![Interval {
-                low: bound(low, span)?,
-                high: bound(high, span)?,
-            }])
         }
-        _ => Err(unsupported(
-            span,
-            "The refinement base must be an integer type.",
-        )),
     }
+    Ok(normalize(intervals))
 }
 
 fn bound(value: &Value, span: Span) -> Result<Option<BigInt>, Diagnostic> {
@@ -449,21 +464,47 @@ fn normalize(mut intervals: Vec<Interval>) -> Vec<Interval> {
 }
 
 fn intersection(left: &[Interval], right: &[Interval]) -> Vec<Interval> {
+    // All callers supply normalized (sorted, disjoint, inhabited) intervals.
+    // Advance the interval that ends first: each input is visited at most once,
+    // and the intersections are already normalized. Never form a Cartesian
+    // product merely to discard its disjoint pairs and sort the survivors.
     let mut overlaps = Vec::new();
-    for one in left {
-        for other in right {
-            let low = maximum_low(&one.low, &other.low);
-            let high = minimum_high(&one.high, &other.high);
-            let inhabited = match (&low, &high) {
-                (Some(low), Some(high)) => low <= high,
-                _ => true,
-            };
-            if inhabited {
-                overlaps.push(Interval { low, high });
-            }
+    let mut left_index = 0;
+    let mut right_index = 0;
+    while left_index < left.len() && right_index < right.len() {
+        #[cfg(test)]
+        INTERSECTION_STEPS.with(|steps| steps.set(steps.get() + 1));
+        let one = &left[left_index];
+        let other = &right[right_index];
+        let low = maximum_low(&one.low, &other.low);
+        let high = minimum_high(&one.high, &other.high);
+        let inhabited = match (&low, &high) {
+            (Some(low), Some(high)) => low <= high,
+            _ => true,
+        };
+        if inhabited {
+            overlaps.push(Interval { low, high });
+        }
+        match (&one.high, &other.high) {
+            (None, None) => break,
+            (None, Some(_)) => right_index += 1,
+            (Some(_), None) => left_index += 1,
+            (Some(left), Some(right)) => match left.cmp(right) {
+                SortOrdering::Less => left_index += 1,
+                SortOrdering::Greater => right_index += 1,
+                SortOrdering::Equal => {
+                    left_index += 1;
+                    right_index += 1;
+                }
+            },
         }
     }
-    normalize(overlaps)
+    overlaps
+}
+
+#[cfg(test)]
+thread_local! {
+    static INTERSECTION_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn complement(intervals: &[Interval]) -> Vec<Interval> {
@@ -561,3 +602,7 @@ fn expression_span(module: &Module, expression: ExpressionId) -> Span {
 fn unsupported(span: Span, reason: &str) -> Diagnostic {
     Diagnostic::new("BLOT_REFINEMENT_PREDICATE", reason, span)
 }
+
+#[cfg(test)]
+#[path = "predicate_refinement_tests.rs"]
+mod tests;

@@ -1,0 +1,8 @@
+// The selected result retains a disconnected branch union.
+
+open import "blot:prelude"
+
+let choose = fn flag => case flag of
+  #True => 2
+  #False => 4
+return choose True

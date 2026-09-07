@@ -1,0 +1,9 @@
+// Adjacent base intervals coalesce before removing a hole.
+
+open import "blot:prelude"
+
+const Base = (range (0, 3)) | (range (4, 7))
+const Allowed = refine (Base, fn value => value != 2)
+let chosen :: Allowed
+let chosen = 6
+return chosen

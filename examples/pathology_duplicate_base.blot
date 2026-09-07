@@ -1,0 +1,9 @@
+// Repeated base members do not multiply the normalized result.
+
+open import "blot:prelude"
+
+const Base = 2 | 2 | 4 | 4 | 6
+const Allowed = refine (Base, fn value => value != 6)
+let chosen :: Allowed
+let chosen = 2
+return chosen

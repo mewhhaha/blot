@@ -1,0 +1,8 @@
+// One generalized projection is reused on incompatible field types.
+
+open import "blot:prelude"
+
+let get = fn row => row.value
+let label = get { .value = "ok"; .extra = 1; }
+let result = get { .value = 42; .extra = True; }
+return result

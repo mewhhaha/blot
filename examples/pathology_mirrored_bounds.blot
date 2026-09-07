@@ -1,0 +1,8 @@
+// A comparison witness may appear on either side of the subject.
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => 0 <= value && 10 >= value)
+let chosen :: Allowed
+let chosen = 10
+return chosen

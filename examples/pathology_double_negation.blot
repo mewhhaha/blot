@@ -1,0 +1,8 @@
+// Double negation does not widen a disconnected refinement.
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => not (not (value == -3 || value == 3)))
+let chosen :: Allowed
+let chosen = -3
+return chosen

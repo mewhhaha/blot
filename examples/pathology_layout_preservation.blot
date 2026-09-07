@@ -1,0 +1,6 @@
+// Refinement preserves the attached storage layout namespace.
+
+open import "blot:prelude"
+
+const Small = refine (I32, fn value => value >= -2 && value <= 2)
+return Small.bit_width

@@ -1,0 +1,9 @@
+// A finite schedule intersects allowed hours without accepting the gaps.
+
+open import "blot:prelude"
+
+const Schedule = 8 | 10 | 12 | 14 | 16 | 18
+const Afternoon = refine (Schedule, fn hour => hour >= 12 && hour < 18)
+let next :: Afternoon
+let next = 14
+return next
