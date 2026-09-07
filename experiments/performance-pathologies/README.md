@@ -48,3 +48,14 @@ timing, protect against restoring the pathological algorithms.
 
 The normative boundary is
 [the cost model](../../spec/COST_MODEL.md#8-adversarial-canonical-layouts-and-substring-search).
+
+## Bounded command-line inputs
+
+Options use `--depths=4,8`, `--sizes=4096,8192`, and `--samples=3`. A single
+leading `--` separator is accepted. Values must be positive decimal integers;
+empty entries, whitespace, exponent notation, duplicate flags, and unknown
+arguments are rejected before creating a compiler or temporary directory.
+
+Each list accepts at most 16 values. Depths are bounded to 64, text sizes to
+131072 bytes, and samples to 101. These are operational bounds for this
+benchmark, not new language or compiler limits. Defaults are unchanged.

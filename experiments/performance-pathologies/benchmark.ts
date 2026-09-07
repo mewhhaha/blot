@@ -4,40 +4,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { arch, cpus, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Compiler } from "../../src/compiler.ts";
+import { parseOptions } from "./options.ts";
 import {
   nestedRecordSource,
   textSearchInstance,
   textSearchSource,
 } from "./workloads.ts";
 
-function numbers(name: string, fallback: number[]): number[] {
-  const prefix = `--${name}=`;
-  const argument = process.argv.slice(2).find((value) =>
-    value.startsWith(prefix)
-  );
-  if (argument === undefined) return fallback;
-  const result = argument.slice(prefix.length).split(",").map(Number);
-  if (
-    result.length === 0 ||
-    result.some((value) => !Number.isSafeInteger(value) || value < 1)
-  ) {
-    throw new Error(`${name} requires positive safe integers`);
-  }
-  return result;
-}
-for (const argument of process.argv.slice(2)) {
-  if (!/^--(depths|sizes|samples)=/.test(argument)) {
-    throw new Error(`unknown argument ${argument}`);
-  }
-}
-const depths = numbers("depths", [4, 6, 8, 10]);
-const sizes = numbers("sizes", [4096, 8192, 16384, 32768]);
-const sampleValues = numbers("samples", [3]);
-if (sampleValues.length !== 1) throw new Error("samples takes one integer");
-const samples = sampleValues[0];
-if (sizes.some((size) => size > 131072)) {
-  throw new Error("sizes must fit the fixed input buffers");
-}
+const { depths, sizes, samples } = parseOptions(process.argv.slice(2));
 const directory = await mkdtemp(join(tmpdir(), "blot-pathology-benchmark-"));
 const compiler = await Compiler.create();
 const compilation: {
