@@ -38,10 +38,14 @@ export function parseScalingOptions<Family extends string>(
     }
     const family = availableFamilies.find((value) => value === argument);
     if (family === undefined) {
-      throw new Error(`unknown type-scaling family ${JSON.stringify(argument)}`);
+      throw new Error(
+        `unknown type-scaling family ${JSON.stringify(argument)}`,
+      );
     }
     if (families.includes(family)) {
-      throw new Error(`duplicate type-scaling family ${JSON.stringify(family)}`);
+      throw new Error(
+        `duplicate type-scaling family ${JSON.stringify(family)}`,
+      );
     }
     families.push(family);
   }

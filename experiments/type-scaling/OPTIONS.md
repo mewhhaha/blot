@@ -8,8 +8,8 @@ numbers, exponent notation, fractions, and duplicate or descending sizes fail.
 
 Only explicitly registered family names are accepted; JavaScript prototype
 properties are not families. Repeated family selections and repeated options
-are rejected instead of silently producing duplicate rows or replacing an earlier
-configuration. The `--` package-manager delimiter remains supported.
+are rejected instead of silently accepting redundant selections or replacing an
+earlier configuration. The `--` package-manager delimiter remains supported.
 
 Defaults, generators, qualification, timed boundaries, and report schemas are
 unchanged. The parser is pure, so invalid configurations can be regression-tested
