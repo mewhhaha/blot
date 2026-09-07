@@ -2,8 +2,9 @@
 
 This is the representation-cost contract for the integer normalization in
 `compiler/src/predicate_refinement.rs`. The accepted predicates and their
-inhabitant sets remain those of [Predicate refinements](PREDICATE_REFINEMENTS.md).
-There is no new type rule, language syntax, primitive, certificate, or ABI.
+inhabitant sets remain those of
+[Predicate refinements](PREDICATE_REFINEMENTS.md). There is no new type rule,
+language syntax, primitive, certificate, or ABI.
 
 ## Canonical interval invariant
 
@@ -28,16 +29,18 @@ and rejection stages are unchanged.
 ## Required work bounds
 
 For canonical inputs with `m` and `n` intervals, intersection advances at least
-one input cursor per comparison. It performs at most `m + n - 1` comparisons when
-both inputs are nonempty and emits at most that many intervals. Endpoint integer
-operations have their usual bit-width-dependent costs; the claim is about the
-number of interval operations, not constant-time arbitrary-precision arithmetic.
+one input cursor per comparison. It performs at most `m + n - 1` comparisons
+when both inputs are nonempty and emits at most that many intervals. Endpoint
+integer operations have their usual bit-width-dependent costs; the claim is
+about the number of interval operations, not constant-time arbitrary-precision
+arithmetic.
 
 Base collection uses an explicit work stack and deduplicates borrowed value
-identities within one call. For a graph of `V` distinct values and `E` edges, graph
-traversal takes expected `O(V + E)` hash-table work. Collecting `K` leaf intervals
-then performs one `O(K log K)` normalization. The traversal must not recursively
-expand shared union diamonds or repeatedly sort nested union prefixes.
+identities within one call. For a graph of `V` distinct values and `E` edges,
+graph traversal takes expected `O(V + E)` hash-table work. Collecting `K` leaf
+intervals then performs one `O(K log K)` normalization. The traversal must not
+recursively expand shared union diamonds or repeatedly sort nested union
+prefixes.
 
 Pointer identities are local visitation keys only. They do not survive the call,
 enter persisted artifacts, replace semantic equality, or permit invalid leaf
@@ -52,6 +55,7 @@ commutativity, tests signed-64-bit endpoints, and counts sweep iterations for
 checks that base collection follows graph sharing rather than its expanded tree.
 
 `src/compiler/refinement_pathologies.test.ts` checks 24 executable examples by
-exact principal type, golden evaluator value, and emitted Wasm observation. Eight
-negative examples must parse before producing their specified checking diagnostic
-with a nonempty source span. These tests are not wall-clock performance claims.
+exact principal type, golden evaluator value, and emitted Wasm observation.
+Eight negative examples must parse before producing their specified checking
+diagnostic with a nonempty source span. These tests are not wall-clock
+performance claims.

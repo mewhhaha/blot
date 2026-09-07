@@ -70,11 +70,13 @@ test("scaling family names cannot resolve through Object.prototype", () => {
 });
 
 test("scaling rejects repeated flags and repeated families", () => {
-  for (const args of [
-    ["--samples=3", "--samples=5"],
-    ["--sizes=8", "--sizes=16"],
-    ["union", "union"],
-  ]) {
+  for (
+    const args of [
+      ["--samples=3", "--samples=5"],
+      ["--sizes=8", "--sizes=16"],
+      ["union", "union"],
+    ]
+  ) {
     assert.throws(() => parseScalingOptions(args, families), /duplicate/);
   }
 });

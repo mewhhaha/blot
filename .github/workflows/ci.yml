@@ -55,6 +55,14 @@ jobs:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
+      - name: Check generated-code Rust formatting
+        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
+      - name: Check formatting
+        run: deno fmt --check
+      - name: Check lint
+        run: deno lint
       - run: pnpm install --frozen-lockfile
       - name: Rebuild Rust compiler Wasm
         run: >-
@@ -85,10 +93,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24.19.0
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path compiler/Cargo.toml -- --check
-      - name: Check generated-code Rust formatting
-        run: rustfmt --edition 2024 --check experiments/generated-code/counterpart.rs
       - name: Check Rust lint
         run: >-
           cargo clippy
@@ -109,10 +113,6 @@ jobs:
         run: deno check .
       - name: Check current implementation manifest
         run: pnpm current:check
-      - name: Check formatting
-        run: deno fmt --check
-      - name: Check lint
-        run: deno lint
       - name: Verify generated frontend artifacts
         run: deno task check:generated
       - name: Pack runnable Node workspace
