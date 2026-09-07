@@ -68,11 +68,9 @@ test("Git object identities have exactly 40 or 64 hex digits", async () => {
   for (const field of ["sourceCommit", "sourceTree"] as const) {
     for (const length of [0, 39, 41, 48, 63, 65]) {
       const identity = "a".repeat(length);
+      const encoded = JSON.stringify({ ...manifest, [field]: identity });
       assert.throws(
-        () => decodeCompilerArtifactManifest(JSON.stringify({
-          ...manifest,
-          [field]: identity,
-        })),
+        () => decodeCompilerArtifactManifest(encoded),
         /invalid source (commit|tree)/,
       );
       let commit = manifest.sourceCommit;
@@ -94,7 +92,10 @@ test("Git object identities have exactly 40 or 64 hex digits", async () => {
     }
     for (const length of [40, 64]) {
       const value = { ...manifest, [field]: "a".repeat(length) };
-      assert.deepEqual(decodeCompilerArtifactManifest(JSON.stringify(value)), value);
+      assert.deepEqual(
+        decodeCompilerArtifactManifest(JSON.stringify(value)),
+        value,
+      );
     }
   }
 });
