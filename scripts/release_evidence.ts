@@ -100,6 +100,16 @@ export function checkReleaseEvidence(
       "release evidence requires standard CI on a frozen commit, not a pull-request merge candidate",
     );
   }
+  const head = record(run.head_commit, "workflow head commit");
+  if (
+    head.id !== commit || typeof head.tree_id !== "string" ||
+    !/^[0-9a-f]{40}$/.test(head.tree_id) ||
+    head.tree_id !== compiler.sourceTree
+  ) {
+    throw new Error(
+      "workflow head commit and source tree must match the compiler",
+    );
+  }
   if (compiler.profile !== "production") {
     throw new Error("release evidence requires a production compiler artifact");
   }
@@ -142,6 +152,13 @@ export function checkReleaseEvidence(
       }
     }
     selected.push({ name, id: positiveInteger(job.id, `${name} job id`) });
+  }
+  const jobIds = new Set<number>();
+  for (const encoded of encodedJobs) {
+    const job = record(encoded, "job");
+    const id = positiveInteger(job.id, "job id");
+    if (jobIds.has(id)) throw new Error(`duplicate job id ${id}`);
+    jobIds.add(id);
   }
   return {
     schema: "blot-release-evidence",
