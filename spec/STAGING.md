@@ -265,6 +265,22 @@ accumulator names. Checked expression and nested-closure facts belong to that
 instance and are restored when leaving it, rather than overwriting facts for
 other calls of the same source body.
 
+Closed checked argument evidence takes precedence over the initial value's
+narrower observed type during instance checking. Surface elaboration marks the
+initial accumulator argument for retention as an ordinary checked expression
+fact, including stable variant fields. Residual specialization consumes that
+fact rather than inferring a loop's invariant from its first iteration.
+
+Runtime receiver lookup consults the current function's checked value evidence
+before shared generic expression facts. Runtime value identities and their
+checked-type table have the same function scope: starting another export resets
+both. A previous export cannot determine another export's numeric dispatch. On
+return through a checked call site, its result fact supersedes facts recorded
+inside the generic body; intermediate arithmetic therefore retains the calling
+expression's numeric domain. Unmaterialized ordering results reuse operand
+identities. Their ordering type must not be recorded as the operand's type or
+recovered from that operand's checked-value entry.
+
 Source type evidence, including refinements, is retained across runtime
 parameter and capture renaming. An unrefined physical carrier may identify an
 integer, floating-point, collection, or recursive aggregate representation, but

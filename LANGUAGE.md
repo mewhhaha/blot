@@ -133,6 +133,13 @@ that token's single-precision representation. `F32.of_float` remains the
 explicit narrowing operation for a value already bound as `F64`. `F32.widen`
 goes back exactly because every `F32` is representable as an `F64`.
 
+Negating a bound value dispatches to its type's attached `negate` member for
+both compile-time values and runtime arguments. For example, a function with
+signature `F32 -> F32` and body `fn x => -x` negates a runtime single-precision
+value, including its zero sign. `F32` remainder dispatches to its source-defined
+`rem` member: widen both operands to `F64`, compute the remainder, and narrow
+once. Thus `(F32.of_float 8.0) % (F32.of_float 2.5)` returns `0.5f32`.
+
 `F32x4`, `I32x4`, `I16x8`, and `I8x16` are 128-bit SIMD values. Their lane width
 and count are part of the type; none is a tuple or record that can be projected
 structurally. `F32x4`, `I32x4`, `I16x8`, and `I8x16` are the prelude namespaces
@@ -686,6 +693,11 @@ type already assigned to its lineage. For example, rebinding a value of type
 text literals are widened to their stable domains at this boundary. The previous
 polymorphic scheme is retained. Use another `let` or `const` to shadow a name
 with a different type.
+
+A declared `Bool` accumulator initialized with `False` retains `Bool` when a
+runtime loop carries it alongside numeric state. Branches may rebind it to
+either constructor, and both exhaustion and `break` return the current value
+without narrowing the lineage to its initial constructor.
 
 Only a single name may appear to the left of `:=`. A `:=` in a `for` body
 defines one of that loop's accumulator fields only when the target comes from

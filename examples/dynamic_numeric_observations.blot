@@ -1,0 +1,21 @@
+open import "blot:prelude"
+const negation = import "./dynamic_negation.blot"
+const single = import "./dynamic_f32_remainder.blot"
+const traversal = import "./dynamic_boolean_traversal.blot"
+
+let horizontal = case traversal.traverse (0.25, 0.5) of
+  #True => 1.0
+  #False => 0.0
+
+let vertical = case traversal.traverse (0.5, 0.25) of
+  #True => 1.0
+  #False => 0.0
+
+return [
+  F64.of_int (negation.negate_int (7, 2)),
+  F32.widen (negation.negate_f32 (7.5, 2.5)),
+  negation.negate_f64 (7.5, 2.5),
+  F32.widen (single.remainder (8.0, 2.5)),
+  horizontal,
+  vertical
+]

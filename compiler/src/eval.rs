@@ -1107,8 +1107,23 @@ impl Context {
         module: &str,
         environment: &Environment,
     ) {
-        for value in environment.names.borrow().values() {
-            self.register_operator_attachments_from_value(module, value);
+        let loaded = self
+            .modules
+            .borrow()
+            .get(module)
+            .cloned()
+            .expect("a decoded environment retains its source module");
+        for declaration in &loaded.module.declarations {
+            let names = match &loaded.module.arena.declarations[declaration.0 as usize] {
+                Declaration::Binding { pattern, .. } => pattern_names(&loaded.module, *pattern),
+                Declaration::Shadow { name, .. } => vec![name.clone()],
+                Declaration::Signature { .. } | Declaration::Open { .. } => continue,
+            };
+            for name in names {
+                if let Some(value) = lookup(environment, &name) {
+                    self.register_operator_attachments_from_value(module, &value);
+                }
+            }
         }
     }
 
@@ -1146,7 +1161,7 @@ impl Context {
             .cloned();
         drop(extensions);
         if let Some(extension) = extension {
-            return overlay_operator_extension(value, &extension);
+            return overlay_operator_extension(bootstrap_operator_type(value), &extension);
         }
         if key.starts_with("domain:") {
             return operator_type_with_members(value);
@@ -2428,9 +2443,23 @@ pub fn evaluate_expression(
             let inferred_argument = runtime
                 .expression_type(&context, module_path.as_str(), argument)
                 .map(|type_| substitute_signature(&type_, &environment));
-            let expected_argument = inferred_argument
-                .clone()
-                .filter(|type_| !contains_type_variables(type_))
+            let runtime_argument = match &loaded_module.arena.expressions[argument.0 as usize] {
+                Expression::Var { name, .. } => lookup(&environment, name)
+                    .filter(crate::hir::contains_runtime)
+                    .and_then(|value| {
+                        runtime
+                            .residual
+                            .as_ref()
+                            .and_then(|trace| trace.borrow().conservative_value_type(&value))
+                    }),
+                _ => None,
+            };
+            let expected_argument = runtime_argument
+                .or_else(|| {
+                    inferred_argument
+                        .clone()
+                        .filter(|type_| !contains_type_variables(type_))
+                })
                 .or_else(|| recognition_argument_type(&runtime, span))
                 .or_else(
                     || match &loaded_module.arena.expressions[argument.0 as usize] {

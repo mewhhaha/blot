@@ -212,7 +212,9 @@ Surface elaboration lowers rich control to the smaller Core owned by
 - sequencing a suspended nullary effect value applies it to unit once;
 - loops become recursion and cases with explicit accumulator transfer; names
   bound by the loop pattern are local to an iteration and are excluded from the
-  accumulator even when rebound with `:=`;
+  accumulator even when rebound with `:=`; the initial argument is marked for
+  retention of its checked expression type so specialization receives stable
+  accumulator fields rather than only their initial values;
 - comma-separated case subjects become affine deferred parameters whose first
   demanded reads are cached before ordinary nested cases inspect them; a
   non-executed decision tree over the unguarded rows carries the same subject

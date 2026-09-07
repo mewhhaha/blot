@@ -1733,6 +1733,9 @@ fn desugar_loop(
         elements: vec![initial_iterator, state],
         span,
     });
+    arena
+        .synthetic_runtime_type_expressions
+        .insert(initial_arguments);
     let initial_go = variable(go_in, span, arena);
     let result = arena.expression(Expression::Apply {
         function: initial_go,

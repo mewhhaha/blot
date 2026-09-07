@@ -1,0 +1,16 @@
+open import "blot:prelude"
+
+const negate_int :: (Int, Int) -> Int
+const negate_int = fn (x, y) => -x
+
+const negate_f32 :: (F32, F32) -> F32
+const negate_f32 = fn (x, y) => -x
+
+const negate_f64 :: (F64, F64) -> F64
+const negate_f64 = fn (x, y) => -x
+
+return {
+  .negate_int = negate_int;
+  .negate_f32 = negate_f32;
+  .negate_f64 = negate_f64;
+  }

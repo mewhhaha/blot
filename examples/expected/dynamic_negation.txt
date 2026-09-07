@@ -1,0 +1,1 @@
+{ .negate_int = <function>; .negate_f32 = <function>; .negate_f64 = <function>; }

@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+const remainder :: (F32, F32) -> F32
+const remainder = fn (x, y) => x % y
+
+return { .remainder = remainder; }

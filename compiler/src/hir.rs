@@ -1107,10 +1107,14 @@ impl ResidualTrace {
 
     pub(crate) fn record_checked_value(&mut self, value: &Value, type_: &Value) {
         match (value, type_) {
-            (Value::Runtime(value), type_) if !crate::value::contains_type_variables(type_) => {
-                self.checked_values
-                    .entry(value.id)
-                    .or_insert_with(|| type_.clone());
+            (Value::Runtime(value), type_)
+                if !matches!(
+                    value.meaning,
+                    RuntimeMeaning::Ordering | RuntimeMeaning::ScalarOrdering { .. }
+                ) && !crate::value::contains_type_variables(type_) =>
+            {
+                // A call site's checked result supersedes facts from its generic body.
+                self.checked_values.insert(value.id, type_.clone());
             }
             (Value::Shape(values), Value::Shape(types)) => {
                 for (name, value) in values {
@@ -1159,6 +1163,14 @@ impl ResidualTrace {
 
     pub(crate) fn conservative_value_type(&self, value: &Value) -> Option<Value> {
         match value {
+            Value::Runtime(value)
+                if matches!(
+                    value.meaning,
+                    RuntimeMeaning::Ordering | RuntimeMeaning::ScalarOrdering { .. }
+                ) =>
+            {
+                None
+            }
             Value::Runtime(value) => self
                 .checked_values
                 .get(&value.id)
@@ -1400,6 +1412,7 @@ impl ResidualTrace {
         self.next_function += 1;
         self.current_block = 0;
         self.next_value = 0;
+        self.checked_values.clear();
         self.export_effects.clear();
         self.block();
         Ok(())
@@ -4315,7 +4328,9 @@ impl ResidualTrace {
                     checked_captures: Some(&checked_captures),
                 },
                 argument,
-                actual_evidence.as_ref().or(checked_argument_type),
+                checked_argument_type
+                    .filter(|type_| !crate::value::contains_type_variables(type_))
+                    .or(actual_evidence.as_ref()),
                 &self.types,
             )?;
             signature = instance_facts.as_ref().map(|facts| &facts.signature);

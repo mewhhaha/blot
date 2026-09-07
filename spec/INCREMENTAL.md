@@ -510,6 +510,14 @@ evaluated module value must not silently remove an attached member. Removing or
 replacing the owning module releases that attachment under the ordinary resident
 invalidation rules; ownership is not transferred into a global cache.
 
+Snapshot reconstruction restores operator attachments from the decoded lexical
+environment, including its parent scopes, before publishing the module result.
+Bindings are visited in source declaration order rather than map-key order so
+later attachments retain precedence. Attached source callables overlay the
+numeric domain's existing operations and retain their checked signatures. The
+same restoration applies to initial installation, replacement, and
+reconstruction of a module-result template.
+
 The cached-interface path requires all three of an eligible compile-time
 environment, a certificate with no generative effect label or opaque effect
 identity, and a validated AST containing no `@effect` or `@effect.host`

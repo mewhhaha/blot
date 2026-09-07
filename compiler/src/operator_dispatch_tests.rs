@@ -137,6 +137,71 @@ fn prefix_negation_uses_the_selected_numeric_member() {
 }
 
 #[test]
+fn exported_numeric_operations_retain_their_checked_types() {
+    with_stack(|| {
+        let mut builder = CompilerSession::default();
+        builder
+            .add_source(
+                "prelude.blot".to_owned(),
+                include_str!("../../src/prelude/prelude.blot")
+                    .encode_utf16()
+                    .collect(),
+            )
+            .unwrap();
+        builder
+            .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+            .unwrap();
+        let snapshot = builder.module_snapshot("prelude.blot").unwrap();
+        for (name, source) in [
+            (
+                "comparisons",
+                include_str!("../../examples/dynamic_numeric_comparisons.blot"),
+            ),
+            (
+                "chained",
+                "open import \"blot:prelude\"\nconst run :: (F32, F32) -> F32\nconst run = fn (x, y) => (x + y) * 2.0 / 4.0 - 0.5\nreturn { .run = run; }\n",
+            ),
+            (
+                "negation",
+                include_str!("../../examples/dynamic_negation.blot"),
+            ),
+            (
+                "remainder",
+                include_str!("../../examples/dynamic_f32_remainder.blot"),
+            ),
+            (
+                "traversal",
+                include_str!("../../examples/dynamic_boolean_traversal.blot"),
+            ),
+        ] {
+            let mut compiler = with_prelude(source);
+            compiler
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            let checked = compiler.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{name}: {checked}");
+            let prepared = compiler.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{name}: {prepared}");
+        }
+    });
+}
+
+#[test]
+fn source_loaded_f32_remainder_retains_its_checked_signature() {
+    with_stack(|| {
+        let compiler = with_prelude(include_str!("../../examples/dynamic_f32_remainder.blot"));
+        let checked = compiler.check_module("main.blot");
+        assert_eq!(checked["ok"], true, "{checked}");
+        assert_eq!(
+            checked["type"],
+            "{ .remainder = { .0 = F32; .1 = F32 } -> F32 }"
+        );
+        let prepared = compiler.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+}
+
+#[test]
 fn generic_dispatch_keeps_call_site_domains_without_prelude() {
     with_stack(|| {
         let mut compiler = session(&format!(

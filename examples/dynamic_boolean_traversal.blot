@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const traverse :: (F32, F32) -> Bool
+const traverse = fn (x, y) => do:
+  let next_x = x
+  let next_y = y
+  let horizontal :: Bool
+  let horizontal = False
+  for crossing in Iter.range (0, 20):
+    if next_x < next_y:
+      next_x := next_x + F32.of_float 1.0
+      horizontal := False
+    else:
+      next_y := next_y + F32.of_float 1.0
+      horizontal := True
+
+    if next_x > F32.of_float 5.0 && next_y > F32.of_float 5.0:
+      break
+
+  return horizontal
+
+return { .traverse = traverse; }

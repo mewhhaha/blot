@@ -330,6 +330,7 @@ impl CompilerSession {
                     &base_module_instances,
                     &base_effect_scope,
                 )?;
+                staged_context.register_operator_attachments_from_environment(path, &environment);
                 run(evaluate_expression(
                     staged_context.clone(),
                     Rc::new(path.to_owned()),
@@ -2627,6 +2628,51 @@ mod tests {
             .expect("compiler test thread should start")
             .join()
             .expect("compiler test thread should finish");
+    }
+
+    #[test]
+    fn snapshot_replacement_restores_the_latest_source_operator_attachment() {
+        run_with_compiler_test_stack(|| {
+            let mut consumer = CompilerSession::default();
+            consumer
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "prefix 90 (-) = negate\n",
+                        "open import \"numeric\"\n",
+                        "const negate = fn value => (@type.inferred value).negate value\n",
+                        "let operand = 7\nreturn -operand\n",
+                    )),
+                )
+                .unwrap();
+            consumer
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("numeric".to_owned(), "numeric.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            for (offset, expected) in [(11, "18"), (12, "19")] {
+                let snapshot = snapshot_from_source(
+                    "numeric.blot",
+                    &format!(
+                        "const earlier = @type.attach @type.int \"negate\" @int.neg\nconst negate :: @type.int -> @type.int\nconst negate = fn value => @int.add value {offset}\nconst Scalar = @type.attach @type.int \"negate\" negate\nreturn {{ .earlier = earlier; .Scalar = Scalar; }}\n"
+                    ),
+                );
+                consumer
+                    .install_trusted_module_snapshot("numeric.blot", &snapshot)
+                    .unwrap();
+                for _ in 0..2 {
+                    let checked = consumer.check_module("main.blot");
+                    assert_eq!(checked["ok"], true, "{checked}");
+                    let evaluated = consumer.evaluate_module("main.blot");
+                    assert_eq!(evaluated["ok"], true, "{evaluated}");
+                    assert_eq!(evaluated["display"], expected, "{evaluated}");
+                    let prepared = consumer.prepare_runtime_hir("main.blot");
+                    assert_eq!(prepared["ok"], true, "{prepared}");
+                }
+            }
+        });
     }
 
     #[test]

@@ -5286,6 +5286,14 @@ impl Checker {
                         low: Some(Scalar::Text(low)),
                         high: Some(Scalar::Text(high)),
                     } if low == high => text_type(),
+                    Type::Variant { cases, open: false }
+                        if cases.len() > 1
+                            && cases.iter().all(|(_, payload)| {
+                                closed_checked_type(payload, &mut HashSet::new())
+                            }) =>
+                    {
+                        Type::Variant { cases, open: false }
+                    }
                     _ => previous,
                 };
                 let inferred = if closed_checked_type(&previous, &mut HashSet::new()) {
@@ -5487,11 +5495,10 @@ impl Checker {
             }
         }
         if let Ok(inferred) = &inferred
-            && matches!(
+            && ((matches!(
                 module.arena.expressions[expression_id.0 as usize],
                 Expression::Apply { .. }
-            )
-            && (!module.arena.synthetic_expressions.contains(&expression_id)
+            ) && !module.arena.synthetic_expressions.contains(&expression_id))
                 || module
                     .arena
                     .synthetic_runtime_type_expressions
@@ -5640,6 +5647,7 @@ impl Checker {
                 if member_arguments.len() > 1
                     && let Expression::Field { target, name, .. } =
                         &module.arena.expressions[member_callee.0 as usize]
+                    && inferred_type_subject(module, *target).is_none()
                     && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
                     && (matches!(target_value, Value::Extended { .. })
                         || static_member(&target_value, name)
@@ -5720,6 +5728,7 @@ impl Checker {
                 }
                 if let Expression::Field { target, name, .. } =
                     &module.arena.expressions[function.0 as usize]
+                    && inferred_type_subject(module, *target).is_none()
                     && let Ok(target_value) = self.evaluate(path, *target, values, Phase::Comptime)
                     && (matches!(target_value, Value::Extended { .. })
                         || name == "transform"

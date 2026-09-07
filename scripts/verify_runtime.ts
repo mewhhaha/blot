@@ -3,6 +3,7 @@ import { runArtifact } from "../src/node/run.ts";
 
 const cases = [
   "examples/minimal.blot",
+  "examples/dynamic_numeric_observations.blot",
   "examples/control_transformers.blot",
   "examples/row_preserving_wrapper.blot",
   "examples/region_round_trip.blot",

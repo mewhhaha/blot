@@ -1,0 +1,12 @@
+open import "blot:prelude"
+
+const less_int :: (Int, Int) -> Bool
+const less_int = fn (x, y) => x < y
+
+const less_f32 :: (F32, F32) -> Bool
+const less_f32 = fn (x, y) => x < y
+
+const less_f64 :: (F64, F64) -> Bool
+const less_f64 = fn (x, y) => x < y
+
+return { .less_int = less_int; .less_f32 = less_f32; .less_f64 = less_f64; }

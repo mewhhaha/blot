@@ -275,6 +275,11 @@ introduces its unspellable `loop$` accumulator binding, a closed
 multi-constructor variant already established for a carried source name is also
 retained separately as that name's stable lineage.
 
+The initial accumulator argument retains its checked structural type for
+residual instance checking. A declared Boolean field remains the complete
+variant there even when its initial runtime value is one constructor; source
+checking and residual instance checking must admit the same back edges.
+
 The implementation uses an undo journal and a variable-arena checkpoint. It must
 not clone the whole solver graph for a candidate. This is both a semantic
 requirement and the first performance invariant.
@@ -422,6 +427,11 @@ is recognized only as `@type.resolve_member` with arity three and exactly one
 already-applied text member argument; that argument, not the wrapper's field
 name, determines the ordering set. An unrecognized attached implementation
 produces no comparison fact. Member spelling is never a fallback proof.
+
+An application whose member target is `@type.inferred` resolves that member
+through the current subject's checked type. Static attached-member
+specialization must not evaluate that target using expression facts from another
+instance of the same generic source body.
 
 ## 6. Flat implementation model
 
