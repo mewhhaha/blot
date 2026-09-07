@@ -183,6 +183,20 @@ index. Constructing a row is `O(L)` expected work, cloning it is `O(1)`, and one
 field or constructor lookup is expected `O(1)`; checking `L` case arms against
 an `L`-constructor variant must not scan the complete row for every arm.
 
+Immutable type DAGs must stay shared when interned, expanded, compared, and
+scanned for qualified member obligations. For one unchanged graph observation,
+work is proportional to the distinct visited nodes and edges rather than the
+tree obtained by expanding every shared occurrence. Scope-sensitive equality and
+complete-component reachability caches retain the same judgments; mutation and
+speculation still have their own invalidation costs. Repeated source checking,
+candidate exploration, and output rendering are separate costs, so these local
+bounds do not claim that the entire compiler is linear.
+
+Private editor type strings are rendered on demand from frozen analysis facts.
+Ordinary compilation does not pay to print every expression's expanded qualified
+signature. Public boundary identity likewise visits public roots only; a
+complete portable certificate remains subject to its unchanged total budget.
+
 The type-mechanics scaling experiment varies one source dimension `N` at a time.
 An ordinary declaration chain, one wide structural requirement, `N` independent
 polymorphic instantiations, `N` fixed-size predicate refinements, a chain of `N`

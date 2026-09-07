@@ -27,6 +27,33 @@ impl<T> MemberRequirement<T> {
     }
 }
 
+// Distinct free variables can never compare equal. Keep structural subjects in
+// one bucket so alpha-equivalent forall types still use semantic equality.
+#[derive(Eq, Hash, PartialEq)]
+enum RequirementTypeHint {
+    Variable(VariableId),
+    Rigid(VariableId),
+    Structural,
+}
+
+fn requirement_type_hint(type_: &Type) -> RequirementTypeHint {
+    match type_ {
+        Type::Variable(id) => RequirementTypeHint::Variable(*id),
+        Type::Rigid(id) => RequirementTypeHint::Rigid(*id),
+        _ => RequirementTypeHint::Structural,
+    }
+}
+
+fn requirement_hint(
+    requirement: &MemberRequirement<Type>,
+) -> (String, RequirementTypeHint, RequirementTypeHint) {
+    (
+        requirement.name.clone(),
+        requirement_type_hint(&requirement.subject),
+        requirement_type_hint(&requirement.member),
+    )
+}
+
 #[derive(Clone)]
 struct PendingMember {
     requirement: MemberRequirement<Type>,
@@ -39,6 +66,8 @@ pub(super) struct MemberConstraints {
     identities: HashMap<(String, ConstraintTypeId, ConstraintTypeId), usize>,
     variables: HashMap<VariableId, BTreeSet<usize>>,
     queued: BTreeSet<usize>,
+    #[cfg(test)]
+    node_visits: Cell<u64>,
 }
 
 impl MemberConstraints {
@@ -98,17 +127,41 @@ impl Checker {
     /// Include graph edges as well as syntactic occurrences. A member's result
     /// and effects can become connected to a function only after an application.
     fn member_variable_ids(&self, type_: &Type) -> BTreeSet<VariableId> {
+        let mut variables = BTreeSet::new();
+        self.walk_member_variables(type_, |variable, _| {
+            variables.insert(variable);
+            false
+        });
+        variables
+    }
+
+    // All roots discovered by the visitor share the same visited set. Expanding
+    // each requirement with a separate traversal repeatedly walks the same
+    // connected inference graph.
+    fn walk_member_variables(
+        &self,
+        type_: &Type,
+        mut visit: impl FnMut(VariableId, &mut Vec<ConstraintTypeId>) -> bool,
+    ) -> bool {
         let mut pending = vec![self.constraint_type(type_)];
         let mut visited = HashSet::new();
-        let mut variables = BTreeSet::new();
         while let Some(id) = pending.pop() {
             if !visited.insert(id) {
                 continue;
             }
+            #[cfg(test)]
+            {
+                let constraints = self.member_constraints.borrow();
+                constraints
+                    .node_visits
+                    .set(constraints.node_visits.get() + 1);
+            }
             let node = self.constraint_types.borrow().nodes[id.0 as usize].clone();
             match node {
                 ConstraintTypeNode::Variable(variable) => {
-                    variables.insert(variable);
+                    if visit(variable, &mut pending) {
+                        return true;
+                    }
                     let source = self.variables.borrow()[variable as usize].clone();
                     pending.extend(source.lower);
                     pending.extend(source.upper);
@@ -150,7 +203,7 @@ impl Checker {
                 | ConstraintTypeNode::Bottom => {}
             }
         }
-        variables
+        false
     }
 
     fn index_member_requirement(&self, id: usize, requirement: &MemberRequirement<Type>) {
@@ -158,11 +211,16 @@ impl Checker {
         variables.extend(self.member_variable_ids(&requirement.member));
         let mut constraints = self.member_constraints.borrow_mut();
         for variable in variables {
-            constraints
+            if constraints
                 .variables
                 .entry(variable)
                 .or_default()
-                .insert(id);
+                .insert(id)
+            {
+                self.member_reachability.borrow_mut().clear();
+                self.residual_analyses.borrow_mut().clear();
+                self.residual_prefixes.borrow_mut().clear();
+            }
         }
     }
 
@@ -186,40 +244,180 @@ impl Checker {
             constraints.queued.insert(id);
             id
         };
+        self.residual_analyses.borrow_mut().clear();
+        self.residual_prefixes.borrow_mut().clear();
+        self.member_reachability.borrow_mut().clear();
         self.index_member_requirement(id, &requirement);
     }
 
+    // Compute transitive obligations by strongly connected component. A cycle
+    // shares one complete result; predecessors union child results. Cache keys
+    // are exact arena nodes, and every bound/index/discharge mutation invalidates
+    // them. A cached successor is therefore a complete, not speculative, fact.
     fn reachable_member_requirements(&self, type_: &Type) -> Vec<MemberRequirement<Type>> {
-        let mut pending = self
-            .member_variable_ids(type_)
-            .into_iter()
-            .collect::<Vec<_>>();
-        let mut variables = BTreeSet::new();
-        let mut selected = BTreeSet::new();
-        while let Some(variable) = pending.pop() {
-            if !variables.insert(variable) {
-                continue;
-            }
-            let ids = self
-                .member_constraints
-                .borrow()
-                .variables
-                .get(&variable)
-                .cloned();
-            for id in ids.into_iter().flatten() {
-                let entry = self.member_constraints.borrow().entries[id].clone();
-                if entry.discharged || !selected.insert(id) {
+        struct Node {
+            id: ConstraintTypeId,
+            low: usize,
+            active: bool,
+            children: Vec<ConstraintTypeId>,
+            members: Vec<usize>,
+        }
+        let root = self.constraint_type(type_);
+        let mut indices = HashMap::<ConstraintTypeId, usize>::new();
+        let mut nodes = Vec::<Node>::new();
+        let mut active = Vec::<usize>::new();
+        let mut frames = Vec::<(usize, usize)>::new();
+        let enter = |id,
+                     nodes: &mut Vec<Node>,
+                     indices: &mut HashMap<_, _>,
+                     active: &mut Vec<usize>,
+                     frames: &mut Vec<(usize, usize)>| {
+            let index = nodes.len();
+            let (children, members) = self.member_graph_edges(id);
+            nodes.push(Node {
+                id,
+                low: index,
+                active: true,
+                children,
+                members,
+            });
+            indices.insert(id, index);
+            active.push(index);
+            frames.push((index, 0));
+        };
+        if !self.member_reachability.borrow().contains_key(&root) {
+            enter(root, &mut nodes, &mut indices, &mut active, &mut frames);
+        }
+        while let Some(&(current, next)) = frames.last() {
+            if let Some(&child) = nodes[current].children.get(next) {
+                frames.last_mut().expect("a DFS frame is active").1 += 1;
+                if self.member_reachability.borrow().contains_key(&child) {
                     continue;
                 }
-                pending.extend(self.member_variable_ids(&entry.requirement.subject));
-                pending.extend(self.member_variable_ids(&entry.requirement.member));
+                if let Some(&index) = indices.get(&child) {
+                    if nodes[index].active {
+                        nodes[current].low = nodes[current].low.min(index);
+                    }
+                } else {
+                    enter(child, &mut nodes, &mut indices, &mut active, &mut frames);
+                }
+                continue;
+            }
+            frames.pop();
+            if nodes[current].low == current {
+                let mut component = Vec::new();
+                loop {
+                    let member = active.pop().expect("a component contains its root");
+                    nodes[member].active = false;
+                    component.push(member);
+                    if member == current {
+                        break;
+                    }
+                }
+                let members = component.iter().copied().collect::<HashSet<_>>();
+                let mut result = BTreeSet::new();
+                {
+                    let cache = self.member_reachability.borrow();
+                    for &index in &component {
+                        result.extend(nodes[index].members.iter().copied());
+                        for child in &nodes[index].children {
+                            if indices
+                                .get(child)
+                                .is_some_and(|index| members.contains(index))
+                            {
+                                continue;
+                            }
+                            result.extend(
+                                cache
+                                    .get(child)
+                                    .expect("successor components finish first")
+                                    .iter()
+                                    .copied(),
+                            );
+                        }
+                    }
+                }
+                let result: Rc<[usize]> = result.into_iter().collect::<Vec<_>>().into();
+                let mut cache = self.member_reachability.borrow_mut();
+                for index in component {
+                    cache.insert(nodes[index].id, result.clone());
+                }
+            }
+            if let Some(&(parent, _)) = frames.last() {
+                nodes[parent].low = nodes[parent].low.min(nodes[current].low);
             }
         }
+        let cache = self.member_reachability.borrow();
         let constraints = self.member_constraints.borrow();
-        selected
-            .into_iter()
-            .map(|id| constraints.entries[id].requirement.clone())
+        cache[&root]
+            .iter()
+            .map(|id| constraints.entries[*id].requirement.clone())
             .collect()
+    }
+
+    fn member_graph_edges(&self, id: ConstraintTypeId) -> (Vec<ConstraintTypeId>, Vec<usize>) {
+        #[cfg(test)]
+        {
+            let constraints = self.member_constraints.borrow();
+            constraints
+                .node_visits
+                .set(constraints.node_visits.get() + 1);
+        }
+        let node = self.constraint_types.borrow().nodes[id.0 as usize].clone();
+        let mut children = Vec::new();
+        let mut members = Vec::new();
+        match node {
+            ConstraintTypeNode::Variable(variable) => {
+                let source = self.variables.borrow()[variable as usize].clone();
+                children.extend(source.lower);
+                children.extend(source.upper);
+                let constraints = self.member_constraints.borrow();
+                if let Some(ids) = constraints.variables.get(&variable) {
+                    for &id in ids {
+                        let entry = &constraints.entries[id];
+                        if !entry.discharged {
+                            members.push(id);
+                            children.push(self.constraint_type(&entry.requirement.subject));
+                            children.push(self.constraint_type(&entry.requirement.member));
+                        }
+                    }
+                }
+            }
+            ConstraintTypeNode::Forall { body, .. } => children.push(body),
+            ConstraintTypeNode::Qualified { requirements, body } => {
+                children.push(body);
+                for requirement in requirements {
+                    children.extend([requirement.subject, requirement.member]);
+                }
+            }
+            ConstraintTypeNode::Function {
+                parameter,
+                effects,
+                result,
+                ..
+            } => children.extend([parameter, effects, result]),
+            ConstraintTypeNode::Record(fields)
+            | ConstraintTypeNode::Variant { cases: fields, .. } => {
+                children.extend(fields.into_iter().map(|(_, field)| field))
+            }
+            ConstraintTypeNode::RecordUpdate { base, fields } => {
+                children.push(base);
+                children.extend(fields.into_iter().map(|(_, field)| field));
+            }
+            ConstraintTypeNode::Array(element)
+            | ConstraintTypeNode::Region(element)
+            | ConstraintTypeNode::Scratch(element) => children.push(element),
+            ConstraintTypeNode::OpenEffects { tail, .. } => children.push(tail),
+            ConstraintTypeNode::Union(members) => children.extend(members),
+            ConstraintTypeNode::Rigid(_)
+            | ConstraintTypeNode::Range { .. }
+            | ConstraintTypeNode::Unit
+            | ConstraintTypeNode::Effects(_)
+            | ConstraintTypeNode::Opaque(_)
+            | ConstraintTypeNode::Top
+            | ConstraintTypeNode::Bottom => {}
+        }
+        (children, members)
     }
 
     pub(super) fn qualify_type(&self, type_: Type) -> Type {
@@ -230,12 +428,23 @@ impl Checker {
             ),
             other => (Vec::new(), other),
         };
+        let mut candidates = HashMap::<_, Vec<usize>>::new();
+        for (index, requirement) in requirements.iter().enumerate() {
+            candidates
+                .entry(requirement_hint(requirement))
+                .or_default()
+                .push(index);
+        }
         for requirement in self.reachable_member_requirements(&body) {
-            if !requirements.iter().any(|existing| {
-                existing.name == requirement.name
-                    && same_type(&existing.subject, &requirement.subject)
+            let matching = candidates
+                .entry(requirement_hint(&requirement))
+                .or_default();
+            if !matching.iter().any(|index| {
+                let existing = &requirements[*index];
+                same_type(&existing.subject, &requirement.subject)
                     && same_type(&existing.member, &requirement.member)
             }) {
+                matching.push(requirements.len());
                 requirements.push(requirement);
             }
         }
@@ -265,7 +474,16 @@ impl Checker {
     }
 
     pub(super) fn has_member_requirements(&self, type_: &Type) -> bool {
-        !self.reachable_member_requirements(type_).is_empty()
+        // Reaching a transitive obligation first requires reaching a pending
+        // obligation. An existence query can stop at that first requirement.
+        self.walk_member_variables(type_, |variable, _| {
+            let constraints = self.member_constraints.borrow();
+            constraints.variables.get(&variable).is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|id| !constraints.entries[*id].discharged)
+            })
+        })
     }
 
     /// Produce ordinary subtype work only after lookup has actual type evidence.
@@ -327,6 +545,9 @@ impl Checker {
                 body: signature,
             });
             self.member_constraints.borrow_mut().entries[id].discharged = true;
+            self.residual_analyses.borrow_mut().clear();
+            self.residual_prefixes.borrow_mut().clear();
+            self.member_reachability.borrow_mut().clear();
             work.push(WorkItem {
                 left: self.constraint_type(&signature),
                 right: self.constraint_type(&entry.requirement.member),
@@ -392,5 +613,137 @@ pub(super) fn map_type_children(type_: Type, mut f: impl FnMut(Type) -> Type) ->
         },
         Type::Union(members) => Type::Union(members.into_iter().map(f).collect()),
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod traversal_tests {
+    use super::*;
+
+    #[test]
+    fn cached_reachability_covers_cycles_and_new_obligations() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let a = checker.fresh();
+        let b = checker.fresh();
+        let span = Span { start: 0, end: 0 };
+        checker.constrain(a.clone(), b.clone(), span).unwrap();
+        checker.constrain(b.clone(), a.clone(), span).unwrap();
+        checker.register_member_requirement(MemberRequirement {
+            name: "first".to_owned(),
+            subject: a.clone(),
+            member: checker.fresh(),
+        });
+        assert_eq!(checker.reachable_member_requirements(&b).len(), 1);
+        assert_eq!(checker.reachable_member_requirements(&a).len(), 1);
+        checker.register_member_requirement(MemberRequirement {
+            name: "second".to_owned(),
+            subject: b.clone(),
+            member: checker.fresh(),
+        });
+        for root in [&a, &b, &a] {
+            let names = checker
+                .reachable_member_requirements(root)
+                .into_iter()
+                .map(|requirement| requirement.name)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                names,
+                BTreeSet::from(["first".to_owned(), "second".to_owned()])
+            );
+        }
+    }
+
+    #[test]
+    fn connected_requirements_are_walked_once_and_existence_short_circuits() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let subjects = (0..32).map(|_| checker.fresh()).collect::<Vec<_>>();
+        for pair in subjects.windows(2) {
+            checker
+                .constrain(pair[0].clone(), pair[1].clone(), Span { start: 0, end: 0 })
+                .unwrap();
+        }
+        for subject in &subjects {
+            checker.register_member_requirement(MemberRequirement {
+                name: "add".to_owned(),
+                subject: subject.clone(),
+                member: checker.fresh(),
+            });
+        }
+        let before = checker.member_constraints.borrow().node_visits.get();
+        let requirements = checker.reachable_member_requirements(&subjects[0]);
+        let after = checker.member_constraints.borrow().node_visits.get();
+        assert_eq!(requirements.len(), 32);
+        assert_eq!(
+            after - before,
+            64,
+            "each graph node must be visited once, not once per requirement"
+        );
+        assert!(checker.has_member_requirements(&subjects[0]));
+        assert_eq!(
+            checker.member_constraints.borrow().node_visits.get() - after,
+            1,
+            "existence must stop at the first pending requirement"
+        );
+        for entry in &mut checker.member_constraints.borrow_mut().entries {
+            entry.discharged = true;
+        }
+        assert!(!checker.has_member_requirements(&subjects[0]));
+    }
+
+    #[test]
+    fn requirement_bucketing_retains_alpha_equivalence_and_distinct_variables() {
+        for quantified_subject in [false, true] {
+            let checker = Checker::new(Rc::new(Context::default()));
+            let root = checker.fresh();
+            let forall = |id| Type::Forall {
+                variables: vec![id],
+                body: Rc::new(curried(vec![Type::Rigid(id)], Type::Rigid(id))),
+            };
+            let requirement = |id| {
+                let (subject, member) = if quantified_subject {
+                    (forall(id), root.clone())
+                } else {
+                    (root.clone(), forall(id))
+                };
+                MemberRequirement {
+                    name: "add".to_owned(),
+                    subject,
+                    member,
+                }
+            };
+            checker.register_member_requirement(requirement(8));
+            let existing = Type::Qualified {
+                requirements: vec![requirement(7)].into(),
+                body: Rc::new(root),
+            };
+            let Type::Qualified { requirements, .. } = checker.qualify_type(existing) else {
+                panic!("qualification was dropped")
+            };
+            assert_eq!(
+                requirements.len(),
+                1,
+                "alpha-equivalent obligations must still deduplicate"
+            );
+        }
+        let checker = Checker::new(Rc::new(Context::default()));
+        let left = checker.fresh();
+        let right = checker.fresh();
+        for subject in [&left, &right] {
+            checker.register_member_requirement(MemberRequirement {
+                name: "add".to_owned(),
+                subject: subject.clone(),
+                member: Type::Unit,
+            });
+        }
+        let Type::Qualified { requirements, .. } = checker.qualify_type(Type::Record(
+            vec![("left".to_owned(), left), ("right".to_owned(), right)].into(),
+        )) else {
+            panic!("requirements were lost")
+        };
+        assert_eq!(
+            requirements.len(),
+            2,
+            "distinct free receivers must not merge"
+        );
     }
 }

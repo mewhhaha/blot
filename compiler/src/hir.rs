@@ -592,6 +592,7 @@ pub struct RuntimeModule {
 }
 
 pub(crate) struct ResidualTrace {
+    checked_values: HashMap<usize, Value>,
     source: String,
     development_units: Option<Rc<HashSet<String>>>,
     types: Vec<RuntimeType>,
@@ -783,6 +784,7 @@ impl RepresentationFacts {
 }
 
 struct ResidualFunctionFrame {
+    checked_values: HashMap<usize, Value>,
     source: String,
     blocks: Vec<ResidualBlock>,
     current_block: usize,
@@ -826,6 +828,7 @@ struct LexicalClosure<'a> {
 }
 
 pub(crate) struct ResidualFunctionCompilation {
+    pub(crate) instance_facts: Option<Rc<crate::typecheck::ResidualInstanceFacts>>,
     pub(crate) argument: Value,
     pub(crate) environment: Environment,
     function: usize,
@@ -987,6 +990,7 @@ impl ResidualTrace {
         development_units: Option<Rc<HashSet<String>>>,
     ) -> Self {
         let mut trace = Self {
+            checked_values: HashMap::new(),
             source: source.to_owned(),
             development_units,
             types: Vec::new(),
@@ -1099,6 +1103,189 @@ impl ResidualTrace {
             },
             span,
         )
+    }
+
+    pub(crate) fn record_checked_value(&mut self, value: &Value, type_: &Value) {
+        match (value, type_) {
+            (Value::Runtime(value), type_) if !crate::value::contains_type_variables(type_) => {
+                self.checked_values
+                    .entry(value.id)
+                    .or_insert_with(|| type_.clone());
+            }
+            (Value::Shape(values), Value::Shape(types)) => {
+                for (name, value) in values {
+                    if let Some(type_) = types.get(name) {
+                        self.record_checked_value(value, type_);
+                    }
+                }
+            }
+            (Value::Array(values), Value::Array(types)) if types.len() == 1 => {
+                for value in values {
+                    self.record_checked_value(value, &types[0]);
+                }
+            }
+            (
+                Value::Tag {
+                    name,
+                    payload: Some(value),
+                },
+                Value::Union(types),
+            ) => {
+                for type_ in types {
+                    if let Value::Tag {
+                        name: expected,
+                        payload: Some(type_),
+                    } = type_
+                        && name == expected
+                    {
+                        self.record_checked_value(value, type_);
+                    }
+                }
+            }
+            (
+                Value::Tag {
+                    name,
+                    payload: Some(value),
+                },
+                Value::Tag {
+                    name: expected,
+                    payload: Some(type_),
+                },
+            ) if name == expected => self.record_checked_value(value, type_),
+            (_, Value::Extended { inner, .. }) => self.record_checked_value(value, inner),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn conservative_value_type(&self, value: &Value) -> Option<Value> {
+        match value {
+            Value::Runtime(value) => self
+                .checked_values
+                .get(&value.id)
+                .cloned()
+                .or_else(|| self.runtime_type_value(value.type_id, &mut HashSet::new())),
+            Value::Shape(fields) => Some(Value::Shape(
+                fields
+                    .iter()
+                    .map(|(name, value)| Some((name.clone(), self.conservative_value_type(value)?)))
+                    .collect::<Option<OrderedFields>>()?,
+            )),
+            Value::Array(values) => Some(Value::Array(
+                values
+                    .iter()
+                    .map(|value| self.conservative_value_type(value))
+                    .collect::<Option<Vec<_>>>()?
+                    .into(),
+            )),
+            Value::Tag { name, payload } => Some(Value::Tag {
+                name: name.clone(),
+                payload: match payload {
+                    Some(value) => Some(Box::new(self.conservative_value_type(value)?)),
+                    None => None,
+                },
+            }),
+            Value::Extended { inner, .. } => self.conservative_value_type(inner),
+            Value::Sealed { name, inner } => Some(Value::Sealed {
+                name: name.clone(),
+                inner: Box::new(self.conservative_value_type(inner)?),
+            }),
+            _ if !contains_runtime(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    // This witness is deliberately an unrefined carrier. The source checker
+    // must still prove every qualified requirement and any refined domain.
+    fn runtime_type_value(&self, type_id: usize, seen: &mut HashSet<usize>) -> Option<Value> {
+        if !seen.insert(type_id) {
+            return None;
+        }
+        let value = match self.types.get(type_id)? {
+            RuntimeType::Unit => Value::Unit,
+            RuntimeType::Integer32 => Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(crate::value::Domain::Int),
+            },
+            RuntimeType::SignedInteger64 => Value::Range {
+                low: Box::new(Value::Int(i64::MIN.into())),
+                high: Box::new(Value::Int(i64::MAX.into())),
+                domain: Some(crate::value::Domain::Int),
+            },
+            RuntimeType::Float32 => Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(crate::value::Domain::Float32),
+            },
+            RuntimeType::Float64 => Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(crate::value::Domain::Float),
+            },
+            RuntimeType::Boolean => Value::Union(
+                vec![
+                    Value::Tag {
+                        name: "False".to_owned(),
+                        payload: None,
+                    },
+                    Value::Tag {
+                        name: "True".to_owned(),
+                        payload: None,
+                    },
+                ]
+                .into(),
+            ),
+            RuntimeType::Text => Value::Range {
+                low: Box::new(Value::Unbounded),
+                high: Box::new(Value::Unbounded),
+                domain: Some(crate::value::Domain::Text),
+            },
+            RuntimeType::Store { element_type } => {
+                Value::Array(vec![self.runtime_type_value(*element_type, seen)?].into())
+            }
+            RuntimeType::Scratch { element_type } => {
+                Value::ScratchType(Box::new(self.runtime_type_value(*element_type, seen)?))
+            }
+            RuntimeType::Indirect { target_type } => {
+                let value = self.runtime_type_value(*target_type, seen)?;
+                seen.remove(&type_id);
+                return Some(value);
+            }
+            RuntimeType::Product { fields, .. } => Value::Shape(
+                fields
+                    .iter()
+                    .map(|field| {
+                        Some((
+                            field.name.clone(),
+                            self.runtime_type_value(field.type_id, seen)?,
+                        ))
+                    })
+                    .collect::<Option<OrderedFields>>()?,
+            ),
+            RuntimeType::Sum { cases, .. } => Value::Union(
+                cases
+                    .iter()
+                    .map(|case_| {
+                        let payload = self.runtime_type_value(case_.payload_type, seen)?;
+                        Some(Value::Tag {
+                            name: case_.name.clone(),
+                            payload: (!matches!(payload, Value::Unit)).then(|| Box::new(payload)),
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .into(),
+            ),
+            RuntimeType::Sealed {
+                name,
+                representation_type,
+            } => Value::Sealed {
+                name: name.clone(),
+                inner: Box::new(self.runtime_type_value(*representation_type, seen)?),
+            },
+            RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => return None,
+        };
+        seen.remove(&type_id);
+        Some(value)
     }
 
     pub(crate) fn record_checked_aggregate_representation(&mut self, value: &Value, type_: &Value) {
@@ -4100,7 +4287,39 @@ impl ResidualTrace {
         else {
             return Ok(ResidualFunctionCall::Static);
         };
+        let actual_evidence = self.conservative_value_type(argument);
+        let checked_captures =
+            closure_free_names(context, module, closure_parameter, body, self_name)?
+                .into_iter()
+                .filter_map(|name| {
+                    let value = lookup(environment, &name)?;
+                    let type_ = crate::value::lookup_signature(environment, &name)
+                        .map(|type_| crate::eval::substitute_signature(&type_, environment))
+                        .or_else(|| self.conservative_value_type(&value))?;
+                    Some((name, type_))
+                })
+                .collect::<BTreeMap<_, _>>();
+        let mut instance_facts = None;
         let mut signature = signature;
+        if signature.is_none() && (self_name.is_some() || crosses_development_boundary) {
+            instance_facts = crate::typecheck::Checker::residual_instance_signature(
+                context.clone(),
+                crate::typecheck::EvaluatedClosure {
+                    argument_value: None,
+                    module_path: module,
+                    parameter: closure_parameter,
+                    body,
+                    captures: environment,
+                    self_name,
+                    deferred: false,
+                    checked_captures: Some(&checked_captures),
+                },
+                argument,
+                actual_evidence.as_ref().or(checked_argument_type),
+                &self.types,
+            )?;
+            signature = instance_facts.as_ref().map(|facts| &facts.signature);
+        }
         while let Some(Value::Forall { body, .. }) = signature {
             signature = Some(body);
         }
@@ -4403,6 +4622,7 @@ impl ResidualTrace {
             runtime_signature: signature_id,
         });
         self.function_frames.push(ResidualFunctionFrame {
+            checked_values: std::mem::take(&mut self.checked_values),
             source: self.source.clone(),
             blocks: std::mem::take(&mut self.blocks),
             current_block: self.current_block,
@@ -4441,6 +4661,14 @@ impl ResidualTrace {
                 ownership,
                 span: runtime_span,
             });
+            if let Some(type_) = self
+                .function_frames
+                .last()
+                .and_then(|frame| frame.checked_values.get(&capture.id))
+                .cloned()
+            {
+                self.checked_values.insert(parameter, type_);
+            }
             replacements.insert(
                 (capture.id, capture.type_id),
                 RuntimeValue {
@@ -4454,6 +4682,7 @@ impl ResidualTrace {
         let mut caller_arguments = vec![caller_argument.id];
         caller_arguments.extend(captures.iter().map(|capture| capture.id));
         Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
+            instance_facts,
             argument,
             environment,
             function,
@@ -4636,6 +4865,7 @@ impl ResidualTrace {
             .function_frames
             .pop()
             .ok_or_else(|| hir_error("A residual function lost its caller frame."))?;
+        self.checked_values = frame.checked_values;
         self.blocks = frame.blocks;
         self.current_block = frame.current_block;
         self.next_value = frame.next_value;
@@ -5120,6 +5350,16 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<RuntimeValue, Diagnostic> {
         match (value, type_) {
+            (Value::Tag { .. }, Value::Union(_)) => {
+                // The call already settled representation variables. Lower the
+                // complete substituted sum, not its open source spelling.
+                let expected_type = self.specialized_type_from_type_value(
+                    type_,
+                    &mut substitutions.clone(),
+                    &RepresentationFacts::default(),
+                )?;
+                self.lower_value_as(value, expected_type, span)
+            }
             (_, Value::TypeVariable(variable)) => {
                 let expected_type = substitutions.get(variable).copied().ok_or_else(|| {
                     Diagnostic::new(
@@ -6270,9 +6510,8 @@ impl ResidualTrace {
                         cases.push(name.clone());
                         payload_types.push(self.type_from_type_value(&payload)?);
                     }
-                    if cases.len() == 2
-                        && cases.iter().any(|name| name == "False")
-                        && cases.iter().any(|name| name == "True")
+                    if !cases.is_empty()
+                        && cases.iter().all(|name| name == "False" || name == "True")
                         && payload_types.iter().all(|type_id| *type_id == 0)
                     {
                         return Ok(1);
@@ -6667,9 +6906,8 @@ impl ResidualTrace {
                             representation_facts,
                         )?);
                     }
-                    if cases.len() == 2
-                        && cases.iter().any(|name| name == "False")
-                        && cases.iter().any(|name| name == "True")
+                    if !cases.is_empty()
+                        && cases.iter().all(|name| name == "False" || name == "True")
                         && payload_types.iter().all(|type_id| *type_id == 0)
                     {
                         return Ok(1);
@@ -6824,6 +7062,13 @@ impl ResidualTrace {
                 ))
             }
             Type::Variant { cases, open: false } => {
+                if !cases.is_empty()
+                    && cases.iter().all(|(name, payload)| {
+                        (name == "True" || name == "False") && matches!(payload, Type::Unit)
+                    })
+                {
+                    return Ok(1);
+                }
                 let names = cases
                     .iter()
                     .map(|(name, _)| name.clone())

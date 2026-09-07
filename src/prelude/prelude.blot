@@ -2976,12 +2976,13 @@ const struct = fn shape => do:
     // the shape does not declare is refused here rather than stored, and a
     // missing one fails on the read.
     .new = fn record => do:
-      let _ = @satisfies (@shape.names record) order
+      let checked = @satisfies record shape
+      let _ = @satisfies checked (fn actual => every (@shape.names actual, fn name => @shape.has shape name))
       let product = @shape.empty
       for name in array_items (@array.copy (&order)):
         product := {
           ...product;
-          .[key name] = @satisfies (@shape.get record name) (@shape.get shape name);
+          .[key name] = @shape.get checked name;
         }
 
       return product

@@ -134,3 +134,30 @@ test("partial pagination, a different attempt, skipped tests, and duplicate jobs
     /exactly one check/,
   );
 });
+
+test("release evidence requires every bounded test stage to succeed", async () => {
+  for (
+    const name of [
+      "Test Node host",
+      "Test regression suite",
+      "Test compiler and runtime conformance",
+      "Verify runtime conformance",
+    ]
+  ) {
+    const { run, jobs } = await fixture();
+    const stage = jobs.jobs[1].steps.find((step) => step.name === name);
+    assert.ok(stage, `missing workflow stage ${name}`);
+    for (const conclusion of ["skipped", "cancelled", "failure"]) {
+      stage.conclusion = conclusion;
+      assert.throws(
+        () => checkReleaseEvidence(commit, run, jobs, compiler),
+        /mandatory step/,
+      );
+    }
+    jobs.jobs[1].steps = jobs.jobs[1].steps.filter((step) => step !== stage);
+    assert.throws(
+      () => checkReleaseEvidence(commit, run, jobs, compiler),
+      /mandatory step/,
+    );
+  }
+});

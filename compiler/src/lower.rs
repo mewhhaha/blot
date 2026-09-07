@@ -3429,6 +3429,88 @@ fn lower_case_targets(
     span: Span,
     arena: &mut AstArena,
 ) -> Result<ExpressionId, String> {
+    // A tuple expression is strict: evaluate all components once before
+    // selecting a row. Its field tests then use the existing scalar decision
+    // matrix, rather than asking the staged value matcher to treat unknown
+    // runtime fields as mismatches. Only scalar field probes use this path;
+    // payload destructuring retains its existing checked lowering.
+    // Do not flatten arbitrary product values:
+    // other arm shapes may legitimately accept a different source type.
+    if targets.len() == 1
+        && let Expression::Tuple { elements, .. } = arena.expressions[targets[0].0 as usize].clone()
+        && elements.len() > 1
+        && arms.iter().all(|arm| {
+            arm.patterns.len() == 1
+                && match &arena.patterns[arm.patterns[0].0 as usize] {
+                    Pattern::Tuple {
+                        elements: fields, ..
+                    } => {
+                        fields.len() == elements.len()
+                            && fields.iter().all(|field| {
+                                matches!(
+                                    arena.patterns[field.0 as usize],
+                                    Pattern::Name { .. }
+                                        | Pattern::Wildcard { .. }
+                                        | Pattern::Int { .. }
+                                        | Pattern::Unit { .. }
+                                        | Pattern::Constructor { payload: None, .. }
+                                )
+                            })
+                    }
+                    Pattern::Wildcard { .. } => true,
+                    _ => false,
+                }
+        })
+    {
+        let names = (0..elements.len())
+            .map(|column| format!("case_tuple${}${}${column}", span.start, span.end))
+            .collect::<Vec<_>>();
+        let bindings = names
+            .iter()
+            .map(|name| {
+                arena.pattern(Pattern::Name {
+                    name: name.clone(),
+                    qualifier: Qualifier::None,
+                    span,
+                })
+            })
+            .collect();
+        let binding_pattern = arena.pattern(Pattern::Tuple {
+            elements: bindings,
+            span,
+        });
+        let rows = arms
+            .iter()
+            .map(|arm| {
+                let patterns = match &arena.patterns[arm.patterns[0].0 as usize] {
+                    Pattern::Tuple { elements, .. } => elements.clone(),
+                    Pattern::Wildcard { .. } => vec![arm.patterns[0]; elements.len()],
+                    _ => unreachable!("validated tuple row"),
+                };
+                MultiCaseArm {
+                    patterns,
+                    guard: arm.guard,
+                    body: arm.body,
+                }
+            })
+            .collect::<Vec<_>>();
+        let fields = names
+            .iter()
+            .map(|name| variable(name, span, arena))
+            .collect();
+        let result = lower_case_targets(fields, &rows, span, arena)?;
+        let function = arena.expression(Expression::Lambda {
+            parameter: binding_pattern,
+            body: result,
+            deferred: false,
+            span,
+        });
+        return Ok(arena.expression(Expression::Apply {
+            function,
+            argument: targets[0],
+            span,
+        }));
+    }
     if targets.len() == 1 && arms.iter().all(|arm| arm.patterns.len() == 1) {
         let target = targets[0];
         let arms = arms

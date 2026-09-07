@@ -9,4 +9,4 @@ return {
   .late = search ("aaaaaaaaaaaaaaaab", "aaaab");
   .unicode = search ("αβ🐱éβ🐱", "éβ");
   .search = search;
-}
+  }

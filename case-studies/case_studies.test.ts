@@ -57,10 +57,13 @@ Deno.test("game_loop.blot streams exact shrubbery geometry once", async () => {
     }
     return { selection, observation };
   };
+  // Tree fields are also checked voxel-by-voxel against the independent
+  // coordinate recipe in the worker. Standalone trees use origin (0, 0, 0);
+  // mixed trees use their written offsets. Fir colors follow the tuple case.
   const expectedShrubberies = [
-    { selection: 1, voxels: 8_581, hash: 8_352_871_537_366_778_277n },
-    { selection: 2, voxels: 5_402, hash: 581_267_836_942_678_797n },
-    { selection: 3, voxels: 1_865, hash: 891_817_835_035_434_143n },
+    { selection: 1, voxels: 8_581, hash: 11_915_643_461_904_549_488n },
+    { selection: 2, voxels: 5_402, hash: 17_761_807_046_553_221_617n },
+    { selection: 3, voxels: 1_865, hash: 14_988_544_064_764_283_730n },
     { selection: 4, voxels: 160, hash: 5_278_148_221_706_545_873n },
     { selection: 5, voxels: 1_154, hash: 11_831_599_231_652_038_555n },
   ];

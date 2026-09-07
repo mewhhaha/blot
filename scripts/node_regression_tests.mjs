@@ -1,9 +1,26 @@
 import { spawnSync } from "node:child_process";
 import { discoverRegressionTests } from "./regression_test_discovery.mjs";
 
+// Node's parent test runner enforces this deadline even when synchronous
+// compiler Wasm blocks the test child's event loop. In-test timers cannot.
+let timeoutMs = 300_000;
+const configuredTimeout = process.env.BLOT_TEST_TIMEOUT_MS;
+if (configuredTimeout !== undefined) {
+  if (!/^[1-9][0-9]*$/.test(configuredTimeout)) {
+    throw new Error("BLOT_TEST_TIMEOUT_MS must be a positive integer");
+  }
+  timeoutMs = Number(configuredTimeout);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs > 2_147_483_647) {
+    throw new Error("BLOT_TEST_TIMEOUT_MS exceeds the supported timer range");
+  }
+}
+
 const tests = await discoverRegressionTests(".");
 
-for (const test of tests) {
+for (const [index, test] of tests.entries()) {
+  console.log(
+    `[${index + 1}/${tests.length}] ${test} (timeout ${timeoutMs}ms)`,
+  );
   const result = spawnSync(
     process.execPath,
     [
@@ -12,6 +29,7 @@ for (const test of tests) {
       "--import",
       "tsx",
       "--test",
+      `--test-timeout=${timeoutMs}`,
       test,
     ],
     { stdio: "inherit" },
@@ -21,6 +39,7 @@ for (const test of tests) {
     throw new Error(`Node regression test ${test} was terminated`);
   }
   if (result.status !== 0) {
+    console.error(`Regression test failed: ${test} (exit ${result.status})`);
     process.exitCode = result.status;
     break;
   }

@@ -2,6 +2,14 @@ use std::cell::{Cell, RefCell};
 
 #[path = "member_constraints.rs"]
 mod member_constraints;
+#[path = "runtime_signature.rs"]
+mod runtime_signature;
+pub(crate) struct ResidualInstanceFacts {
+    pub(crate) module: String,
+    pub(crate) signature: Value,
+    pub(crate) expression_types: HashMap<ExpressionId, Value>,
+    pub(crate) closure_signatures: HashMap<ExpressionId, Value>,
+}
 use member_constraints::MemberConstraints;
 pub use member_constraints::MemberRequirement;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -332,13 +340,15 @@ enum Requirement {
     Predicate(Value),
 }
 
-struct EvaluatedClosure<'a> {
-    module_path: &'a str,
-    parameter: PatternId,
-    body: ExpressionId,
-    captures: &'a ValueEnvironment,
-    self_name: Option<&'a str>,
-    deferred: bool,
+pub(crate) struct EvaluatedClosure<'a> {
+    pub(crate) argument_value: Option<&'a Value>,
+    pub(crate) module_path: &'a str,
+    pub(crate) parameter: PatternId,
+    pub(crate) body: ExpressionId,
+    pub(crate) captures: &'a ValueEnvironment,
+    pub(crate) self_name: Option<&'a str>,
+    pub(crate) deferred: bool,
+    pub(crate) checked_captures: Option<&'a BTreeMap<String, Value>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize)]
@@ -480,6 +490,7 @@ impl<'a> IntoIterator for &'a ConstraintTypeRow {
 struct ConstraintTypeArena {
     nodes: Vec<ConstraintTypeNode>,
     interned: HashMap<ConstraintTypeNode, ConstraintTypeId>,
+    expanded: RefCell<HashMap<ConstraintTypeId, Rc<Type>>>,
     intern_attempts: u64,
 }
 
@@ -487,23 +498,38 @@ impl ConstraintTypeArena {
     fn reset(&mut self) {
         self.nodes.clear();
         self.interned.clear();
+        self.expanded.borrow_mut().clear();
         self.intern_attempts = 0;
     }
 
     fn intern(&mut self, type_: &Type) -> ConstraintTypeId {
+        self.intern_shared(type_, &mut HashMap::new())
+    }
+
+    fn intern_shared(
+        &mut self,
+        type_: &Type,
+        seen: &mut HashMap<*const Type, ConstraintTypeId>,
+    ) -> ConstraintTypeId {
+        // Identity is valid for this traversal only: every borrowed node stays
+        // alive while its immutable input graph is being interned.
+        let identity = std::ptr::from_ref(type_);
+        if let Some(id) = seen.get(&identity) {
+            return *id;
+        }
         let node = match type_ {
             Type::Qualified { requirements, body } => ConstraintTypeNode::Qualified {
                 requirements: requirements
                     .iter()
-                    .map(|requirement| requirement.map_ref(|type_| self.intern(type_)))
+                    .map(|requirement| requirement.map_ref(|type_| self.intern_shared(type_, seen)))
                     .collect(),
-                body: self.intern(body),
+                body: self.intern_shared(body, seen),
             },
             Type::Variable(id) => ConstraintTypeNode::Variable(*id),
             Type::Rigid(id) => ConstraintTypeNode::Rigid(*id),
             Type::Forall { variables, body } => ConstraintTypeNode::Forall {
                 variables: variables.clone(),
-                body: self.intern(body),
+                body: self.intern_shared(body, seen),
             },
             Type::Range { domain, low, high } => ConstraintTypeNode::Range {
                 domain: *domain,
@@ -518,46 +544,53 @@ impl ConstraintTypeArena {
                 result,
             } => ConstraintTypeNode::Function {
                 deferred: *deferred,
-                parameter: self.intern(parameter),
-                effects: self.intern(effects),
-                result: self.intern(result),
+                parameter: self.intern_shared(parameter, seen),
+                effects: self.intern_shared(effects, seen),
+                result: self.intern_shared(result, seen),
             },
             Type::Record(fields) => ConstraintTypeNode::Record(
                 fields
                     .iter()
-                    .map(|(name, type_)| (name.clone(), self.intern(type_)))
+                    .map(|(name, type_)| (name.clone(), self.intern_shared(type_, seen)))
                     .collect(),
             ),
             Type::RecordUpdate { base, fields } => ConstraintTypeNode::RecordUpdate {
-                base: self.intern(base),
+                base: self.intern_shared(base, seen),
                 fields: fields
                     .iter()
-                    .map(|(name, type_)| (name.clone(), self.intern(type_)))
+                    .map(|(name, type_)| (name.clone(), self.intern_shared(type_, seen)))
                     .collect(),
             },
-            Type::Array(element) => ConstraintTypeNode::Array(self.intern(element)),
-            Type::Region(element) => ConstraintTypeNode::Region(self.intern(element)),
-            Type::Scratch(element) => ConstraintTypeNode::Scratch(self.intern(element)),
+            Type::Array(element) => ConstraintTypeNode::Array(self.intern_shared(element, seen)),
+            Type::Region(element) => ConstraintTypeNode::Region(self.intern_shared(element, seen)),
+            Type::Scratch(element) => {
+                ConstraintTypeNode::Scratch(self.intern_shared(element, seen))
+            }
             Type::Variant { cases, open } => ConstraintTypeNode::Variant {
                 cases: cases
                     .iter()
-                    .map(|(name, type_)| (name.clone(), self.intern(type_)))
+                    .map(|(name, type_)| (name.clone(), self.intern_shared(type_, seen)))
                     .collect(),
                 open: *open,
             },
             Type::Effects(labels) => ConstraintTypeNode::Effects(labels.clone()),
             Type::OpenEffects { labels, tail } => ConstraintTypeNode::OpenEffects {
                 labels: labels.clone(),
-                tail: self.intern(tail),
+                tail: self.intern_shared(tail, seen),
             },
             Type::Union(members) => ConstraintTypeNode::Union(
-                members.iter().map(|member| self.intern(member)).collect(),
+                members
+                    .iter()
+                    .map(|member| self.intern_shared(member, seen))
+                    .collect(),
             ),
             Type::Opaque(name) => ConstraintTypeNode::Opaque(name.clone()),
             Type::Top => ConstraintTypeNode::Top,
             Type::Bottom => ConstraintTypeNode::Bottom,
         };
-        self.intern_node(node)
+        let id = self.intern_node(node);
+        seen.insert(identity, id);
+        id
     }
 
     fn intern_node(&mut self, node: ConstraintTypeNode) -> ConstraintTypeId {
@@ -572,19 +605,30 @@ impl ConstraintTypeArena {
     }
 
     fn expand(&self, id: ConstraintTypeId) -> Type {
-        match &self.nodes[id.0 as usize] {
+        self.expand_shared(id).as_ref().clone()
+    }
+
+    fn expand_shared(&self, id: ConstraintTypeId) -> Rc<Type> {
+        if let Some(type_) = self.expanded.borrow().get(&id) {
+            return type_.clone();
+        }
+        // Arena nodes are immutable. Preserve their sharing instead of
+        // materializing a fresh tree for each occurrence of a shared child.
+        // Variable bounds are not expanded here, so changing bounds does not
+        // invalidate these structural values.
+        let type_ = Rc::new(match &self.nodes[id.0 as usize] {
             ConstraintTypeNode::Qualified { requirements, body } => Type::Qualified {
                 requirements: requirements
                     .iter()
                     .map(|requirement| requirement.map_ref(|type_| self.expand(*type_)))
                     .collect(),
-                body: Rc::new(self.expand(*body)),
+                body: self.expand_shared(*body),
             },
             ConstraintTypeNode::Variable(id) => Type::Variable(*id),
             ConstraintTypeNode::Rigid(id) => Type::Rigid(*id),
             ConstraintTypeNode::Forall { variables, body } => Type::Forall {
                 variables: variables.clone(),
-                body: Rc::new(self.expand(*body)),
+                body: self.expand_shared(*body),
             },
             ConstraintTypeNode::Range { domain, low, high } => Type::Range {
                 domain: *domain,
@@ -599,9 +643,9 @@ impl ConstraintTypeArena {
                 result,
             } => Type::Function {
                 deferred: *deferred,
-                parameter: Rc::new(self.expand(*parameter)),
-                effects: Rc::new(self.expand(*effects)),
-                result: Rc::new(self.expand(*result)),
+                parameter: self.expand_shared(*parameter),
+                effects: self.expand_shared(*effects),
+                result: self.expand_shared(*result),
             },
             ConstraintTypeNode::Record(fields) => Type::Record(
                 fields
@@ -610,15 +654,15 @@ impl ConstraintTypeArena {
                     .collect(),
             ),
             ConstraintTypeNode::RecordUpdate { base, fields } => Type::RecordUpdate {
-                base: Rc::new(self.expand(*base)),
+                base: self.expand_shared(*base),
                 fields: fields
                     .iter()
                     .map(|(name, type_)| (name.clone(), self.expand(*type_)))
                     .collect(),
             },
-            ConstraintTypeNode::Array(element) => Type::Array(Rc::new(self.expand(*element))),
-            ConstraintTypeNode::Region(element) => Type::Region(Rc::new(self.expand(*element))),
-            ConstraintTypeNode::Scratch(element) => Type::Scratch(Rc::new(self.expand(*element))),
+            ConstraintTypeNode::Array(element) => Type::Array(self.expand_shared(*element)),
+            ConstraintTypeNode::Region(element) => Type::Region(self.expand_shared(*element)),
+            ConstraintTypeNode::Scratch(element) => Type::Scratch(self.expand_shared(*element)),
             ConstraintTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
@@ -629,7 +673,7 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Effects(labels) => Type::Effects(labels.clone()),
             ConstraintTypeNode::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels: labels.clone(),
-                tail: Rc::new(self.expand(*tail)),
+                tail: self.expand_shared(*tail),
             },
             ConstraintTypeNode::Union(members) => {
                 Type::Union(members.iter().map(|member| self.expand(*member)).collect())
@@ -637,7 +681,9 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Opaque(name) => Type::Opaque(name.clone()),
             ConstraintTypeNode::Top => Type::Top,
             ConstraintTypeNode::Bottom => Type::Bottom,
-        }
+        });
+        self.expanded.borrow_mut().insert(id, type_.clone());
+        type_
     }
 
     fn variable(&self, id: ConstraintTypeId) -> Option<VariableId> {
@@ -901,6 +947,139 @@ struct WorkItem {
 struct ResidualVariable {
     type_: Type,
     unresolved: BTreeSet<VariableId>,
+}
+
+// Residual evidence can fall back from recursive lower bounds to upper bounds.
+// Checkpoints journal only facts added by that attempt: cloning the whole
+// growing result graph at every variable makes large inferred closures quadratic.
+#[derive(Clone, Copy)]
+struct ResidualSignatureCheckpoint {
+    resolved: usize,
+    unresolved: usize,
+    recursive: usize,
+}
+
+struct ResidualSignatureDelta {
+    resolved: Vec<(VariableId, Type)>,
+    unresolved: Vec<VariableId>,
+    recursive: Vec<VariableId>,
+}
+
+struct ResidualSignaturePrefix {
+    requirements: TypeList<MemberRequirement<Type>>,
+    resolved: HashMap<VariableId, Type>,
+    unresolved: BTreeSet<VariableId>,
+    recursive: HashSet<VariableId>,
+    free: BTreeSet<VariableId>,
+}
+
+#[derive(Default)]
+struct ResidualSignatureTraversal {
+    inherited: Option<Rc<ResidualSignaturePrefix>>,
+    seen: HashSet<VariableId>,
+    resolved: HashMap<VariableId, Type>,
+    unresolved: BTreeSet<VariableId>,
+    recursive: HashSet<VariableId>,
+    resolved_changes: Vec<VariableId>,
+    unresolved_changes: Vec<VariableId>,
+    recursive_changes: Vec<VariableId>,
+}
+
+impl ResidualSignatureTraversal {
+    fn resolved_type(&self, id: &VariableId) -> Option<&Type> {
+        self.resolved.get(id).or_else(|| {
+            self.inherited
+                .as_ref()
+                .and_then(|prefix| prefix.resolved.get(id))
+        })
+    }
+
+    fn is_unresolved(&self, id: &VariableId) -> bool {
+        self.unresolved.contains(id)
+            || self
+                .inherited
+                .as_ref()
+                .is_some_and(|prefix| prefix.unresolved.contains(id))
+    }
+
+    fn checkpoint(&self) -> ResidualSignatureCheckpoint {
+        ResidualSignatureCheckpoint {
+            resolved: self.resolved_changes.len(),
+            unresolved: self.unresolved_changes.len(),
+            recursive: self.recursive_changes.len(),
+        }
+    }
+
+    fn resolve(&mut self, id: VariableId, type_: Type) {
+        let previous = self.resolved.insert(id, type_);
+        debug_assert!(
+            previous.is_none(),
+            "residual variables resolve once per attempt"
+        );
+        self.resolved_changes.push(id);
+    }
+
+    fn mark_unresolved(&mut self, id: VariableId) {
+        if !self
+            .inherited
+            .as_ref()
+            .is_some_and(|prefix| prefix.unresolved.contains(&id))
+            && self.unresolved.insert(id)
+        {
+            self.unresolved_changes.push(id);
+        }
+    }
+
+    fn mark_recursive(&mut self, id: VariableId) {
+        if !self
+            .inherited
+            .as_ref()
+            .is_some_and(|prefix| prefix.recursive.contains(&id))
+            && self.recursive.insert(id)
+        {
+            self.recursive_changes.push(id);
+        }
+    }
+
+    fn rollback(&mut self, checkpoint: ResidualSignatureCheckpoint) -> ResidualSignatureDelta {
+        let resolved = self
+            .resolved_changes
+            .split_off(checkpoint.resolved)
+            .into_iter()
+            .map(|id| {
+                let type_ = self
+                    .resolved
+                    .remove(&id)
+                    .expect("journaled residual result exists");
+                (id, type_)
+            })
+            .collect();
+        let unresolved = self.unresolved_changes.split_off(checkpoint.unresolved);
+        for id in &unresolved {
+            self.unresolved.remove(id);
+        }
+        let recursive = self.recursive_changes.split_off(checkpoint.recursive);
+        for id in &recursive {
+            self.recursive.remove(id);
+        }
+        ResidualSignatureDelta {
+            resolved,
+            unresolved,
+            recursive,
+        }
+    }
+
+    fn replay(&mut self, changes: ResidualSignatureDelta) {
+        for (id, type_) in changes.resolved {
+            self.resolve(id, type_);
+        }
+        for id in changes.unresolved {
+            self.mark_unresolved(id);
+        }
+        for id in changes.recursive {
+            self.mark_recursive(id);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -2328,8 +2507,9 @@ struct OpenUsageCandidate {
 
 #[derive(Clone)]
 struct ExpressionAnalysis {
-    display: String,
-    analysis_display: String,
+    display: Type,
+    negative: Type,
+    signature: Type,
     nullary_unit: bool,
     reported: bool,
 }
@@ -2373,6 +2553,9 @@ pub struct Checker {
     constraint_types: RefCell<ConstraintTypeArena>,
     settled_variables: RefCell<HashMap<(VariableId, bool), Type>>,
     residual_variables: RefCell<HashMap<VariableId, ResidualVariable>>,
+    residual_analyses: RefCell<HashMap<ConstraintTypeId, (Type, bool)>>,
+    residual_prefixes: RefCell<HashMap<ConstraintTypeId, Rc<ResidualSignaturePrefix>>>,
+    member_reachability: RefCell<HashMap<ConstraintTypeId, Rc<[usize]>>>,
     constraints: Cell<u64>,
     settle_visits: Cell<u64>,
     freshen_visits: Cell<u64>,
@@ -2462,6 +2645,9 @@ impl Checker {
             constraint_types: RefCell::new(ConstraintTypeArena::default()),
             settled_variables: RefCell::new(HashMap::new()),
             residual_variables: RefCell::new(HashMap::new()),
+            residual_analyses: RefCell::new(HashMap::new()),
+            residual_prefixes: RefCell::new(HashMap::new()),
+            member_reachability: RefCell::new(HashMap::new()),
             constraints: Cell::new(0),
             settle_visits: Cell::new(0),
             freshen_visits: Cell::new(0),
@@ -2831,6 +3017,9 @@ impl Checker {
         self.constraint_types.borrow_mut().reset();
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
+        self.residual_analyses.borrow_mut().clear();
+        self.residual_prefixes.borrow_mut().clear();
+        self.member_reachability.borrow_mut().clear();
         self.bound_insertions.borrow_mut().clear();
         self.numeric_literals.borrow_mut().clear();
         self.member_constraints.borrow_mut().clear();
@@ -2858,7 +3047,17 @@ impl Checker {
                     diagnostic.message, diagnostic.code
                 )
             })?;
-        let interface = CachedModuleInterface::from_checked(&checked)
+        let boundary = CheckedModule {
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
+            readability: Vec::new(),
+            evaluated: None,
+            ..checked
+        };
+        let interface = CachedModuleInterface::from_checked(&boundary)
             .map_err(|error| format!("module {path} checked interface cannot be sealed: {error}"))?
             .ok_or_else(|| format!("module {path} has no closed checked interface"))?;
         interface.sealed_boundary_bytes()
@@ -2971,7 +3170,7 @@ impl Checker {
                     *expression,
                     serde_json::json!({
                         "span": module.arena.expression_span(*expression),
-                        "type": analysis.analysis_display,
+                         "type": self.show_expression_analysis(analysis),
                     }),
                 )
             })
@@ -3369,7 +3568,7 @@ impl Checker {
             .get(path, &expression)
             .cloned()
         {
-            return Some(analysis.display);
+            return Some(self.show_settled(&analysis.display));
         }
         self.settled_expression_type(path, expression)
             .map(|type_| self.show_settled(&type_))
@@ -3728,11 +3927,18 @@ impl Checker {
             .iter()
             .map(|(expression, type_)| {
                 let settled = self.settle(type_.clone(), true);
+                let negative = self.settle(type_.clone(), false);
+                let signature = if same_type(&settled, &negative) {
+                    settled.clone()
+                } else {
+                    self.residual_signature(type_.clone())
+                };
                 (
                     *expression,
                     ExpressionAnalysis {
-                        display: self.show_settled(&settled),
-                        analysis_display: self.show_analysis(type_),
+                        display: settled.clone(),
+                        negative,
+                        signature,
                         nullary_unit: nullary_unit_type(&settled),
                         reported: true,
                     },
@@ -3773,8 +3979,9 @@ impl Checker {
             expression_analyses.insert(
                 expression,
                 ExpressionAnalysis {
-                    display: self.show_settled(type_),
-                    analysis_display: self.show_analysis(type_),
+                    display: type_.clone(),
+                    negative: self.settle(type_.clone(), false),
+                    signature: type_.clone(),
                     nullary_unit: nullary_unit_type(type_),
                     reported: false,
                 },
@@ -3954,8 +4161,9 @@ impl Checker {
                     (
                         *expression,
                         ExpressionAnalysis {
-                            display: self.show(&type_),
-                            analysis_display: self.show_analysis(&type_),
+                            display: self.settle(type_.clone(), true),
+                            negative: self.settle(type_.clone(), false),
+                            signature: type_.clone(),
                             nullary_unit: nullary_unit_type(&type_),
                             reported: true,
                         },
@@ -4876,6 +5084,8 @@ impl Checker {
                         path,
                         module,
                         EvaluatedClosure {
+                            argument_value: None,
+                            checked_captures: None,
                             module_path: closure_module,
                             parameter: *parameter,
                             body: *body,
@@ -4902,6 +5112,15 @@ impl Checker {
                     Vec::new()
                 };
                 if let Some(signature) = signature {
+                    // Nominal carrier identity is exact. A generic constructor's
+                    // open result cannot serve as evidence that an evaluated
+                    // sealed value carries this declaration's chosen type.
+                    if matches!(signature, Type::Opaque(ref name) if sealed_type_name(name).is_some())
+                        && let Some(value @ Value::Sealed { .. }) = &evaluated
+                        && let Some(actual) = self.bridge(value)
+                    {
+                        self.constrain(actual, signature.clone(), span)?;
+                    }
                     if kind == DeclarationKind::Effect {
                         self.constrain(inferred.type_.clone(), signature.clone(), span)?;
                     }
@@ -5347,6 +5566,7 @@ impl Checker {
                 function, argument, ..
             } => {
                 let function_expression = function;
+                let argument_expression = argument;
                 let (member_callee, member_arguments) =
                     application_spine_ids(module, expression_id);
                 if member_arguments.len() == 3
@@ -5444,11 +5664,11 @@ impl Checker {
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
                         .is_some_and(|val| is_operator_member_closure(&self.context, val));
-                    let parameter_type = if is_resolve_op {
-                        arguments.first().cloned()
-                    } else {
-                        None
-                    };
+                    let parameter_type = arguments.first().cloned();
+                    let argument_value = member_arguments.first().and_then(|expression| {
+                        self.evaluate(path, *expression, values, Phase::Comptime)
+                            .ok()
+                    });
                     let attached_signature = static_member(&target_value, name)
                         .as_ref()
                         .filter(|_| !is_resolve_op)
@@ -5460,6 +5680,8 @@ impl Checker {
                             path,
                             module,
                             EvaluatedClosure {
+                                argument_value: argument_value.as_ref(),
+                                checked_captures: None,
                                 module_path: &closure_module,
                                 parameter,
                                 body,
@@ -5517,22 +5739,34 @@ impl Checker {
                     let is_resolve_op = static_member(&target_value, name)
                         .as_ref()
                         .is_some_and(|val| is_operator_member_closure(&self.context, val));
-                    let parameter_type = if is_resolve_op {
-                        Some(argument_type.type_.clone())
-                    } else {
-                        None
-                    };
+                    let parameter_type = Some(argument_type.type_.clone());
+                    let argument_value =
+                        self.evaluate(path, argument, values, Phase::Comptime).ok();
                     let attached_signature = static_member(&target_value, name)
                         .as_ref()
                         .filter(|_| !is_resolve_op)
                         .and_then(|member| self.bridge_closed_attached_signature(member));
-                    let function_type = if let Some(signature) = attached_signature {
+                    let specialize_reflection = self
+                        .context
+                        .modules
+                        .borrow()
+                        .get(closure_module.as_ref())
+                        .is_some_and(|loaded| {
+                            expression_contains_computed_field(&loaded.module, body)
+                        });
+                    let retained_signature =
+                        attached_signature.clone().filter(|_| specialize_reflection);
+                    let function_type = if let Some(signature) =
+                        attached_signature.filter(|_| !specialize_reflection)
+                    {
                         signature
                     } else {
                         self.infer_evaluated_closure(
                             path,
                             module,
                             EvaluatedClosure {
+                                argument_value: argument_value.as_ref(),
+                                checked_captures: None,
                                 module_path: &closure_module,
                                 parameter,
                                 body,
@@ -5548,6 +5782,18 @@ impl Checker {
                     let result = self.fresh();
                     let performed = self.fresh();
                     let deferred = self.deferred_call(&function_type);
+                    if let Some(signature) = retained_signature {
+                        self.constrain(
+                            signature,
+                            Type::Function {
+                                deferred,
+                                parameter: Rc::new(argument_type.type_.clone()),
+                                effects: Rc::new(performed.clone()),
+                                result: Rc::new(result.clone()),
+                            },
+                            span,
+                        )?;
+                    }
                     self.constrain(
                         function_type,
                         Type::Function {
@@ -5558,9 +5804,51 @@ impl Checker {
                         },
                         span,
                     )?;
+                    let result = if argument_value.is_some()
+                        && self
+                            .context
+                            .modules
+                            .borrow()
+                            .get(closure_module.as_ref())
+                            .is_some_and(|loaded| {
+                                expression_contains_computed_field(&loaded.module, body)
+                            })
+                        && let Ok(value) =
+                            self.evaluate(path, expression_id, values, Phase::Comptime)
+                        && let Some(exact) = self.bridge(&value)
+                    {
+                        self.constrain(exact.clone(), result, span)?;
+                        exact
+                    } else {
+                        result
+                    };
                     return Ok(Inferred {
                         type_: result,
                         effects: self.join_effects(argument_type.effects, performed)?,
+                    });
+                }
+                if matches!(&module.arena.expressions[function.0 as usize],
+                    Expression::Intrinsic { name, .. } if name == "@shape.names")
+                {
+                    let inferred =
+                        self.infer(path, module, argument, environment, values, dependencies)?;
+                    let evaluated_names = self.evaluate(path, argument, values, Phase::Comptime);
+                    let result = match evaluated_names {
+                        Ok(Value::Shape(fields)) => Type::Array(Rc::new(join_types(
+                            fields
+                                .iter()
+                                .map(|(name, _)| Type::Range {
+                                    domain: Domain::Text,
+                                    low: Some(Scalar::Text(name.clone())),
+                                    high: Some(Scalar::Text(name.clone())),
+                                })
+                                .collect(),
+                        ))),
+                        _ => Type::Array(Rc::new(text_type())),
+                    };
+                    return Ok(Inferred {
+                        type_: result,
+                        effects: inferred.effects,
                     });
                 }
                 if let Expression::Apply {
@@ -5658,6 +5946,34 @@ impl Checker {
                             span,
                         ));
                     }
+                }
+                if member_arguments.len() == 2
+                    && matches!(&module.arena.expressions[member_callee.0 as usize],
+                        Expression::Intrinsic { name, .. } if name == "@type.seal")
+                    && let Ok(value) = self.evaluate(path, expression_id, values, Phase::Comptime)
+                    && let Some(type_) = self.bridge(&value)
+                {
+                    let name = self.infer(
+                        path,
+                        module,
+                        member_arguments[0],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    self.constrain(name.type_, text_type(), span)?;
+                    let carrier = self.infer(
+                        path,
+                        module,
+                        member_arguments[1],
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    return Ok(Inferred {
+                        type_,
+                        effects: self.join_effects(name.effects, carrier.effects)?,
+                    });
                 }
                 if let Expression::Intrinsic { name, .. } =
                     &module.arena.expressions[function.0 as usize]
@@ -5763,6 +6079,8 @@ impl Checker {
                         path,
                         module,
                         EvaluatedClosure {
+                            argument_value: None,
+                            checked_captures: None,
                             module_path: closure_module,
                             parameter: *parameter,
                             body: *body,
@@ -5929,10 +6247,15 @@ impl Checker {
                     && self_name.is_none()
                 {
                     self.record_specialization(closure_module, *body, &argument_type, path, span)?;
+                    let argument_value = self
+                        .evaluate(path, argument_expression, values, Phase::Comptime)
+                        .ok();
                     let selected = self.infer_evaluated_closure(
                         path,
                         module,
                         EvaluatedClosure {
+                            argument_value: argument_value.as_ref(),
+                            checked_captures: None,
                             module_path: closure_module,
                             parameter: *parameter,
                             body: *body,
@@ -5958,7 +6281,8 @@ impl Checker {
                         span,
                     )?;
                     selected_effects = Some(selected_performed);
-                    selected_result
+                    self.constrain(selected_result, result.clone(), span)?;
+                    result
                 } else {
                     result
                 };
@@ -6891,6 +7215,8 @@ impl Checker {
         self.synthetic_call_context.set(synthetic_call_context);
         let inferred = (|| {
             let EvaluatedClosure {
+                argument_value,
+                checked_captures,
                 module_path: closure_module,
                 parameter,
                 body,
@@ -6919,19 +7245,56 @@ impl Checker {
             self.capture_candidates
                 .set(self.capture_candidates.get() + free_names.len() as u64);
             let mut scope = TypeEnvironment::child(Rc::new(environment.clone()));
+            let instance_values = child_env(None);
             for name in free_names {
                 let Some(value) = lookup(closure_values, &name) else {
                     continue;
                 };
+                instance_values
+                    .names
+                    .borrow_mut()
+                    .insert(name.clone(), value.clone());
+                if let Some(signature) = crate::value::lookup_signature(closure_values, &name) {
+                    instance_values
+                        .signatures
+                        .borrow_mut()
+                        .insert(name.clone(), signature);
+                }
                 self.captures_bridged.set(self.captures_bridged.get() + 1);
-                let type_ = self.bridge(&value).unwrap_or_else(|| self.fresh());
-                let phase = if closure_module == path {
+                let type_ = checked_captures
+                    .and_then(|types| types.get(&name))
+                    .and_then(|type_| self.bridge(type_))
+                    .or_else(|| self.bridge(&value))
+                    .or_else(|| {
+                        checked_captures.map(|types| {
+                            self.residual_capture_type(types.get(&name).unwrap_or(&value))
+                        })
+                    })
+                    .unwrap_or_else(|| self.fresh());
+                let phase = if checked_captures.is_some() {
+                    if crate::hir::contains_runtime(&value) {
+                        Phase::Runtime
+                    } else {
+                        Phase::Comptime
+                    }
+                } else if closure_module == path {
                     environment.binding_phase(&name).unwrap_or(Phase::Comptime)
                 } else {
                     Phase::Comptime
                 };
                 Rc::make_mut(&mut scope.names).insert(name.clone(), Typing::Mono(type_));
                 Rc::make_mut(&mut scope.phases).insert(name, phase);
+            }
+            let mut parent = Some(closure_values.clone());
+            while let Some(current) = parent {
+                for (id, value) in current.type_substitutions.borrow().iter() {
+                    instance_values
+                        .type_substitutions
+                        .borrow_mut()
+                        .entry(*id)
+                        .or_insert_with(|| value.clone());
+                }
+                parent = current.parent.borrow().clone();
             }
             let recursive = self_name.map(|name| (name.to_owned(), self.fresh()));
             if let Some((name, type_)) = &recursive {
@@ -6947,6 +7310,17 @@ impl Checker {
                 Some(parameter_type) => parameter_type,
                 None => self.fresh(),
             };
+            if let Some(value) = argument_value
+                && !match_pattern(&closure_ast, parameter, value, &instance_values)
+            {
+                return Err(Diagnostic::new(
+                    "BLOT_BINDING_MISMATCH",
+                    "The specialized argument does not match its parameter.",
+                    closure_ast.span,
+                ));
+            }
+            // Knowing a value during specialization is not permission to move
+            // a source runtime parameter across the const phase boundary.
             let parameter_phase = Phase::Runtime;
             self.bind_pattern_at_phase(
                 &closure_ast,
@@ -6966,7 +7340,7 @@ impl Checker {
                 &closure_ast,
                 body,
                 &scope,
-                closure_values,
+                &instance_values,
                 dependencies,
             );
             self.active_closures.borrow_mut().pop();
@@ -8431,6 +8805,9 @@ impl Checker {
         self.member_constraints.borrow_mut().changed(variable);
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
+        self.residual_analyses.borrow_mut().clear();
+        self.residual_prefixes.borrow_mut().clear();
+        self.member_reachability.borrow_mut().clear();
         self.bound_insertions.borrow_mut().push(BoundInsertion {
             variable,
             direction,
@@ -8467,6 +8844,9 @@ impl Checker {
         self.next_skolem.set(next_skolem);
         self.settled_variables.borrow_mut().clear();
         self.residual_variables.borrow_mut().clear();
+        self.residual_analyses.borrow_mut().clear();
+        self.residual_prefixes.borrow_mut().clear();
+        self.member_reachability.borrow_mut().clear();
     }
 
     fn add_upper_bound(
@@ -9068,78 +9448,37 @@ impl Checker {
     }
 
     fn residual_signature_analysis(&self, type_: Type) -> (Type, bool) {
-        let type_ = self.qualify_type(type_);
+        let key = self.constraint_type(&type_);
+        if let Some(cached) = self.residual_analyses.borrow().get(&key) {
+            return cached.clone();
+        }
         self.boundary_materializations
             .set(self.boundary_materializations.get() + 1);
-        let mut unresolved = BTreeSet::new();
-        let mut recursive = HashSet::new();
-        let body = self.residual_signature_type(
-            type_,
-            &mut HashSet::new(),
-            &mut HashMap::new(),
-            &mut unresolved,
-            &mut recursive,
-        );
-        unresolved.clear();
-        let mut pending = vec![(&body, BTreeSet::<VariableId>::new())];
-        while let Some((type_, bound)) = pending.pop() {
-            match type_ {
-                Type::Rigid(variable) => {
-                    if !bound.contains(variable) {
-                        unresolved.insert(*variable);
-                    }
-                }
-                Type::Forall { variables, body } => {
-                    let mut nested_bound = bound;
-                    nested_bound.extend(variables);
-                    pending.push((body, nested_bound));
-                }
-                Type::Qualified { requirements, body } => {
-                    pending.push((body, bound.clone()));
-                    for requirement in requirements {
-                        pending.push((&requirement.subject, bound.clone()));
-                        pending.push((&requirement.member, bound.clone()));
-                    }
-                }
-                Type::Function {
-                    parameter,
-                    effects,
-                    result,
-                    ..
-                } => {
-                    pending.push((parameter, bound.clone()));
-                    pending.push((effects, bound.clone()));
-                    pending.push((result, bound));
-                }
-                Type::Record(fields) | Type::Variant { cases: fields, .. } => {
-                    for (_, field) in fields {
-                        pending.push((field, bound.clone()));
-                    }
-                }
-                Type::RecordUpdate { base, fields } => {
-                    pending.push((base, bound.clone()));
-                    for (_, field) in fields {
-                        pending.push((field, bound.clone()));
-                    }
-                }
-                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-                    pending.push((element, bound));
-                }
-                Type::OpenEffects { tail, .. } => pending.push((tail, bound)),
-                Type::Union(members) => {
-                    for member in members {
-                        pending.push((member, bound.clone()));
-                    }
-                }
-                Type::Variable(_)
-                | Type::Range { .. }
-                | Type::Unit
-                | Type::Effects(_)
-                | Type::Opaque(_)
-                | Type::Top
-                | Type::Bottom => {}
+        let type_ = self.qualify_type(type_);
+        let (body, prefix) = match type_ {
+            Type::Qualified { requirements, body } => (
+                Rc::unwrap_or_clone(body),
+                Some(self.residual_signature_prefix(requirements)),
+            ),
+            other => (other, None),
+        };
+        let mut traversal = ResidualSignatureTraversal {
+            inherited: prefix.clone(),
+            ..ResidualSignatureTraversal::default()
+        };
+        let body = self.residual_signature_type(body, &mut traversal);
+        let mut unresolved = free_residual_variables(&body);
+        let mut recursive = !traversal.recursive.is_empty();
+        let body = if let Some(prefix) = prefix {
+            unresolved.extend(prefix.free.iter().copied());
+            recursive |= !prefix.recursive.is_empty();
+            Type::Qualified {
+                requirements: prefix.requirements.clone(),
+                body: Rc::new(body),
             }
-        }
+        } else {
+            body
+        };
         let signature = if unresolved.is_empty() {
             body
         } else {
@@ -9148,7 +9487,46 @@ impl Checker {
                 body: Rc::new(body),
             }
         };
-        (signature, !recursive.is_empty())
+        let result = (signature, recursive);
+        self.residual_analyses
+            .borrow_mut()
+            .insert(key, result.clone());
+        result
+    }
+
+    fn residual_signature_prefix(
+        &self,
+        requirements: TypeList<MemberRequirement<Type>>,
+    ) -> Rc<ResidualSignaturePrefix> {
+        let key = self.constraint_type(&Type::Qualified {
+            requirements: requirements.clone(),
+            body: Rc::new(Type::Unit),
+        });
+        if let Some(prefix) = self.residual_prefixes.borrow().get(&key) {
+            return prefix.clone();
+        }
+        let mut traversal = ResidualSignatureTraversal::default();
+        let requirements: TypeList<_> = requirements
+            .into_iter()
+            .map(|requirement| {
+                requirement.map(|type_| self.residual_signature_type(type_, &mut traversal))
+            })
+            .collect();
+        let free = free_residual_variables(&Type::Qualified {
+            requirements: requirements.clone(),
+            body: Rc::new(Type::Unit),
+        });
+        let prefix = Rc::new(ResidualSignaturePrefix {
+            requirements,
+            resolved: traversal.resolved,
+            unresolved: traversal.unresolved,
+            recursive: traversal.recursive,
+            free,
+        });
+        self.residual_prefixes
+            .borrow_mut()
+            .insert(key, prefix.clone());
+        prefix
     }
 
     fn reify_runtime_type(&self, type_: &Type) -> Option<Value> {
@@ -9161,35 +9539,30 @@ impl Checker {
     fn residual_signature_type(
         &self,
         type_: Type,
-        seen: &mut HashSet<VariableId>,
-        resolved: &mut HashMap<VariableId, Type>,
-        unresolved: &mut BTreeSet<VariableId>,
-        recursive: &mut HashSet<VariableId>,
+        traversal: &mut ResidualSignatureTraversal,
     ) -> Type {
         match type_ {
             qualified @ Type::Qualified { .. } => {
                 member_constraints::map_type_children(qualified, |child| {
-                    self.residual_signature_type(child, seen, resolved, unresolved, recursive)
+                    self.residual_signature_type(child, traversal)
                 })
             }
             Type::Variable(id) => {
-                if let Some(type_) = resolved.get(&id) {
+                if let Some(type_) = traversal.resolved_type(&id) {
                     return type_.clone();
                 }
                 if let Some(cached) = self.residual_variables.borrow().get(&id) {
-                    unresolved.extend(cached.unresolved.iter().copied());
+                    for variable in &cached.unresolved {
+                        traversal.mark_unresolved(*variable);
+                    }
                     return cached.type_.clone();
                 }
-                if !seen.insert(id) {
-                    unresolved.insert(id);
-                    recursive.insert(id);
+                if !traversal.seen.insert(id) {
+                    traversal.mark_unresolved(id);
+                    traversal.mark_recursive(id);
                     return Type::Rigid(id);
                 }
-                let resolved_before_evidence = resolved.clone();
-                let unresolved_before_evidence = unresolved.clone();
-                let recursive_before_evidence = recursive.clone();
-                let cache_unresolved_before = unresolved.clone();
-                let cache_recursive_before = recursive.clone();
+                let checkpoint = traversal.checkpoint();
                 let variable = self.variables.borrow()[id as usize].clone();
                 let mut lower_evidence = variable
                     .lower
@@ -9217,40 +9590,28 @@ impl Checker {
                     }
                 };
                 let mut result = if let Some(evidence) = evidence {
-                    self.residual_signature_type(evidence, seen, resolved, unresolved, recursive)
+                    self.residual_signature_type(evidence, traversal)
                 } else {
-                    unresolved.insert(id);
+                    traversal.mark_unresolved(id);
                     Type::Rigid(id)
                 };
-                if unresolved.contains(&id)
+                if traversal.is_unresolved(&id)
                     && let Some(upper_evidence) = upper_evidence
                 {
-                    let lower_resolved = resolved.clone();
-                    let lower_unresolved = unresolved.clone();
-                    let lower_recursive = recursive.clone();
-                    *resolved = resolved_before_evidence;
-                    *unresolved = unresolved_before_evidence;
-                    *recursive = recursive_before_evidence;
-                    let upper = self.residual_signature_type(
-                        upper_evidence,
-                        seen,
-                        resolved,
-                        unresolved,
-                        recursive,
-                    );
-                    if !unresolved.contains(&id) {
+                    let lower_changes = traversal.rollback(checkpoint);
+                    let upper = self.residual_signature_type(upper_evidence, traversal);
+                    if !traversal.is_unresolved(&id) {
                         result = upper;
                     } else {
-                        *resolved = lower_resolved;
-                        *unresolved = lower_unresolved;
-                        *recursive = lower_recursive;
+                        traversal.rollback(checkpoint);
+                        traversal.replay(lower_changes);
                     }
                 }
-                seen.remove(&id);
-                resolved.insert(id, result.clone());
-                if recursive.is_subset(&cache_recursive_before) {
-                    let unresolved = unresolved
-                        .difference(&cache_unresolved_before)
+                traversal.seen.remove(&id);
+                traversal.resolve(id, result.clone());
+                if traversal.recursive_changes.len() == checkpoint.recursive {
+                    let unresolved = traversal.unresolved_changes[checkpoint.unresolved..]
+                        .iter()
                         .copied()
                         .collect();
                     self.residual_variables.borrow_mut().insert(
@@ -9265,13 +9626,7 @@ impl Checker {
             }
             Type::Forall { variables, body } => Type::Forall {
                 variables,
-                body: Rc::new(self.residual_signature_type(
-                    Rc::unwrap_or_clone(body),
-                    seen,
-                    resolved,
-                    unresolved,
-                    recursive,
-                )),
+                body: Rc::new(self.residual_signature_type(Rc::unwrap_or_clone(body), traversal)),
             },
             Type::Function {
                 deferred,
@@ -9280,116 +9635,55 @@ impl Checker {
                 result,
             } => Type::Function {
                 deferred,
-                parameter: Rc::new(self.residual_signature_type(
-                    Rc::unwrap_or_clone(parameter),
-                    seen,
-                    resolved,
-                    unresolved,
-                    recursive,
-                )),
+                parameter: Rc::new(
+                    self.residual_signature_type(Rc::unwrap_or_clone(parameter), traversal),
+                ),
                 effects: Rc::new(if self.has_member_requirements(&effects) {
-                    self.residual_signature_type(
-                        Rc::unwrap_or_clone(effects),
-                        seen,
-                        resolved,
-                        unresolved,
-                        recursive,
-                    )
+                    self.residual_signature_type(Rc::unwrap_or_clone(effects), traversal)
                 } else {
                     self.settle(Rc::unwrap_or_clone(effects), true)
                 }),
-                result: Rc::new(self.residual_signature_type(
-                    Rc::unwrap_or_clone(result),
-                    seen,
-                    resolved,
-                    unresolved,
-                    recursive,
-                )),
+                result: Rc::new(
+                    self.residual_signature_type(Rc::unwrap_or_clone(result), traversal),
+                ),
             },
             Type::Record(fields) => Type::Record(
                 fields
                     .into_iter()
-                    .map(|(name, type_)| {
-                        (
-                            name,
-                            self.residual_signature_type(
-                                type_, seen, resolved, unresolved, recursive,
-                            ),
-                        )
-                    })
+                    .map(|(name, type_)| (name, self.residual_signature_type(type_, traversal)))
                     .collect(),
             ),
             Type::RecordUpdate { base, fields } => record_update_type(
-                self.residual_signature_type(
-                    Rc::unwrap_or_clone(base),
-                    seen,
-                    resolved,
-                    unresolved,
-                    recursive,
-                ),
+                self.residual_signature_type(Rc::unwrap_or_clone(base), traversal),
                 fields
                     .into_iter()
-                    .map(|(name, type_)| {
-                        (
-                            name,
-                            self.residual_signature_type(
-                                type_, seen, resolved, unresolved, recursive,
-                            ),
-                        )
-                    })
+                    .map(|(name, type_)| (name, self.residual_signature_type(type_, traversal)))
                     .collect(),
             ),
-            Type::Array(element) => Type::Array(Rc::new(self.residual_signature_type(
-                Rc::unwrap_or_clone(element),
-                seen,
-                resolved,
-                unresolved,
-                recursive,
-            ))),
-            Type::Region(element) => Type::Region(Rc::new(self.residual_signature_type(
-                Rc::unwrap_or_clone(element),
-                seen,
-                resolved,
-                unresolved,
-                recursive,
-            ))),
-            Type::Scratch(element) => Type::Scratch(Rc::new(self.residual_signature_type(
-                Rc::unwrap_or_clone(element),
-                seen,
-                resolved,
-                unresolved,
-                recursive,
-            ))),
+            Type::Array(element) => Type::Array(Rc::new(
+                self.residual_signature_type(Rc::unwrap_or_clone(element), traversal),
+            )),
+            Type::Region(element) => Type::Region(Rc::new(
+                self.residual_signature_type(Rc::unwrap_or_clone(element), traversal),
+            )),
+            Type::Scratch(element) => Type::Scratch(Rc::new(
+                self.residual_signature_type(Rc::unwrap_or_clone(element), traversal),
+            )),
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
-                tail: Rc::new(self.residual_signature_type(
-                    Rc::unwrap_or_clone(tail),
-                    seen,
-                    resolved,
-                    unresolved,
-                    recursive,
-                )),
+                tail: Rc::new(self.residual_signature_type(Rc::unwrap_or_clone(tail), traversal)),
             },
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
-                    .map(|(name, type_)| {
-                        (
-                            name,
-                            self.residual_signature_type(
-                                type_, seen, resolved, unresolved, recursive,
-                            ),
-                        )
-                    })
+                    .map(|(name, type_)| (name, self.residual_signature_type(type_, traversal)))
                     .collect(),
                 open,
             },
             Type::Union(members) => {
                 let members = members
                     .into_iter()
-                    .map(|member| {
-                        self.residual_signature_type(member, seen, resolved, unresolved, recursive)
-                    })
+                    .map(|member| self.residual_signature_type(member, traversal))
                     .collect::<Vec<_>>();
                 let mut control_cases = BTreeMap::<String, Vec<Type>>::new();
                 for member in &members {
@@ -10505,10 +10799,25 @@ impl Checker {
     }
 
     fn show_analysis(&self, type_: &Type) -> String {
+        self.show_settled(&self.analysis_type(type_))
+    }
+
+    fn analysis_type(&self, type_: &Type) -> Type {
         if let Some(type_) = self.exact_settlement(type_) {
-            return self.show_settled(&type_);
+            return type_;
         }
-        let signature = self.residual_signature(type_.clone());
+        self.normalize_analysis_signature(self.residual_signature(type_.clone()))
+    }
+
+    fn show_expression_analysis(&self, analysis: &ExpressionAnalysis) -> String {
+        if same_type(&analysis.display, &analysis.negative) {
+            self.show_settled(&analysis.display)
+        } else {
+            self.show_settled(&self.normalize_analysis_signature(analysis.signature.clone()))
+        }
+    }
+
+    fn normalize_analysis_signature(&self, signature: Type) -> Type {
         let mut replacements = HashMap::new();
         let body = match signature {
             Type::Forall { variables, body } => {
@@ -10528,7 +10837,7 @@ impl Checker {
             let index = replacements.len();
             replacements.insert(variable, Type::Opaque(type_variable_name(index)));
         }
-        self.show_settled(&substitute_rigid(body, &replacements))
+        substitute_rigid(body, &replacements)
     }
 
     fn exact_settlement(&self, type_: &Type) -> Option<Type> {
@@ -10936,68 +11245,11 @@ fn free_rigid_variables(
     bound: &mut HashSet<VariableId>,
     free: &mut BTreeSet<VariableId>,
 ) {
-    match type_ {
-        Type::Qualified { requirements, body } => {
-            free_rigid_variables(body, bound, free);
-            for requirement in requirements {
-                free_rigid_variables(&requirement.subject, bound, free);
-                free_rigid_variables(&requirement.member, bound, free);
-            }
-        }
-        Type::Rigid(variable) => {
-            if !bound.contains(variable) {
-                free.insert(*variable);
-            }
-        }
-        Type::Forall { variables, body } => {
-            let inserted = variables
-                .iter()
-                .copied()
-                .filter(|variable| bound.insert(*variable))
-                .collect::<Vec<_>>();
-            free_rigid_variables(body, bound, free);
-            for variable in inserted {
-                bound.remove(&variable);
-            }
-        }
-        Type::Function {
-            parameter,
-            effects,
-            result,
-            ..
-        } => {
-            free_rigid_variables(parameter, bound, free);
-            free_rigid_variables(effects, bound, free);
-            free_rigid_variables(result, bound, free);
-        }
-        Type::Record(fields) | Type::Variant { cases: fields, .. } => {
-            for (_, field) in fields {
-                free_rigid_variables(field, bound, free);
-            }
-        }
-        Type::RecordUpdate { base, fields } => {
-            free_rigid_variables(base, bound, free);
-            for (_, field) in fields {
-                free_rigid_variables(field, bound, free);
-            }
-        }
-        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-            free_rigid_variables(element, bound, free);
-        }
-        Type::OpenEffects { tail, .. } => free_rigid_variables(tail, bound, free),
-        Type::Union(members) => {
-            for member in members {
-                free_rigid_variables(member, bound, free);
-            }
-        }
-        Type::Variable(_)
-        | Type::Range { .. }
-        | Type::Unit
-        | Type::Effects(_)
-        | Type::Opaque(_)
-        | Type::Top
-        | Type::Bottom => {}
-    }
+    free.extend(
+        free_residual_variables(type_)
+            .into_iter()
+            .filter(|id| !bound.contains(id)),
+    );
 }
 
 /// Renders a union as a set rather than as the list the solver happened to
@@ -12305,85 +12557,89 @@ fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Ve
     }
 }
 
-fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
+fn map_type_children_ref(type_: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {
     match type_ {
-        qualified @ Type::Qualified { .. } => {
-            member_constraints::map_type_children(qualified, |child| {
-                substitute_rigid(child, replacements)
-            })
-        }
-        Type::Rigid(id) => replacements.get(&id).cloned().unwrap_or(Type::Rigid(id)),
-        Type::Forall { variables, body } => {
-            let mut inner_replacements = replacements.clone();
-            for variable in &variables {
-                inner_replacements.remove(variable);
-            }
-            Type::Forall {
-                variables,
-                body: Rc::new(substitute_rigid(
-                    Rc::unwrap_or_clone(body),
-                    &inner_replacements,
-                )),
-            }
-        }
+        Type::Forall { variables, body } => Type::Forall {
+            variables: variables.clone(),
+            body: Rc::new(f(body)),
+        },
+        Type::Qualified { requirements, body } => Type::Qualified {
+            requirements: requirements.iter().map(|req| req.map_ref(&mut f)).collect(),
+            body: Rc::new(f(body)),
+        },
         Type::Function {
             deferred,
             parameter,
             effects,
             result,
         } => Type::Function {
-            deferred,
-            parameter: Rc::new(substitute_rigid(
-                Rc::unwrap_or_clone(parameter),
-                replacements,
-            )),
-            effects: Rc::new(substitute_rigid(Rc::unwrap_or_clone(effects), replacements)),
-            result: Rc::new(substitute_rigid(Rc::unwrap_or_clone(result), replacements)),
+            deferred: *deferred,
+            parameter: Rc::new(f(parameter)),
+            effects: Rc::new(f(effects)),
+            result: Rc::new(f(result)),
         },
         Type::Record(fields) => Type::Record(
             fields
-                .into_iter()
-                .map(|(name, field)| (name, substitute_rigid(field, replacements)))
+                .iter()
+                .map(|(name, field)| (name.clone(), f(field)))
                 .collect(),
         ),
         Type::RecordUpdate { base, fields } => Type::RecordUpdate {
-            base: Rc::new(substitute_rigid(Rc::unwrap_or_clone(base), replacements)),
+            base: Rc::new(f(base)),
             fields: fields
-                .into_iter()
-                .map(|(name, field)| (name, substitute_rigid(field, replacements)))
+                .iter()
+                .map(|(name, field)| (name.clone(), f(field)))
                 .collect(),
         },
-        Type::Array(element) => Type::Array(Rc::new(substitute_rigid(
-            Rc::unwrap_or_clone(element),
-            replacements,
-        ))),
-        Type::Region(element) => Type::Region(Rc::new(substitute_rigid(
-            Rc::unwrap_or_clone(element),
-            replacements,
-        ))),
-        Type::Scratch(element) => Type::Scratch(Rc::new(substitute_rigid(
-            Rc::unwrap_or_clone(element),
-            replacements,
-        ))),
+        Type::Array(element) => Type::Array(Rc::new(f(element))),
+        Type::Region(element) => Type::Region(Rc::new(f(element))),
+        Type::Scratch(element) => Type::Scratch(Rc::new(f(element))),
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
-            labels,
-            tail: Rc::new(substitute_rigid(Rc::unwrap_or_clone(tail), replacements)),
+            labels: labels.clone(),
+            tail: Rc::new(f(tail)),
         },
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
-                .into_iter()
-                .map(|(name, payload)| (name, substitute_rigid(payload, replacements)))
+                .iter()
+                .map(|(name, field)| (name.clone(), f(field)))
                 .collect(),
-            open,
+            open: *open,
         },
-        Type::Union(members) => Type::Union(
-            members
-                .into_iter()
-                .map(|member| substitute_rigid(member, replacements))
-                .collect(),
-        ),
-        other => other,
+        Type::Union(members) => Type::Union(members.iter().map(f).collect()),
+        other => other.clone(),
     }
+}
+
+fn substitute_rigid(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
+    fn visit(
+        type_: &Type,
+        replacements: &HashMap<VariableId, Type>,
+        bound: &Rc<BTreeSet<VariableId>>,
+        memo: &mut HashMap<(usize, Rc<BTreeSet<VariableId>>), Type>,
+    ) -> Type {
+        let key = (std::ptr::from_ref(type_) as usize, bound.clone());
+        if let Some(type_) = memo.get(&key) {
+            return type_.clone();
+        }
+        let result = match type_ {
+            Type::Rigid(id) if !bound.contains(id) => replacements
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| type_.clone()),
+            Type::Forall { variables, body } => {
+                let mut nested = bound.as_ref().clone();
+                nested.extend(variables);
+                Type::Forall {
+                    variables: variables.clone(),
+                    body: Rc::new(visit(body, replacements, &Rc::new(nested), memo)),
+                }
+            }
+            other => map_type_children_ref(other, |child| visit(child, replacements, bound, memo)),
+        };
+        memo.insert(key, result.clone());
+        result
+    }
+    visit(&type_, replacements, &Rc::default(), &mut HashMap::new())
 }
 
 fn substitute_inference_variables(type_: Type, replacements: &HashMap<VariableId, Type>) -> Type {
@@ -13735,7 +13991,26 @@ fn same_type_with_rigids(
     right: &Type,
     rigids: &mut Vec<(VariableId, VariableId)>,
 ) -> bool {
-    match (left, right) {
+    same_type_scoped(left, right, rigids, 0, &mut HashMap::new(), &mut 1)
+}
+
+fn same_type_scoped(
+    left: &Type,
+    right: &Type,
+    rigids: &mut Vec<(VariableId, VariableId)>,
+    scope: usize,
+    memo: &mut HashMap<(usize, usize, usize), bool>,
+    next_scope: &mut usize,
+) -> bool {
+    let key = (
+        left as *const Type as usize,
+        right as *const Type as usize,
+        scope,
+    );
+    if let Some(same) = memo.get(&key) {
+        return *same;
+    }
+    let same = match (left, right) {
         (
             Type::Qualified {
                 requirements: left,
@@ -13747,11 +14022,25 @@ fn same_type_with_rigids(
             },
         ) => {
             left.len() == right.len()
-                && same_type_with_rigids(left_body, right_body, rigids)
+                && same_type_scoped(left_body, right_body, rigids, scope, memo, next_scope)
                 && left.iter().zip(right).all(|(left, right)| {
                     left.name == right.name
-                        && same_type_with_rigids(&left.subject, &right.subject, rigids)
-                        && same_type_with_rigids(&left.member, &right.member, rigids)
+                        && same_type_scoped(
+                            &left.subject,
+                            &right.subject,
+                            rigids,
+                            scope,
+                            memo,
+                            next_scope,
+                        )
+                        && same_type_scoped(
+                            &left.member,
+                            &right.member,
+                            rigids,
+                            scope,
+                            memo,
+                            next_scope,
+                        )
                 })
         }
         (Type::Variable(left), Type::Variable(right)) => left == right,
@@ -13791,7 +14080,10 @@ fn same_type_with_rigids(
                     .zip(right_variables)
                     .map(|(left, right)| (*left, *right)),
             );
-            let same = same_type_with_rigids(left_body, right_body, rigids);
+            let child_scope = *next_scope;
+            *next_scope += 1;
+            let same =
+                same_type_scoped(left_body, right_body, rigids, child_scope, memo, next_scope);
             rigids.truncate(previous);
             same
         }
@@ -13819,7 +14111,10 @@ fn same_type_with_rigids(
                 labels: right_labels,
                 tail: right_tail,
             },
-        ) => left_labels == right_labels && same_type_with_rigids(left_tail, right_tail, rigids),
+        ) => {
+            left_labels == right_labels
+                && same_type_scoped(left_tail, right_tail, rigids, scope, memo, next_scope)
+        }
         (
             Type::Function {
                 deferred: left_deferred,
@@ -13835,14 +14130,25 @@ fn same_type_with_rigids(
             },
         ) => {
             left_deferred == right_deferred
-                && same_type_with_rigids(left_parameter, right_parameter, rigids)
-                && same_type_with_rigids(left_effects, right_effects, rigids)
-                && same_type_with_rigids(left_result, right_result, rigids)
+                && same_type_scoped(
+                    left_parameter,
+                    right_parameter,
+                    rigids,
+                    scope,
+                    memo,
+                    next_scope,
+                )
+                && same_type_scoped(left_effects, right_effects, rigids, scope, memo, next_scope)
+                && same_type_scoped(left_result, right_result, rigids, scope, memo, next_scope)
         }
-        (Type::Record(left), Type::Record(right)) => same_fields(left, right, rigids),
+        (Type::Record(left), Type::Record(right)) => {
+            same_fields(left, right, rigids, scope, memo, next_scope)
+        }
         (Type::Array(left), Type::Array(right))
         | (Type::Region(left), Type::Region(right))
-        | (Type::Scratch(left), Type::Scratch(right)) => same_type_with_rigids(left, right, rigids),
+        | (Type::Scratch(left), Type::Scratch(right)) => {
+            same_type_scoped(left, right, rigids, scope, memo, next_scope)
+        }
         (
             Type::Variant {
                 cases: left,
@@ -13852,23 +14158,28 @@ fn same_type_with_rigids(
                 cases: right,
                 open: right_open,
             },
-        ) => left_open == right_open && same_fields(left, right, rigids),
+        ) => left_open == right_open && same_fields(left, right, rigids, scope, memo, next_scope),
         (Type::Union(left), Type::Union(right)) => {
             left.len() == right.len()
                 && left.iter().all(|member| {
-                    right
-                        .iter()
-                        .any(|candidate| same_type_with_rigids(member, candidate, rigids))
+                    right.iter().any(|candidate| {
+                        same_type_scoped(member, candidate, rigids, scope, memo, next_scope)
+                    })
                 })
         }
         _ => false,
-    }
+    };
+    memo.insert(key, same);
+    same
 }
 
 fn same_fields(
     left: &[(String, Type)],
     right: &[(String, Type)],
     rigids: &mut Vec<(VariableId, VariableId)>,
+    scope: usize,
+    memo: &mut HashMap<(usize, usize, usize), bool>,
+    next_scope: &mut usize,
 ) -> bool {
     if left.len() != right.len() {
         return false;
@@ -13878,9 +14189,9 @@ fn same_fields(
         .map(|(name, type_)| (name.as_str(), type_))
         .collect::<HashMap<_, _>>();
     left.iter().all(|(name, type_)| {
-        right
-            .get(name.as_str())
-            .is_some_and(|candidate| same_type_with_rigids(type_, candidate, rigids))
+        right.get(name.as_str()).is_some_and(|candidate| {
+            same_type_scoped(type_, candidate, rigids, scope, memo, next_scope)
+        })
     })
 }
 
@@ -15092,8 +15403,161 @@ fn flatten_interface_type(
     Some(types.intern(node))
 }
 
+fn free_residual_variables(body: &Type) -> BTreeSet<VariableId> {
+    let mut unresolved = BTreeSet::new();
+    let mut pending = vec![(body, BTreeSet::<VariableId>::new())];
+    let mut visited = HashSet::new();
+    while let Some((type_, bound)) = pending.pop() {
+        if !visited.insert((std::ptr::from_ref(type_), bound.clone())) {
+            continue;
+        }
+        match type_ {
+            Type::Rigid(variable) => {
+                if !bound.contains(variable) {
+                    unresolved.insert(*variable);
+                }
+            }
+            Type::Forall { variables, body } => {
+                let mut nested_bound = bound;
+                nested_bound.extend(variables);
+                pending.push((body, nested_bound));
+            }
+            Type::Qualified { requirements, body } => {
+                pending.push((body, bound.clone()));
+                for requirement in requirements {
+                    pending.push((&requirement.subject, bound.clone()));
+                    pending.push((&requirement.member, bound.clone()));
+                }
+            }
+            Type::Function {
+                parameter,
+                effects,
+                result,
+                ..
+            } => {
+                pending.push((parameter, bound.clone()));
+                pending.push((effects, bound.clone()));
+                pending.push((result, bound));
+            }
+            Type::Record(fields) | Type::Variant { cases: fields, .. } => {
+                for (_, field) in fields {
+                    pending.push((field, bound.clone()));
+                }
+            }
+            Type::RecordUpdate { base, fields } => {
+                pending.push((base, bound.clone()));
+                for (_, field) in fields {
+                    pending.push((field, bound.clone()));
+                }
+            }
+            Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                pending.push((element, bound));
+            }
+            Type::OpenEffects { tail, .. } => pending.push((tail, bound)),
+            Type::Union(members) => {
+                for member in members {
+                    pending.push((member, bound.clone()));
+                }
+            }
+            Type::Variable(_)
+            | Type::Range { .. }
+            | Type::Unit
+            | Type::Effects(_)
+            | Type::Opaque(_)
+            | Type::Top
+            | Type::Bottom => {}
+        }
+    }
+    unresolved
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_constraint_types_stay_shared_when_interned_and_expanded() {
+        let effects = Rc::new(Type::Effects(BTreeSet::new()));
+        let mut shared = Rc::new(Type::Unit);
+        let depth = 12;
+        for _ in 0..depth {
+            shared = Rc::new(Type::Function {
+                deferred: false,
+                parameter: shared.clone(),
+                effects: effects.clone(),
+                result: shared.clone(),
+            });
+        }
+        let mut arena = ConstraintTypeArena::default();
+        let root = arena.intern(&shared);
+        assert!(
+            arena.intern_attempts <= 4 * depth + 2,
+            "shared input was expanded into a tree"
+        );
+        let first = arena.expand_shared(root);
+        assert!(Rc::ptr_eq(&first, &arena.expand_shared(root)));
+        let Type::Function {
+            parameter, result, ..
+        } = first.as_ref()
+        else {
+            panic!("function structure was lost")
+        };
+        assert!(
+            Rc::ptr_eq(parameter, result),
+            "shared children must not be recopied"
+        );
+        assert!(same_type(&first, &shared));
+        arena.reset();
+        let replacement = arena.intern(&int_type());
+        assert!(
+            same_type(&arena.expand(replacement), &int_type()),
+            "reset reused a stale expansion"
+        );
+    }
+
+    #[test]
+    fn residual_evidence_journal_restores_lower_facts_after_failed_upper_attempt() {
+        let mut traversal = ResidualSignatureTraversal::default();
+        traversal.resolve(1, int_type());
+        traversal.mark_unresolved(7);
+        traversal.mark_recursive(8);
+        let checkpoint = traversal.checkpoint();
+        traversal.resolve(2, float_type());
+        traversal.mark_unresolved(7); // An existing fact is not part of the delta.
+        traversal.mark_unresolved(9);
+        traversal.mark_recursive(10);
+        let lower = traversal.rollback(checkpoint);
+        assert_eq!(traversal.resolved.len(), 1);
+        assert_eq!(traversal.unresolved, BTreeSet::from([7]));
+        assert_eq!(traversal.recursive, HashSet::from([8]));
+        traversal.resolve(3, Type::Unit);
+        traversal.mark_unresolved(11);
+        traversal.mark_recursive(12);
+        traversal.rollback(checkpoint);
+        traversal.replay(lower);
+        assert_eq!(traversal.resolved.len(), 2);
+        assert!(same_type(&traversal.resolved[&2], &float_type()));
+        assert!(!traversal.resolved.contains_key(&3));
+        assert_eq!(traversal.unresolved, BTreeSet::from([7, 9]));
+        assert_eq!(traversal.recursive, HashSet::from([8, 10]));
+        traversal.rollback(checkpoint);
+        assert_eq!(traversal.resolved.len(), 1);
+        assert_eq!(traversal.unresolved, BTreeSet::from([7]));
+        assert_eq!(traversal.recursive, HashSet::from([8]));
+    }
+
+    #[test]
+    fn residual_evidence_journal_keeps_successful_upper_facts() {
+        let mut traversal = ResidualSignatureTraversal::default();
+        let checkpoint = traversal.checkpoint();
+        traversal.resolve(1, Type::Rigid(2));
+        traversal.mark_unresolved(2);
+        traversal.mark_recursive(2);
+        let _rejected_lower = traversal.rollback(checkpoint);
+        traversal.resolve(1, int_type());
+        assert!(traversal.unresolved.is_empty());
+        assert!(traversal.recursive.is_empty());
+        assert!(same_type(&traversal.resolved[&1], &int_type()));
+    }
+
     use super::*;
 
     fn certificate_with_result(
@@ -15845,6 +16309,42 @@ mod tests {
             CachedModuleInterface::from_checked(&checked),
             Ok(None)
         ));
+    }
+
+    #[test]
+    fn public_boundary_does_not_serialize_oversized_private_facts() {
+        let checked = CheckedModule {
+            result: int_type(),
+            effects: Type::Effects(BTreeSet::new()),
+            parameter: None,
+            evaluated: None,
+            expression_types: Vec::new(),
+            closure_signatures: Vec::new(),
+            recursive_closures: Vec::new(),
+            ownership_contracts: Vec::new(),
+            simplifications: Vec::new(),
+            readability: Vec::new(),
+        };
+        let expected = cache_checked(&checked).sealed_boundary_bytes().unwrap();
+        let mut private = Type::Unit;
+        for _ in 0..=ARTIFACT_REFERENCE_PATH_LIMIT {
+            private = Type::Array(Rc::new(private));
+        }
+        let checked = CheckedModule {
+            expression_types: vec![(ExpressionId(7), private)],
+            ..checked
+        };
+        assert!(CachedModuleInterface::from_checked(&checked).is_err());
+        let checker = Checker::new(Rc::new(Context::default()));
+        checker
+            .modules
+            .borrow_mut()
+            .insert("private".to_owned(), Ok(checked));
+        assert_eq!(checker.sealed_boundary_bytes("private").unwrap(), expected);
+        assert!(
+            checker.certificate("private").is_err(),
+            "the full certificate must still enforce its admission budget"
+        );
     }
 
     #[test]

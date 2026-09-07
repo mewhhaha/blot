@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { treeGeometry } from "./tree_geometry_reference.mjs";
 import { parentPort, workerData as executionInput } from "node:worker_threads";
 
 if (parentPort === null) {
@@ -12,6 +14,17 @@ if (!Number.isInteger(executionInput.selection)) {
   );
 }
 
+let treeOracle = [];
+if (executionInput.selection === 1) {
+  treeOracle = [
+    ...treeGeometry("oak", 424242 + 1729, [-10, 0, -4]),
+    ...treeGeometry("fir", 424242 + 3571, [12, 0, 10]),
+  ];
+} else if (executionInput.selection === 2) {
+  treeOracle = treeGeometry("oak", 424242 + 101);
+} else if (executionInput.selection === 3) {
+  treeOracle = treeGeometry("fir", 424242 + 503);
+}
 let remainingFrames = 1;
 let streamedBatches = 0;
 let uploadedBatches = 0;
@@ -42,6 +55,13 @@ const instance = await WebAssembly.instantiate(executionInput.module, {
       uploadedVoxels = 0;
     },
     voxel(colorBlue, colorGreen, colorRed, scale, x, y, z) {
+      if (voxelCalls < treeOracle.length) {
+        assert.deepEqual(
+          [x, y, z, scale, colorRed, colorGreen, colorBlue].map(Number),
+          treeOracle[voxelCalls],
+          `selection ${executionInput.selection} tree voxel ${voxelCalls}`,
+        );
+      }
       uploadedVoxels += 1;
       voxelCalls += 1;
       hashVoxelField(x);
@@ -82,8 +102,20 @@ if (!(run instanceof Function)) {
   throw new Error("game_loop.blot omitted blot:default");
 }
 
+const frames = run();
+assert.ok(
+  voxelCalls >= treeOracle.length,
+  "every reference tree voxel was emitted",
+);
+if (executionInput.selection === 2 || executionInput.selection === 3) {
+  assert.equal(
+    voxelCalls,
+    treeOracle.length,
+    "standalone trees contain no extra voxels",
+  );
+}
 parentPort.postMessage({
-  frames: run(),
+  frames,
   streamedBatches,
   uploadedBatches,
   uploadedVoxels,
