@@ -18,6 +18,15 @@ source override is not a replacement for a trusted snapshot or capsule node.
 In-memory checking uses the same invalidation and fresh-equivalence judgment as
 disk checking.
 
+## Overlay version validity
+
+Overlay versions are safe JavaScript integers, including signed versions. A new
+version must be greater than the retained version; an identical source/version
+pair is idempotent. NaN, infinities, fractions, unsafe integers, and an automatic
+increment beyond the safe-integer range fail before publishing any staged graph
+state. A rejected update must not advance the automatic sequence or replace the
+committed source. Closing an overlay permits a new version sequence for that path.
+
 ## Traversal and refresh
 
 Rebinding a retained graph expands each completed reachable node at most once

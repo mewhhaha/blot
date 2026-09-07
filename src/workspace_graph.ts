@@ -115,6 +115,9 @@ export class WorkspaceGraph {
       nextVersion = Math.max(staged.overlaySequence, previousVersion) + 1;
       staged.overlaySequence = nextVersion;
     }
+    if (!Number.isSafeInteger(nextVersion)) {
+      throw new Error(`overlay ${absolute} version must be a safe integer`);
+    }
     if (
       previous !== undefined && previous.source === source &&
       previous.version === nextVersion
