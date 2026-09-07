@@ -30,9 +30,14 @@ candidates are not silently treated as the source branch's commit: their merge
 checkout and branch head can have different identities. Use a frozen
 push/dispatch revision for release evidence.
 
-The checker rejects mismatched run/compiler commits, incomplete job pagination,
-wrong run attempts, duplicate jobs, absent or skipped required steps, unfinished
-or failed runs, and a development-profile compiler. Required evidence includes
+The checker corroborates `head_commit.id` and `head_commit.tree_id` from the run
+against the selected commit and compiler source tree. Missing or malformed head
+metadata is refused. Every returned job must have a unique positive safe-integer
+ID, including additional jobs outside the mandatory set.
+
+The checker rejects mismatched run/compiler commits or trees, incomplete job
+pagination, wrong run attempts, duplicate jobs, absent or skipped required steps,
+unfinished or failed runs, and a development-profile compiler. Required evidence includes
 formal checks, native compiler tests, package checks, the normal Node suite,
 frontend generation, deterministic performance gates, and both Node target
 profiles. It validates the artifact's manifest and the actual Wasm byte length,
