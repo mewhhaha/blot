@@ -1,0 +1,6 @@
+// A primitive constructor payload cannot satisfy unit.
+open import "blot:prelude"
+const value = #Some @int.add
+let rejected :: #Some Unit
+let rejected = value
+return rejected

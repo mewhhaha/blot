@@ -1,0 +1,7 @@
+// A primitive inside a constant array is still callable.
+open import "blot:prelude"
+const callbacks = [@int.add]
+const call = @array.get callbacks 0
+let result :: Int
+let result = call 40 2
+return result

@@ -1,0 +1,6 @@
+// A tuple cannot conceal a callable constructor payload.
+open import "blot:prelude"
+const value = (#Some (fn item => item), 1)
+let rejected :: (#Some Unit, 1)
+let rejected = value
+return rejected

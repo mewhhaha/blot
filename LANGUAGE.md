@@ -2159,7 +2159,15 @@ pattern matches by equality without proving anything about the scrutinee.
 
 Type checking evaluates compile-time code because signatures and type
 constructors are ordinary values. A compile-time value is bridged into the
-inference lattice only when it denotes a type.
+inference lattice only when it denotes a type. This conversion is all-or-nothing
+for a structural value: every array or union member, record field, and present
+constructor payload must be representable. An unrepresentable function value
+must not disappear from an array or become a unit constructor payload. When
+conversion cannot provide an exact type for a `const` result, ordinary inference
+remains authoritative; a signature still requires a valid canonical type value.
+For example, `[1, fn value => value]` cannot satisfy `[1]`, and
+`#Some (fn value
+=> value)` cannot satisfy `#Some Unit`.
 
 ### 10.1 Unknown-first constraint solving
 

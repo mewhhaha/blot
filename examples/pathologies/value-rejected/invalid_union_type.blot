@@ -1,0 +1,6 @@
+// Every union member must denote a canonical type.
+open import "blot:prelude"
+const Invalid = @type.union 1 @int.add
+let rejected :: Invalid
+let rejected = 1
+return rejected

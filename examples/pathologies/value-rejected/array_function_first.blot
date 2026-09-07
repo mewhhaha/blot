@@ -1,0 +1,6 @@
+// Member order cannot affect soundness.
+open import "blot:prelude"
+const values = [fn item => item, 1]
+let rejected :: [1]
+let rejected = values
+return rejected

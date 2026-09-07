@@ -1,0 +1,6 @@
+// Nested arrays cannot hide an incompatible member.
+open import "blot:prelude"
+const values = [[1, fn item => item]]
+let rejected :: [[1]]
+let rejected = values
+return rejected

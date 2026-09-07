@@ -1,0 +1,8 @@
+// A record field retains a callable constructor payload.
+open import "blot:prelude"
+const increment = fn number => @int.add number 1
+const record = { .box = #Some increment; }
+let result :: Int
+let result = case record.box of
+  #Some call => call 41
+return result

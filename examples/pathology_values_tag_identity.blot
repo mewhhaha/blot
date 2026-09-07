@@ -1,0 +1,7 @@
+// Generic constructor payloads remain callable.
+open import "blot:prelude"
+const box = #Some (fn item => item)
+let result :: Int
+let result = case box of
+  #Some call => call 42
+return result

@@ -1,0 +1,7 @@
+// Unit arguments remain distinct from a unit-valued callback.
+open import "blot:prelude"
+const callbacks = [fn () => 42]
+const call = @array.get callbacks 0
+let result :: Int
+let result = call ()
+return result

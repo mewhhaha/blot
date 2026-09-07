@@ -1,0 +1,262 @@
+{
+  "accepted": [
+    {
+      "name": "array_closure",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_primitive",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_curried",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_identity",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_duplicate",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "nested_arrays",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "record_array",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tuple_array",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_closure",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_primitive",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_curried",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "nested_tags",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_array",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "record_tag",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tuple_tag",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_alias",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_factory",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_factory",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "record_factory",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_capture",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_capture",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_composition",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "tag_identity",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "array_unit_argument",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_01",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_02",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_03",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_04",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_06",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_08",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_10",
+      "type": "Int",
+      "value": "42"
+    },
+    {
+      "name": "shared_record_12",
+      "type": "Int",
+      "value": "42"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "array_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "array_primitive",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "array_only_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "array_function_first",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "nested_array_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "record_array_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tuple_array_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tag_array_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tag_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tag_primitive",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "nested_tag_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "array_tag_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "record_tag_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tuple_tag_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "tag_factory_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "array_factory_closure",
+      "code": "BLOT_TYPE_ERROR"
+    },
+    {
+      "name": "invalid_union_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_union_of_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_tag_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_array_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_record_tag_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_nested_tag_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_tuple_array_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    },
+    {
+      "name": "invalid_nested_array_type",
+      "code": "BLOT_SIGNATURE_NOT_A_TYPE"
+    }
+  ]
+}

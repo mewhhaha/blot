@@ -1,0 +1,6 @@
+// An unsupported array type member must not be dropped.
+open import "blot:prelude"
+const Invalid = [1, @int.add]
+let rejected :: Invalid
+let rejected = [1]
+return rejected

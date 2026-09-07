@@ -1,0 +1,14 @@
+// Callable values retain their inferred types through structural containers.
+open import "blot:prelude"
+const increment = fn number => @int.add number 1
+const box = #Some [increment]
+const callbacks = case box of
+  #Some callbacks => callbacks
+let result :: Int
+let result = do:
+  if @array.len callbacks > 0:
+    const call = @array.get callbacks 0
+    return call 41
+  else:
+    return 0
+return result

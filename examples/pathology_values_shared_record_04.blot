@@ -1,0 +1,10 @@
+// A depth-4 shared record DAG selects one scalar without expanding its value.
+open import "blot:prelude"
+const node0 = { .value = 42; }
+const node1 = { .left = node0; .right = node0; }
+const node2 = { .left = node1; .right = node1; }
+const node3 = { .left = node2; .right = node2; }
+const node4 = { .left = node3; .right = node3; }
+let result :: Int
+let result = node4.left.left.left.left.value
+return result
