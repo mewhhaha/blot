@@ -183,7 +183,9 @@ function requireGitIdentity(
   value: unknown,
   label: string,
 ): asserts value is string {
-  if (typeof value !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)) {
+  if (
+    typeof value !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)
+  ) {
     throw new Error(`compiler artifact manifest has an invalid ${label}`);
   }
 }

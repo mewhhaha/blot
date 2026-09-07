@@ -22,10 +22,11 @@ disk checking.
 
 Overlay versions are safe JavaScript integers, including signed versions. A new
 version must be greater than the retained version; an identical source/version
-pair is idempotent. NaN, infinities, fractions, unsafe integers, and an automatic
-increment beyond the safe-integer range fail before publishing any staged graph
-state. A rejected update must not advance the automatic sequence or replace the
-committed source. Closing an overlay permits a new version sequence for that path.
+pair is idempotent. NaN, infinities, fractions, unsafe integers, and an
+automatic increment beyond the safe-integer range fail before publishing any
+staged graph state. A rejected update must not advance the automatic sequence or
+replace the committed source. Closing an overlay permits a new version sequence
+for that path.
 
 ## Traversal and refresh
 

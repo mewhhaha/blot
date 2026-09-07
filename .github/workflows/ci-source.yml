@@ -1,0 +1,41 @@
+name: CI source snapshot
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Archive the exact validation inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/blot-source"
+          git archive --format=tar.gz --output="$RUNNER_TEMP/blot-source/source.tar.gz" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/blot-source/commit.txt"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/blot-source/tree.txt"
+          cd "$RUNNER_TEMP/blot-source"
+          sha256sum source.tar.gz > SHA256SUMS
+      - name: Publish source for CI reproduction
+        uses: actions/upload-artifact@v7
+        with:
+          name: blot-validation-source-${{ github.sha }}
+          path: ${{ runner.temp }}/blot-source/
+          if-no-files-found: error
+          retention-days: 14
