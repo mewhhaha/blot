@@ -1,0 +1,9 @@
+// Refining an already disconnected type cannot restore an excluded value.
+
+open import "blot:prelude"
+
+const NonZero = refine (Int, fn value => value != 0)
+const Allowed = refine (NonZero, fn value => value >= -2 && value <= 2)
+let chosen :: Allowed
+let chosen = -1
+return chosen

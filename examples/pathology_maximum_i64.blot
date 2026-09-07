@@ -1,0 +1,8 @@
+// The maximum signed runtime integer survives intersection exactly.
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => value >= 9223372036854775807)
+let chosen :: Allowed
+let chosen = 9223372036854775807
+return chosen

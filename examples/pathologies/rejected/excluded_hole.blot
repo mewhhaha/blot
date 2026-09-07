@@ -1,0 +1,8 @@
+// Expected at check: BLOT_TYPE_ERROR
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => value < 0 || value > 0)
+let chosen :: Allowed
+let chosen = 0
+return chosen

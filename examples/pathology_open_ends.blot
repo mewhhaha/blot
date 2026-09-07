@@ -1,0 +1,8 @@
+// Two unbounded predicate arms leave a bounded hole after base clipping.
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => value < -10 || value > 10)
+let chosen :: Allowed
+let chosen = 11
+return chosen

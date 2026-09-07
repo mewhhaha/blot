@@ -1,0 +1,8 @@
+// Fresh instantiations of identity must not share argument constraints.
+
+open import "blot:prelude"
+
+let identity = fn value => value
+let text = identity "separate"
+let flag = identity True
+return identity 42

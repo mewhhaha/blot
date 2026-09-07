@@ -1,0 +1,8 @@
+// Overlapping disjuncts merge rather than duplicate their intersection.
+
+open import "blot:prelude"
+
+const Allowed = refine (Int, fn value => (value >= 0 && value <= 5) || (value >= 3 && value <= 8))
+let chosen :: Allowed
+let chosen = 4
+return chosen

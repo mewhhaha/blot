@@ -1,0 +1,7 @@
+// Expected at check: BLOT_TYPE_ERROR
+
+open import "blot:prelude"
+
+let get = fn row => row.value
+let text = get { .value = "ok"; }
+return get { .other = 42; }
