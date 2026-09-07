@@ -1,9 +1,9 @@
 # Regression runner failures are not empty successes
 
-Run `pnpm test:regression` from the repository root. The runner discovers regular
-`.test.ts` files recursively, prints each selected path, and runs files in sorted
-order in separate Node processes. The Node host and explicitly excluded
-standalone/package suites retain their dedicated commands.
+Run `pnpm test:regression` from the repository root. The runner discovers
+regular `.test.ts` files recursively, prints each selected path, and runs files
+in sorted order in separate Node processes. The Node host and explicitly
+excluded standalone/package suites retain their dedicated commands.
 
 An empty discovery result is an error. Running from the wrong directory, or
 accidentally excluding every test, must not produce a successful CI result.
