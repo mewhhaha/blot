@@ -156,12 +156,21 @@ jobs:
           path: blot-node-workspace.tar.gz
           if-no-files-found: error
           retention-days: 90
-      - run: pnpm test
+      - name: Test Node host
+        timeout-minutes: 5
+        run: pnpm test:node
+      - name: Test regression suite
+        timeout-minutes: 15
+        run: pnpm test:regression
       - run: pnpm run check
       - run: pnpm run smoke
       - run: pnpm blot run examples/node-runner-demo.blot
-      - run: pnpm test:compiler
-      - run: pnpm verify:compiler
+      - name: Test compiler and runtime conformance
+        timeout-minutes: 10
+        run: pnpm test:compiler
+      - name: Verify runtime conformance
+        timeout-minutes: 5
+        run: pnpm verify:compiler
       - name: Verify the V8 / Wasm 3 target on Node 24 LTS
         run: pnpm test:v8-wasm
       - name: Select Node 26 Current

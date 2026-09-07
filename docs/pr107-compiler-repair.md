@@ -103,3 +103,42 @@ remain ignored derived output; the regenerated prelude snapshot remains tracked.
 No test is ignored, no timeout is converted to success, and no standard CI
 validation stage is disabled. Exact-commit Actions results, not intermediate
 local compiler builds, govern merge readiness.
+
+## Follow-up: standard CI and bounded regression execution
+
+Standard CI run `34065085148` on `2242a54cee677814554d8c55a79272211441bfaa`
+confirmed that all 453 native tests pass, including the formerly stalled engine
+case. Native test execution took 132.86 seconds. The check job started 55
+minutes and 33 seconds after the workflow was created; that interval was runner
+queuing, not compiler execution. Workflow execution deadlines do not limit queue
+time.
+
+The completed run instead failed the two `examples/newtype.blot` checks. `Money`
+has an I32 carrier, but its attached addition returned an unrestricted Int. The
+example now checks both bounds before constructing `Money` and traps on
+overflow. Its carrier and recorded output are unchanged. A dynamic-input test
+checks both boundary values and both overflow directions against the Rust
+evaluator and emitted Wasm. Obsolete comments claiming member calls lose their
+checked result constraints were removed.
+
+The Node regression runner previously waited for each child without a deadline.
+A timer inside a test cannot interrupt synchronous compiler Wasm on that same
+event loop. The runner now uses Node's parent-enforced test deadline, defaults
+to five minutes per file, and prints the file and deadline before starting it.
+`BLOT_TEST_TIMEOUT_MS` can override that deadline with a positive, supported
+integer. Runner regressions cover a synchronous infinite loop, ordinary failure,
+successful continuation, and invalid deadlines; neither failure nor timeout is
+converted to success.
+
+Standard CI names the Node-host and regression stages separately and bounds them
+at five and fifteen minutes. The later native/compiler-conformance invocation is
+also bounded at ten minutes and uses `--nocapture`; standalone conformance has a
+five-minute limit. The existing native-step and thirty-minute job limits remain.
+Release-evidence validation requires every renamed stage to succeed, with tests
+rejecting missing, skipped, cancelled, and failed stages. No validation stage or
+existing assertion is removed.
+
+This follow-up does not change compiler inputs or generated compiler bytes.
+Local execution uses the digest-verified production artifact from the preceding
+standard CI run. Fresh Actions results for the updated head are still required
+before claiming a complete standard-CI pass.
