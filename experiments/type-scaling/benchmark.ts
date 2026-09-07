@@ -4,9 +4,8 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join, resolve } from "node:path";
 import { Compiler } from "../../src/compiler/session.ts";
+import { parseScalingOptions } from "./options.ts";
 
-let samples = 3;
-let sizes: readonly number[] = [8, 16, 32, 64, 128, 256];
 const phases = ["frontend", "check", "prepare", "compile"] as const;
 const generators = {
   ordinary: ordinarySource,
@@ -27,41 +26,10 @@ const generators = {
 type Phase = typeof phases[number];
 type Family = keyof typeof generators;
 
-const requested = process.argv.slice(2).filter((argument) => argument !== "--");
-const familyArguments: string[] = [];
-for (const argument of requested) {
-  if (argument.startsWith("--samples=")) {
-    samples = Number.parseInt(argument.slice("--samples=".length), 10);
-    if (!Number.isSafeInteger(samples) || samples < 1 || samples % 2 === 0) {
-      throw new Error("type-scaling samples must be a positive odd integer");
-    }
-    continue;
-  }
-  if (argument.startsWith("--sizes=")) {
-    sizes = argument.slice("--sizes=".length).split(",").map((value) =>
-      Number.parseInt(value, 10)
-    );
-    if (
-      sizes.length === 0 ||
-      sizes.some((size) => !Number.isSafeInteger(size) || size < 1)
-    ) {
-      throw new Error("type-scaling sizes must be positive integers");
-    }
-    continue;
-  }
-  familyArguments.push(argument);
-}
-
-let selectedFamilies = Object.keys(generators) as Family[];
-if (familyArguments.length > 0) {
-  const requested = familyArguments;
-  for (const family of requested) {
-    if (!(family in generators)) {
-      throw new Error(`unknown type-scaling family ${JSON.stringify(family)}`);
-    }
-  }
-  selectedFamilies = requested as Family[];
-}
+const { samples, sizes, families: selectedFamilies } = parseScalingOptions(
+  process.argv.slice(2),
+  Object.keys(generators) as Family[],
+);
 
 interface Case {
   readonly family: Family;
