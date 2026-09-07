@@ -166,6 +166,11 @@ function requireWasmHeader(bytes: Uint8Array): void {
   ) {
     throw new Error("compiler artifact has no WebAssembly header");
   }
+  if (bytes[4] !== 1 || bytes[5] !== 0 || bytes[6] !== 0 || bytes[7] !== 0) {
+    throw new Error(
+      "compiler artifact is not valid WebAssembly: unsupported binary version",
+    );
+  }
 }
 
 function requireHash(value: unknown, label: string): asserts value is string {
@@ -178,7 +183,7 @@ function requireGitIdentity(
   value: unknown,
   label: string,
 ): asserts value is string {
-  if (typeof value !== "string" || !/^[0-9a-f]{40,64}$/.test(value)) {
+  if (typeof value !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)) {
     throw new Error(`compiler artifact manifest has an invalid ${label}`);
   }
 }
