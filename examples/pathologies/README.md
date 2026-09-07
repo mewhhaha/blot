@@ -1,9 +1,9 @@
 # Type-checking and refinement pathologies
 
 The accepted programs live at `examples/pathology_*.blot`, with ordinary catalog
-goldens in `examples/expected/`. `cases.json` also records exact principal types.
-The eight programs in `rejected/` must parse and then fail during checking with
-the recorded diagnostic and a real source span.
+goldens in `examples/expected/`. `cases.json` also records exact principal
+types. The eight programs in `rejected/` must parse and then fail during
+checking with the recorded diagnostic and a real source span.
 
 The 24 accepted cases cover adjacent and unsorted bases, disconnected
 intersections, complement holes, mirrored bounds, De Morgan transformations,
@@ -21,8 +21,8 @@ cargo test --manifest-path compiler/Cargo.toml predicate_refinement
 ```
 
 The Node command needs the matching compiler artifact, as all semantic compiler
-commands do. Build it with `pnpm compiler:build`, or use the verified runnable CI
-workspace. The ordinary regression test discovery includes the focused test.
+commands do. Build it with `pnpm compiler:build`, or use the verified runnable
+CI workspace. The ordinary regression test discovery includes the focused test.
 
 ## Diagnostic regression
 
@@ -46,7 +46,8 @@ normalizes collected leaves once. The depth-30 diamond regression represents
 more than a billion expanded leaves with only linear graph storage.
 
 See [the cost contract](../../spec/REFINEMENT_NORMALIZATION.md) for assumptions
-and boundaries. None of these fixes widens inferred types or adds runtime checks.
-The existing `pnpm benchmark:predicate-refinements` experiment remains available
-for end-to-end timing and erasure comparisons; its timings include more than
-interval normalization and should not be reported as an isolated algorithm speedup.
+and boundaries. None of these fixes widens inferred types or adds runtime
+checks. The existing `pnpm benchmark:predicate-refinements` experiment remains
+available for end-to-end timing and erasure comparisons; its timings include
+more than interval normalization and should not be reported as an isolated
+algorithm speedup.

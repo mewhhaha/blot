@@ -167,24 +167,28 @@ test("release evidence corroborates the compiler tree against the run head commi
   const { run, jobs } = await fixture();
   const evidence = checkReleaseEvidence(commit, run, jobs, compiler);
   assert.equal(evidence.sourceTree, run.head_commit.tree_id);
-  for (const head_commit of [
-    { id: "f".repeat(40), tree_id: compiler.sourceTree },
-    { id: commit, tree_id: "f".repeat(40) },
-    { id: commit, tree_id: "not-a-tree" },
-    { id: commit, tree_id: "E".repeat(40) },
-    { id: commit },
-    { tree_id: compiler.sourceTree },
-  ]) {
+  for (
+    const head_commit of [
+      { id: "f".repeat(40), tree_id: compiler.sourceTree },
+      { id: commit, tree_id: "f".repeat(40) },
+      { id: commit, tree_id: "not-a-tree" },
+      { id: commit, tree_id: "E".repeat(40) },
+      { id: commit },
+      { tree_id: compiler.sourceTree },
+    ]
+  ) {
     assert.throws(
-      () => checkReleaseEvidence(commit, { ...run, head_commit }, jobs, compiler),
+      () =>
+        checkReleaseEvidence(commit, { ...run, head_commit }, jobs, compiler),
       /head commit and source tree/,
     );
   }
   assert.throws(
-    () => checkReleaseEvidence(commit, run, jobs, {
-      ...compiler,
-      sourceTree: "f".repeat(40),
-    }),
+    () =>
+      checkReleaseEvidence(commit, run, jobs, {
+        ...compiler,
+        sourceTree: "f".repeat(40),
+      }),
     /source tree/,
   );
 });
@@ -193,7 +197,8 @@ test("missing or malformed workflow head objects are refused", async () => {
   const { run, jobs } = await fixture();
   for (const head_commit of [undefined, null, [], "commit", 1]) {
     assert.throws(
-      () => checkReleaseEvidence(commit, { ...run, head_commit }, jobs, compiler),
+      () =>
+        checkReleaseEvidence(commit, { ...run, head_commit }, jobs, compiler),
       /workflow head commit must be an object/,
     );
   }
@@ -213,7 +218,10 @@ test("additional jobs also require unique positive identities", async () => {
   const extra = { ...jobs.jobs[0], name: "additional", id: 3 };
   jobs.jobs.push(extra);
   jobs.total_count += 1;
-  assert.equal(checkReleaseEvidence(commit, run, jobs, compiler).jobs.length, 2);
+  assert.equal(
+    checkReleaseEvidence(commit, run, jobs, compiler).jobs.length,
+    2,
+  );
   for (const id of [1, 0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
     extra.id = id;
     assert.throws(() => checkReleaseEvidence(commit, run, jobs, compiler));
