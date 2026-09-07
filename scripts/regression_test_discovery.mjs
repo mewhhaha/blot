@@ -32,7 +32,9 @@ async function discover(root, directory, tests) {
       await discover(root, path, tests);
       continue;
     }
-    if (!entry.name.endsWith(".test.ts")) continue;
+    // A symlink can escape the root or name a directory, cycle, or missing file.
+    // Discover regular tests without following filesystem aliases.
+    if (!entry.isFile() || !entry.name.endsWith(".test.ts")) continue;
     const normalized = relative(root, path).split(sep).join("/");
     if (normalized.startsWith("src/node/")) continue;
     if (excludedRegressionTests.has(normalized)) continue;
