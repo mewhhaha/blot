@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { discoverRegressionTests } from "./regression_test_discovery.mjs";
 
-// Node's parent test runner enforces this deadline even when synchronous
-// compiler Wasm blocks the test child's event loop. In-test timers cannot.
+// The parent enforces this deadline even when synchronous compiler Wasm
+// blocks Node's test runner. Each file runs in the directly killable child.
 let timeoutMs = 300_000;
 const configuredTimeout = process.env.BLOT_TEST_TIMEOUT_MS;
 if (configuredTimeout !== undefined) {
@@ -34,11 +34,18 @@ for (const [index, test] of tests.entries()) {
       "--import",
       "tsx",
       "--test",
+      "--test-isolation=none",
       `--test-timeout=${timeoutMs}`,
       test,
     ],
-    { stdio: "inherit" },
+    { stdio: "inherit", timeout: timeoutMs, killSignal: "SIGKILL" },
   );
+  if (result.error?.code === "ETIMEDOUT") {
+    console.log(`Test timed out after ${timeoutMs}ms`);
+    console.error(`Regression test failed: ${test} (timeout)`);
+    process.exitCode = 1;
+    break;
+  }
   if (result.error !== undefined) throw result.error;
   if (result.status === null) {
     throw new Error(`Node regression test ${test} was terminated`);
