@@ -472,7 +472,7 @@ test("an abandoned low-level preparation recompiles before cache commit", async 
   }
 });
 
-test("host effect ownership reaches Runtime HIR and Core Wasm ABI 2", async () => {
+test("host effect ownership reaches Runtime HIR and Core Wasm ABI 3", async () => {
   const compiler = await Compiler.create();
   try {
     const runtime = await compiler.prepare(
@@ -507,7 +507,7 @@ test("host effect ownership reaches Runtime HIR and Core Wasm ABI 2", async () =
     const manifest = JSON.parse(
       new TextDecoder().decode(artifact.manifestBytes),
     );
-    assert.equal(manifest.abi.major, 2);
+    assert.equal(manifest.abi.major, 3);
     assert.deepEqual(
       manifest.imports.map((imported: { ownership: unknown }) =>
         imported.ownership
@@ -540,7 +540,7 @@ test("host effect ownership reaches Runtime HIR and Core Wasm ABI 2", async () =
     });
     const abiMajor = instance.exports["blot:abi-major"];
     assert(abiMajor instanceof WebAssembly.Global);
-    assert.equal(abiMajor.value, 2);
+    assert.equal(abiMajor.value, 3);
     const run = instance.exports["blot:default"];
     assert.equal(typeof run, "function");
     assert.equal((run as () => bigint)(), 42n);

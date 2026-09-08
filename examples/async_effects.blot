@@ -1,0 +1,21 @@
+// The same computation can use a source handler or a suspending host operation.
+open import "blot:prelude"
+
+const Device = @effect.host { .read = Effect.suspends (Int -> Int); }
+
+const run = fn x => do:
+  use first <- Device.read x
+  use second <- Device.read (first + 1)
+  return second + first
+
+use answer <- @handle (
+  Device,
+  fn () => run 7,
+  {
+    .read = fn (value, ?resume) => do:
+      use result <- resume (value + 10)
+      return result
+    ;
+  }
+)
+return answer

@@ -26,6 +26,7 @@ mod safety;
 mod session;
 mod source;
 mod source_identity;
+mod suspension;
 mod typecheck;
 mod value;
 mod value_capsule;

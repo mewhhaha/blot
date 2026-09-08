@@ -13,7 +13,7 @@ use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
     ClosureAlternative, DecodedEnvironmentIdentity, DeferredDemands, Domain as ValueDomain,
-    EffectOperationOwnership, EffectOwnership, Env, Environment, OpenedValues, OrderedFields,
+    EffectOperationContract, EffectOwnership, Env, Environment, OpenedValues, OrderedFields,
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
     capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
     lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
@@ -472,7 +472,7 @@ impl EffectIdentity {
 
 type EffectSignatures = Vec<(
     OrderedFields,
-    BTreeMap<String, EffectOperationOwnership>,
+    BTreeMap<String, EffectOperationContract>,
     u32,
 )>;
 
@@ -1080,7 +1080,7 @@ impl Context {
         runtime: &Runtime,
         source: ApplicationSite,
         signature: &OrderedFields,
-        ownership: &BTreeMap<String, EffectOperationOwnership>,
+        ownership: &BTreeMap<String, EffectOperationContract>,
         host: bool,
     ) -> u32 {
         let key = EffectIdentity {
@@ -1317,7 +1317,7 @@ fn effect_signatures_equal(left: &OrderedFields, right: &OrderedFields) -> bool 
 fn normalize_effect_operations(
     operations: &OrderedFields,
     span: Span,
-) -> Result<(OrderedFields, BTreeMap<String, EffectOperationOwnership>), Diagnostic> {
+) -> Result<(OrderedFields, BTreeMap<String, EffectOperationContract>), Diagnostic> {
     let mut signatures = OrderedFields::default();
     let mut ownership = BTreeMap::new();
     for (name, descriptor) in operations {
@@ -1332,9 +1332,9 @@ fn normalize_effect_operation(
     operation: &str,
     descriptor: &Value,
     span: Span,
-) -> Result<(Value, EffectOperationOwnership), Diagnostic> {
+) -> Result<(Value, EffectOperationContract), Diagnostic> {
     if effect_arrow(descriptor).is_some() {
-        return Ok((descriptor.clone(), EffectOperationOwnership::unrestricted()));
+        return Ok((descriptor.clone(), EffectOperationContract::unrestricted()));
     }
     let Value::Shape(fields) = descriptor else {
         return Err(effect_ownership_error(
@@ -1348,7 +1348,8 @@ fn normalize_effect_operation(
         ));
     };
     let expected_fields = ["signature", "input", "result"];
-    if fields.len() != expected_fields.len()
+    let optional_fields = usize::from(fields.contains_key("suspension"));
+    if fields.len() != expected_fields.len() + optional_fields
         || expected_fields
             .iter()
             .any(|field| !fields.contains_key(field))
@@ -1362,7 +1363,7 @@ fn normalize_effect_operation(
             operation,
             "descriptor",
             format!(
-                "expected exactly `.signature`, `.input`, and `.result`, found fields [{found}]"
+                "expected `.signature`, `.input`, and `.result`, optionally `.suspension`, found fields [{found}]"
             ),
             span,
         ));
@@ -1396,9 +1397,32 @@ fn normalize_effect_operation(
         "result",
         span,
     )?;
+    let suspension = match fields.get("suspension") {
+        None => crate::value::Suspension::Never,
+        Some(Value::Tag {
+            name,
+            payload: None,
+        }) if name == "Never" => crate::value::Suspension::Never,
+        Some(Value::Tag {
+            name,
+            payload: None,
+        }) if name == "MaySuspend" => crate::value::Suspension::MaySuspend,
+        Some(value) => {
+            return Err(effect_ownership_error(
+                operation,
+                "suspension",
+                format!("expected #Never or #MaySuspend, found {}", show(value)),
+                span,
+            ));
+        }
+    };
     Ok((
         signature.clone(),
-        EffectOperationOwnership { input, result },
+        EffectOperationContract {
+            input,
+            result,
+            suspension,
+        },
     ))
 }
 
@@ -2160,7 +2184,7 @@ pub struct Perform {
     pub operation: String,
     pub argument: Value,
     pub result_type: Value,
-    pub operation_ownership: EffectOperationOwnership,
+    pub operation_ownership: EffectOperationContract,
     pub span: Span,
     pub host: bool,
     application: ApplicationSite,
@@ -6398,7 +6422,7 @@ mod tests {
                     operation: "resume".to_owned(),
                     argument: Value::Unit,
                     result_type: Value::Unit,
-                    operation_ownership: EffectOperationOwnership::unrestricted(),
+                    operation_ownership: EffectOperationContract::unrestricted(),
                     span: Span { start: 0, end: 0 },
                     host: true,
                     application: ApplicationSite::expression(
@@ -6628,7 +6652,7 @@ mod tests {
             },
         )]);
         let ownership =
-            BTreeMap::from([("map".to_owned(), EffectOperationOwnership::unrestricted())]);
+            BTreeMap::from([("map".to_owned(), EffectOperationContract::unrestricted())]);
 
         let first = context.effect_id(
             &runtime,
@@ -6651,11 +6675,29 @@ mod tests {
         );
         let linear_result = BTreeMap::from([(
             "map".to_owned(),
-            EffectOperationOwnership {
+            EffectOperationContract {
                 input: EffectOwnership::Unrestricted,
                 result: EffectOwnership::Linear,
+                suspension: crate::value::Suspension::Never,
             },
         )]);
+        let suspending = BTreeMap::from([(
+            "map".to_owned(),
+            EffectOperationContract {
+                suspension: crate::value::Suspension::MaySuspend,
+                ..EffectOperationContract::unrestricted()
+            },
+        )]);
+        assert_ne!(
+            first,
+            context.effect_id(
+                &runtime,
+                application.clone(),
+                &signature(1),
+                &suspending,
+                false,
+            )
+        );
         assert_ne!(
             first,
             context.effect_id(&runtime, application, &signature(1), &linear_result, false,)

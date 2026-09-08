@@ -55,14 +55,14 @@ try {
   try {
     console.log(guest.call("score", [21n]));
   } finally {
-    guest.destroy();
+    await guest.close();
   }
 } finally {
   compiler.destroy();
 }
 ```
 
-The adapter supports closed ABI 2.0 artifacts with scalar input parameters:
+The adapter supports closed ABI 3.0 artifacts with scalar input parameters:
 `Int` uses JavaScript `bigint`, `F32`/`F64` use `number`, `Bool` uses `boolean`,
 and `Unit` uses `null`. Signatures requiring more than 16 flattened input lanes
 are refused rather than incorrectly passed as scalar arguments. The argument
@@ -93,22 +93,60 @@ const operations = new Map<string, HostOperation>([
 const capabilities = new Map([["Device", operations]]);
 ```
 
-Pass `capabilities` as the second argument to `instantiateArtifact`. Both
-missing and unused capabilities/operations are rejected. The maps are
-snapshotted before asynchronous Wasm compilation. The actual Wasm import set
-must match the manifest. This adapter currently accepts only scalar
-host-operation parameters and results with unrestricted ownership; it refuses
-aggregate imports, owned resource transfers, and split development-unit links.
-Those restrictions belong to this adapter, not to the language's complete ABI 2
-support.
+Pass `capabilities` as the second argument to `instantiateArtifact`. Missing and
+unused capabilities/operations are rejected. Maps are snapshotted before Wasm
+compilation, and the actual imports must match the authenticated manifest.
 
-A handler must return synchronously. Returning a Promise is rejected even for a
-Unit operation, whose result might otherwise be discarded unnoticed. Calling an
-async JavaScript function can already start work before that rejection; the
-adapter cannot undo host actions. Reentrant guest calls and destroying the
-instance during a guest call are refused. `destroy` invalidates subsequent calls
-and releases the adapter's instance reference; it does not run
-application-specific finalizers or interrupt a nonterminating synchronous call.
+Synchronous operations must return synchronously, including Unit operations.
+The direct adapter accepts unrestricted scalar operations. Marked suspending
+operations accept canonical first-order arguments and results, including text,
+records and supported variants. Arrays crossing suspension are currently refused
+until canonical element copying is implemented. Operations receive a second
+`{ signal }` argument for
+cancelling platform work.
+
+## Portable asynchronous calls
+
+Declare a potentially suspending operation in Blot:
+
+```blot
+open import "blot:prelude"
+const Network = @effect.host { .get = Effect.suspends (Text -> Text); }
+const run = fn url => do:
+  use body <- Network.get url
+  return body <> "!"
+return { .run = run; }
+```
+
+Provide an asynchronous host implementation and invoke the emitted continuation:
+
+```ts
+const guest = await instantiateArtifact(artifact, new Map([
+  ["Network", new Map([["get", async (url, { signal }) => {
+    if (typeof url !== "string") throw new TypeError("expected URL text");
+    const response = await fetch(url, { signal });
+    return await response.text();
+  }]])],
+]));
+try {
+  console.log(await guest.callAsync("run", ["/message.txt"]));
+} finally {
+  await guest.close();
+}
+```
+
+`callAsync` accepts canonical logical arguments, including aggregate values.
+An optional third argument `{ signal }` cancels a call. Cancellation aborts the
+host operation's signal and releases the suspended activation. Late completions
+cannot write into a later activation. Host rejections reject the invocation;
+expected application errors should be returned as explicit Result variants.
+
+Only one invocation is active per instance. Reentrant calls are refused.
+`close()` cancels a pending invocation, awaits its termination, and invalidates
+subsequent calls. It is idempotent. It does not run source resource finalizers or
+interrupt nonterminating synchronous code. Ownership-bearing host capabilities
+and resumable development-unit links remain refused until their cleanup and
+activation contracts are implemented.
 
 ## Live report
 
@@ -132,11 +170,9 @@ policy, not proof that all quantities terminate or avoid traps.
 
 ## Boundaries retained
 
-ABI 2 host effects are still synchronous. This change does not add guest
-suspension, a scheduler, continuation serialization, asynchronous cancellation,
-or a WASI Component Model adapter. A future suspending ABI needs an explicit
-version, continuation ownership, failure/cleanup rules, and reload interaction;
-a Promise wrapper is not an implementation of those semantics.
+Suspension uses Rust-emitted frames and an explicit ABI 3 protocol; it requires
+no JavaScript stack switching. Structured tasks, channels, shared memory, and
+source resource cleanup remain subsequent work.
 
 Compilation can execute compile-time code and read declared includes and
 packages. Effects expose dependencies but are not a complete sandbox. This host

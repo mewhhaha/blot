@@ -26,7 +26,7 @@ use crate::typecheck::{
     type_exposes_generative_effect,
 };
 use crate::value::{
-    EffectOperationOwnership, EffectOwnership, OrderedFields, Value,
+    EffectOperationContract, EffectOwnership, OrderedFields, Value,
     reusable_across_module_instances, show,
 };
 use crate::value_capsule::{ValueCapsule, validate_snapshot_message_pack};
@@ -1122,7 +1122,8 @@ impl CompilerSession {
                 } else {
                     let compiled = Rc::new(
                         crate::backend::close(unit_module)
-                            .and_then(|program| program.compile())
+                            .map_err(|failure| backend_closure_diagnostic(failure, path))?
+                            .compile()
                             .map_err(|message| {
                                 let code = if message.contains("development link")
                                     && message.contains("unsupported")
@@ -1229,14 +1230,10 @@ impl CompilerSession {
             .map_err(|diagnostic| diagnostic.at(path))?;
         let runtime = crate::hir::elaborate(self.context.clone(), path, checked)
             .map_err(|diagnostic| diagnostic.at(path))?;
-        let program = Rc::new(crate::backend::close(runtime).map_err(|message| {
-            Diagnostic::new(
-                "BLOT_BACKEND_ERROR",
-                message,
-                crate::ast::Span { start: 0, end: 0 },
-            )
-            .at(path)
-        })?);
+        let program = Rc::new(
+            crate::backend::close(runtime)
+                .map_err(|failure| backend_closure_diagnostic(failure, path))?,
+        );
         self.closed_programs
             .borrow_mut()
             .insert(path.to_owned(), program.clone());
@@ -1289,14 +1286,10 @@ impl CompilerSession {
         .map_err(|diagnostic| diagnostic.at(path))?;
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("runtime-hir");
-        let closed = Rc::new(crate::backend::close(runtime).map_err(|message| {
-            Diagnostic::new(
-                "BLOT_BACKEND_ERROR",
-                message,
-                crate::ast::Span { start: 0, end: 0 },
-            )
-            .at(path)
-        })?);
+        let closed = Rc::new(
+            crate::backend::close(runtime)
+                .map_err(|failure| backend_closure_diagnostic(failure, path))?,
+        );
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("backend-closed");
         self.closed_development_programs
@@ -1564,7 +1557,7 @@ fn tool_grants() -> Value {
         name: "Console".to_owned(),
         operation_ownership: BTreeMap::from([(
             "write".to_owned(),
-            EffectOperationOwnership::unrestricted(),
+            EffectOperationContract::unrestricted(),
         )]),
         operations,
         host: true,
@@ -1815,6 +1808,7 @@ fn encode_boundary_value(
                 append_boundary_string(target, operation);
                 encode_effect_ownership(&ownership.input, target);
                 encode_effect_ownership(&ownership.result, target);
+                append_boundary_string(target, ownership.suspension.name());
             }
         }
         Value::Operation { effect, name } => {
@@ -2066,6 +2060,7 @@ fn json_value(value: &Value) -> serde_json::Value {
                 serde_json::json!([name, {
                     "input": json_effect_ownership(&ownership.input),
                     "result": json_effect_ownership(&ownership.result),
+                    "suspension": ownership.suspension.name(),
                 }])
             }).collect::<Vec<_>>(),
         }),
@@ -2476,6 +2471,14 @@ fn source_expression_span(expression: &Expression) -> crate::ast::Span {
         | Expression::Block { span, .. }
         | Expression::Rec { span, .. } => *span,
     }
+}
+
+fn backend_closure_diagnostic(failure: crate::backend::ClosureFailure, path: &str) -> Diagnostic {
+    let (code, message) = match failure {
+        crate::backend::ClosureFailure::TargetRefusal(message) => ("BLOT_TARGET_REFUSAL", message),
+        crate::backend::ClosureFailure::Invariant(message) => ("BLOT_BACKEND_ERROR", message),
+    };
+    Diagnostic::new(code, message, crate::ast::Span { start: 0, end: 0 }).at(path)
 }
 
 #[cfg(test)]
@@ -7068,7 +7071,7 @@ mod tests {
             .as_str()
             .expect("a diagnostic message");
         assert!(
-            message.contains("function choice") && message.contains("ABI 2"),
+            message.contains("function choice") && message.contains("ABI 3"),
             "the refusal must name the private layout: {message}"
         );
     }

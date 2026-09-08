@@ -54,7 +54,7 @@ writes at `length`, increments it, and grows only when `length = capacity`.
 `(pointer,length)` to Scratch `(pointer,0,length)`.
 
 Runtime-HIR schema 6 retains the type and four runtime operations. Scratch is
-never encoded by Blot Core Wasm ABI 2. Checked-module certificate schema 10
+never encoded by Blot Core Wasm ABI 3. Checked-module certificate schema 10
 records Scratch roots and their structural result lineage; linearity remains
 outside the type lattice.
 

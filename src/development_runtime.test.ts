@@ -218,7 +218,7 @@ async function bridgeFixture(
   let postReturn: string | null = null;
   if (width > 1) postReturn = "cabi_post_echo";
   const abi = {
-    major: 2,
+    major: 3,
     minor: 0,
     memory: "memory32",
     stringEncoding: "utf-8",
@@ -240,6 +240,7 @@ async function bridgeFixture(
       postReturn,
       effects: [],
       ownership: "owned",
+      suspension: "never",
     }],
     links: [],
   };

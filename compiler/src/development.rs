@@ -272,6 +272,14 @@ pub(crate) fn split_runtime_module(
     configured_units: &BTreeMap<String, String>,
     reusable_partitions: &HashMap<String, DevelopmentUnitPartition>,
 ) -> Result<DevelopmentProgram, String> {
+    if module
+        .capabilities
+        .iter()
+        .flat_map(|capability| &capability.operations)
+        .any(|operation| operation.contract.suspension == crate::value::Suspension::MaySuspend)
+    {
+        return Err("Resumable development units require suspension-aware links and activation cleanup, which this target does not yet support.".to_owned());
+    }
     let entry_root = configured_units
         .get(entry_unit)
         .ok_or_else(|| format!("development entry unit {entry_unit:?} has no configured root"))?;
@@ -1230,7 +1238,8 @@ mod tests {
         for unit in split.units {
             let compiled =
                 crate::backend::close(unit.module.expect("development unit should be prepared"))
-                    .and_then(|program| program.compile())
+                    .unwrap_or_else(|error| panic!("unit {} did not close: {error:?}", unit.name))
+                    .compile()
                     .unwrap_or_else(|error| panic!("unit {} did not emit: {error}", unit.name));
             assert_eq!(compiled.wasm.get(..4), Some(b"\0asm".as_slice()));
             let manifest: serde_json::Value = serde_json::from_slice(&compiled.manifest)

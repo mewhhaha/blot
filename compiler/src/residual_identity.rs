@@ -11,7 +11,7 @@ use crate::eval::{
     ModuleInstanceScope, closure_free_names,
 };
 use crate::value::{
-    ChoiceSource, Domain, EffectOperationOwnership, OrderedFields, RuntimeMeaning, RuntimeValue,
+    ChoiceSource, Domain, EffectOperationContract, OrderedFields, RuntimeMeaning, RuntimeValue,
     Value, lookup, lookup_signature,
 };
 use serde::Serialize;
@@ -41,7 +41,7 @@ enum Part {
     Reference(usize),
     Instances(Rc<ModuleInstanceScope>),
     Scope(Rc<EffectScope>),
-    Ownership(EffectOperationOwnership),
+    Ownership(EffectOperationContract),
 }
 
 #[derive(Serialize)]

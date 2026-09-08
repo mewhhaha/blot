@@ -562,7 +562,7 @@ function decodeManifest(
   }
   const abi = requireRecord(decoded.abi, `${position}.abi`);
   if (
-    abi.major !== 2 || abi.minor !== 0 || abi.memory !== "memory32" ||
+    abi.major !== 3 || abi.minor !== 0 || abi.memory !== "memory32" ||
     abi.stringEncoding !== "utf-8" || abi.maximumFlatParameters !== 16 ||
     abi.maximumFlatResults !== 1 || abi.memoryExport !== "memory" ||
     abi.reallocExport !== "cabi_realloc"
@@ -896,6 +896,11 @@ function parseExport(
   }
   if (phase !== "runtime") {
     throw new TypeError(`${position}.phase is ${JSON.stringify(phase)}`);
+  }
+  if (encoded.suspension !== "never") {
+    throw new TypeError(
+      `${position} requires resumable development links, which are not yet supported`,
+    );
   }
   const name = requireString(encoded.name, `${position}.name`);
   const function_ = parseFunction(encoded.function, `${position}.function`);

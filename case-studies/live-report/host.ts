@@ -61,10 +61,10 @@ export class LiveReport {
         const previous = this.#active;
         this.#active = candidate;
         this.#revision += 1;
-        if (previous !== null) previous.destroy();
+        if (previous !== null) await previous.close();
         return "activated" as const;
       } finally {
-        if (this.#active !== candidate) candidate.destroy();
+        if (this.#active !== candidate) await candidate.close();
       }
     });
     // The caller still receives the original rejection; only the queue tail
@@ -96,8 +96,8 @@ export class LiveReport {
     if (this.#closing !== null) return this.#closing;
     this.#closed = true;
     this.#requested += 1;
-    this.#closing = this.#queue.then(() => {
-      if (this.#active !== null) this.#active.destroy();
+    this.#closing = this.#queue.then(async () => {
+      if (this.#active !== null) await this.#active.close();
       this.#active = null;
       this.#compiler.destroy();
     });

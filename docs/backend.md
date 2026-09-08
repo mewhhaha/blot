@@ -55,7 +55,7 @@ resolved source graph
   -> ownership and safety
   -> specialization and residual evaluation
   -> validated Runtime HIR
-  -> ABI 2 closure
+  -> ABI 3 closure
   -> emitted WebAssembly
 ```
 
@@ -76,7 +76,7 @@ There are two authoritative observations of executable code:
 | Observation    | Purpose                                                       |
 | -------------- | ------------------------------------------------------------- |
 | Rust evaluator | `const`, comptime, interactive evaluation, and test execution |
-| emitted Wasm   | production execution through Blot Core Wasm ABI 2             |
+| emitted Wasm   | production execution through Blot Core Wasm ABI 3             |
 
 `pnpm conformance` requires both to agree on representative scalar and owned-
 collection programs, including owned quicksort. Independent evaluators may be
@@ -132,7 +132,7 @@ specialization primitive.
 
 ## V8 and WebAssembly 3.0
 
-The production module is standard WebAssembly 3.0 and keeps the existing ABI 2
+The production module is standard WebAssembly 3.0 and keeps the existing ABI 3
 memory32 boundary. The manifest declares the core specification and the exact
 feature families used by each artifact. Current emission uses bulk-memory,
 internal multi-value results, fixed-width SIMD when the source requests vector
@@ -176,7 +176,7 @@ inside a returned function.
 
 ## Public ABI
 
-Blot Core Wasm ABI 2 is memory32 with canonical UTF-8 text adapters. Public
+Blot Core Wasm ABI 3 is memory32 with canonical UTF-8 text adapters. Public
 exports contain only closed first-order types. The emitter derives the sidecar
 manifest and the `blot:abi` custom section from one byte sequence, and the host
 requires them to agree.

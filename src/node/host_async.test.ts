@@ -70,7 +70,7 @@ return run
             assert.throws(() => hosted.call("default", [null]), /synchronous/);
             await new Promise((accept) => setTimeout(accept, 20));
           } finally {
-            hosted.destroy();
+            await hosted.close();
           }
         }
       }

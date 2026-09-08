@@ -12,6 +12,7 @@ use wasm_encoder::{
 };
 use wasmparser::{BinaryReader, FunctionBody, Operator};
 
+mod suspension;
 mod text_search;
 
 use crate::hir::{
@@ -380,6 +381,7 @@ struct AbiExport {
     post_return: Option<String>,
     effects: Vec<String>,
     ownership: Option<&'static str>,
+    suspension: crate::value::Suspension,
 }
 
 #[derive(Clone, Serialize)]
@@ -390,6 +392,7 @@ struct AbiImport {
     name: String,
     function: AbiFunction,
     ownership: RuntimeOperationOwnership,
+    suspension: crate::value::Suspension,
 }
 
 #[derive(Clone, Serialize)]
@@ -411,9 +414,96 @@ struct AbiManifest {
     links: Vec<AbiLink>,
 }
 
-pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
+#[derive(Debug)]
+pub(crate) enum ClosureFailure {
+    TargetRefusal(String),
+    Invariant(String),
+}
+
+impl From<String> for ClosureFailure {
+    fn from(message: String) -> Self {
+        Self::Invariant(message)
+    }
+}
+
+impl From<&str> for ClosureFailure {
+    fn from(message: &str) -> Self {
+        Self::Invariant(message.to_owned())
+    }
+}
+
+pub(crate) fn close(runtime: RuntimeModule) -> Result<ClosedProgram, ClosureFailure> {
+    if runtime
+        .capabilities
+        .iter()
+        .flat_map(|capability| &capability.operations)
+        .any(|operation| operation.contract.suspension == crate::value::Suspension::MaySuspend)
+        && runtime
+            .capabilities
+            .iter()
+            .flat_map(|capability| &capability.operations)
+            .any(|operation| {
+                operation.contract.ownership.input
+                    != crate::hir::RuntimeEffectOwnership::Mode("unrestricted")
+                    || operation.contract.ownership.result
+                        != crate::hir::RuntimeEffectOwnership::Mode("unrestricted")
+            })
+    {
+        return Err(ClosureFailure::TargetRefusal("Suspending owned host capabilities require checked cancellation cleanup, which this target does not yet support.".to_owned()));
+    }
     let runtime_layouts = RuntimeTypeLayouts::new(&runtime)?;
+    for function in &runtime.functions {
+        for block in &function.blocks {
+            for parameter in &block.parameters {
+                runtime_layouts
+                    .flattened(&runtime, parameter.type_id)
+                    .map_err(ClosureFailure::TargetRefusal)?;
+            }
+            for operation in &block.operations {
+                runtime_layouts
+                    .flattened(&runtime, operation.type_id)
+                    .map_err(ClosureFailure::TargetRefusal)?;
+            }
+        }
+    }
     let manifest = build_manifest(&runtime, &runtime_layouts)?;
+    for exported in &manifest.exports {
+        if exported.suspension == crate::value::Suspension::MaySuspend {
+            let function = exported
+                .function
+                .as_ref()
+                .ok_or("resumable export has no function")?;
+            for type_ in function
+                .parameters
+                .iter()
+                .chain(std::iter::once(&function.result))
+            {
+                suspension::validate_boundary(type_).map_err(ClosureFailure::TargetRefusal)?;
+            }
+        }
+    }
+    for imported in &manifest.imports {
+        if imported.suspension == crate::value::Suspension::MaySuspend {
+            for type_ in imported
+                .function
+                .parameters
+                .iter()
+                .chain(std::iter::once(&imported.function.result))
+            {
+                suspension::validate_boundary(type_).map_err(ClosureFailure::TargetRefusal)?;
+            }
+        }
+    }
+    if !runtime.links.is_empty()
+        && manifest
+            .exports
+            .iter()
+            .any(|exported| exported.suspension == crate::value::Suspension::MaySuspend)
+    {
+        return Err(ClosureFailure::TargetRefusal(
+            "Resumable development links are not supported by this target.".to_owned(),
+        ));
+    }
     let mut manifest_text = serde_json::to_string_pretty(&manifest)
         .map_err(|error| format!("could not serialize Blot ABI manifest: {error}"))?;
     manifest_text.push('\n');
@@ -466,6 +556,7 @@ fn build_manifest(
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
 ) -> Result<AbiManifest, String> {
+    let suspension = crate::suspension::SuspensionPlan::new(module)?;
     let mut exports = Vec::new();
     for exported in &module.exports {
         match exported {
@@ -479,6 +570,7 @@ fn build_manifest(
                 post_return: None,
                 effects: Vec::new(),
                 ownership: None,
+                suspension: crate::value::Suspension::Never,
             }),
             RuntimeExport::Runtime {
                 source_name,
@@ -486,6 +578,7 @@ fn build_manifest(
                 wasm_name,
                 signature,
                 ownership,
+                function: function_id,
                 ..
             } => {
                 let signature = module.signatures.get(*signature).ok_or_else(|| {
@@ -517,7 +610,9 @@ fn build_manifest(
                         },
                     )?,
                 };
-                let post_return = if flattened_type(&function.result).len() > 1 {
+                let post_return = if flattened_type(&function.result).len() > 1
+                    && !suspension.functions.contains_key(function_id)
+                {
                     Some(format!("cabi_post_{wasm_name}"))
                 } else {
                     None
@@ -532,6 +627,11 @@ fn build_manifest(
                     post_return,
                     effects,
                     ownership: Some(ownership),
+                    suspension: if suspension.functions.contains_key(function_id) {
+                        crate::value::Suspension::MaySuspend
+                    } else {
+                        crate::value::Suspension::Never
+                    },
                 });
             }
         }
@@ -573,7 +673,8 @@ fn build_manifest(
                         },
                     )?,
                 },
-                ownership: operation.ownership.clone(),
+                ownership: operation.contract.ownership.clone(),
+                suspension: operation.contract.suspension,
             });
         }
     }
@@ -621,7 +722,7 @@ fn build_manifest(
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
-            major: 2,
+            major: 3,
             minor: 0,
             core_specification: "3.0",
             required_features,
@@ -890,20 +991,20 @@ fn runtime_layout_type(
         },
         RuntimeType::Scratch { .. } => {
             return Err(format!(
-                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
         RuntimeType::Indirect { .. } if scope == LayoutScope::Internal => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
-                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
         RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
             return Err(format!(
-                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
@@ -1380,6 +1481,7 @@ fn emit_dynamic_module(
     manifest: &AbiManifest,
     manifest_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
+    let suspension_plan = crate::suspension::SuspensionPlan::new(module)?;
     let mut static_end = 1_024_u32;
     let mut static_data = StaticData {
         text_offsets: HashMap::new(),
@@ -1447,6 +1549,15 @@ fn emit_dynamic_module(
     let mut types = FunctionTypes::new();
     let mut imports = ImportSection::new();
     for imported in &manifest.imports {
+        if imported.suspension == crate::value::Suspension::MaySuspend {
+            let type_index = types.intern(vec![ValType::I32; 4], vec![ValType::I32]);
+            imports.import(
+                &imported.module,
+                &imported.name,
+                EntityType::Function(type_index),
+            );
+            continue;
+        }
         let mut parameters = imported
             .function
             .parameters
@@ -1621,7 +1732,9 @@ fn emit_dynamic_module(
     let internal_functions = module
         .functions
         .iter()
-        .filter(|function| internally_emitted.contains(&function.id))
+        .filter(|function| {
+            internally_emitted.contains(&function.id) && !suspension_plan.contains(function)
+        })
         .collect::<Vec<_>>();
     for function in &internal_functions {
         let signature = module.signatures.get(function.signature).ok_or_else(|| {
@@ -1665,7 +1778,51 @@ fn emit_dynamic_module(
         )?;
     }
 
+    let mut frames = BTreeMap::new();
+    let mut step_indices = BTreeMap::new();
+    for function in &module.functions {
+        if suspension_plan.contains(function) {
+            frames.insert(
+                function.id,
+                suspension::FrameLayout::new(
+                    module,
+                    runtime_layouts,
+                    function,
+                    &suspension_plan.functions[&function.id],
+                )?,
+            );
+            step_indices.insert(function.id, imported_function_count + functions.len());
+            functions.function(types.intern(vec![ValType::I32], vec![ValType::I32]));
+        }
+    }
+    for (function_id, plan) in &suspension_plan.functions {
+        code.function(&suspension::step(
+            module,
+            runtime_layouts,
+            &module.functions[*function_id],
+            plan,
+            &frames,
+            manifest,
+            dynamic_helpers,
+            &static_data,
+            &runtime_function_indices,
+        )?);
+    }
     let mut function_exports = Vec::new();
+    let lookup = if step_indices.is_empty() {
+        None
+    } else {
+        let (lookup, exports) = suspension::append_protocol(
+            &mut types,
+            &mut functions,
+            &mut code,
+            imported_function_count,
+            realloc_index,
+            &step_indices,
+        );
+        function_exports.extend(exports);
+        Some(lookup)
+    };
     for (export_ordinal, exported) in module.exports.iter().enumerate() {
         let RuntimeExport::Runtime {
             wasm_name,
@@ -1697,6 +1854,22 @@ fn emit_dynamic_module(
             .function
             .as_ref()
             .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?;
+        if let Some(plan) = suspension_plan.functions.get(function) {
+            let function_index = imported_function_count + functions.len();
+            functions.function(types.intern(vec![ValType::I32; 2], Vec::new()));
+            code.function(&suspension::start(
+                module,
+                runtime_layouts,
+                runtime_function,
+                &frames[function],
+                plan,
+                lookup.expect("resumable module lookup"),
+                realloc_index,
+                utf8_validator_index.expect("suspending export UTF-8 validator"),
+            )?);
+            function_exports.push((wasm_name.clone(), function_index));
+            continue;
+        }
         let result = &public_function.result;
         let flattened_result = flattened_type(result);
         let wasm_results = if flattened_result.len() <= 1 {
@@ -1761,11 +1934,13 @@ fn emit_dynamic_module(
     });
     let mut globals = GlobalSection::new();
     add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 2, false);
+    add_i32_global(&mut globals, 3, false);
     add_i32_global(&mut globals, 0, false);
     add_i32_global(&mut globals, 0, true);
     add_i32_global(&mut globals, 0, true);
     add_i32_global(&mut globals, heap_start as i32, true);
+    add_i32_global(&mut globals, 0, true);
+    add_i32_global(&mut globals, 0, true);
 
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
@@ -6220,6 +6395,37 @@ fn emit_validate_canonical_texts(
                 utf8_validator,
             )?;
         }
+        AbiType::Variant { cases } => {
+            let tag = locals[*flat_index];
+            instructions
+                .local_get(tag)
+                .i32_const(cases.len() as i32)
+                .i32_ge_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end();
+            for (index, case_) in cases.iter().enumerate() {
+                let Some(payload) = &case_.payload else {
+                    continue;
+                };
+                instructions
+                    .local_get(tag)
+                    .i32_const(index as i32)
+                    .i32_eq()
+                    .if_(BlockType::Empty);
+                let mut payload_index = *flat_index + 1;
+                emit_validate_canonical_texts(
+                    instructions,
+                    payload,
+                    locals,
+                    &mut payload_index,
+                    scratch_end,
+                    utf8_validator,
+                )?;
+                instructions.end();
+            }
+            *flat_index += flattened_type(type_).len();
+        }
         _ => {
             return Err(format!(
                 "indirect dynamic {} host results are not validated yet",
@@ -7755,10 +7961,10 @@ mod tests {
         };
 
         let Err(error) = canonical_type(&module, 1, &mut Vec::new()) else {
-            panic!("a recursive value acquired an ABI 2 layout");
+            panic!("a recursive value acquired an ABI 3 layout");
         };
 
-        assert!(error.contains("cannot cross Blot Core Wasm ABI 2"));
+        assert!(error.contains("cannot cross Blot Core Wasm ABI 3"));
     }
 
     #[test]

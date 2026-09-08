@@ -185,6 +185,123 @@ export function readMemory(
   };
 }
 
+/** Copy a logical host value into canonical guest memory, refreshing views after allocation. */
+export function writeMemory(
+  type: BlotAbiType,
+  value: RuntimeValue,
+  memory: WebAssembly.Memory,
+  offset: number,
+  allocate: (alignment: number, size: number) => number,
+  layouts = new AbiMemoryLayouts(),
+): void {
+  const view = () => new DataView(memory.buffer);
+  if (type.kind === "unit" && value === null) return;
+  if (type.kind === "boolean" && typeof value === "boolean") {
+    let flag = 0;
+    if (value) flag = 1;
+    view().setUint8(offset, flag);
+    return;
+  }
+  if (type.kind === "signed-integer-64" && typeof value === "bigint") {
+    if (value < -9223372036854775808n || value > 9223372036854775807n) {
+      throw new RangeError("Int host value is outside signed 64-bit range");
+    }
+    view().setBigInt64(offset, value, true);
+    return;
+  }
+  if (type.kind === "float-32" && typeof value === "number") {
+    view().setFloat32(offset, value, true);
+    return;
+  }
+  if (type.kind === "float-64" && typeof value === "number") {
+    view().setFloat64(offset, value, true);
+    return;
+  }
+  if (type.kind === "text" && typeof value === "string") {
+    const bytes = new TextEncoder().encode(value);
+    const pointer = allocate(1, bytes.length);
+    new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
+    view().setUint32(offset, pointer, true);
+    view().setUint32(offset + 4, bytes.length, true);
+    return;
+  }
+  if (type.kind === "array" && Array.isArray(value)) {
+    const element = layouts.get(type.element);
+    const pointer = allocate(element.alignment, element.size * value.length);
+    value.forEach((elementValue: RuntimeValue, index: number) => {
+      writeMemory(
+        type.element,
+        elementValue,
+        memory,
+        pointer + index * element.size,
+        allocate,
+        layouts,
+      );
+    });
+    view().setUint32(offset, pointer, true);
+    view().setUint32(offset + 4, value.length, true);
+    return;
+  }
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    throw new TypeError(`expected ${type.kind} host value`);
+  }
+  if (type.kind === "record" && value.kind === "record") {
+    if (type.fields.length !== value.fields.size) {
+      throw new TypeError("host record field count mismatch");
+    }
+    for (const field of layouts.get(type).fields) {
+      const fieldValue = value.fields.get(field.name);
+      if (fieldValue === undefined) {
+        throw new TypeError(`host record omitted ${field.name}`);
+      }
+      writeMemory(
+        field.type,
+        fieldValue,
+        memory,
+        offset + field.offset,
+        allocate,
+        layouts,
+      );
+    }
+    return;
+  }
+  if (
+    type.kind === "sealed" && value.kind === "sealed" &&
+    value.name === type.name
+  ) {
+    writeMemory(type.inner, value.value, memory, offset, allocate, layouts);
+    return;
+  }
+  if (type.kind === "variant" && value.kind === "variant") {
+    const layout = layouts.get(type);
+    const tag = layout.cases.findIndex((case_) => case_.name === value.name);
+    if (tag < 0) throw new TypeError(`unknown host variant ${value.name}`);
+    const selected = layout.cases[tag];
+    if (selected.payload !== undefined) {
+      if (value.payload === undefined) {
+        throw new TypeError(`host variant ${value.name} omitted its payload`);
+      }
+      writeMemory(
+        selected.payload,
+        value.payload,
+        memory,
+        offset + layout.payloadOffset,
+        allocate,
+        layouts,
+      );
+    } else if (value.payload !== undefined) {
+      throw new TypeError(
+        `host variant ${value.name} has an unexpected payload`,
+      );
+    }
+    if (layout.discriminantSize === 1) view().setUint8(offset, tag);
+    else if (layout.discriminantSize === 2) view().setUint16(offset, tag, true);
+    else view().setUint32(offset, tag, true);
+    return;
+  }
+  throw new TypeError(`expected ${type.kind} host value`);
+}
+
 export function formatValue(value: RuntimeValue): string {
   if (value === null) return "()";
   if (typeof value === "string") return JSON.stringify(value);

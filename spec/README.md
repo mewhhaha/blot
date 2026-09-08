@@ -45,8 +45,9 @@ semantics.
 | [`SCRATCH.md`](SCRATCH.md)                                      | Affine initialized-prefix builders and allocation recycling            |
 | [`OWNED_ORDERED_MAPS.md`](OWNED_ORDERED_MAPS.md)                | Ordered-map representation, protocol invariant, and cost model         |
 | [`REUSE.md`](REUSE.md)                                          | Declaration-tag Store-reuse assertions and Runtime-HIR certificates    |
+| [`SUSPENSION.md`](SUSPENSION.md) | Portable suspension, checked modes, and frame resumption |
 | [`RUNTIME.md`](RUNTIME.md)                                      | Runtime HIR, semantic ABI relation, and target validation              |
-| [`docs/abi.md`](../docs/abi.md)                                 | Normative Core Wasm ABI 2 bytes and caller ownership                   |
+| [`docs/abi.md`](../docs/abi.md)                                 | Normative Core Wasm ABI 3 bytes and caller ownership                   |
 | [`docs/wasm-target-profile.md`](../docs/wasm-target-profile.md) | Operational V8/Wasm 3 feature profile and engine matrix                |
 | [`CORRECTNESS.md`](CORRECTNESS.md)                              | Pass adequacy and the whole-compiler correctness obligation            |
 | [`INCREMENTAL.md`](INCREMENTAL.md)                              | Revision identity, invalidation, and certified cache reuse             |
@@ -54,7 +55,7 @@ semantics.
 | [`PACKAGES.md`](PACKAGES.md)                                    | Package resolution, portable module capsules, and source fallback      |
 | [`COST_MODEL.md`](COST_MODEL.md)                                | Work model, benchmark boundaries, and optimization acceptance          |
 
-`docs/abi.md` is the one normative document under `docs/`: its ABI 2 layout,
+`docs/abi.md` is the one normative document under `docs/`: its ABI 3 layout,
 lifting/lowering, and ownership rules are incorporated by reference from
 `RUNTIME.md`. Its section named **Runtime target status** remains operational
 and cannot weaken an ABI rule for an artifact the compiler accepts.

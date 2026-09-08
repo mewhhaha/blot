@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "publicAbi": {
-    "major": 2,
+    "major": 3,
     "minor": 0
   },
   "semanticCompiler": "rust-wasm",
@@ -25,7 +25,10 @@
     "Scratch and private Region values cannot cross the public ABI",
     "deferred functions must be eliminated before the public ABI",
     "public values must have closed first-order layouts",
-    "ABI 2 host effects are synchronous"
+    "suspending host effects currently require unrestricted operation ownership",
+    "arrays crossing suspension require canonical element copying",
+    "dynamic variant payloads require compatible Wasm lanes",
+    "development links currently require synchronous exports"
   ],
   "editorFeatures": [
     "diagnostics",
@@ -44,9 +47,9 @@
     "experiments/revision-key-performance.md",
     "experiments/compiler-profile-matrix.latest.json"
   ],
-  "compilerHostAbi": 7,
-  "checkedModuleCertificate": 17,
+  "compilerHostAbi": 8,
+  "checkedModuleCertificate": 18,
   "moduleSnapshotSchema": 2,
   "valueCapsuleSchema": 4,
-  "runtimeHir": 10
+  "runtimeHir": 11
 }

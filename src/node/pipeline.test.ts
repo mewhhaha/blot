@@ -392,6 +392,7 @@ test("module grants keep Unit return typing through canonical text imports", asy
           result: { kind: "unit" },
         },
         ownership: { input: "unrestricted", result: "unrestricted" },
+        suspension: "never",
       },
     ]);
     const exported = requiredRuntimeExport(manifest, "default");
@@ -453,6 +454,7 @@ test("a module may directly return an effectful computation", async () => {
           result: { kind: "signed-integer-64" },
         },
         ownership: { input: "unrestricted", result: "unrestricted" },
+        suspension: "never",
       },
     ]);
 

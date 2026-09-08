@@ -11,7 +11,7 @@ This document owns:
 - public-layout admissibility; and
 - the Runtime-HIR-to-WebAssembly correctness obligation.
 
-[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 2 bytes,
+[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 3 bytes,
 canonical lifting/lowering encodings, and caller ownership. Its **Runtime target
 status** section is operational and cannot weaken a rule for an artifact the
 compiler accepts. Cross-document corrections are in
@@ -84,7 +84,7 @@ It contains no:
 - general run-time thunk introduced only for a known deferred source call;
 - source binding name used as semantic evidence;
 - unchecked proof-required operation; or
-- private capability object crossing ABI 2.
+- private capability object crossing ABI 3.
 
 During construction, a recursive result may temporarily have a private indirect
 identity before a finite branch determines its target representation. The
@@ -387,7 +387,7 @@ contract, or fail to respond.
 ## 7. Seals at the boundary
 
 A seal is nominal in source through its public name and canonical invariant
-carrier. ABI 2 may lower it transparently to the carrier representation, while
+carrier. ABI 3 may lower it transparently to the carrier representation, while
 the manifest records the public name and carrier contract.
 
 The public name therefore distinguishes contracts for conforming tooling and in

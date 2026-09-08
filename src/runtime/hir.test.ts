@@ -125,6 +125,7 @@ function acceptedModule(): BlotRuntimeModule {
         name: "write",
         signature: 1,
         ownership: { input: "unrestricted", result: "unrestricted" },
+        suspension: "never",
       }],
     }],
     links: [],
@@ -163,6 +164,7 @@ Deno.test("Blot Runtime HIR accepts structural operation ownership matching its 
     capabilities: [{
       ...module.capabilities[0],
       operations: [...module.capabilities[0].operations, {
+        suspension: "never",
         name: "submit",
         signature: 2,
         ownership: {

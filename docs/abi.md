@@ -3,7 +3,7 @@
 ## Status
 
 This document is the normative byte-level and caller-ownership contract for Blot
-Core Wasm ABI 2. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
+Core Wasm ABI 3. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
 source-to-caller representation relation and public-type admissibility. The
 section **Runtime target status** below records current implementation coverage;
 it cannot weaken an ABI rule for an artifact the compiler accepts.
@@ -16,7 +16,7 @@ the current ABI version and public capability inventory.
 Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
 caller values into that private representation and lower results back out.
 
-The current contract is Blot Core Wasm ABI 2.0. A compatible compiler may add
+The current contract is Blot Core Wasm ABI 3.0. A compatible compiler may add
 manifest fields or exports that do not change an existing declaration. Changing
 a function signature, layout, ownership rule, import name, or value meaning
 requires a new ABI major.
@@ -38,13 +38,14 @@ A module whose result is a record exports one function per runtime field, under
 that field's name. A module whose result is anything else has one export whose
 source name is `default`, so the function is `blot:default`.
 
-An export with an indirect result also exports
+An export marked `suspension: "never"` with an indirect result also exports
 `cabi_post_blot:<source-name>(result_pointer)`. The caller must invoke it once,
 after it has finished reading that result.
 
 Host effects import operations from `blot:host/<capability>` under their source
 operation name. They use the same value layouts and flattening rules as exports.
-Host calls are synchronous in ABI 2.
+Host calls marked `suspension: "never"` are synchronous. Calls marked
+`suspension: "may-suspend"` follow the resumable protocol below.
 
 `@text.len`, `@text.of_int`, `@text.cmp`, and `@text.contains` are implemented
 in the artifact. They do not create a `Text` import. Text comparison is
@@ -53,7 +54,7 @@ representation; valid UTF-8 preserves textual substring boundaries.
 
 ## Core signatures
 
-ABI 2 is the synchronous memory32, UTF-8 subset of the WebAssembly Component
+The direct calling convention uses the memory32, UTF-8 subset of the WebAssembly Component
 Model Canonical ABI:
 
 - at most 16 flat parameters;
@@ -187,7 +188,7 @@ the provider unit, its compiler-generated `blot:dev:*` export, the corresponding
 are private to one successful development build and are not a stable package or
 production ABI. Production artifacts omit `links`.
 
-Development units retain ABI 2's one-memory module contract, so linked units do
+Development units retain ABI 3's one-memory module contract, so linked units do
 not import or share memories. A development host copies parameters and results
 recursively through canonical layouts, calls an indirect result's post-return
 export after copying, and never exposes one unit's pointers to another. The
@@ -201,7 +202,7 @@ than dependent on private constructor numbers.
 
 ## Runtime target status
 
-This section is operational status, not a relaxation of ABI 2.
+This section is operational status, not a relaxation of ABI 3.
 
 Ordinary semantic analysis also runs public-layout preflight without emitting a
 Wasm binary. Its `targetPreflight` fact records whether the inferred boundary is
@@ -227,13 +228,13 @@ another export, and double post-return trap.
 
 Runtime HIR schema 6 retains private `indirect` roots for positive recursive
 algebraic values. Their targets live in the current export call's scratch arena
-and recursive edges are memory32 pointers. ABI 2 defines no caller encoding for
+and recursive edges are memory32 pointers. ABI 3 defines no caller encoding for
 such a root: it is admitted only as an internal value whose eventual public
 observation has a supported non-recursive type. Public-layout construction
 rejects any signature that exposes it.
 
 Schema 6 also retains private Scratch values as a memory32 pointer, initialized
-length, and capacity. Scratch has no ABI 2 caller encoding and is rejected in
+length, and capacity. Scratch has no ABI 3 caller encoding and is rejected in
 public signatures and initialized public aggregates; only a finished Array may
 cross the boundary.
 
@@ -254,11 +255,12 @@ reported for that path and excluded before emission. An emitter failure discards
 completed sibling misses and returns no admitted miss artifact. Batching changes
 compiler scheduling only and never executes a declared host effect.
 
-The production target currently refuses signatures requiring dynamic composite
-export parameters, general dynamic composite export results outside the admitted
-closed-result cases, indirect host results other than `Text`, boolean inputs,
-general caller-memory composite inputs, multiple outstanding results, or
-asynchronous host calls. These are target restrictions, not changes to ABI 2.
+The suspension target currently admits closed modules with unrestricted host
+capabilities. Ownership-bearing host suspension and resumable development links
+are refused. Arrays crossing suspension require canonical element copying and
+are also refused. Dynamic variant payloads must share compatible Wasm lanes;
+incompatible payloads fail target closure before emission. These are current
+target restrictions within ABI 3.
 The compiler must refuse such a boundary before emission. For every boundary it
 does accept, all ABI-required range, representation, UTF-8, discriminant,
 boolean, pointer, extent, and ownership checks applicable to that signature must
@@ -284,3 +286,34 @@ memory = instance.exports.memory;
 
 instance.exports["blot:default"]();
 ```
+
+## Resumable calling convention
+
+Every export and host import declares `suspension` as `never` or `may-suspend`.
+Logical parameter/result types retain the canonical layouts above. A resumable
+export's Core signature is `(token: i32, arguments_pointer: i32) -> ()`.
+Its argument block is a canonical record with fields `"0"`, `"1"`, and so on,
+one for each logical parameter. A resumable import's Core signature is
+`(token: i32, input_pointer: i32, result_pointer: i32, request: i32) -> i32`.
+Its input/result pointers address the declared canonical input/result values.
+It returns 0 after writing an immediate completion or 1 for a pending request.
+
+An artifact with resumable exports also exports:
+
+- `blot:begin() -> token`: reserve an invocation and its allocation region;
+- `blot:resume(token, request) -> status`: continue the saved computation;
+- `blot:result(token) -> pointer`: access a completed canonical result; and
+- `blot:release(token)`: consume the invocation and reclaim its region.
+
+The caller begins before allocating the argument block, calls the selected
+export to initialize the frame, and resumes with request 0. Status 1 means a
+host operation is pending; write its result and resume with that operation's
+request identity. Status 2 means completion. Copy the result before release.
+A resumable export has no `cabi_post_*`; release owns its complete result region.
+
+Tokens are opaque, instance-local identities, distinct from addresses. One
+invocation can be active per instance. Invalid/released tokens, stale request
+identities, reinitialization, and resuming a completed invocation trap before
+executing a continuation. Release can discard a pending invocation; it does
+not execute guest finalizers. Host adapters must abort pending platform work
+and prevent a late completion from accessing released memory.

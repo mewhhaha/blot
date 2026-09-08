@@ -92,7 +92,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 7. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 8. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -118,6 +118,13 @@ Root export wrappers and fully static applications are outside these body counts
 Counters describe the current request, including
 zero work on a closed-program cache hit; they are observations, not checked
 facts or cache authority.
+
+ABI 8 carries checked host-operation suspension contracts. Checked-module
+certificate 18 and Runtime HIR schema 11 retain this distinction. Effect and
+boundary identities include suspension, so synchronous and suspending operation
+declarations cannot share semantic cache entries. ABI closure computes the
+transitive resumable call graph in Rust as specified by
+[`SUSPENSION.md`](SUSPENSION.md).
 
 Host frame construction may use geometrically grown typed storage and bulk
 copies, but a finished frame owns its exact bytes independently of its inputs
@@ -592,7 +599,7 @@ must not accept a boundary whose required malformed-input validation is
 unimplemented.
 
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
-ABI 2 bytes and caller ownership.
+ABI 3 bytes and caller ownership.
 
 For every admitted type, lifting validates before constructing a source value,
 and valid values round-trip through lowering and lifting up to the
@@ -667,7 +674,7 @@ separate from target refusal.
 
 Target refusal means a checked program lies outside the selected target or ABI
 policy. It is permitted only at an explicit policy boundary, such as a public
-vector type refused by ABI 2 or an experimental target feature not enabled for
+vector type refused by ABI 3 or an experimental target feature not enabled for
 production.
 
 It cannot hide an unresolved production-supported internal representation,

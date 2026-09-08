@@ -48,9 +48,9 @@ return { .score = score; .heading = "\uFEFFWarehouse A"; }`,
       );
       assert.throws(() => hosted.call("score"), /requires 1 arguments/);
       assert.throws(() => hosted.call("missing"), /unknown runtime export/);
-      hosted.destroy();
-      hosted.destroy();
-      assert.throws(() => hosted.call("score", [1n]), /destroyed/);
+      await hosted.close();
+      await hosted.close();
+      assert.throws(() => hosted.call("score", [1n]), /closed/);
     },
   );
 });
@@ -90,7 +90,7 @@ test("host grants exactly the requested scalar operations and preserves order", 
         "capabilities are snapshotted",
       );
     } finally {
-      hosted.destroy();
+      await hosted.close();
     }
     await assert.rejects(
       () => instantiateArtifact(artifact),
@@ -121,12 +121,12 @@ test("host rejects asynchronous Unit handlers instead of silently discarding the
     try {
       assert.throws(() => hosted.call("default", [null]), /synchronous unit/);
     } finally {
-      hosted.destroy();
+      await hosted.close();
     }
   });
 });
 
-test("host refuses reentrancy and destruction during a guest call", async () => {
+test("host refuses reentrancy and closing during a guest call", async () => {
   await withArtifact(effectful, async (artifact) => {
     const hosted: HostedModule = await instantiateArtifact(
       artifact,
@@ -135,7 +135,7 @@ test("host refuses reentrancy and destruction during a guest call", async () => 
         new Map<string, HostOperation>([
           ["read", () => {
             assert.throws(() => hosted.call("default", [null]), /reentrant/);
-            assert.throws(() => hosted.destroy(), /during a guest call/);
+            assert.throws(() => hosted.close(), /during a guest call/);
             return 42n;
           }],
           ["write", () => null],
@@ -145,7 +145,7 @@ test("host refuses reentrancy and destruction during a guest call", async () => 
     try {
       assert.equal(hosted.call("default", [null]), 42n);
     } finally {
-      hosted.destroy();
+      await hosted.close();
     }
   });
 });
@@ -164,14 +164,14 @@ test("host checks ABI identity before exposing exports", async () => {
         }),
       /manifests disagree/,
     );
-    manifest.abi.major = 3;
+    manifest.abi.major = 4;
     await assert.rejects(
       () =>
         instantiateArtifact({
           ...artifact,
           manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
         }),
-      /ABI 2.0/,
+      /ABI 3.0/,
     );
     await assert.rejects(
       () => instantiateArtifact(artifact, new Map([["Ambient", new Map()]])),

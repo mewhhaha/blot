@@ -1,6 +1,7 @@
 # Asynchronous host-result refusal
 
-The scalar adapter remains synchronous. A handler returning a Promise or
+An operation declared with an ordinary arrow remains synchronous. For that
+operation, a handler returning a Promise or
 thenable still fails the guest call with the existing synchronous-result
 `TypeError`; neither its eventual value nor its effects are accepted as a guest
 result.
@@ -18,3 +19,7 @@ with `--unhandled-rejections=strict`. It checks immediate, delayed, cross-realm,
 and thenable rejection for both Int and Unit host results, requires the
 synchronous refusal, and requires the process to survive. The abstraction
 qualification runner includes this regression alongside the existing host tests.
+
+Operations declared with `Effect.suspends` use `callAsync` and the ABI 3
+resumption protocol described in [hosted applications](hosted-applications.md).
+Their Promise results are accepted, copied, and resumed through Wasm frames.

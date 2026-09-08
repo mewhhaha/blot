@@ -41,7 +41,7 @@ export type BlotAbiFunction = {
 export type BlotAbiManifest = {
   readonly format: "blot-core-wasm";
   readonly abi: {
-    readonly major: 2;
+    readonly major: 3;
     readonly minor: 0;
     readonly memory: "memory32";
     readonly stringEncoding: "utf-8";
@@ -52,6 +52,7 @@ export type BlotAbiManifest = {
   };
   readonly source: string;
   readonly exports: readonly {
+    readonly suspension: "never" | "may-suspend";
     readonly sourceName: string;
     readonly name: string | null;
     readonly phase: "runtime" | "comptime";
@@ -61,6 +62,7 @@ export type BlotAbiManifest = {
     readonly ownership: "owned" | null;
   }[];
   readonly imports: readonly {
+    readonly suspension: "never" | "may-suspend";
     readonly capability: string;
     readonly operation: string;
     readonly module: string;
@@ -82,11 +84,22 @@ export type BlotAbiManifest = {
 export function buildBlotAbiManifest(
   module: BlotRuntimeModule,
 ): BlotAbiManifest {
+  if (
+    module.capabilities.some((capability) =>
+      capability.operations.some((operation) =>
+        operation.suspension === "may-suspend"
+      )
+    )
+  ) {
+    throw new TypeError(
+      "resumable ABI manifests require Rust suspension facts; consume the compiler artifact manifest",
+    );
+  }
   const canonical = (type: number) => canonicalType(module, type, new Set());
   return {
     format: "blot-core-wasm",
     abi: {
-      major: 2,
+      major: 3,
       minor: 0,
       memory: "memory32",
       stringEncoding: "utf-8",
@@ -106,6 +119,7 @@ export function buildBlotAbiManifest(
           postReturn: null,
           effects: [],
           ownership: null,
+          suspension: "never",
         };
       }
       const signature = module.signatures[exported.signature];
@@ -125,6 +139,7 @@ export function buildBlotAbiManifest(
         postReturn,
         effects: [...signature.effects].sort(),
         ownership: exported.ownership,
+        suspension: "never",
       };
     }),
     imports: [...module.capabilities].sort(byName).flatMap((capability) =>
@@ -140,6 +155,7 @@ export function buildBlotAbiManifest(
             result: canonical(signature.result),
           },
           ownership: operation.ownership,
+          suspension: operation.suspension,
         };
       })
     ),
@@ -239,7 +255,7 @@ function requireDirectParameterCount(
   const flatParameters = function_.parameters.flatMap(flattenedAbiType).length;
   if (flatParameters <= maximumFlatParameters) return;
   throw new TypeError(
-    `${position} has ${flatParameters} flat parameters; Blot ABI 2 currently admits at most ${maximumFlatParameters}`,
+    `${position} has ${flatParameters} flat parameters; Blot ABI 3 currently admits at most ${maximumFlatParameters}`,
   );
 }
 
@@ -329,7 +345,7 @@ function requireDirectAbiType(type: BlotAbiType, position: string): void {
     return;
   }
   throw new TypeError(
-    `${position} uses ${type.kind}; the direct Blot ABI 2 path currently admits only flat values`,
+    `${position} uses ${type.kind}; the direct Blot ABI 3 path currently admits only flat values`,
   );
 }
 

@@ -2711,7 +2711,7 @@ wrapper locally. No `Slice` module, binding, or field name is recognized by the
 checker. Unknown and host-supplied functions retain the conservative ordinary
 call rule.
 
-Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 2
+Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 3
 has no encoding for either and refuses a live one at a public boundary. Internal
 Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
@@ -2983,13 +2983,39 @@ seals. A host capability's source name is part of its external contract and is
 not silently mangled.
 
 Every host operation carries its normalized input and result ownership contract
-through Runtime HIR into the Core Wasm manifest. The WebAssembly call remains
-synchronous and its memory parameters remain borrowed for the duration of the
-call. The ownership contract instead governs the logical Blot values: consuming
-input transfers source authority to the host, and a linear or affine result
-transfers a fresh obligation back to the program. A conforming host must obey
-that protocol even when the boundary carrier is a scalar with no allocated
-memory.
+and suspension contract through Runtime HIR into the Core Wasm manifest.
+An ordinary arrow descriptor is synchronous. `Effect.suspends signature` declares
+an unrestricted operation that may suspend; an explicit ownership descriptor
+can also carry `.suspension = #MaySuspend` or `.suspension = #Never`.
+
+```blot
+const Network = @effect.host {
+  .get = Effect.suspends (Text -> Text);
+}
+```
+
+`use` sequences both synchronous and suspending operations. Suspension preserves
+the continuation's values and resumes after the completed operation, without
+repeating prior effects. A borrowed binding cannot remain live in its lexical
+scope across a possibly suspending call. Owned state must be transferred into
+the computation instead. Suspension information participates in effect identity
+and boundary identity; changing it invalidates dependent compiler facts.
+
+The ownership contract governs logical Blot values: consuming input transfers
+source authority to the host, and a linear or affine result transfers a fresh
+obligation back to the program. Synchronous memory parameters are borrowed for
+the call. Suspending host adapters copy canonical arguments and retain the
+result storage until completion or cancellation.
+
+The initial ABI 3 suspension target admits unrestricted host capabilities.
+Suspending programs using ownership-bearing host capabilities are target
+refusals until checked cancellation cleanup is implemented. Releasing a pending
+activation discards its continuation and allocation region; it does not invoke
+source resource finalizers. Structured tasks and cleanup scopes are not yet
+source-language capabilities. This target also refuses arrays crossing a
+suspension boundary until canonical element copying is implemented. Dynamic
+variant payloads require compatible private Wasm lanes. Both are target
+refusals, independently of source type checking.
 
 ### 12.4 Written effect rows
 
@@ -3876,7 +3902,7 @@ root. Constructor matching loads the target before inspecting its tag, while a
 recursive edge copies only the indirect word. The representation is entirely
 compiler-owned: source programs do not name boxes, pointers, regions, or
 lifetimes. A recursive value may be used internally to produce an ABI-supported
-result, but the indirect root itself cannot cross Blot Core Wasm ABI 2. A
+result, but the indirect root itself cannot cross Blot Core Wasm ABI 3. A
 self-only result equation with no constructor case is refused rather than given
 an invented inhabitant.
 
@@ -3945,15 +3971,15 @@ literal policy, Blot re-ingests those already-identified token spans with
 offset-preserving zero spellings and materializes the original I64 text; no
 tokenization rule is duplicated. The external conformance tools may exercise
 alternate frontends or evaluators, but they are not compiler targets. Generated
-modules implement Blot Core Wasm ABI 2.0. Backend-private values and heap
-objects never cross the generated adapters, which expose the synchronous
+modules implement Blot Core Wasm ABI 3.0. Backend-private values and heap
+objects never cross the generated adapters, which expose the canonical
 memory32, UTF-8 subset of the Component Model Canonical ABI.
 
 Each runtime field of a record module result is exported as `blot:<field>`. A
 module whose result is not a record has one export, `blot:default`, which is
 that result. Host effects import their operations from `blot:host/<capability>`.
 The module exports `memory`, `cabi_realloc`, and immutable `blot:abi-major` and
-`blot:abi-minor` globals. An indirect result also exports
+`blot:abi-minor` globals. A synchronous indirect result also exports
 `cabi_post_blot:<field>`, which the caller must invoke exactly once after
 reading the result.
 
@@ -4004,7 +4030,7 @@ continuation byte and returned indices remain scalar positions.
 The JSON sidecar and the `blot:abi` custom section contain identical bytes. The
 manifest is the authoritative structural contract for exports, imports,
 operation input and result ownership, record fields, variant cases, and seals.
-ABI 2 layout and meaning are stable within major version 2; an incompatible
+ABI 3 layout and meaning are stable within major version 3; an incompatible
 change requires another major. The byte-level layouts and host calling example
 are in [docs/abi.md](docs/abi.md).
 
@@ -4049,14 +4075,16 @@ for staging and WebAssembly lowering.
 
 ## Hosted tooling boundary
 
-The Node scalar host adapter consumes the versioned ABI 2.0 manifest and emitted
-Wasm; it does not introduce source types or reinterpret effect rows. It exposes
-scalar parameters, copied canonical results, and an exact map of synchronous
-unrestricted scalar host operations. Missing/extra capabilities, Promise
-results, reentrant calls, and sidecar/embedded manifest disagreement are
-refused. Its limited input marshalling does not narrow the compiler's broader
-ABI support. See `docs/hosted-applications.md` for the adapter contract and its
-explicit non-sandbox and non-suspending boundaries. `blot pack` uses the
+The Node host adapter consumes the versioned ABI 3.0 manifest and emitted
+Wasm; it does not introduce source types or reinterpret effect rows. `call`
+exposes scalar direct parameters and copied canonical results. `callAsync`
+drives Rust-emitted resumable exports with canonical first-order arguments and
+results. Host capabilities are explicit; only marked suspending operations may
+return Promises. Missing/extra capabilities, reentrant calls, and
+sidecar/embedded manifest disagreement are refused. `close` cancels pending
+work and releases the invocation; it does not run source finalizers. See
+`docs/hosted-applications.md` for the adapter's current target boundaries.
+`blot pack` uses the
 existing package semantics, and `blot explain` displays existing Rust compiler
 facts; neither adds an alternative semantic compiler.
 

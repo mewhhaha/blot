@@ -346,6 +346,7 @@ export type BlotEffectOwnership =
 export type BlotRuntimeCapability = {
   readonly name: string;
   readonly operations: readonly {
+    readonly suspension: "never" | "may-suspend";
     readonly name: string;
     readonly signature: number;
     readonly ownership: {
@@ -643,6 +644,14 @@ export function validateBlotRuntimeModule(
       `${module.source}: capability ${capability.name} operations`,
     );
     for (const operation of capability.operations) {
+      if (
+        operation.suspension !== "never" &&
+        operation.suspension !== "may-suspend"
+      ) {
+        throw new Error(
+          `${module.source}: capability ${capability.name}.${operation.name} has no suspension contract`,
+        );
+      }
       const signature = requireSignature(
         module,
         operation.signature,

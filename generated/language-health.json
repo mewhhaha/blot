@@ -1,10 +1,10 @@
 {
   "protocol": {
-    "compilerHostAbi": 6,
-    "checkedModuleCertificate": 17,
+    "compilerHostAbi": 8,
+    "checkedModuleCertificate": 18,
     "moduleSnapshotSchema": 2,
     "valueCapsuleSchema": 4,
-    "runtimeHir": 10
+    "runtimeHir": 11
   },
   "operators": [
     {
@@ -187,6 +187,7 @@
     "BLOT_BAD_REBINDING_TARGET",
     "BLOT_BAD_TEST",
     "BLOT_BINDING_MISMATCH",
+    "BLOT_BORROW_ACROSS_SUSPENSION",
     "BLOT_BORROW_ARGUMENT_ESCAPES",
     "BLOT_BORROW_MOVED",
     "BLOT_BORROW_RESULT_ESCAPES",
@@ -735,31 +736,31 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 16860
+      "lines": 16749
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14816
+      "lines": 14948
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10426
+      "lines": 10634
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8196
+      "lines": 8402
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6908
+      "lines": 7019
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6691
+      "lines": 6758
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 4461
+      "lines": 4464
     },
     {
       "path": "compiler/src/frontend_plan.rs",
@@ -767,7 +768,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3396
+      "lines": 3402
     },
     {
       "path": "compiler/src/value_capsule.rs",
@@ -778,16 +779,16 @@
       "lines": 3218
     },
     {
-      "path": "compiler/src/value.rs",
-      "lines": 2325
-    },
-    {
       "path": "compiler/src/primitives.rs",
       "lines": 2322
     },
     {
       "path": "compiler/src/qcore.rs",
       "lines": 2289
+    },
+    {
+      "path": "compiler/src/value.rs",
+      "lines": 2222
     },
     {
       "path": "src/tooling/lint.test.ts",

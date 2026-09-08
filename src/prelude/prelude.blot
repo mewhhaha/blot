@@ -105,6 +105,12 @@ const Effect =
     .operation = identity;
     .consumes = effect_consumes;
     .produces = effect_produces;
+    .suspends = fn signature => {
+      .signature = signature;
+      .input = #Unrestricted;
+      .result = #Unrestricted;
+      .suspension = #MaySuspend;
+    };
   }
 
 // --- declaration tags ------------------------------------------------------

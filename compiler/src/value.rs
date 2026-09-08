@@ -945,17 +945,35 @@ pub enum EffectOwnership {
     Variant(BTreeMap<String, EffectOwnership>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EffectOperationOwnership {
-    pub input: EffectOwnership,
-    pub result: EffectOwnership,
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Suspension {
+    Never,
+    MaySuspend,
 }
 
-impl EffectOperationOwnership {
+impl Suspension {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::MaySuspend => "may-suspend",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectOperationContract {
+    pub input: EffectOwnership,
+    pub result: EffectOwnership,
+    pub suspension: Suspension,
+}
+
+impl EffectOperationContract {
     pub fn unrestricted() -> Self {
         Self {
             input: EffectOwnership::Unrestricted,
             result: EffectOwnership::Unrestricted,
+            suspension: Suspension::Never,
         }
     }
 }
@@ -1084,7 +1102,7 @@ pub enum Value {
         id: u32,
         name: String,
         operations: OrderedFields,
-        operation_ownership: BTreeMap<String, EffectOperationOwnership>,
+        operation_ownership: BTreeMap<String, EffectOperationContract>,
         host: bool,
     },
     Operation {
