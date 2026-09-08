@@ -1,0 +1,30 @@
+open import "blot:prelude"
+
+const ClockCapability = Resource.of "Io.Clock"
+const HttpCapability = Resource.of "Io.Http"
+const HttpResponse = { .status = Int; .body = Text; }
+
+const Clock =
+  @effect.host {
+    .now = ClockCapability -> Int;
+    .sleep = Effect.suspends ((ClockCapability, Int) -> Unit);
+  }
+const Http =
+  @effect.host {
+    .get = Effect.suspends ((HttpCapability, Text) -> Result (HttpResponse, Text));
+  }
+
+return {
+  .Clock = {
+    .Capability = ClockCapability;
+    .Effect = Clock;
+    .now = Clock.now;
+    .sleep = fn clock => fn milliseconds => Clock.sleep (clock, milliseconds);
+  };
+  .Http = {
+    .Capability = HttpCapability;
+    .Response = HttpResponse;
+    .Effect = Http;
+    .get = fn http => fn path => Http.get (http, path);
+  };
+  }

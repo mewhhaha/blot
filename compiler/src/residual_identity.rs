@@ -11,7 +11,7 @@ use crate::eval::{
     ModuleInstanceScope, closure_free_names,
 };
 use crate::value::{
-    ChoiceSource, Domain, EffectOperationOwnership, OrderedFields, RuntimeMeaning, RuntimeValue,
+    ChoiceSource, Domain, EffectOperationContract, OrderedFields, RuntimeMeaning, RuntimeValue,
     Value, lookup, lookup_signature,
 };
 use serde::Serialize;
@@ -41,7 +41,7 @@ enum Part {
     Reference(usize),
     Instances(Rc<ModuleInstanceScope>),
     Scope(Rc<EffectScope>),
-    Ownership(EffectOperationOwnership),
+    Ownership(EffectOperationContract),
 }
 
 #[derive(Serialize)]
@@ -382,6 +382,7 @@ impl PortableProvenance<'_> {
                 CompilerApplication::RuntimeExportParameter(index) => {
                     serde_json::json!(["export-parameter", index])
                 }
+                CompilerApplication::HostCallbackEntry => serde_json::json!(["host-callback"]),
             });
         }
         Some(serde_json::json!([root, steps]))
@@ -508,8 +509,14 @@ impl<'a> Builder<'a> {
         // These substitutions are read by specialization independently of free
         // term variables. Retain the nearest lexical value of every variable.
         let mut substitutions = BTreeMap::new();
+        let mut effect_substitutions = BTreeMap::new();
         let mut environment = Some(closure.environment.clone());
         while let Some(current) = environment {
+            for (effect, value) in current.effect_substitutions.borrow().iter() {
+                effect_substitutions
+                    .entry(*effect)
+                    .or_insert_with(|| value.clone());
+            }
             for (variable, value) in current.type_substitutions.borrow().iter() {
                 substitutions
                     .entry(*variable)
@@ -520,6 +527,13 @@ impl<'a> Builder<'a> {
         self.number(substitutions.len() as u64);
         for (variable, value) in substitutions {
             self.parts.push(Part::Variable(variable));
+            if !self.value(&value)? {
+                return Ok(false);
+            }
+        }
+        self.number(effect_substitutions.len() as u64);
+        for (effect, value) in effect_substitutions {
+            self.number(u64::from(effect));
             if !self.value(&value)? {
                 return Ok(false);
             }
@@ -590,6 +604,10 @@ impl<'a> Builder<'a> {
             Value::RegionType(value)
             | Value::ScratchType(value)
             | Value::EmptyArray { element: value } => return self.value(value),
+            Value::ResourceType { family, payload } => {
+                self.text(family);
+                return self.value(payload);
+            }
             Value::DeferredScratch { capacity } => {
                 self.parts.push(Part::SessionOnly);
                 return self.value(capacity);

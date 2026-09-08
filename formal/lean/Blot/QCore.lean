@@ -90,6 +90,8 @@ mutual
             | .StructuralRegion element
             | .StructuralScratch element =>
                 scopedValue arena remaining depth rigids element
+            | .StructuralResource _ payload =>
+                scopedValue arena remaining depth rigids payload
             | .StructuralVariant labels payloadTypes _ =>
                 decide (labels.length = payloadTypes.length) &&
                 payloadTypes.all (scopedValue arena remaining depth rigids)

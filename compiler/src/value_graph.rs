@@ -29,6 +29,9 @@ pub(super) fn reusable_across_module_instances(value: &Value) -> bool {
             Value::Union(values) => pending.extend(values.iter()),
             Value::RegionType(element)
             | Value::ScratchType(element)
+            | Value::ResourceType {
+                payload: element, ..
+            }
             | Value::DeferredScratch { capacity: element }
             | Value::EmptyArray { element }
             | Value::Forall { body: element, .. }
@@ -89,6 +92,9 @@ pub(super) fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32
             Value::Union(members) => pending.extend(members.iter()),
             Value::RegionType(element)
             | Value::ScratchType(element)
+            | Value::ResourceType {
+                payload: element, ..
+            }
             | Value::EmptyArray { element }
             | Value::DeferredScratch { capacity: element }
             | Value::Sealed { inner: element, .. } => pending.push(element),

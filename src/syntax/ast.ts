@@ -157,7 +157,7 @@ export interface DeclarationTag {
 export type Decl =
   | {
     readonly tag: "signature";
-    readonly kind: "let" | "const";
+    readonly kind: DeclKind;
     readonly recursive: boolean;
     readonly name: string;
     readonly value: Expr;

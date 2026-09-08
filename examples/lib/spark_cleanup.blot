@@ -1,0 +1,25 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+
+const Handle = Resource.of "Example.Handle"
+const Cleanup = @effect.host {
+  .release = Effect.suspends ((Handle, Int) -> Unit);
+  .wait = Effect.suspends (Unit -> Int);
+}
+
+let run :: { .executor = Spark.Executor; .handle = Handle; } -> Bool -> Int ~ { Spark.Effect, Cleanup }
+let run = fn io => fn wait => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect, Cleanup }
+  let body = fn scope => do:
+    let ?first :: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 1)
+    use Spark.on_exit scope (?first)
+    let ?second :: Unit -> Unit ~ { Cleanup } = fn () => Cleanup.release (io.handle, 2)
+    use Spark.on_exit scope (?second)
+    if wait:
+      use result <- Cleanup.wait ()
+      return 42 / result
+
+    return 42
+  return Spark.scope io.executor body
+
+return { .run = run; }

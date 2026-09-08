@@ -1,4 +1,6 @@
 import { AbiMemoryLayouts } from "./compiler/backend/runtime/memory_layout.ts";
+import type { HostResource, HostScope } from "./resources.ts";
+import type { HostCallback, HostCallbackFactory } from "./callbacks.ts";
 import {
   type BlotAbiManifest,
   type BlotAbiType,
@@ -6,6 +8,8 @@ import {
 } from "./compiler/backend/runtime/abi.ts";
 
 export type RuntimeValue =
+  | HostCallback
+  | HostResource
   | null
   | bigint
   | number
@@ -64,7 +68,17 @@ export function requiredMemory(
   return value;
 }
 
-export function readDirect(type: BlotAbiType, value: unknown): RuntimeValue {
+export function readDirect(
+  type: BlotAbiType,
+  value: unknown,
+  resources?: HostScope,
+): RuntimeValue {
+  if (type.kind === "resource") {
+    if (resources === undefined || typeof value !== "bigint") {
+      throw new TypeError("resource result requires its host scope");
+    }
+    return resources.lift(type.name, value, type.payload);
+  }
   if (type.kind === "unit") return null;
   if (type.kind === "boolean") return value !== 0;
   if (
@@ -80,15 +94,15 @@ export function readDirect(type: BlotAbiType, value: unknown): RuntimeValue {
     return {
       kind: "sealed",
       name: type.name,
-      value: readDirect(type.inner, value),
+      value: readDirect(type.inner, value, resources),
     };
   }
   if (type.kind === "record") {
     const fields = new Map<string, RuntimeValue>();
     for (const field of type.fields) {
       if (flattenedAbiType(field.type).length === 0) {
-        fields.set(field.name, readDirect(field.type, undefined));
-      } else fields.set(field.name, readDirect(field.type, value));
+        fields.set(field.name, readDirect(field.type, undefined, resources));
+      } else fields.set(field.name, readDirect(field.type, value, resources));
     }
     return { kind: "record", fields };
   }
@@ -104,7 +118,7 @@ export function readDirect(type: BlotAbiType, value: unknown): RuntimeValue {
     return {
       kind: "variant",
       name: selected.name,
-      payload: readDirect(selected.payload, undefined),
+      payload: readDirect(selected.payload, undefined, resources),
     };
   }
   throw new TypeError(`run cannot decode direct ${type.kind}`);
@@ -115,7 +129,28 @@ export function readMemory(
   view: DataView,
   offset: number,
   layouts?: AbiMemoryLayouts,
+  resources?: HostScope,
+  callbacks?: HostCallbackFactory,
 ): RuntimeValue {
+  if (type.kind === "callback") {
+    if (callbacks === undefined) {
+      throw new TypeError("callback requires its artifact execution context");
+    }
+    return callbacks(
+      type,
+      readMemory(type.environment, view, offset, layouts, resources, callbacks),
+    );
+  }
+  if (type.kind === "resource") {
+    if (resources === undefined) {
+      throw new TypeError("resource result requires its host scope");
+    }
+    return resources.lift(
+      type.name,
+      view.getBigInt64(offset, true),
+      type.payload,
+    );
+  }
   if (type.kind === "unit") return null;
   if (type.kind === "boolean") return view.getUint8(offset) !== 0;
   if (type.kind === "signed-integer-64") return view.getBigInt64(offset, true);
@@ -133,7 +168,14 @@ export function readMemory(
     return {
       kind: "sealed",
       name: type.name,
-      value: readMemory(type.inner, view, offset, layouts),
+      value: readMemory(
+        type.inner,
+        view,
+        offset,
+        layouts,
+        resources,
+        callbacks,
+      ),
     };
   }
   // Scalars and text do not need layout metadata. Allocate a cache only when
@@ -146,7 +188,14 @@ export function readMemory(
     const values: RuntimeValue[] = [];
     for (let index = 0; index < length; index += 1) {
       values.push(
-        readMemory(type.element, view, pointer + index * element.size, layouts),
+        readMemory(
+          type.element,
+          view,
+          pointer + index * element.size,
+          layouts,
+          resources,
+          callbacks,
+        ),
       );
     }
     return values;
@@ -156,7 +205,14 @@ export function readMemory(
     for (const field of layouts.get(type).fields) {
       fields.set(
         field.name,
-        readMemory(field.type, view, offset + field.offset, layouts),
+        readMemory(
+          field.type,
+          view,
+          offset + field.offset,
+          layouts,
+          resources,
+          callbacks,
+        ),
       );
     }
     return { kind: "record", fields };
@@ -181,6 +237,8 @@ export function readMemory(
       view,
       offset + layout.payloadOffset,
       layouts,
+      resources,
+      callbacks,
     ),
   };
 }
@@ -193,6 +251,8 @@ export function formatValue(value: RuntimeValue): string {
     typeof value === "boolean"
   ) return String(value);
   if (isRuntimeArray(value)) return `[${value.map(formatValue).join(", ")}]`;
+  if (value.kind === "resource") return `<resource ${value.name}>`;
+  if (value.kind === "callback") return "<compiled callback>";
   if (value.kind === "record") {
     const fields = [...value.fields].map(([name, field]) =>
       `.${name} = ${formatValue(field)}`

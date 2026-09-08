@@ -55,6 +55,61 @@ test("V8 executes the Wasm 3 target and accepts branch metadata", async () => {
   }
 });
 
+test("effectful Unit loops keep bounded stack and preserve pending effects", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve("experiments/generated-code/programs/unit_tail_recursion.blot"),
+    );
+    let next = 0n;
+    let completed = false;
+    const visits: bigint[] = [];
+    let recordUnwind = false;
+    const { instance } = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm),
+      {
+        "blot:host/Probe": {
+          visit(index: bigint) {
+            if (recordUnwind) {
+              visits.push(index);
+              return;
+            }
+            assert.equal(completed, false);
+            if (index === -1n) {
+              completed = true;
+              return;
+            }
+            assert.equal(index, next);
+            next += 1n;
+          },
+        },
+      },
+    );
+    const run = instance.exports["blot:run"];
+    const unwind = instance.exports["blot:unwind"];
+    assert.equal(typeof run, "function");
+    assert.equal(typeof unwind, "function");
+    if (typeof run !== "function" || typeof unwind !== "function") {
+      throw new Error("Unit-tail-recursion artifact omitted its functions");
+    }
+    for (const count of [0n, 1n, 1_000_000n]) {
+      next = 0n;
+      completed = false;
+      run(count);
+      assert.equal(next, count);
+      assert.equal(completed, true);
+    }
+    recordUnwind = true;
+    unwind(64n);
+    assert.deepEqual(
+      visits,
+      Array.from({ length: 64 }, (_, i) => BigInt(i + 1)),
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("cabi_realloc grows the active allocation geometrically", async () => {
   const compiler = await Compiler.create();
   try {

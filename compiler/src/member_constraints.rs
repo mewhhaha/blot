@@ -191,7 +191,10 @@ impl Checker {
                 }
                 ConstraintTypeNode::Array(element)
                 | ConstraintTypeNode::Region(element)
-                | ConstraintTypeNode::Scratch(element) => pending.push(element),
+                | ConstraintTypeNode::Scratch(element)
+                | ConstraintTypeNode::Resource {
+                    payload: element, ..
+                } => pending.push(element),
                 ConstraintTypeNode::OpenEffects { tail, .. } => pending.push(tail),
                 ConstraintTypeNode::Union(members) => pending.extend(members),
                 ConstraintTypeNode::Rigid(_)
@@ -406,7 +409,10 @@ impl Checker {
             }
             ConstraintTypeNode::Array(element)
             | ConstraintTypeNode::Region(element)
-            | ConstraintTypeNode::Scratch(element) => children.push(element),
+            | ConstraintTypeNode::Scratch(element)
+            | ConstraintTypeNode::Resource {
+                payload: element, ..
+            } => children.push(element),
             ConstraintTypeNode::OpenEffects { tail, .. } => children.push(tail),
             ConstraintTypeNode::Union(members) => children.extend(members),
             ConstraintTypeNode::Rigid(_)
@@ -600,6 +606,10 @@ pub(super) fn map_type_children(type_: Type, mut f: impl FnMut(Type) -> Type) ->
         Type::Array(element) => Type::Array(Rc::new(f(Rc::unwrap_or_clone(element)))),
         Type::Region(element) => Type::Region(Rc::new(f(Rc::unwrap_or_clone(element)))),
         Type::Scratch(element) => Type::Scratch(Rc::new(f(Rc::unwrap_or_clone(element)))),
+        Type::Resource { family, payload } => Type::Resource {
+            family,
+            payload: Rc::new(f(Rc::unwrap_or_clone(payload))),
+        },
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
                 .into_iter()

@@ -10,21 +10,39 @@ import {
   DevelopmentProject,
 } from "../../src/development.ts";
 
-export async function serveHotReload(manifestPath: string, port = 8323) {
+export async function serveHotReload(
+  manifestPath: string,
+  port = 8323,
+  browser: {
+    readonly page: URL;
+    readonly client: URL;
+  } = {
+    page: new URL("./index.html", import.meta.url),
+    client: new URL("./client.mjs", import.meta.url),
+  },
+) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new RangeError(`port must be between 0 and 65535: ${port}`);
   }
   const manifest = resolve(manifestPath);
   const directory = dirname(manifest);
   const messagePath = resolve(directory, "message.txt");
-  const page = await readFile(new URL("./index.html", import.meta.url), "utf8");
-  const client = await bundle({
-    entryPoints: [fileURLToPath(new URL("./client.mjs", import.meta.url))],
+  const page = await readFile(browser.page, "utf8");
+  const bundling = {
     bundle: true,
-    platform: "browser",
-    format: "esm",
-    write: false,
-  });
+    platform: "browser" as const,
+    format: "esm" as const,
+    write: false as const,
+  };
+  const [client, worker] = await Promise.all([
+    bundle({ ...bundling, entryPoints: [fileURLToPath(browser.client)] }),
+    bundle({
+      ...bundling,
+      entryPoints: [
+        fileURLToPath(new URL("../../src/web_worker.ts", import.meta.url)),
+      ],
+    }),
+  ]);
   const initialMessage = await readFile(messagePath, "utf8");
   let project = await DevelopmentProject.create(manifest, {
     cache: { mode: "disk" },
@@ -141,6 +159,8 @@ export async function serveHotReload(manifestPath: string, port = 8323) {
   }
 
   const server = createServer((request, response) => {
+    response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
     if (request.method !== "GET") {
@@ -163,6 +183,14 @@ export async function serveHotReload(manifestPath: string, port = 8323) {
       response.writeHead(200, {
         "Content-Type": "text/javascript; charset=utf-8",
       }).end(client.outputFiles[0].contents);
+    } else if (url.pathname === "/worker.js") {
+      response.writeHead(200, {
+        "Content-Type": "text/javascript; charset=utf-8",
+        "Cache-Control": "no-cache",
+      }).end(worker.outputFiles[0].contents);
+    } else if (url.pathname === "/message.txt") {
+      response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" })
+        .end(message);
     } else if (url.pathname === "/events") {
       response.writeHead(200, {
         "Content-Type": "text/event-stream",

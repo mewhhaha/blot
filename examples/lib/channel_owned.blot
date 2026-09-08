@@ -1,0 +1,24 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Channel = import "blot:channel"
+
+let run ::
+  { .executor = Spark.Executor; } -> Int ~ { Spark.Effect, Channel.Effect }
+let run = fn io => do:
+  let body :: Spark.Scope -> Int ~ { Channel.Effect }
+  let body = fn scope => do:
+    use channel :: Channel.Ends [Int] <- Channel.bounded scope 1
+    let ?values = [1, 2, 3]
+    use Channel.send channel.sender (?values)
+    use message <- Channel.receive channel.receiver
+    if let #Some received = message else:
+      return 0
+
+    let total = 0
+    for value in Iter.items received:
+      total := total + value
+
+    return total
+  return Spark.scope io.executor body
+
+return { .run = run; }

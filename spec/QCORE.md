@@ -83,6 +83,7 @@ rerunning inference. Each `FlatTypeNode` maps to one dedicated structural value:
 | `Function`                         | `StructuralFunction`                         |
 | `Record`, `RecordUpdate`           | `StructuralRecord`, `StructuralRecordUpdate` |
 | `Array`, `Region`, `Scratch`       | matching structural container                |
+| `Resource`                       | family name and invariant payload type       |
 | `Variant`                          | `StructuralVariant`                          |
 | `Effects`, `OpenEffects`           | `StructuralEffects`, `StructuralOpenEffects` |
 | `Union`, `Opaque`, `Top`, `Bottom` | matching structural value                    |
@@ -216,6 +217,11 @@ definitions for proof checking, erasure, and translation adequacy. None may be
 inferred from `ValidatedQModule` alone.
 
 ### Qualified structural certificates
+
+Schema version 5 also records `StructuralResource`, preserving an opaque host
+family and its payload type parameter. The payload reference obeys the same
+scoping rules as other structural type children. This certificate carries no
+resource token or host authority.
 
 Schema version 4 adds `StructuralQualified`: a body plus equally sized member
 name, receiver-type, and member-type arrays. Receivers and members are checked

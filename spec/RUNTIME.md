@@ -11,7 +11,7 @@ This document owns:
 - public-layout admissibility; and
 - the Runtime-HIR-to-WebAssembly correctness obligation.
 
-[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 2 bytes,
+[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 3 bytes,
 canonical lifting/lowering encodings, and caller ownership. Its **Runtime target
 status** section is operational and cannot weaken a rule for an artifact the
 compiler accepts. Cross-document corrections are in
@@ -59,6 +59,39 @@ The operational feature audit and engine matrix are recorded in
 
 ## 1. Runtime-HIR boundary
 
+Host scheduling of compiled callbacks preserves the same canonical argument and
+result relation as ordinary entry invocation. A required worker job has at most
+one start; cancellation before admission can prevent that start, while a running
+job must drain before its scope finishes. Worker failure cannot trigger replay.
+Pure worker callbacks have an empty source effect row. Their precompiled entry
+and private canonical captures cross the worker boundary; compiler state and
+backend-private heap pointers do not. Worker module/instance reuse does not
+change this relation. Registered source finalizers run only after ordinary work
+drains, with cancellation masked and the defining artifact retained. A trapped
+artifact permits host resource reclamation but no further guest cleanup calls.
+
+A development worker program owns the captured revision's complete transitive
+bundle of precompiled modules. Bundle identity includes the provider modules,
+even when the entry module is unchanged. The canonical development-link bridge
+is shared by the ordinary host and workers. Program eviction occurs between
+jobs and drains all bundle instances; a trap invalidates the complete bundle.
+Bounded reuse cannot change at-most-once admission or select a newer provider
+for work that captured an earlier bundle.
+
+An undemanded speculative callback may be skipped, cancelled, or evaluated once.
+Its failure does not fail its scope until demand. Demand promotes that same
+execution or queued entry; it never replays work. Scope completion drains unused
+speculation, so unused divergence does not become required divergence. Worker
+admission reserves capacity for required work and prioritizes it over queued
+speculation. Deferred demand is ordinary affine source staging around `join`.
+
+A resumable frame reserves canonical request and result slots sized for its
+largest suspending import. Sequential requests reuse those slots only after
+the previous request has completed or cancelled. Slots belong to the frame,
+so concurrently suspended calls cannot overwrite one another. Nested variable
+length payloads retain their arena lifetime; slot reuse does not authorize a
+heap rewind while another call is live.
+
 Runtime HIR is the first artifact whose operations and representations are fully
 target-facing. It is constructed only after ordinary checking, safety analysis,
 ownership checking, staging, and representation-closing specialization.
@@ -84,7 +117,7 @@ It contains no:
 - general run-time thunk introduced only for a known deferred source call;
 - source binding name used as semantic evidence;
 - unchecked proof-required operation; or
-- private capability object crossing ABI 2.
+- private capability object crossing ABI 3.
 
 During construction, a recursive result may temporarily have a private indirect
 identity before a finite branch determines its target representation. The
@@ -387,7 +420,7 @@ contract, or fail to respond.
 ## 7. Seals at the boundary
 
 A seal is nominal in source through its public name and canonical invariant
-carrier. ABI 2 may lower it transparently to the carrier representation, while
+carrier. ABI 3 may lower it transparently to the carrier representation, while
 the manifest records the public name and carrier contract.
 
 The public name therefore distinguishes contracts for conforming tooling and in
@@ -561,3 +594,35 @@ constructor name before running the body. Direct one-lane variant results
 likewise translate back to canonical tags; a single i32 lane is not evidence
 that the public and internal tag meanings agree. These translations do not
 change the ABI version or the source constructor meanings.
+
+## 13. Explicit shared numeric worker loans
+
+The `blot:shared` source library uses ordinary host effects and resource leases;
+it adds no primitive, Runtime-HIR operation, shared guest heap, or ownership
+family to the compiler. `SharedRuntime` registers numeric allocations under a
+selected Spark scope. Each partition is a node with allocation identity,
+interval, generation, and one of idle, split, running, or joined states. A split
+records its exact two children and a one-shot witness. Join requires those
+children to be idle, consumes the witness, retires the children, and increments
+the parent's lease generation. Nested joins preserve node identity for the
+outer witness. Aliases cannot recover retired authority.
+
+Worker admission validates all resource leaves against the checked callback
+argument type before claiming any partition. A loan contains copied canonical
+arguments with descriptor indices at resource leaves, plus SharedArrayBuffer
+descriptors for numeric storage and allocation validity. Worker decoding checks
+storage kind, lengths, alignment, bounds, generation, and resource type before
+granting job-owned local leases. Callbacks execute with that job's explicit
+scope authority; job cleanup precedes completion publication. Captures and
+results remain private canonical values. Kernels cannot transfer rejoin
+witnesses, callbacks, or unrelated resources.
+
+Non-atomic writes require disjoint exclusive partition loans. Atomic i32 load,
+store, and fetch-add have sequentially consistent platform semantics; fetch-add
+returns the previous value and wraps to signed 32 bits. A root validity word is
+checked on access. A dispatched loan that fails or cancels invalidates every
+partition of its allocation, including idle siblings. Already observed atomic
+effects remain observable. A pool never replays required work and waits for
+physical worker termination after transport loss before settling a loan. A loan
+cancelled before dispatch restores idle ownership. This is a host execution
+protocol, with real Node and Web Worker tests, not a second Blot evaluator.

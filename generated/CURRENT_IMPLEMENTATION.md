@@ -8,11 +8,11 @@
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
 | Compiler-host ABI | 7 |
-| Checked-module certificate | 17 |
+| Checked-module certificate | 18 |
 | Module snapshot | 2 |
 | Value capsule | 4 |
-| Runtime HIR | 10 |
-| Public ABI | 2.0 |
+| Runtime HIR | 11 |
+| Public ABI | 3.0 |
 
 ## Supported public values
 
@@ -22,6 +22,7 @@
 - Float32
 - Float64
 - Text
+- scope-checked opaque host resources
 - closed records
 - closed variants
 - arrays of supported values
@@ -33,7 +34,7 @@
 - Scratch and private Region values cannot cross the public ABI
 - deferred functions must be eliminated before the public ABI
 - public values must have closed first-order layouts
-- ABI 2 host effects are synchronous
+- suspending artifacts with owned host transfers require scoped cleanup
 
 ## Editor features
 

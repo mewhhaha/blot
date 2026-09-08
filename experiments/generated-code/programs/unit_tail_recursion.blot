@@ -1,0 +1,19 @@
+open import "blot:prelude"
+
+const Probe = @effect.host { .visit = Int -> Unit; }
+
+const run :: Int -> Unit ~ { Probe }
+const run = fn count => do:
+  for index in Iter.range (0, count):
+    use Probe.visit index
+  use Probe.visit (-1)
+  return ()
+
+const rec unwind :: Int -> Unit ~ { Probe }
+const rec unwind = fn count => do:
+  if count > 0:
+    use unwind (count - 1)
+    use Probe.visit count
+  return ()
+
+return { .run = run; .unwind = unwind; }

@@ -1,17 +1,25 @@
-import type {
-  BlotEffectOwnership,
-  BlotRuntimeModule,
-} from "../../../runtime/hir.ts";
+import type { BlotEffectOwnership } from "../../../runtime/hir.ts";
 
 export const blotAbiCustomSectionName = "blot:abi";
 
 export type BlotAbiType =
+  | {
+    readonly kind: "callback";
+    readonly entry: string;
+    readonly function: BlotAbiFunction;
+    readonly environment: BlotAbiType;
+  }
   | { readonly kind: "unit" }
   | { readonly kind: "signed-integer-64" }
   | { readonly kind: "float-32" }
   | { readonly kind: "float-64" }
   | { readonly kind: "boolean" }
   | { readonly kind: "text" }
+  | {
+    readonly kind: "resource";
+    readonly name: string;
+    readonly payload: BlotAbiType;
+  }
   | { readonly kind: "array"; readonly element: BlotAbiType }
   | {
     readonly kind: "record";
@@ -41,7 +49,7 @@ export type BlotAbiFunction = {
 export type BlotAbiManifest = {
   readonly format: "blot-core-wasm";
   readonly abi: {
-    readonly major: 2;
+    readonly major: 3;
     readonly minor: 0;
     readonly memory: "memory32";
     readonly stringEncoding: "utf-8";
@@ -51,10 +59,15 @@ export type BlotAbiManifest = {
     readonly reallocExport: "cabi_realloc";
   };
   readonly source: string;
+  readonly callbacks: readonly {
+    readonly name: string;
+    readonly function: BlotAbiFunction;
+  }[];
   readonly exports: readonly {
     readonly sourceName: string;
     readonly name: string | null;
     readonly phase: "runtime" | "comptime";
+    readonly execution: "direct" | "resumable" | "comptime";
     readonly function: BlotAbiFunction | null;
     readonly postReturn: string | null;
     readonly effects: readonly string[];
@@ -63,12 +76,14 @@ export type BlotAbiManifest = {
   readonly imports: readonly {
     readonly capability: string;
     readonly operation: string;
+    readonly sourceName: string;
     readonly module: string;
     readonly name: string;
     readonly function: BlotAbiFunction;
-    readonly ownership: {
+    readonly contract: {
       readonly input: BlotEffectOwnership;
       readonly result: BlotEffectOwnership;
+      readonly suspends: boolean;
     };
   }[];
   readonly links?: readonly {
@@ -76,92 +91,23 @@ export type BlotAbiManifest = {
     readonly name: string;
     readonly module: string;
     readonly function: BlotAbiFunction;
+    readonly suspends: boolean;
   }[];
 };
-
-export function buildBlotAbiManifest(
-  module: BlotRuntimeModule,
-): BlotAbiManifest {
-  const canonical = (type: number) => canonicalType(module, type, new Set());
-  return {
-    format: "blot-core-wasm",
-    abi: {
-      major: 2,
-      minor: 0,
-      memory: "memory32",
-      stringEncoding: "utf-8",
-      maximumFlatParameters: 16,
-      maximumFlatResults: 1,
-      memoryExport: "memory",
-      reallocExport: "cabi_realloc",
-    },
-    source: module.source,
-    exports: module.exports.map((exported) => {
-      if (exported.phase === "comptime") {
-        return {
-          sourceName: exported.sourceName,
-          name: null,
-          phase: exported.phase,
-          function: null,
-          postReturn: null,
-          effects: [],
-          ownership: null,
-        };
-      }
-      const signature = module.signatures[exported.signature];
-      const function_ = {
-        parameters: signature.parameters.map(canonical),
-        result: canonical(signature.result),
-      };
-      let postReturn: string | null = null;
-      if (flattenedAbiType(function_.result).length > 1) {
-        postReturn = `cabi_post_${exported.wasmName}`;
-      }
-      return {
-        sourceName: exported.sourceName,
-        name: exported.wasmName,
-        phase: exported.phase,
-        function: function_,
-        postReturn,
-        effects: [...signature.effects].sort(),
-        ownership: exported.ownership,
-      };
-    }),
-    imports: [...module.capabilities].sort(byName).flatMap((capability) =>
-      capability.operations.map((operation) => {
-        const signature = module.signatures[operation.signature];
-        return {
-          capability: capability.name,
-          operation: operation.name,
-          module: `blot:host/${capability.name}`,
-          name: operation.name,
-          function: {
-            parameters: signature.parameters.map(canonical),
-            result: canonical(signature.result),
-          },
-          ownership: operation.ownership,
-        };
-      })
-    ),
-  };
-}
-
-export function serializeBlotAbiManifest(
-  manifest: BlotAbiManifest,
-): Uint8Array {
-  return new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
-}
 
 export function flattenedAbiType(
   type: BlotAbiType,
 ): readonly ("i32" | "i64" | "f32" | "f64")[] {
   if (type.kind === "unit") return [];
-  if (type.kind === "signed-integer-64") return ["i64"];
+  if (type.kind === "signed-integer-64" || type.kind === "resource") {
+    return ["i64"];
+  }
   if (type.kind === "float-32") return ["f32"];
   if (type.kind === "float-64") return ["f64"];
   if (type.kind === "boolean") return ["i32"];
   if (type.kind === "text" || type.kind === "array") return ["i32", "i32"];
   if (type.kind === "sealed") return flattenedAbiType(type.inner);
+  if (type.kind === "callback") return flattenedAbiType(type.environment);
   if (type.kind === "record") {
     return type.fields.flatMap((field) => flattenedAbiType(field.type));
   }
@@ -239,81 +185,8 @@ function requireDirectParameterCount(
   const flatParameters = function_.parameters.flatMap(flattenedAbiType).length;
   if (flatParameters <= maximumFlatParameters) return;
   throw new TypeError(
-    `${position} has ${flatParameters} flat parameters; Blot ABI 2 currently admits at most ${maximumFlatParameters}`,
+    `${position} has ${flatParameters} flat parameters; Blot ABI 3 currently admits at most ${maximumFlatParameters}`,
   );
-}
-
-function canonicalType(
-  module: BlotRuntimeModule,
-  typeId: number,
-  resolving: Set<number>,
-): BlotAbiType {
-  if (resolving.has(typeId)) {
-    throw new TypeError(
-      `${module.source}: ABI type ${typeId} has a recursive canonical layout`,
-    );
-  }
-  const type = module.types[typeId];
-  if (type.kind === "unit") return { kind: "unit" };
-  if (type.kind === "signed-integer-64") {
-    return { kind: "signed-integer-64" };
-  }
-  if (type.kind === "float-32") return { kind: "float-32" };
-  if (type.kind === "float-64") return { kind: "float-64" };
-  if (type.kind === "boolean") return { kind: "boolean" };
-  if (type.kind === "text") return { kind: "text" };
-  if (type.kind === "integer-32") {
-    throw new TypeError(
-      `${module.source}: internal integer-32 type ${typeId} cannot cross the Blot ABI`,
-    );
-  }
-  if (type.kind === "vector" || type.kind === "mask") {
-    throw new TypeError(
-      `${module.source}: ${type.kind} type ${typeId} cannot cross the Blot ABI`,
-    );
-  }
-  if (type.kind === "function") {
-    throw new TypeError(
-      `${module.source}: function type ${typeId} cannot cross the Blot ABI`,
-    );
-  }
-  resolving.add(typeId);
-  let canonical: BlotAbiType;
-  if (type.kind === "store") {
-    canonical = {
-      kind: "array",
-      element: canonicalType(module, type.elementType, resolving),
-    };
-  } else if (type.kind === "product") {
-    canonical = {
-      kind: "record",
-      fields: [...type.fields].sort(byName).map((field) => ({
-        name: field.name,
-        type: canonicalType(module, field.type, resolving),
-      })),
-    };
-  } else if (type.kind === "sum") {
-    canonical = {
-      kind: "variant",
-      cases: [...type.cases].sort(byName).map((case_) => {
-        const payload = canonicalType(module, case_.payloadType, resolving);
-        if (payload.kind === "unit") return { name: case_.name };
-        return { name: case_.name, payload };
-      }),
-    };
-  } else if (type.kind === "sealed") {
-    canonical = {
-      kind: "sealed",
-      name: type.name,
-      inner: canonicalType(module, type.representationType, resolving),
-    };
-  } else {
-    throw new TypeError(
-      `${module.source}: type ${typeId} cannot cross the Blot ABI`,
-    );
-  }
-  resolving.delete(typeId);
-  return canonical;
 }
 
 function requireDirectAbiType(type: BlotAbiType, position: string): void {
@@ -329,15 +202,6 @@ function requireDirectAbiType(type: BlotAbiType, position: string): void {
     return;
   }
   throw new TypeError(
-    `${position} uses ${type.kind}; the direct Blot ABI 2 path currently admits only flat values`,
+    `${position} uses ${type.kind}; the direct Blot ABI 3 path currently admits only flat values`,
   );
-}
-
-function byName(
-  left: { readonly name: string },
-  right: { readonly name: string },
-): number {
-  if (left.name < right.name) return -1;
-  if (left.name > right.name) return 1;
-  return 0;
 }

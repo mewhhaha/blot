@@ -2,7 +2,7 @@
 
 namespace Blot.QCoreGenerated
 
-def schemaVersion : UInt32 := 4
+def schemaVersion : UInt32 := 5
 
 structure ValueId where
   «value» : UInt32
@@ -174,6 +174,7 @@ inductive ValueTag where
   | StructuralTop
   | StructuralBottom
   | StructuralQualified
+  | StructuralResource
   deriving BEq, DecidableEq, Repr
 
 def ValueTag.code : ValueTag → UInt8
@@ -208,6 +209,7 @@ def ValueTag.code : ValueTag → UInt8
   | .StructuralTop => 28
   | .StructuralBottom => 29
   | .StructuralQualified => 30
+  | .StructuralResource => 31
 
 inductive Value where
   | BoundVariable («index» : UInt32)
@@ -241,6 +243,7 @@ inductive Value where
   | StructuralTop
   | StructuralBottom
   | StructuralQualified («body» : ValueId) («names» : List String) («subjects» : List ValueId) («members» : List ValueId)
+  | StructuralResource («family» : String) («payload» : ValueId)
   deriving BEq, DecidableEq, Repr
 
 def Value.tag : Value → ValueTag
@@ -275,6 +278,7 @@ def Value.tag : Value → ValueTag
   | .StructuralTop => .StructuralTop
   | .StructuralBottom => .StructuralBottom
   | .StructuralQualified _ _ _ _ => .StructuralQualified
+  | .StructuralResource _ _ => .StructuralResource
 
 inductive ComputationTag where
   | ReturnValue

@@ -73,7 +73,7 @@ test("browser development reloads only changed units and survives invalid edits"
         retainedUnits,
         removedUnits: [...identities.keys()].filter((name) => !next.has(name)),
       });
-      runtime.commitActivation(activation);
+      await runtime.commitActivation(activation);
       identities = next;
       return snapshot;
     };

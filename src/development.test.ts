@@ -236,7 +236,7 @@ return
     assertEquals(runtime.revision, initial.revision);
 
     project.commitBuild(edited);
-    runtime.commitActivation(activation);
+    await runtime.commitActivation(activation);
 
     assertStrictEquals(runtime.entryInstance, entry);
     assertNotEquals(runtime.unitInstance("codec"), provider);
@@ -437,7 +437,7 @@ return value
       build,
     );
     project.commitBuild(build);
-    retainedIdentityRuntime.commitActivation(initialActivation);
+    await retainedIdentityRuntime.commitActivation(initialActivation);
     const retained = await project.prepareBuild();
     const retainedUnit = retained.retainedUnits[0];
     if (retainedUnit === undefined) {
@@ -701,7 +701,7 @@ return value
     );
     const activation = await preparation;
     project.commitBuild(build);
-    runtime.commitActivation(activation);
+    await runtime.commitActivation(activation);
     assertEquals(run(runtime.entryInstance), 7n);
 
     const repeated = await project.prepareBuild();
@@ -723,7 +723,7 @@ return value
     externalBuild.entryUnit = "missing";
     externalBuild.revision = "mutated";
     const externalActivation = await externalPreparation;
-    externalRuntime.commitActivation(externalActivation);
+    await externalRuntime.commitActivation(externalActivation);
     assertEquals(run(externalRuntime.entryInstance), 7n);
   } finally {
     project.destroy();
@@ -957,7 +957,7 @@ return value
       Error,
       "pending revision",
     );
-    firstRuntime.abortActivation(activation);
+    await firstRuntime.abortActivation(activation);
     assertThrows(
       () => firstRuntime.abortActivation(activation),
       Error,

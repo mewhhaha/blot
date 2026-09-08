@@ -1,0 +1,52 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Events = import "blot:events"
+const Io = import "blot:io"
+const formula = import "./formula.blot"
+
+const View = Resource.of "Demo.View"
+const Ui =
+  @effect.host {
+    .show = (View, Int, Int) -> Unit;
+    .message = (View, Text) -> Unit;
+    .stopped = View -> Unit;
+  }
+
+let run ::
+  {
+    .executor = Spark.Executor;
+    .changes = Events.Source Int;
+    .clock = Io.Clock.Capability;
+    .http = Io.Http.Capability;
+    .view = View;
+  } -> Unit ~ { Spark.Effect, Events.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+let run = fn io => do:
+  let body ::
+    Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+  let body = fn scope => do:
+    let ?cleanup :: Unit -> Unit ~ { Ui } = fn () => Ui.stopped io.view
+    use () <- Spark.on_exit scope (?cleanup)
+    use response <- Io.Http.get io.http "/message.txt"
+    use () <- case response of
+      #Ok response => Ui.message (io.view, response.body)
+      #Error reason => Ui.message (io.view, reason)
+    use subscription <- Events.subscribe scope io.changes #Latest
+    let received = 0
+    for _ in ever:
+      use event <- Events.next subscription
+      if let #Some quantity = event else:
+        break
+
+      use () <- Io.Clock.sleep io.clock 10
+      let calculate :: Spark.Scope -> Int ~ { Spark.Effect } = fn computation => do:
+        let ?work :: Unit -> Int = fn () => formula.score quantity
+        use job <- Spark.parallel computation (?work)
+        return Spark.join job
+      use score <- Spark.child_scope scope calculate
+      received := received + 1
+      use () <- Ui.show (io.view, score, received)
+
+    return ()
+  return Spark.scope io.executor body
+
+return { .run = run; }

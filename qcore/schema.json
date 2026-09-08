@@ -1,6 +1,6 @@
 {
   "format": "blot-qcore-schema",
-  "version": 4,
+  "version": 5,
   "references": [
     {
       "name": "ValueId",
@@ -743,6 +743,20 @@
             {
               "name": "members",
               "type": "ValueId[]"
+            }
+          ]
+        },
+        {
+          "name": "StructuralResource",
+          "tag": 31,
+          "fields": [
+            {
+              "name": "family",
+              "type": "string"
+            },
+            {
+              "name": "payload",
+              "type": "ValueId"
             }
           ]
         }

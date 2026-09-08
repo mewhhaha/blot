@@ -1,0 +1,22 @@
+open import "blot:prelude"
+const example = import "./lib/compiled_callback.blot"
+
+let executor =
+  {
+    .run = fn (?work, ?resume) => do:
+      use result <- work ()
+      return resume result
+    ;
+    .return = identity;
+  }
+let clock =
+  {
+    .tick = fn (index, ?resume) => resume (index * 2);
+    .return = identity;
+  }
+
+return @handle (
+  example.Clock,
+  fn () => @handle (example.Executor, fn () => example.run 10, executor),
+  clock
+  )

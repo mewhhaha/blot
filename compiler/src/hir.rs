@@ -21,7 +21,7 @@ use crate::ownership::Produced;
 use crate::protocol::RUNTIME_HIR_SCHEMA;
 use crate::typecheck::{CheckedModule, Domain, Scalar, Type, sealed_type, sealed_type_name};
 use crate::value::{
-    ArrayValues, ChoiceSource, ClosureAlternative, EffectOperationOwnership, EffectOwnership,
+    ArrayValues, ChoiceSource, ClosureAlternative, EffectOperationContract, EffectOwnership,
     Environment, OrderedFields, RuntimeMeaning, RuntimeValue, Value, as_tuple, child_env, lookup,
     recursive_env,
 };
@@ -40,6 +40,17 @@ pub(crate) enum RuntimeType {
     Float64,
     Boolean,
     Text,
+    Resource {
+        name: String,
+        #[serde(rename = "payloadType")]
+        payload_type: usize,
+    },
+    Callback {
+        function: usize,
+        signature: usize,
+        #[serde(rename = "environmentType")]
+        environment_type: usize,
+    },
     Vector {
         #[serde(deserialize_with = "residual_cache::word")]
         element: RuntimeWord,
@@ -129,7 +140,30 @@ fn runtime_layout_witness(
             RuntimeType::Unit => scalar(0, 1, "unit".to_owned())?,
             RuntimeType::Integer32 => scalar(4, 4, "integer-32".to_owned())?,
             RuntimeType::SignedInteger64 => scalar(8, 8, "signed-integer-64".to_owned())?,
+            RuntimeType::Resource { name, payload_type } => scalar(
+                8,
+                8,
+                format!(
+                    "resource({}:{name}){}",
+                    name.len(),
+                    visit(types, *payload_type, memo, active)?.fingerprint
+                ),
+            )?,
             RuntimeType::Float32 => scalar(4, 4, "float-32".to_owned())?,
+            RuntimeType::Callback {
+                function,
+                signature,
+                environment_type,
+            } => {
+                let environment = visit(types, *environment_type, memo, active)?;
+                RuntimeLayoutWitness {
+                    fingerprint: format!(
+                        "callback({function}:{signature};{})",
+                        environment.fingerprint
+                    ),
+                    ..environment
+                }
+            }
             RuntimeType::Float64 => scalar(8, 8, "float-64".to_owned())?,
             RuntimeType::Boolean => scalar(4, 4, "boolean".to_owned())?,
             RuntimeType::Text => scalar(8, 4, "text(memory32)".to_owned())?,
@@ -294,6 +328,9 @@ fn runtime_type_contains_scratch(
     }
     match &types[type_id] {
         RuntimeType::Scratch { .. } => true,
+        RuntimeType::Callback {
+            environment_type, ..
+        } => runtime_type_contains_scratch(types, *environment_type, seen),
         RuntimeType::Store { element_type } => {
             runtime_type_contains_scratch(types, *element_type, seen)
         }
@@ -314,6 +351,7 @@ fn runtime_type_contains_scratch(
         | RuntimeType::Boolean
         | RuntimeType::Integer32
         | RuntimeType::SignedInteger64
+        | RuntimeType::Resource { .. }
         | RuntimeType::Float32
         | RuntimeType::Float64
         | RuntimeType::Text
@@ -502,6 +540,16 @@ pub(crate) enum RuntimeEffectOwnership {
     },
 }
 
+impl RuntimeEffectOwnership {
+    pub(crate) fn has_linear(&self) -> bool {
+        match self {
+            Self::Mode(mode) => *mode == "linear",
+            Self::Record { fields, .. } => fields.iter().any(|field| field.ownership.has_linear()),
+            Self::Variant { cases, .. } => cases.iter().any(|case| case.ownership.has_linear()),
+        }
+    }
+}
+
 #[derive(Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct RuntimeEffectOwnershipMember {
     pub(crate) name: String,
@@ -509,15 +557,17 @@ pub(crate) struct RuntimeEffectOwnershipMember {
 }
 
 #[derive(Clone, Eq, PartialEq, Serialize)]
-pub(crate) struct RuntimeOperationOwnership {
-    input: RuntimeEffectOwnership,
-    result: RuntimeEffectOwnership,
+pub(crate) struct RuntimeOperationContract {
+    pub(crate) input: RuntimeEffectOwnership,
+    pub(crate) result: RuntimeEffectOwnership,
+    pub(crate) suspends: bool,
 }
 
-fn runtime_operation_ownership(ownership: &EffectOperationOwnership) -> RuntimeOperationOwnership {
-    RuntimeOperationOwnership {
+fn runtime_operation_ownership(ownership: &EffectOperationContract) -> RuntimeOperationContract {
+    RuntimeOperationContract {
         input: runtime_effect_ownership(&ownership.input),
         result: runtime_effect_ownership(&ownership.result),
+        suspends: ownership.suspends,
     }
 }
 
@@ -552,8 +602,10 @@ fn runtime_effect_ownership(ownership: &EffectOwnership) -> RuntimeEffectOwnersh
 #[derive(Clone, Serialize)]
 pub(crate) struct RuntimeCapabilityOperation {
     pub(crate) name: String,
+    #[serde(rename = "sourceName")]
+    pub(crate) source_name: String,
     pub(crate) signature: usize,
-    pub(crate) ownership: RuntimeOperationOwnership,
+    pub(crate) contract: RuntimeOperationContract,
 }
 
 #[derive(Clone, Serialize)]
@@ -567,6 +619,7 @@ pub(crate) struct RuntimeLink {
     pub(crate) unit: String,
     pub(crate) name: String,
     pub(crate) signature: usize,
+    pub(crate) suspends: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -602,6 +655,8 @@ pub struct RuntimeModule {
     pub(crate) functions: Vec<RuntimeFunction>,
     pub(crate) capabilities: Vec<RuntimeCapability>,
     pub(crate) links: Vec<RuntimeLink>,
+    #[serde(rename = "resumableRoots")]
+    pub(crate) resumable_roots: Vec<usize>,
     pub(crate) exports: Vec<RuntimeExport>,
 }
 
@@ -612,7 +667,7 @@ pub(crate) struct ResidualTrace {
     types: Vec<RuntimeType>,
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
-    capabilities: BTreeMap<String, BTreeMap<String, (usize, RuntimeOperationOwnership)>>,
+    capabilities: BTreeMap<String, BTreeMap<String, ResidualHostOperation>>,
     blocks: Vec<ResidualBlock>,
     current_block: usize,
     next_value: usize,
@@ -628,6 +683,12 @@ pub(crate) struct ResidualTrace {
     next_function: usize,
     function_frames: Vec<ResidualFunctionFrame>,
     checked_aggregate_representations: CheckedAggregateRepresentations,
+}
+
+struct ResidualHostOperation {
+    source_name: String,
+    signature: usize,
+    contract: RuntimeOperationContract,
 }
 
 struct ResidualFunctionIdentity {
@@ -682,6 +743,7 @@ enum RepresentationShape {
     Array(Option<Box<RepresentationShape>>),
     Region(Box<RepresentationShape>),
     Scratch(Box<RepresentationShape>),
+    Resource(String, Box<RepresentationShape>),
     Tag(String, Option<Box<RepresentationShape>>),
     Sealed(String, Box<RepresentationShape>),
 }
@@ -811,7 +873,7 @@ struct RuntimeCapturePlan {
 }
 
 pub(crate) enum ResidualFunctionCall {
-    Static,
+    Static(&'static str),
     Existing(Value),
     Compile(ResidualFunctionCompilation),
 }
@@ -829,6 +891,7 @@ pub(crate) struct ResidualClosure<'a> {
     pub(crate) signature: Option<&'a Value>,
     pub(crate) reuse: bool,
     pub(crate) root_application: bool,
+    pub(crate) host_callback: bool,
     pub(crate) crosses_development_boundary: bool,
 }
 
@@ -842,6 +905,8 @@ struct LexicalClosure<'a> {
 }
 
 pub(crate) struct ResidualFunctionCompilation {
+    host_callback: bool,
+    source_signature: Value,
     cache_request: Option<Box<residual_cache::Request>>,
     pub(crate) instance_facts: Option<Rc<crate::typecheck::ResidualInstanceFacts>>,
     pub(crate) argument: Value,
@@ -1042,7 +1107,7 @@ impl ResidualTrace {
         operation: String,
         argument: &Value,
         result_type: &Value,
-        operation_ownership: &EffectOperationOwnership,
+        operation_ownership: &EffectOperationContract,
         span: crate::ast::Span,
     ) -> Result<Value, Diagnostic> {
         self.export_effects.insert(capability.clone());
@@ -1060,16 +1125,18 @@ impl ResidualTrace {
         let parameter_type = argument.type_id;
         let ownership_contract = runtime_operation_ownership(operation_ownership);
         let operations = self.capabilities.entry(capability.clone()).or_default();
-        if let Some((existing, existing_ownership)) = operations.get(&operation) {
-            let declared = &self.signatures[*existing];
-            if declared.parameters != [parameter_type]
-                || declared.result != result_type
-                || existing_ownership != &ownership_contract
-            {
-                return Err(hir_error(&format!(
-                    "Host operation `{capability}.{operation}` was used with incompatible signatures or ownership contracts."
-                )));
-            }
+        let existing = operations
+            .iter()
+            .find(|(_, declared)| {
+                let signature = &self.signatures[declared.signature];
+                declared.source_name == operation
+                    && signature.parameters == [parameter_type]
+                    && signature.result == result_type
+                    && declared.contract == ownership_contract
+            })
+            .map(|(name, _)| name.clone());
+        let operation = if let Some(name) = existing {
+            name
         } else {
             let signature = self.signatures.len();
             self.signatures.push(RuntimeSignature {
@@ -1077,15 +1144,24 @@ impl ResidualTrace {
                 result: result_type,
                 effects: vec![capability.clone()],
             });
-            operations.insert(operation.clone(), (signature, ownership_contract));
-        }
+            let mut name = operation.clone();
+            let mut suffix = operations.len();
+            while operations.contains_key(&name) {
+                name = format!("{operation}#{suffix}");
+                suffix += 1;
+            }
+            operations.insert(
+                name.clone(),
+                ResidualHostOperation {
+                    source_name: operation,
+                    signature,
+                    contract: ownership_contract,
+                },
+            );
+            name
+        };
         let result = self.next_value();
         let ownership = self.ownership(result_type);
-        let operation_signature = self.capabilities[&capability]
-            .get(&operation)
-            .expect("inserted host operation")
-            .0;
-        let _ = operation_signature;
         let runtime_span = self.span(span);
         self.current().operations.push(RuntimeOperation {
             kind: "host.call",
@@ -1229,6 +1305,11 @@ impl ResidualTrace {
         }
         let value = match self.types.get(type_id)? {
             RuntimeType::Unit => Value::Unit,
+            RuntimeType::Callback { .. } => return None,
+            RuntimeType::Resource { name, payload_type } => Value::ResourceType {
+                family: name.clone(),
+                payload: Box::new(self.runtime_type_value(*payload_type, seen)?),
+            },
             RuntimeType::Integer32 => Value::Range {
                 low: Box::new(Value::Unbounded),
                 high: Box::new(Value::Unbounded),
@@ -1440,13 +1521,12 @@ impl ResidualTrace {
                 name,
                 operations: operations
                     .into_iter()
-                    .map(
-                        |(name, (signature, ownership))| RuntimeCapabilityOperation {
-                            name,
-                            signature,
-                            ownership,
-                        },
-                    )
+                    .map(|(name, operation)| RuntimeCapabilityOperation {
+                        name,
+                        source_name: operation.source_name,
+                        signature: operation.signature,
+                        contract: operation.contract,
+                    })
                     .collect(),
             })
             .collect();
@@ -1461,6 +1541,7 @@ impl ResidualTrace {
             functions: self.functions.into_values().collect(),
             capabilities,
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: self.exports,
         })
     }
@@ -2698,6 +2779,8 @@ impl ResidualTrace {
             RuntimeType::Boolean => "Bool",
             RuntimeType::Integer32 => "I32",
             RuntimeType::SignedInteger64 => "Int",
+            RuntimeType::Resource { .. } => "Resource",
+            RuntimeType::Callback { .. } => "Callback",
             RuntimeType::Float32 => "F32",
             RuntimeType::Float64 => "F64",
             RuntimeType::Text => "Text",
@@ -4272,13 +4355,17 @@ impl ResidualTrace {
             signature,
             reuse,
             root_application,
+            host_callback,
             crosses_development_boundary,
         } = closure;
-        if root_application
-            || Self::is_resolve_member_body(context, module, body)
-            || Self::is_operator_member_body(context, module, body)
+        if !host_callback
+            && (root_application
+                || Self::is_resolve_member_body(context, module, body)
+                || Self::is_operator_member_body(context, module, body))
         {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static(
+                "the source application requires staging",
+            ));
         }
         let lexical_closure = LexicalClosure {
             module,
@@ -4295,14 +4382,16 @@ impl ResidualTrace {
             .ok_or_else(|| hir_error("A residual closure lost its source expression."))?;
         let capture_plan = runtime_capture_plan(context, lexical_closure)?;
         if capture_plan.requires_staging {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static("a capture requires staging"));
         }
         let captures = capture_plan.values;
-        if (!contains_runtime(argument) && captures.is_empty())
+        if (!host_callback && !contains_runtime(argument) && captures.is_empty())
             || contains_staged_iterator(argument)
             || contains_staging_sensitive_runtime(argument)
         {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static(
+                "the argument requires staging",
+            ));
         }
         let Some(environment_key) = residual_environment_key(
             context,
@@ -4313,7 +4402,9 @@ impl ResidualTrace {
             reuse,
         )?
         else {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static(
+                "the capture environment has no stable residual identity",
+            ));
         };
         let actual_evidence = self.conservative_value_type(argument);
         let checked_captures =
@@ -4329,7 +4420,15 @@ impl ResidualTrace {
                 .collect::<BTreeMap<_, _>>();
         let mut instance_facts = None;
         let mut signature = signature;
-        if signature.is_none() && (self_name.is_some() || crosses_development_boundary) {
+        if (signature.is_none()
+            && (host_callback || self_name.is_some() || crosses_development_boundary))
+            || (host_callback && signature.is_some_and(|mut signature| {
+                while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
+                    signature = body;
+                }
+                matches!(signature, Value::Arrow { codomain, .. } if crate::value::contains_type_variables(codomain))
+            }))
+        {
             instance_facts = crate::typecheck::Checker::residual_instance_signature(
                 context.clone(),
                 crate::typecheck::EvaluatedClosure {
@@ -4348,7 +4447,7 @@ impl ResidualTrace {
                     .or(actual_evidence.as_ref()),
                 &self.types,
             )?;
-            signature = instance_facts.as_ref().map(|facts| &facts.signature);
+            signature = instance_facts.as_ref().map(|facts| &facts.signature).or(signature);
         }
         while let Some(Value::Forall { body, .. }) = signature {
             signature = Some(body);
@@ -4368,7 +4467,9 @@ impl ResidualTrace {
             // Do not invent a runtime signature, and do not inline across a
             // development boundary or turn recursive calls into host recursion.
             if signature.is_none() && self_name.is_none() && !crosses_development_boundary {
-                return Ok(ResidualFunctionCall::Static);
+                return Ok(ResidualFunctionCall::Static(
+                    "the checked function signature is missing",
+                ));
             }
             return Err(Diagnostic::new(
                 "BLOT_UNSUPPORTED_LOWERING",
@@ -4390,11 +4491,14 @@ impl ResidualTrace {
         };
         if *deferred
             || residual_result_requires_staging(codomain, result_policy)
-            || (!crosses_development_boundary
+            || (!host_callback
+                && !crosses_development_boundary
                 && self_name.is_none()
                 && matches!(result_body, Value::Union(_)))
         {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static(
+                "the callback is deferred or its result requires staging",
+            ));
         }
         let mut substitutions = HashMap::new();
         let mut representation_facts = RepresentationFacts::default();
@@ -4467,9 +4571,18 @@ impl ResidualTrace {
             }
         }
         if has_unresolved_representation(domain, &substitutions) && !contains_runtime(argument) {
-            return Ok(ResidualFunctionCall::Static);
+            return Ok(ResidualFunctionCall::Static(
+                "the argument representation is unresolved",
+            ));
         }
-        let caller_argument = self
+        let caller_argument = if host_callback {
+            RuntimeValue {
+                id: usize::MAX,
+                type_id: self.type_from_type_value(domain)?,
+                meaning: RuntimeMeaning::Plain,
+            }
+        } else {
+            self
             .lower_residual_argument(argument, domain, &substitutions, span)
             .map_err(|mut diagnostic| {
                 diagnostic.message = format!(
@@ -4483,7 +4596,8 @@ impl ResidualTrace {
                         .unwrap_or_else(|| "<none>".to_owned()),
                 );
                 diagnostic
-            })?;
+            })?
+        };
         let capture_types = captures
             .iter()
             .map(|capture| capture.type_id)
@@ -4550,7 +4664,9 @@ impl ResidualTrace {
             Err(_)
                 if !recursive_result && has_unresolved_representation(codomain, &substitutions) =>
             {
-                return Ok(ResidualFunctionCall::Static);
+                return Ok(ResidualFunctionCall::Static(
+                    "the result representation is unresolved",
+                ));
             }
             Err(_)
                 if recursive_result && has_unresolved_representation(codomain, &substitutions) =>
@@ -4619,13 +4735,25 @@ impl ResidualTrace {
             let result_type = self.signatures[signature].result;
             let mut caller_arguments = vec![caller_argument.id];
             caller_arguments.extend(captures.iter().map(|capture| capture.id));
+            if host_callback {
+                return self
+                    .callback_value(
+                        function,
+                        signature,
+                        caller_arguments,
+                        signature_value.clone(),
+                        span,
+                    )
+                    .map(ResidualFunctionCall::Existing);
+            }
             let value = self.direct_call(function, result_type, caller_arguments, span)?;
             let value = apply_store_reuse_witness(&result_reuse, value, &self.types);
             let value = mark_reusable_stores(&result_ownership, value, &self.types);
             return Ok(ResidualFunctionCall::Existing(value));
         }
 
-        let cache_request = if crosses_development_boundary
+        let cache_request = if !host_callback
+            && crosses_development_boundary
             && context.residual_cache.borrow().enabled()
             && captures.is_empty()
             && effects.is_empty()
@@ -4798,6 +4926,8 @@ impl ResidualTrace {
         let mut caller_arguments = vec![caller_argument.id];
         caller_arguments.extend(captures.iter().map(|capture| capture.id));
         Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
+            host_callback,
+            source_signature: signature_value.clone(),
             cache_request,
             instance_facts,
             argument,
@@ -4992,6 +5122,15 @@ impl ResidualTrace {
         self.current_block = frame.current_block;
         self.next_value = frame.next_value;
         self.source = frame.source;
+        if compilation.host_callback {
+            return self.callback_value(
+                compilation.function,
+                compilation.signature,
+                compilation.caller_arguments,
+                compilation.source_signature,
+                compilation.span,
+            );
+        }
         let call = self.direct_call(
             compilation.function,
             compilation.result_type,
@@ -5001,6 +5140,50 @@ impl ResidualTrace {
         let call = apply_store_reuse_witness(&result_reuse, call, &self.types);
         let call = mark_reusable_stores(&compilation.result_ownership, call, &self.types);
         Ok(call)
+    }
+
+    fn callback_value(
+        &mut self,
+        function: usize,
+        signature: usize,
+        arguments: Vec<usize>,
+        source_signature: Value,
+        span: crate::ast::Span,
+    ) -> Result<Value, Diagnostic> {
+        let captures = self.signatures[signature]
+            .parameters
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(index, type_id)| RuntimeField {
+                name: format!("capture{index:08}"),
+                type_id: *type_id,
+            })
+            .collect();
+        let environment_type = self.insert_product_type(captures);
+        let environment = self.operation(
+            "product.make",
+            environment_type,
+            arguments.into_iter().skip(1).collect(),
+            span,
+            None,
+        );
+        let type_id = self.insert_type(
+            &format!("callback:{function}:{signature}:{environment_type}"),
+            RuntimeType::Callback {
+                function,
+                signature,
+                environment_type,
+            },
+        );
+        let callback = self.operation("callback.make", type_id, vec![environment.id], span, None);
+        self.checked_values.insert(callback.id, source_signature);
+        self.current()
+            .operations
+            .last_mut()
+            .expect("emitted callback")
+            .function = Some(function);
+        Ok(Value::Runtime(callback))
     }
 
     fn direct_call(
@@ -5087,13 +5270,12 @@ impl ResidualTrace {
                 operations: {
                     let mut operations = operations
                         .into_iter()
-                        .map(
-                            |(name, (signature, ownership))| RuntimeCapabilityOperation {
-                                name,
-                                signature,
-                                ownership,
-                            },
-                        )
+                        .map(|(name, operation)| RuntimeCapabilityOperation {
+                            name,
+                            source_name: operation.source_name,
+                            signature: operation.signature,
+                            contract: operation.contract,
+                        })
                         .collect::<Vec<_>>();
                     operations.sort_by_key(|operation| operation.signature);
                     operations
@@ -5127,6 +5309,7 @@ impl ResidualTrace {
             functions: self.functions.into_values().collect(),
             capabilities,
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",
@@ -6560,6 +6743,16 @@ impl ResidualTrace {
 
     fn type_from_type_value(&mut self, value: &Value) -> Result<usize, Diagnostic> {
         match value {
+            Value::ResourceType { family, payload } => {
+                let payload_type = self.type_from_type_value(payload)?;
+                Ok(self.insert_type(
+                    &format!("resource({}:{family}){payload_type}", family.len()),
+                    RuntimeType::Resource {
+                        name: family.clone(),
+                        payload_type,
+                    },
+                ))
+            }
             Value::Unit | Value::Unbounded => Ok(0),
             Value::Int(_) => {
                 Ok(self.insert_type("signed-integer-64", RuntimeType::SignedInteger64))
@@ -6817,6 +7010,23 @@ impl ResidualTrace {
                 )?;
             }
             (
+                Value::ResourceType {
+                    family: expected_family,
+                    payload: expected,
+                },
+                Value::ResourceType {
+                    family: actual_family,
+                    payload: actual,
+                },
+            ) if expected_family == actual_family => {
+                self.record_checked_runtime_substitutions(
+                    expected,
+                    actual,
+                    substitutions,
+                    representation_facts,
+                )?;
+            }
+            (
                 Value::Extended {
                     inner: expected, ..
                 }
@@ -6890,6 +7100,12 @@ impl ResidualTrace {
             }
             (Value::ScratchType(expected), RuntimeType::Scratch { element_type }) => {
                 self.record_runtime_type_substitutions(expected, *element_type, substitutions)?;
+            }
+            (
+                Value::ResourceType { family, payload },
+                RuntimeType::Resource { name, payload_type },
+            ) if family == name => {
+                self.record_runtime_type_substitutions(payload, *payload_type, substitutions)?;
             }
             (Value::RegionType(expected), RuntimeType::Indirect { target_type })
             | (
@@ -7005,6 +7221,10 @@ impl ResidualTrace {
                     &format!("scratch:{element_type}"),
                     RuntimeType::Scratch { element_type },
                 ))
+            }
+            Value::ResourceType { family, payload } => {
+                let payload_type = self.specialized_type_from_type_value(payload, substitutions, representation_facts)?;
+                Ok(self.insert_type(&format!("resource({}:{family}){payload_type}", family.len()), RuntimeType::Resource { name: family.clone(), payload_type }))
             }
             Value::Union(members) => {
                 if members
@@ -7202,6 +7422,16 @@ impl ResidualTrace {
                 Ok(self
                     .existing_sum_type(&names, &payloads)
                     .unwrap_or_else(|| self.sum_type(&names, &payloads)))
+            }
+            Type::Resource { family, payload } => {
+                let payload_type = self.runtime_type_from_checked_type(payload)?;
+                Ok(self.insert_type(
+                    &format!("resource({}:{family}){payload_type}", family.len()),
+                    RuntimeType::Resource {
+                        name: family.clone(),
+                        payload_type,
+                    },
+                ))
             }
             Type::Opaque(name) if simd_layout(name).is_some() => {
                 let layout = simd_layout(name).expect("matched SIMD type");
@@ -8389,6 +8619,7 @@ impl ResidualTrace {
     fn ownership(&self, type_id: usize) -> &'static str {
         match self.types[type_id] {
             RuntimeType::Text
+            | RuntimeType::Callback { .. }
             | RuntimeType::Store { .. }
             | RuntimeType::Scratch { .. }
             | RuntimeType::Indirect { .. }
@@ -8485,9 +8716,11 @@ fn has_unresolved_representation(value: &Value, substitutions: &HashMap<u32, usi
         Value::Union(elements) => elements
             .iter()
             .any(|element| has_unresolved_representation(element, substitutions)),
-        Value::RegionType(element) | Value::ScratchType(element) => {
-            has_unresolved_representation(element, substitutions)
-        }
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => has_unresolved_representation(element, substitutions),
         Value::EmptyArray { element }
         | Value::Extended { inner: element, .. }
         | Value::Sealed { inner: element, .. }
@@ -8954,7 +9187,11 @@ pub(crate) fn contains_runtime(value: &Value) -> bool {
         Value::Region { store, start, end } => {
             store.borrow()[*start..*end].iter().any(contains_runtime)
         }
-        Value::RegionType(element) | Value::ScratchType(element) => contains_runtime(element),
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => contains_runtime(element),
         Value::Scratch { values, .. } => values.iter().any(contains_runtime),
         Value::DeferredScratch { capacity } => contains_runtime(capacity),
         Value::Shape(fields) => fields.iter().any(|(_, value)| contains_runtime(value)),
@@ -9031,6 +9268,10 @@ fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
             Value::ScratchType(element) => {
                 Some(RepresentationShape::Scratch(Box::new(shape(element)?)))
             }
+            Value::ResourceType { family, payload } => Some(RepresentationShape::Resource(
+                family.clone(),
+                Box::new(shape(payload)?),
+            )),
             Value::Tag { name, payload } => {
                 let payload = match payload.as_deref() {
                     Some(payload) => Some(Box::new(shape(payload)?)),
@@ -9049,7 +9290,11 @@ fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
 
     let represented = match value {
         Value::Shape(_) | Value::Array(_) => true,
-        Value::RegionType(element) | Value::ScratchType(element) => {
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => {
             matches!(element.as_ref(), Value::TypeVariable(_))
         }
         _ => false,
@@ -9071,6 +9316,9 @@ fn specialization_representation_shape(value: &Value) -> Option<RepresentationSh
             }
             Value::RegionType(element) => RepresentationShape::Region(Box::new(shape(element))),
             Value::ScratchType(element) => RepresentationShape::Scratch(Box::new(shape(element))),
+            Value::ResourceType { family, payload } => {
+                RepresentationShape::Resource(family.clone(), Box::new(shape(payload)))
+            }
             Value::Tag { name, payload } => RepresentationShape::Tag(
                 name.clone(),
                 payload.as_deref().map(|payload| Box::new(shape(payload))),
@@ -9084,7 +9332,11 @@ fn specialization_representation_shape(value: &Value) -> Option<RepresentationSh
 
     let represented = match value {
         Value::Shape(_) | Value::Array(_) => true,
-        Value::RegionType(element) | Value::ScratchType(element) => {
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => {
             matches!(element.as_ref(), Value::TypeVariable(_))
         }
         _ => false,
@@ -9174,7 +9426,11 @@ fn collect_value(
                 collect_value(context, element, visited, captured, requires_staging)?;
             }
         }
-        Value::RegionType(element) | Value::ScratchType(element) => {
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => {
             collect_value(context, element, visited, captured, requires_staging)?;
         }
         Value::DeferredScratch { capacity } => {
@@ -9469,7 +9725,11 @@ fn replace_value(
                 *element = replace_value(context, element, replacements, replaced)?;
             }
         }
-        Value::RegionType(element) | Value::ScratchType(element) => {
+        Value::RegionType(element)
+        | Value::ScratchType(element)
+        | Value::ResourceType {
+            payload: element, ..
+        } => {
             **element = replace_value(context, element, replacements, replaced)?;
         }
         Value::DeferredScratch { capacity } => {
@@ -10060,8 +10320,8 @@ fn discardable_runtime_operation(operation: &RuntimeOperation) -> bool {
     match operation.kind {
         "constant" | "scalar.unary" | "vector" | "product.make" | "product.project"
         | "sum.make" | "sum.tag" | "sum.payload" | "indirect.load" | "store.length"
-        | "store.read" | "store.read.field" | "seal.wrap" | "seal.unwrap" | "resource.move"
-        | "resource.borrow" | "resource.freeze" => true,
+        | "store.read" | "store.read.field" | "seal.wrap" | "seal.unwrap" | "callback.make"
+        | "resource.move" | "resource.borrow" | "resource.freeze" => true,
         "scalar" => !matches!(operation.operator, Some("divide" | "remainder")),
         "convert" => operation.conversion != Some("float-64-to-signed-integer-64"),
         _ => false,
@@ -10146,6 +10406,8 @@ fn deduplicate_runtime_types(module: &mut RuntimeModule) {
 
 #[derive(Eq, Hash, PartialEq)]
 enum RuntimeTypeShape {
+    Callback(usize, usize),
+    Resource(String),
     Unit,
     Integer32,
     SignedInteger64,
@@ -10165,9 +10427,21 @@ enum RuntimeTypeShape {
 
 fn runtime_type_shape(type_: &RuntimeType) -> (RuntimeTypeShape, Vec<usize>) {
     match type_ {
+        RuntimeType::Callback {
+            function,
+            signature,
+            environment_type,
+        } => (
+            RuntimeTypeShape::Callback(*function, *signature),
+            vec![*environment_type],
+        ),
         RuntimeType::Unit => (RuntimeTypeShape::Unit, Vec::new()),
         RuntimeType::Integer32 => (RuntimeTypeShape::Integer32, Vec::new()),
         RuntimeType::SignedInteger64 => (RuntimeTypeShape::SignedInteger64, Vec::new()),
+        RuntimeType::Resource { name, payload_type } => (
+            RuntimeTypeShape::Resource(name.clone()),
+            vec![*payload_type],
+        ),
         RuntimeType::Float32 => (RuntimeTypeShape::Float32, Vec::new()),
         RuntimeType::Float64 => (RuntimeTypeShape::Float64, Vec::new()),
         RuntimeType::Boolean => (RuntimeTypeShape::Boolean, Vec::new()),
@@ -10207,6 +10481,9 @@ fn runtime_type_shape(type_: &RuntimeType) -> (RuntimeTypeShape, Vec<usize>) {
 
 fn remap_runtime_type(type_: &mut RuntimeType, remap: &[usize]) {
     match type_ {
+        RuntimeType::Callback {
+            environment_type, ..
+        } => *environment_type = remap[*environment_type],
         RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } => {
             *element_type = remap[*element_type];
         }
@@ -10238,6 +10515,7 @@ fn remap_runtime_type(type_: &mut RuntimeType, remap: &[usize]) {
         | RuntimeType::Text
         | RuntimeType::Vector { .. }
         | RuntimeType::Mask { .. } => {}
+        RuntimeType::Resource { payload_type, .. } => *payload_type = remap[*payload_type],
     }
 }
 
@@ -10255,6 +10533,11 @@ fn deduplicate_runtime_signatures(module: &mut RuntimeModule) {
             signature_id
         };
         remap.push(signature_id);
+    }
+    for type_ in &mut module.types {
+        if let RuntimeType::Callback { signature, .. } = type_ {
+            *signature = remap[*signature];
+        }
     }
     for function in &mut module.functions {
         function.signature = remap[function.signature];
@@ -10361,6 +10644,20 @@ fn deduplicate_runtime_functions(
                 .ok_or_else(|| hir_error("A runtime export references an unknown function."))?;
         }
     }
+    for type_ in &mut module.types {
+        if let RuntimeType::Callback { function, .. } = type_ {
+            *function = *function_ids
+                .get(function)
+                .ok_or_else(|| hir_error("A callback references an unknown function."))?;
+        }
+    }
+    for function in &mut module.resumable_roots {
+        *function = *function_ids
+            .get(function)
+            .ok_or_else(|| hir_error("A resumable root references an unknown function."))?;
+    }
+    module.resumable_roots.sort_unstable();
+    module.resumable_roots.dedup();
     module.functions = functions;
     Ok(())
 }
@@ -11384,6 +11681,7 @@ struct TailDemand {
 }
 
 fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
+    recover_unit_tail_calls(function);
     let mut incoming = HashMap::<usize, Vec<usize>>::new();
     for block in &function.blocks {
         match &block.terminator {
@@ -11522,6 +11820,94 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
             continue;
         };
         if !tail_call_suffix_returns(&block.operations, call_index, &block.terminator) {
+            continue;
+        }
+        let call = block.operations[call_index].clone();
+        block.operations.truncate(call_index);
+        block.terminator = RuntimeTerminator::Branch {
+            target: function.entry_block,
+            arguments: call.operands,
+            span: call.span,
+        };
+    }
+}
+
+fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
+    let is_unit_constant = |operation: &RuntimeOperation| {
+        operation.kind == "constant" && matches!(operation.value, Some(WireConstant::Unit))
+    };
+    let unit_types = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter(|operation| is_unit_constant(operation))
+        .map(|operation| operation.type_id)
+        .collect::<HashSet<_>>();
+    if unit_types.is_empty() {
+        return;
+    }
+    let unit_values = function
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .parameters
+                .iter()
+                .map(|parameter| (parameter.value, parameter.type_id))
+                .chain(
+                    block
+                        .operations
+                        .iter()
+                        .map(|operation| (operation.result, operation.type_id)),
+                )
+        })
+        .filter_map(|(value, type_id)| unit_types.contains(&type_id).then_some(value))
+        .collect::<HashSet<_>>();
+    let mut predecessors = HashMap::<usize, Vec<usize>>::new();
+    let mut pending = Vec::new();
+    for block in &function.blocks {
+        if !block.operations.iter().all(&is_unit_constant) {
+            continue;
+        }
+        match &block.terminator {
+            RuntimeTerminator::Return { value, .. } if unit_values.contains(value) => {
+                pending.push(block.id);
+            }
+            RuntimeTerminator::Branch { target, .. } => {
+                predecessors.entry(*target).or_default().push(block.id);
+            }
+            _ => {}
+        }
+    }
+    let mut unit_returns = HashSet::new();
+    while let Some(block) = pending.pop() {
+        if unit_returns.insert(block)
+            && let Some(incoming) = predecessors.get(&block)
+        {
+            pending.extend(incoming);
+        }
+    }
+    for block in &mut function.blocks {
+        let returns_unit = match &block.terminator {
+            RuntimeTerminator::Return { value, .. } => unit_values.contains(value),
+            RuntimeTerminator::Branch { target, .. } => unit_returns.contains(target),
+            _ => false,
+        };
+        if !returns_unit {
+            continue;
+        }
+        let Some(call_index) = block.operations.iter().rposition(|operation| {
+            operation.kind == "call.direct"
+                && operation.function == Some(function.id)
+                && unit_types.contains(&operation.type_id)
+        }) else {
+            continue;
+        };
+        // Unit has one value, but discarding its result must not discard pending work.
+        if !block.operations[call_index + 1..]
+            .iter()
+            .all(&is_unit_constant)
+        {
             continue;
         }
         let call = block.operations[call_index].clone();
@@ -11777,7 +12163,7 @@ struct HostCall {
     capability: String,
     operation: String,
     argument: Value,
-    ownership: RuntimeOperationOwnership,
+    ownership: RuntimeOperationContract,
 }
 
 struct RuntimeValueExport {
@@ -12020,6 +12406,7 @@ fn prepare_function_export(
                 application,
             ),
             trace,
+            &context,
         )?;
         type_ = Rc::unwrap_or_clone(result);
     }
@@ -12049,11 +12436,18 @@ fn merge_runtime_modules(
     let mut functions = Vec::new();
     let mut capabilities = Vec::new();
     let mut links = Vec::new();
+    let mut resumable_roots = Vec::new();
     let mut exports = Vec::new();
     for module in modules {
         let type_offset = types.len();
         let signature_offset = signatures.len();
         let function_offset = functions.len();
+        resumable_roots.extend(
+            module
+                .resumable_roots
+                .iter()
+                .map(|function| function + function_offset),
+        );
         for mut type_ in module.types {
             match &mut type_ {
                 RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } => {
@@ -12074,6 +12468,16 @@ fn merge_runtime_modules(
                     representation_type,
                     ..
                 } => *representation_type += type_offset,
+                RuntimeType::Resource { payload_type, .. } => *payload_type += type_offset,
+                RuntimeType::Callback {
+                    function,
+                    signature,
+                    environment_type,
+                } => {
+                    *function += function_offset;
+                    *signature += signature_offset;
+                    *environment_type += type_offset;
+                }
                 _ => {}
             }
             types.push(type_);
@@ -12138,6 +12542,7 @@ fn merge_runtime_modules(
         functions,
         capabilities,
         links,
+        resumable_roots,
         exports,
     })
 }
@@ -12154,13 +12559,13 @@ fn prepare_residual(
     }));
     let argument = module_argument(&checked.parameter)?;
     let computation = evaluate_checked_module(
-        context,
+        context.clone(),
         path,
         &checked,
         argument,
         Runtime::residual(Phase::Runtime, path.to_owned(), trace.clone()),
     );
-    let value = complete_residual_host_calls(computation, &trace)?;
+    let value = complete_residual_host_calls(computation, &trace, &context)?;
     let trace = Rc::try_unwrap(trace)
         .map_err(|_| hir_error("The Rust residual trace still has live evaluator references."))?
         .into_inner();
@@ -12200,9 +12605,155 @@ fn evaluate_checked_module(
     evaluate_module(context, path.to_owned(), argument, runtime)
 }
 
+fn prepare_host_argument(
+    context: &Rc<Context>,
+    trace: &Rc<std::cell::RefCell<ResidualTrace>>,
+    runtime: &Runtime,
+    application: &ApplicationSite,
+    mut value: Value,
+    expected: Option<&Value>,
+    substitutions: &Environment,
+    span: crate::ast::Span,
+) -> Result<Value, Diagnostic> {
+    match &mut value {
+        Value::Closure { .. } => {
+            if let Some(expected @ Value::Arrow { .. }) = expected
+                && !crate::value::contains_type_variables(expected)
+            {
+                crate::value::attach_signature(&mut value, expected);
+            }
+            let signature = crate::value::closure_signature(&value)
+                .ok_or_else(|| hir_error("A checked host callback has no source signature."))?;
+            let mut signature = &signature;
+            while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
+                signature = body;
+            }
+            let Value::Arrow {
+                deferred: false,
+                domain,
+                ..
+            } = signature
+            else {
+                return Err(Diagnostic::new(
+                    "BLOT_UNSUPPORTED_LOWERING",
+                    "A host callback must have a strict checked function signature.",
+                    span,
+                ));
+            };
+            let type_id = trace.borrow_mut().type_from_type_value(domain)?;
+            let argument = Value::Runtime(RuntimeValue {
+                id: usize::MAX,
+                type_id,
+                meaning: RuntimeMeaning::Plain,
+            });
+            let computation = crate::eval::apply(
+                context.clone(),
+                value,
+                argument,
+                span,
+                runtime.clone(),
+                application
+                    .clone()
+                    .compiler(CompilerApplication::HostCallbackEntry),
+            );
+            let callback = complete_residual_host_calls(computation, trace, context)?;
+            let checked = trace
+                .borrow()
+                .conservative_value_type(&callback)
+                .ok_or_else(|| {
+                    hir_error("A compiled callback lost its checked source signature.")
+                })?;
+            crate::eval::record_signature_substitutions(substitutions, signature, &checked);
+            Ok(callback)
+        }
+        Value::Shape(fields) => {
+            let mut prepared = OrderedFields::default();
+            for (name, value) in fields.iter() {
+                let field_type = match expected {
+                    Some(Value::Shape(types)) => types.get(name),
+                    _ => None,
+                };
+                prepared.insert(
+                    name.clone(),
+                    prepare_host_argument(
+                        context,
+                        trace,
+                        runtime,
+                        application,
+                        value.clone(),
+                        field_type,
+                        substitutions,
+                        span,
+                    )?,
+                );
+            }
+            Ok(Value::Shape(prepared))
+        }
+        Value::Array(elements) => {
+            let element_type = match expected {
+                Some(Value::Array(types)) => types.first(),
+                _ => None,
+            };
+            Ok(Value::Array(
+                elements
+                    .iter()
+                    .map(|element| {
+                        prepare_host_argument(
+                            context,
+                            trace,
+                            runtime,
+                            application,
+                            element.clone(),
+                            element_type,
+                            substitutions,
+                            span,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into(),
+            ))
+        }
+        Value::Tag {
+            payload: Some(payload),
+            ..
+        } => {
+            **payload = prepare_host_argument(
+                context,
+                trace,
+                runtime,
+                application,
+                (**payload).clone(),
+                None,
+                substitutions,
+                span,
+            )?;
+            Ok(value)
+        }
+        Value::Sealed { inner, .. } => {
+            let inner_type = match expected {
+                Some(Value::Sealed { inner, .. }) => Some(inner.as_ref()),
+                _ => None,
+            };
+            **inner = prepare_host_argument(
+                context,
+                trace,
+                runtime,
+                application,
+                (**inner).clone(),
+                inner_type,
+                substitutions,
+                span,
+            )?;
+            Ok(value)
+        }
+        _ => Ok(value),
+    }
+}
+
 fn complete_residual_host_calls(
     mut computation: Computation,
     trace: &Rc<std::cell::RefCell<ResidualTrace>>,
+    context: &Rc<Context>,
 ) -> Result<Value, Diagnostic> {
     loop {
         match computation {
@@ -12219,11 +12770,29 @@ fn complete_residual_host_calls(
                         request.span,
                     ));
                 }
+                let substitutions = crate::value::child_env(None);
+                let argument = prepare_host_argument(
+                    context,
+                    trace,
+                    &request.runtime,
+                    &request.application,
+                    request.argument,
+                    request.argument_type.as_ref(),
+                    &substitutions,
+                    request.span,
+                )?;
+                if let Some(expected) = &request.argument_type
+                    && let Some(actual) = trace.borrow().conservative_value_type(&argument)
+                {
+                    crate::eval::record_signature_substitutions(&substitutions, expected, &actual);
+                }
+                let result_type =
+                    crate::eval::substitute_signature(&request.result_type, &substitutions);
                 let result = trace.borrow_mut().host_call(
                     request.effect_name,
                     request.operation,
-                    &request.argument,
-                    &request.result_type,
+                    &argument,
+                    &result_type,
                     &request.operation_ownership,
                     request.span,
                 )?;
@@ -12268,7 +12837,7 @@ fn module_argument(parameter: &Option<Type>) -> Result<Value, Diagnostic> {
         name: "Init".to_owned(),
         operation_ownership: operations
             .keys()
-            .map(|name| (name.clone(), EffectOperationOwnership::unrestricted()))
+            .map(|name| (name.clone(), EffectOperationContract::unrestricted()))
             .collect(),
         operations,
         host: true,
@@ -12351,6 +12920,10 @@ fn type_value(type_: &Type) -> Value {
         Type::Array(element) => Value::Array(vec![type_value(element)].into()),
         Type::Region(element) => Value::RegionType(Box::new(type_value(element))),
         Type::Scratch(element) => Value::ScratchType(Box::new(type_value(element))),
+        Type::Resource { family, payload } => Value::ResourceType {
+            family: family.clone(),
+            payload: Box::new(type_value(payload)),
+        },
         Type::Variant { cases, .. } => Value::Union(
             cases
                 .iter()
@@ -12481,7 +13054,7 @@ struct HirBuilder {
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
     capability_signatures:
-        BTreeMap<String, BTreeMap<String, (usize, String, RuntimeOperationOwnership)>>,
+        BTreeMap<String, BTreeMap<String, (usize, String, RuntimeOperationContract)>>,
     next_value: usize,
 }
 
@@ -12545,9 +13118,10 @@ impl HirBuilder {
                     .into_iter()
                     .map(
                         |(name, (signature, _, ownership))| RuntimeCapabilityOperation {
+                            source_name: name.clone(),
                             name,
                             signature,
-                            ownership,
+                            contract: ownership,
                         },
                     )
                     .collect(),
@@ -12564,6 +13138,7 @@ impl HirBuilder {
             functions,
             capabilities,
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports,
         })
     }
@@ -12755,6 +13330,16 @@ impl HirBuilder {
                     RuntimeType::Sum {
                         name: format!("RustSum{}", self.types.len()),
                         cases: runtime_cases,
+                    },
+                ))
+            }
+            Type::Resource { family, payload } => {
+                let payload_type = self.runtime_type(payload, &type_value(payload))?;
+                Ok(self.insert_type(
+                    format!("resource({}:{family}){payload_type}", family.len()),
+                    RuntimeType::Resource {
+                        name: family.clone(),
+                        payload_type,
                     },
                 ))
             }
@@ -13292,12 +13877,12 @@ fn type_name(type_: &Type) -> &'static str {
     }
 }
 
-/// What ABI 2 says about the private function-choice layout. The tag and its
+/// What ABI 3 says about the private function-choice layout. The tag and its
 /// capture product are Runtime HIR's own bookkeeping: they name compiler-local
 /// closure sources, so no caller could read one even if it were exported.
 fn closure_choice_refusal(alternatives: usize) -> String {
     format!(
-        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 2 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
+        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 3 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
     )
 }
 
@@ -13546,6 +14131,7 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -13934,6 +14520,7 @@ mod tests {
             functions: vec![body(4, "first", 10), body(9, "second", 70), caller],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",
@@ -14031,6 +14618,7 @@ mod tests {
             functions,
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(0));
@@ -14096,6 +14684,7 @@ mod tests {
             functions,
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(0));
@@ -14152,6 +14741,7 @@ mod tests {
             functions: vec![recursive(0, 1), recursive(1, 0)],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -14198,6 +14788,7 @@ mod tests {
             functions: vec![body(0, "first trap"), body(1, "second trap")],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -14245,6 +14836,7 @@ mod tests {
             functions: vec![body(0, f64::NAN), body(1, f64::INFINITY)],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -14401,6 +14993,7 @@ mod tests {
             functions: vec![function],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -14483,6 +15076,116 @@ mod tests {
         };
         assert_eq!(*target, 0);
         assert_eq!(arguments, &[0]);
+    }
+
+    #[test]
+    fn discarded_unit_self_call_becomes_entry_back_edge() {
+        let mut function = unit_tail_function();
+        recover_direct_tail_calls(&mut function);
+        assert!(function.blocks[0].operations.is_empty());
+        let RuntimeTerminator::Branch {
+            target, arguments, ..
+        } = &function.blocks[0].terminator
+        else {
+            panic!("discarded Unit tail call did not become a branch");
+        };
+        assert_eq!(*target, 0);
+        assert_eq!(arguments, &[0]);
+    }
+
+    #[test]
+    fn unit_tail_recovery_preserves_pending_operations() {
+        for kind in [
+            "call.direct",
+            "host",
+            "scalar",
+            "store.read",
+            "indirect.make",
+        ] {
+            for block in [0, 1, 2] {
+                let mut function = unit_tail_function();
+                function.blocks[block]
+                    .operations
+                    .push(operation(kind, 3, vec![0], Some(8), None));
+                recover_direct_tail_calls(&mut function);
+                assert_eq!(
+                    function.blocks[0].operations[0].kind, "call.direct",
+                    "{kind} in block {block}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unit_tail_recovery_preserves_nonreturning_control_flow() {
+        let mut function = unit_tail_function();
+        function.blocks[1].terminator = RuntimeTerminator::Branch {
+            target: 1,
+            arguments: Vec::new(),
+            span: span(),
+        };
+        recover_direct_tail_calls(&mut function);
+        assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
+
+        let mut function = unit_tail_function();
+        function.blocks[1].terminator = RuntimeTerminator::Conditional {
+            condition: 0,
+            consequent: 2,
+            consequent_arguments: Vec::new(),
+            alternate: 1,
+            alternate_arguments: Vec::new(),
+            span: span(),
+        };
+        recover_direct_tail_calls(&mut function);
+        assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
+
+        let mut function = unit_tail_function();
+        function.blocks[1].terminator = RuntimeTerminator::Trap {
+            message: "pending trap".to_owned(),
+            span: span(),
+        };
+        recover_direct_tail_calls(&mut function);
+        assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
+    }
+
+    fn unit_tail_function() -> RuntimeFunction {
+        runtime_function(vec![
+            RuntimeBlock {
+                id: 0,
+                parameters: vec![RuntimeBlockParameter {
+                    type_id: 1,
+                    ..parameter(0)
+                }],
+                operations: vec![operation("call.direct", 1, vec![0], Some(7), None)],
+                terminator: RuntimeTerminator::Branch {
+                    target: 1,
+                    arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 1,
+                parameters: Vec::new(),
+                operations: Vec::new(),
+                terminator: RuntimeTerminator::Branch {
+                    target: 2,
+                    arguments: Vec::new(),
+                    span: span(),
+                },
+            },
+            RuntimeBlock {
+                id: 2,
+                parameters: Vec::new(),
+                operations: vec![RuntimeOperation {
+                    value: Some(WireConstant::Unit),
+                    ..operation("constant", 2, Vec::new(), None, None)
+                }],
+                terminator: RuntimeTerminator::Return {
+                    value: 2,
+                    span: span(),
+                },
+            },
+        ])
     }
 
     #[test]

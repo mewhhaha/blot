@@ -6,13 +6,10 @@ grammar Blot
 
 token IDENT = /[a-z_][A-Za-z0-9_]*/ ;
 token TYPE_IDENT = /[A-Z][A-Za-z0-9_]*/ ;
-token INTEGER = /[0-9]+/ ;
-// A float needs a digit on both sides of the point. That is what keeps it
-// disjoint from `INTEGER "." field_name`, which is how `pair.0` reads: the
-// field there has no digit before the dot, and a float always does. The
-// priority states the tie rather than leaving it to longest-match, because the
-// GPU profile wants terminal identity fixed rather than resolved.
-token FLOAT priority 3 = /[0-9]+\.[0-9]+/ ;
+token INTEGER = /(0[xX][0-9A-Fa-f](_?[0-9A-Fa-f])*|[0-9](_?[0-9])*)/ ;
+// A decimal point needs digits on both sides, preserving `pair.0` field access.
+// An exponent also identifies a float. Separators occur only between digits.
+token FLOAT priority 3 = /[0-9](_?[0-9])*(\.[0-9](_?[0-9])*([eE][+-]?[0-9](_?[0-9])*)?|[eE][+-]?[0-9](_?[0-9])*)/ ;
 token TEXT = /"([^"\\]|\\[ntr"\\])*"/ ;
 token ELSE_IF priority 3 = /else[ \t\r\n]+if/ ;
 token INTRINSIC priority 3 = /@[a-z_][A-Za-z0-9_]*(\.[a-z_][A-Za-z0-9_]*)*/ ;
@@ -78,7 +75,7 @@ fixity_declaration = (
 // compile-time values.
 declaration =
   signature | binding | rebinding | sequencing
-  | opening | iteration | breaking
+  | opening | iteration | breaking | continuing
   | conditional_statement | result ;
 
 // `statement` is `declaration` under a second name. The duplication is
@@ -86,7 +83,7 @@ declaration =
 // the compact CST.
 statement =
   signature | binding | rebinding | sequencing
-  | opening | iteration | breaking
+  | opening | iteration | breaking | continuing
   | conditional_statement | result ;
 
 signature = (
@@ -103,6 +100,7 @@ binding = (
   kind:("let" | "const")
   recursive:"rec"?
   pattern:binding_pattern
+  annotation:("::" value)?
   "="
   value:(value | indented_value)
   LAYOUT_NEWLINE
@@ -147,6 +145,7 @@ rebinding = (
 sequencing = (
   "use"
   head:value
+  annotation:("::" value)?
   ("<-" value:value)?
   LAYOUT_NEWLINE
 ) ;
@@ -187,6 +186,11 @@ iteration_source = ( "in" source:value ) ;
 
 breaking = (
   "break"
+  LAYOUT_NEWLINE
+) ;
+
+continuing = (
+  "continue"
   LAYOUT_NEWLINE
 ) ;
 
@@ -370,7 +374,7 @@ keyword = (
   | "infixl" | "infixr" | "infix" | "prefix"
   | "let" | "const" | "return" | "use"
   | "if" | "else" | "case" | "of" | "rec" | "open"
-  | "for" | "in" | "break" | "do" | "fn"
+  | "for" | "in" | "break" | "continue" | "do" | "fn"
 ) ;
 
 primary_expression = (

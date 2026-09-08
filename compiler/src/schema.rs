@@ -92,6 +92,7 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "signature",
     "bounded_lambda",
     "computed_shape_field",
+    "continuing",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -160,6 +161,7 @@ pub(crate) const FIELD_NAMES: &[&str] = &[
     "recursive",
     "targets",
     "patterns",
+    "annotation",
 ];
 
 pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[

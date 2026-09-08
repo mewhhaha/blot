@@ -218,6 +218,10 @@ pub enum Type {
     Array(Rc<Type>),
     Region(Rc<Type>),
     Scratch(Rc<Type>),
+    Resource {
+        family: String,
+        payload: Rc<Type>,
+    },
     Variant {
         cases: TypeRow,
         open: bool,
@@ -319,6 +323,10 @@ fn stable_loop_signature(type_: Type) -> Type {
         Type::Scratch(element) => {
             Type::Scratch(Rc::new(stable_loop_signature(Rc::unwrap_or_clone(element))))
         }
+        Type::Resource { family, payload } => Type::Resource {
+            family,
+            payload: Rc::new(stable_loop_signature(Rc::unwrap_or_clone(payload))),
+        },
         Type::Variant { cases, open } => Type::Variant {
             cases: cases
                 .into_iter()
@@ -401,6 +409,10 @@ enum ConstraintTypeNode {
     Array(ConstraintTypeId),
     Region(ConstraintTypeId),
     Scratch(ConstraintTypeId),
+    Resource {
+        family: String,
+        payload: ConstraintTypeId,
+    },
     Variant {
         cases: ConstraintTypeRow,
         open: bool,
@@ -568,6 +580,10 @@ impl ConstraintTypeArena {
             Type::Scratch(element) => {
                 ConstraintTypeNode::Scratch(self.intern_shared(element, seen))
             }
+            Type::Resource { family, payload } => ConstraintTypeNode::Resource {
+                family: family.clone(),
+                payload: self.intern_shared(payload, seen),
+            },
             Type::Variant { cases, open } => ConstraintTypeNode::Variant {
                 cases: cases
                     .iter()
@@ -665,6 +681,10 @@ impl ConstraintTypeArena {
             ConstraintTypeNode::Array(element) => Type::Array(self.expand_shared(*element)),
             ConstraintTypeNode::Region(element) => Type::Region(self.expand_shared(*element)),
             ConstraintTypeNode::Scratch(element) => Type::Scratch(self.expand_shared(*element)),
+            ConstraintTypeNode::Resource { family, payload } => Type::Resource {
+                family: family.clone(),
+                payload: self.expand_shared(*payload),
+            },
             ConstraintTypeNode::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .iter()
@@ -729,7 +749,10 @@ impl ConstraintTypeArena {
                 .unwrap_or(0),
             ConstraintTypeNode::Array(element)
             | ConstraintTypeNode::Region(element)
-            | ConstraintTypeNode::Scratch(element) => self.level_of(*element, variables),
+            | ConstraintTypeNode::Scratch(element)
+            | ConstraintTypeNode::Resource {
+                payload: element, ..
+            } => self.level_of(*element, variables),
             ConstraintTypeNode::OpenEffects { tail, .. } => self.level_of(*tail, variables),
             ConstraintTypeNode::Union(members) => members
                 .iter()
@@ -887,6 +910,16 @@ impl ConstraintTypeArena {
             | (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
                 self.same_with_rigids(*left, *right, rigids)
             }
+            (
+                ConstraintTypeNode::Resource {
+                    family: left_family,
+                    payload: left,
+                },
+                ConstraintTypeNode::Resource {
+                    family: right_family,
+                    payload: right,
+                },
+            ) => left_family == right_family && self.same_with_rigids(*left, *right, rigids),
             (
                 ConstraintTypeNode::Variant {
                     cases: left,
@@ -1469,6 +1502,10 @@ pub(crate) enum FlatTypeNode {
     Array(FlatTypeId),
     Region(FlatTypeId),
     Scratch(FlatTypeId),
+    Resource {
+        family: String,
+        payload: FlatTypeId,
+    },
     Variant {
         cases: Vec<(String, FlatTypeId)>,
         open: bool,
@@ -1508,7 +1545,10 @@ fn append_flat_type_children(node: &FlatTypeNode, children: &mut Vec<FlatTypeId>
         }
         FlatTypeNode::Array(element)
         | FlatTypeNode::Region(element)
-        | FlatTypeNode::Scratch(element) => children.push(*element),
+        | FlatTypeNode::Scratch(element)
+        | FlatTypeNode::Resource {
+            payload: element, ..
+        } => children.push(*element),
         FlatTypeNode::OpenEffects { tail, .. } => children.push(*tail),
         FlatTypeNode::Union(members) => children.extend(members.iter().copied()),
         FlatTypeNode::Rigid(_)
@@ -2046,6 +2086,9 @@ fn closed_boundary_type_key(
                     FlatTypeNode::Array(_) => format!("array({})", children.next()?),
                     FlatTypeNode::Region(_) => format!("region({})", children.next()?),
                     FlatTypeNode::Scratch(_) => format!("scratch({})", children.next()?),
+                    FlatTypeNode::Resource { family, .. } => {
+                        format!("resource({}:{family}){}", family.len(), children.next()?)
+                    }
                     FlatTypeNode::Variant { cases, open } => format!(
                         "variant({open}){}",
                         fields(cases.into_iter().map(|(name, _)| name), children)
@@ -2195,6 +2238,7 @@ fn copy_boundary_type(
                     | FlatTypeNode::Array(_)
                     | FlatTypeNode::Region(_)
                     | FlatTypeNode::Scratch(_)
+                    | FlatTypeNode::Resource { payload: _, .. }
                     | FlatTypeNode::OpenEffects { .. } => {}
                 }
                 children.clear();
@@ -2252,6 +2296,10 @@ fn copy_boundary_type(
                     FlatTypeNode::Scratch(_) => {
                         FlatTypeNode::Scratch(children.next().expect("scratch element"))
                     }
+                    FlatTypeNode::Resource { family, .. } => FlatTypeNode::Resource {
+                        family,
+                        payload: children.next().expect("resource payload"),
+                    },
                     FlatTypeNode::Variant { cases, open } => FlatTypeNode::Variant {
                         cases: cases
                             .into_iter()
@@ -2543,6 +2591,13 @@ struct NumericLiteralCandidate {
     representation: Type,
 }
 
+#[derive(Clone)]
+struct EditorHole {
+    type_: Type,
+    span: Span,
+    environment: TypeEnvironment,
+}
+
 type StructuralReadabilityCandidates =
     ModuleFacts<(ExpressionId, ReadabilityFactKind), Vec<Option<ReadabilityFact>>>;
 
@@ -2569,6 +2624,7 @@ pub struct Checker {
     module_work: RefCell<HashMap<String, CompilerWork>>,
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
+    editor_holes: RefCell<ModuleFacts<ExpressionId, EditorHole>>,
     member_constraints: RefCell<MemberConstraints>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
@@ -2661,6 +2717,7 @@ impl Checker {
             module_work: RefCell::new(HashMap::new()),
             bound_insertions: RefCell::new(Vec::new()),
             numeric_literals: RefCell::new(BTreeMap::new()),
+            editor_holes: RefCell::new(ModuleFacts::default()),
             member_constraints: RefCell::new(MemberConstraints::default()),
             next_skolem: Rc::new(Cell::new(0x8000_0000)),
             next_representation_hole: Rc::new(Cell::new(u32::MAX)),
@@ -3075,6 +3132,7 @@ impl Checker {
         self.numeric_literals
             .borrow_mut()
             .retain(|_, literal| !paths.contains(&literal.path));
+        self.editor_holes.borrow_mut().remove_modules(paths);
         self.analysis_expression_types
             .borrow_mut()
             .remove_modules(paths);
@@ -3131,6 +3189,51 @@ impl Checker {
             .ownership_contracts
             .borrow_mut()
             .remove_modules(paths);
+    }
+
+    fn editor_hole_diagnostics(&self, path: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = self
+            .editor_holes
+            .borrow()
+            .module(path)
+            .into_iter()
+            .flatten()
+            .map(|(_, hole)| {
+                let expected = self.show_settled(&self.settle(hole.type_.clone(), false));
+                let mut bindings = BTreeMap::new();
+                let mut scope = Some(&hole.environment);
+                while let Some(environment) = scope {
+                    for (name, typing) in environment.names.iter() {
+                        if name == "_" || name.contains('$') || bindings.contains_key(name) {
+                            continue;
+                        }
+                        let type_ = match typing {
+                            Typing::Mono(type_) | Typing::Scheme { body: type_, .. } => type_,
+                        };
+                        bindings.insert(
+                            name.clone(),
+                            self.show_settled(&self.settle(type_.clone(), true)),
+                        );
+                    }
+                    scope = environment.parent.as_deref();
+                }
+                let mut message = format!("Unresolved expression hole; expected {expected}.");
+                if !bindings.is_empty() {
+                    message.push_str(" Local bindings: ");
+                    message.push_str(
+                        &bindings
+                            .into_iter()
+                            .map(|(name, type_)| format!("{name}: {type_}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    message.push('.');
+                }
+                Diagnostic::new("BLOT_EXPRESSION_HOLE", message, hole.span).at(path)
+            })
+            .collect::<Vec<_>>();
+        diagnostics.sort_by_key(|diagnostic| (diagnostic.span.start, diagnostic.span.end));
+        diagnostics
     }
 
     pub fn check_json(&self, path: &str) -> serde_json::Value {
@@ -3620,6 +3723,7 @@ impl Checker {
     }
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
+        self.editor_holes.borrow_mut().remove_module(path);
         self.simplifications.borrow_mut().remove_module(path);
         self.readability.borrow_mut().remove_module(path);
         self.conflicting_readability
@@ -3722,6 +3826,9 @@ impl Checker {
         )?;
         effects = self.join_effects(effects, inferred.effects)?;
         self.resolve_numeric_literals()?;
+        if let Some(diagnostic) = self.editor_hole_diagnostics(path).into_iter().next() {
+            return Err(diagnostic);
+        }
         let effects = self.settle(effects, true);
         if let Type::Effects(labels) = &effects
             && labels.iter().any(|label| !label.starts_with("host:"))
@@ -4384,6 +4491,10 @@ impl Checker {
                         FlatTypeNode::Scratch(_) => {
                             Type::Scratch(Rc::new(children.next().expect("scratch element")))
                         }
+                        FlatTypeNode::Resource { family, .. } => Type::Resource {
+                            family: family.clone(),
+                            payload: Rc::new(children.next().expect("resource payload")),
+                        },
                         FlatTypeNode::Variant { cases, open } => Type::Variant {
                             cases: cases
                                 .iter()
@@ -4951,6 +5062,7 @@ impl Checker {
                             replacement: inferred.type_.clone(),
                         });
                 }
+                let unforced_type = inferred.type_.clone();
                 let suspended = if kind == DeclarationKind::Effect {
                     self.effect_value_signature(&inferred.type_)
                 } else {
@@ -5102,6 +5214,12 @@ impl Checker {
                     self.phase.set(previous_phase);
                     inferred.type_ = selected?;
                 }
+                if kind == DeclarationKind::Const
+                    && type_exposes_generative_effect(&inferred.type_)
+                    && let Some(value) = &evaluated
+                {
+                    inferred.type_ = self.instantiate_comptime_effects(&inferred.type_, value);
+                }
                 let recursive_bounds = if recursive {
                     names
                         .iter()
@@ -5125,6 +5243,36 @@ impl Checker {
                     }
                     if kind == DeclarationKind::Effect {
                         self.constrain(inferred.type_.clone(), signature.clone(), span)?;
+                        let expected_expression = match unforced_type {
+                            Type::Function {
+                                deferred,
+                                parameter,
+                                effects,
+                                ..
+                            } if matches!(self.settle((*parameter).clone(), false), Type::Unit) => {
+                                Type::Function {
+                                    deferred,
+                                    parameter,
+                                    effects,
+                                    result: Rc::new(signature.clone()),
+                                }
+                            }
+                            _ => signature.clone(),
+                        };
+                        if !module.arena.synthetic_expressions.contains(&value) {
+                            self.analysis_expression_types.borrow_mut().insert(
+                                path.to_owned(),
+                                value,
+                                expected_expression.clone(),
+                            );
+                        }
+                        if self.expression_types.borrow().contains_key(path, &value) {
+                            self.expression_types.borrow_mut().insert(
+                                path.to_owned(),
+                                value,
+                                expected_expression,
+                            );
+                        }
                     }
                     inferred.type_ = signature;
                 }
@@ -5550,6 +5698,19 @@ impl Checker {
                 open: false,
             })),
             Expression::Var { name, .. } => {
+                if name == "_" {
+                    let type_ = self.fresh();
+                    self.editor_holes.borrow_mut().insert(
+                        path.to_owned(),
+                        expression_id,
+                        EditorHole {
+                            type_: type_.clone(),
+                            span,
+                            environment: environment.clone(),
+                        },
+                    );
+                    return Ok(Inferred::pure(type_));
+                }
                 let typing = environment.lookup(&name, self).ok_or_else(|| {
                     if environment.is_forward(&name) {
                         return Diagnostic::new(
@@ -7298,6 +7459,13 @@ impl Checker {
             }
             let mut parent = Some(closure_values.clone());
             while let Some(current) = parent {
+                for (effect, value) in current.effect_substitutions.borrow().iter() {
+                    instance_values
+                        .effect_substitutions
+                        .borrow_mut()
+                        .entry(*effect)
+                        .or_insert_with(|| value.clone());
+                }
                 for (id, value) in current.type_substitutions.borrow().iter() {
                     instance_values
                         .type_substitutions
@@ -8135,9 +8303,12 @@ impl Checker {
                     pending.push(Rc::unwrap_or_clone(base));
                     pending.extend(fields.iter().map(|(_, field)| field.clone()));
                 }
-                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-                    pending.push(Rc::unwrap_or_clone(element))
-                }
+                Type::Array(element)
+                | Type::Region(element)
+                | Type::Scratch(element)
+                | Type::Resource {
+                    payload: element, ..
+                } => pending.push(Rc::unwrap_or_clone(element)),
                 Type::OpenEffects { tail, .. } => pending.push(Rc::unwrap_or_clone(tail)),
                 Type::Union(members) => {
                     pending.extend(members.iter().cloned());
@@ -8209,9 +8380,12 @@ impl Checker {
                     pending.push(Rc::unwrap_or_clone(base));
                     pending.extend(fields.iter().map(|(_, field)| field.clone()));
                 }
-                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-                    pending.push(Rc::unwrap_or_clone(element))
-                }
+                Type::Array(element)
+                | Type::Region(element)
+                | Type::Scratch(element)
+                | Type::Resource {
+                    payload: element, ..
+                } => pending.push(Rc::unwrap_or_clone(element)),
                 Type::OpenEffects { tail, .. } => pending.push(Rc::unwrap_or_clone(tail)),
                 Type::Union(members) => {
                     pending.extend(members.iter().cloned());
@@ -8318,7 +8492,12 @@ impl Checker {
                     pending.push(base);
                     pending.extend(fields.iter().map(|(_, field)| field));
                 }
-                Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+                Type::Array(element)
+                | Type::Region(element)
+                | Type::Scratch(element)
+                | Type::Resource {
+                    payload: element, ..
+                } => {
                     pending.push(element);
                 }
                 Type::OpenEffects { tail, .. } => pending.push(tail),
@@ -8555,6 +8734,10 @@ impl Checker {
             ConstraintTypeNode::Scratch(element) => ConstraintTypeNode::Scratch(
                 self.freshen_constraint(element, level, fresh, rewritten),
             ),
+            ConstraintTypeNode::Resource { family, payload } => ConstraintTypeNode::Resource {
+                family,
+                payload: self.freshen_constraint(payload, level, fresh, rewritten),
+            },
             ConstraintTypeNode::Variant { cases, open } => ConstraintTypeNode::Variant {
                 cases: self.freshen_constraint_fields(cases, level, fresh, rewritten),
                 open,
@@ -8649,9 +8832,12 @@ impl Checker {
                 .map(|(_, field)| self.level_of(field))
                 .max()
                 .unwrap_or(0),
-            Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-                self.level_of(element)
-            }
+            Type::Array(element)
+            | Type::Region(element)
+            | Type::Scratch(element)
+            | Type::Resource {
+                payload: element, ..
+            } => self.level_of(element),
             Type::OpenEffects { tail, .. } => self.level_of(tail),
             Type::Union(members) => members
                 .iter()
@@ -8782,6 +8968,15 @@ impl Checker {
                 level,
                 copies,
             ))),
+            Type::Resource { family, payload } => Type::Resource {
+                family,
+                payload: Rc::new(self.extrude(
+                    Rc::unwrap_or_clone(payload),
+                    polarity,
+                    level,
+                    copies,
+                )),
+            },
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
                 tail: Rc::new(self.extrude(Rc::unwrap_or_clone(tail), polarity, level, copies)),
@@ -9193,6 +9388,26 @@ impl Checker {
                 true
             }
             (ConstraintTypeNode::Scratch(left), ConstraintTypeNode::Scratch(right)) => {
+                work.extend([
+                    WorkItem { left, right, span },
+                    WorkItem {
+                        left: right,
+                        right: left,
+                        span,
+                    },
+                ]);
+                true
+            }
+            (
+                ConstraintTypeNode::Resource {
+                    family: left_family,
+                    payload: left,
+                },
+                ConstraintTypeNode::Resource {
+                    family: right_family,
+                    payload: right,
+                },
+            ) if left_family == right_family => {
                 work.extend([
                     WorkItem { left, right, span },
                     WorkItem {
@@ -9680,6 +9895,12 @@ impl Checker {
             Type::Scratch(element) => Type::Scratch(Rc::new(
                 self.residual_signature_type(Rc::unwrap_or_clone(element), traversal),
             )),
+            Type::Resource { family, payload } => Type::Resource {
+                family,
+                payload: Rc::new(
+                    self.residual_signature_type(Rc::unwrap_or_clone(payload), traversal),
+                ),
+            },
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
                 tail: Rc::new(self.residual_signature_type(Rc::unwrap_or_clone(tail), traversal)),
@@ -9841,6 +10062,14 @@ impl Checker {
                 positive,
                 traversal,
             ))),
+            Type::Resource { family, payload } => Type::Resource {
+                family,
+                payload: Rc::new(self.settle_seen(
+                    Rc::unwrap_or_clone(payload),
+                    positive,
+                    traversal,
+                )),
+            },
             Type::OpenEffects { labels, tail } => Type::OpenEffects {
                 labels,
                 tail: Rc::new(self.settle_seen(Rc::unwrap_or_clone(tail), positive, traversal)),
@@ -10466,6 +10695,46 @@ impl Checker {
         evaluated
     }
 
+    fn instantiate_comptime_effects(&self, type_: &Type, value: &Value) -> Type {
+        if !type_exposes_generative_effect(type_) {
+            return type_.clone();
+        }
+        if let Value::Extended { inner, .. } = value {
+            return self.instantiate_comptime_effects(type_, inner);
+        }
+        if let (Type::Record(fields), Value::Shape(values)) = (type_, value) {
+            return Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, type_)| {
+                        let instantiated = match values.get(name) {
+                            Some(value) => self.instantiate_comptime_effects(type_, value),
+                            None => type_.clone(),
+                        };
+                        (name.clone(), instantiated)
+                    })
+                    .collect(),
+            );
+        }
+        if let Value::Closure { environment, .. } = value {
+            let mut replacements = BTreeMap::new();
+            let mut scope = Some(environment.clone());
+            while let Some(current) = scope {
+                for (effect, value) in current.effect_substitutions.borrow().iter() {
+                    replacements.entry(*effect).or_insert_with(|| value.clone());
+                }
+                scope = current.parent.borrow().clone();
+            }
+            return instantiate_effect_identities(type_, &replacements);
+        }
+        if matches!(value, Value::Operation { .. } | Value::Effect { .. })
+            && let Some(instantiated) = self.bridge(value)
+        {
+            return instantiated;
+        }
+        type_.clone()
+    }
+
     fn bridge_runtime_value(&self, value: &Value) -> Type {
         match value {
             Value::Closure { .. } | Value::ModuleClosure { .. } | Value::IndexedStep { .. } => {
@@ -10481,6 +10750,10 @@ impl Checker {
             Value::ScratchType(element) => {
                 Type::Scratch(Rc::new(self.bridge_runtime_value(element)))
             }
+            Value::ResourceType { family, payload } => Type::Resource {
+                family: family.clone(),
+                payload: Rc::new(self.bridge_runtime_value(payload)),
+            },
             Value::Scratch { values, .. } => Type::Scratch(Rc::new(join_types(
                 values
                     .iter()
@@ -10652,6 +10925,9 @@ impl Checker {
             }
             Type::Region(element) => format!("Region {}", self.show_settled(element)),
             Type::Scratch(element) => format!("Scratch {}", self.show_settled(element)),
+            Type::Resource { family, payload } => {
+                format!("Resource:{family} {}", self.show_settled(payload))
+            }
             Type::Variant { cases, .. } => cases
                 .iter()
                 .map(|(name, payload)| {
@@ -10866,6 +11142,14 @@ fn quantify_settlement_holes(
             next_skolem,
             variables,
         )?))),
+        Type::Resource { family, payload } => Some(Type::Resource {
+            family,
+            payload: Rc::new(quantify_settlement_holes(
+                Rc::unwrap_or_clone(payload),
+                next_skolem,
+                variables,
+            )?),
+        }),
         Type::Variant { cases, open } => Some(Type::Variant {
             cases: cases
                 .into_iter()
@@ -10921,9 +11205,12 @@ fn operator_dispatch_type_is_concrete(type_: &Type) -> bool {
                     .iter()
                     .all(|(_, field)| operator_dispatch_type_is_concrete(field))
         }
-        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-            operator_dispatch_type_is_concrete(element)
-        }
+        Type::Array(element)
+        | Type::Region(element)
+        | Type::Scratch(element)
+        | Type::Resource {
+            payload: element, ..
+        } => operator_dispatch_type_is_concrete(element),
         Type::OpenEffects { tail, .. } => operator_dispatch_type_is_concrete(tail),
         Type::Union(members) => members.iter().all(operator_dispatch_type_is_concrete),
         Type::Opaque(name) if name.starts_with("'t") => false,
@@ -10958,9 +11245,12 @@ fn contains_bottom(type_: &Type) -> bool {
         Type::RecordUpdate { base, fields } => {
             contains_bottom(base) || fields.iter().any(|(_, field)| contains_bottom(field))
         }
-        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-            contains_bottom(element)
-        }
+        Type::Array(element)
+        | Type::Region(element)
+        | Type::Scratch(element)
+        | Type::Resource {
+            payload: element, ..
+        } => contains_bottom(element),
         Type::OpenEffects { tail, .. } => contains_bottom(tail),
         Type::Union(members) => members.iter().any(contains_bottom),
         Type::Variable(_)
@@ -11092,6 +11382,11 @@ fn closed_type_key(type_: &Type) -> Option<String> {
             Type::Array(element) => Some(format!("array({})", visit(element, binders)?)),
             Type::Region(element) => Some(format!("region({})", visit(element, binders)?)),
             Type::Scratch(element) => Some(format!("scratch({})", visit(element, binders)?)),
+            Type::Resource { family, payload } => Some(format!(
+                "resource({}:{family}){}",
+                family.len(),
+                visit(payload, binders)?
+            )),
             Type::Variant { cases, open } => {
                 Some(format!("variant({open}){}", fields("", cases, binders)?))
             }
@@ -11534,6 +11829,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
         "@text.contains" => curried(vec![text.clone(), text], bool_),
         "@text.of_int" => curried(vec![int], text),
+        "@resource.type" => curried(vec![text, checker.fresh()], Type::Opaque("Type".to_owned())),
         "@region.type" => curried(
             vec![Type::Opaque("Type".to_owned())],
             Type::Opaque("Type".to_owned()),
@@ -11948,6 +12244,7 @@ fn contains_function(type_: &Type) -> bool {
         | Type::Array(body)
         | Type::Region(body)
         | Type::Scratch(body)
+        | Type::Resource { payload: body, .. }
         | Type::OpenEffects { tail: body, .. } => contains_function(body),
         Type::Record(fields) | Type::Variant { cases: fields, .. } => {
             fields.iter().any(|(_, field)| contains_function(field))
@@ -11969,6 +12266,7 @@ fn ownership_uses_expression_type(type_: &Type) -> bool {
         | Type::RecordUpdate { .. }
         | Type::Region(_)
         | Type::Scratch(_)
+        | Type::Resource { payload: _, .. }
         | Type::Variant { .. }
         | Type::Effects(_)
         | Type::OpenEffects { .. }
@@ -12446,6 +12744,39 @@ fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Ve
     }
 }
 
+fn instantiate_effect_identities(type_: &Type, replacements: &BTreeMap<u32, Value>) -> Type {
+    let label = |label: &String| {
+        let replacement = label
+            .splitn(3, ':')
+            .nth(1)
+            .and_then(|id| id.parse::<u32>().ok())
+            .and_then(|id| replacements.get(&id))
+            .and_then(effect_label);
+        replacement.unwrap_or_else(|| label.clone())
+    };
+    match type_ {
+        Type::Effects(labels) => Type::Effects(labels.iter().map(label).collect()),
+        Type::OpenEffects { labels, tail } => Type::OpenEffects {
+            labels: labels.iter().map(label).collect(),
+            tail: Rc::new(instantiate_effect_identities(tail, replacements)),
+        },
+        Type::Opaque(name) if name.starts_with("Effect:") => {
+            let effect = name
+                .splitn(3, ':')
+                .nth(1)
+                .and_then(|id| id.parse::<u32>().ok())
+                .and_then(|id| replacements.get(&id));
+            match effect {
+                Some(Value::Effect { id, name, .. }) => Type::Opaque(format!("Effect:{id}:{name}")),
+                _ => type_.clone(),
+            }
+        }
+        _ => map_type_children_ref(type_, |child| {
+            instantiate_effect_identities(child, replacements)
+        }),
+    }
+}
+
 fn map_type_children_ref(type_: &Type, mut f: impl FnMut(&Type) -> Type) -> Type {
     match type_ {
         Type::Forall { variables, body } => Type::Forall {
@@ -12483,6 +12814,10 @@ fn map_type_children_ref(type_: &Type, mut f: impl FnMut(&Type) -> Type) -> Type
         Type::Array(element) => Type::Array(Rc::new(f(element))),
         Type::Region(element) => Type::Region(Rc::new(f(element))),
         Type::Scratch(element) => Type::Scratch(Rc::new(f(element))),
+        Type::Resource { family, payload } => Type::Resource {
+            family: family.clone(),
+            payload: Rc::new(f(payload)),
+        },
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
             labels: labels.clone(),
             tail: Rc::new(f(tail)),
@@ -12594,6 +12929,13 @@ fn substitute_inference_variables(type_: Type, replacements: &HashMap<VariableId
             Rc::unwrap_or_clone(element),
             replacements,
         ))),
+        Type::Resource { family, payload } => Type::Resource {
+            family,
+            payload: Rc::new(substitute_inference_variables(
+                Rc::unwrap_or_clone(payload),
+                replacements,
+            )),
+        },
         Type::OpenEffects { labels, tail } => Type::OpenEffects {
             labels,
             tail: Rc::new(substitute_inference_variables(
@@ -12721,6 +13063,7 @@ fn coverage_matrix(rows: &[CoverageRow], types: &[Type]) -> bool {
         | Type::Array(_)
         | Type::Region(_)
         | Type::Scratch(_)
+        | Type::Resource { payload: _, .. }
         | Type::Effects(_)
         | Type::OpenEffects { .. }
         | Type::Opaque(_)
@@ -13703,7 +14046,7 @@ fn declaration_header(kind: DeclarationKind, recursive: bool, name: &str) -> Str
     let kind = match kind {
         DeclarationKind::Let => "let",
         DeclarationKind::Const => "const",
-        DeclarationKind::Effect => "effect",
+        DeclarationKind::Effect => "use",
     };
     if recursive {
         format!("{kind} rec {name}")
@@ -13784,6 +14127,10 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
         Type::Scratch(element) => Some(Value::ScratchType(Box::new(reify_type_with_holes(
             context, element, next_hole,
         )?))),
+        Type::Resource { family, payload } => Some(Value::ResourceType {
+            family: family.clone(),
+            payload: Box::new(reify_type_with_holes(context, payload, next_hole)?),
+        }),
         Type::Variant { cases, open: false } => Some(Value::Union(
             cases
                 .iter()
@@ -14037,6 +14384,19 @@ fn same_type_scoped(
         | (Type::Region(left), Type::Region(right))
         | (Type::Scratch(left), Type::Scratch(right)) => {
             same_type_scoped(left, right, rigids, scope, memo, next_scope)
+        }
+        (
+            Type::Resource {
+                family: left_family,
+                payload: left,
+            },
+            Type::Resource {
+                family: right_family,
+                payload: right,
+            },
+        ) => {
+            left_family == right_family
+                && same_type_scoped(left, right, rigids, scope, memo, next_scope)
         }
         (
             Type::Variant {
@@ -14302,6 +14662,16 @@ fn same_closed_type(left: &Type, right: &Type) -> bool {
             (Type::Array(left), Type::Array(right))
             | (Type::Region(left), Type::Region(right))
             | (Type::Scratch(left), Type::Scratch(right)) => edge(left, right, binders),
+            (
+                Type::Resource {
+                    family: left_family,
+                    payload: left,
+                },
+                Type::Resource {
+                    family: right_family,
+                    payload: right,
+                },
+            ) => left_family == right_family && edge(left, right, binders),
             (
                 Type::Variant {
                     cases: left,
@@ -15089,7 +15459,8 @@ pub(crate) fn type_exposes_generative_effect(type_: &Type) -> bool {
         Type::Forall { body, .. }
         | Type::Array(body)
         | Type::Region(body)
-        | Type::Scratch(body) => type_exposes_generative_effect(body),
+        | Type::Scratch(body)
+        | Type::Resource { payload: body, .. } => type_exposes_generative_effect(body),
         Type::Function {
             parameter,
             effects,
@@ -15166,9 +15537,12 @@ fn closed_checked_type(type_: &Type, bound: &mut HashSet<VariableId>) -> bool {
                     .iter()
                     .all(|(_, field)| closed_checked_type(field, bound))
         }
-        Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
-            closed_checked_type(element, bound)
-        }
+        Type::Array(element)
+        | Type::Region(element)
+        | Type::Scratch(element)
+        | Type::Resource {
+            payload: element, ..
+        } => closed_checked_type(element, bound),
         Type::OpenEffects { tail, .. } => closed_checked_type(tail, bound),
         Type::Union(members) => members
             .iter()
@@ -15259,6 +15633,10 @@ fn flatten_interface_type(
         Type::Scratch(element) => {
             FlatTypeNode::Scratch(flatten_interface_type(element, bound, types)?)
         }
+        Type::Resource { family, payload } => FlatTypeNode::Resource {
+            family: family.clone(),
+            payload: flatten_interface_type(payload, bound, types)?,
+        },
         Type::Variant { cases, open } => FlatTypeNode::Variant {
             cases: cases
                 .iter()
@@ -15339,7 +15717,12 @@ fn free_residual_variables(body: &Type) -> BTreeSet<VariableId> {
                     pending.push((field, bound.clone()));
                 }
             }
-            Type::Array(element) | Type::Region(element) | Type::Scratch(element) => {
+            Type::Array(element)
+            | Type::Region(element)
+            | Type::Scratch(element)
+            | Type::Resource {
+                payload: element, ..
+            } => {
                 pending.push((element, bound));
             }
             Type::OpenEffects { tail, .. } => pending.push((tail, bound)),

@@ -10,6 +10,17 @@ export type BlotRuntimeOwnership = "plain" | "owned" | "borrowed";
 
 export type BlotRuntimeType =
   | {
+    readonly kind: "callback";
+    readonly function: number;
+    readonly signature: number;
+    readonly environmentType: number;
+  }
+  | {
+    readonly kind: "resource";
+    readonly name: string;
+    readonly payloadType: number;
+  }
+  | {
     readonly kind:
       | "unit"
       | "integer-32"
@@ -254,6 +265,7 @@ export type BlotRuntimeOperation =
     | {
       readonly kind:
         | "seal.wrap"
+        | "callback.make"
         | "seal.unwrap"
         | "resource.move"
         | "resource.borrow"
@@ -347,10 +359,12 @@ export type BlotRuntimeCapability = {
   readonly name: string;
   readonly operations: readonly {
     readonly name: string;
+    readonly sourceName: string;
     readonly signature: number;
-    readonly ownership: {
+    readonly contract: {
       readonly input: BlotEffectOwnership;
       readonly result: BlotEffectOwnership;
+      readonly suspends: boolean;
     };
   }[];
 };
@@ -359,6 +373,7 @@ export type BlotRuntimeLink = {
   readonly unit: string;
   readonly name: string;
   readonly signature: number;
+  readonly suspends: boolean;
 };
 
 export type BlotRuntimeExport =
@@ -388,6 +403,7 @@ export type BlotRuntimeModule = {
   readonly functions: readonly BlotRuntimeFunction[];
   readonly capabilities: readonly BlotRuntimeCapability[];
   readonly links: readonly BlotRuntimeLink[];
+  readonly resumableRoots: readonly number[];
   readonly exports: readonly BlotRuntimeExport[];
 };
 
@@ -460,6 +476,27 @@ export function runtimeLayoutWitness(
       case "function":
         witness = scalar(4, 4, `function(${type.signature})`);
         break;
+      case "resource":
+        if (typeof type.name !== "string" || type.name.length === 0) {
+          throw new TypeError("resource type has no family name");
+        }
+        witness = scalar(
+          8,
+          8,
+          `resource(${type.name.length}:${type.name})${
+            visit(type.payloadType).fingerprint
+          }`,
+        );
+        break;
+      case "callback": {
+        const environment = visit(type.environmentType);
+        witness = {
+          ...environment,
+          fingerprint:
+            `callback(${type.function}:${type.signature};${environment.fingerprint})`,
+        };
+        break;
+      }
       case "store": {
         // A Store is the recursion boundary.  Publish its fixed memory32
         // carrier before visiting the element so `Store (Node (Store ...))`
@@ -643,6 +680,19 @@ export function validateBlotRuntimeModule(
       `${module.source}: capability ${capability.name} operations`,
     );
     for (const operation of capability.operations) {
+      if (
+        typeof operation.sourceName !== "string" ||
+        operation.sourceName.length === 0
+      ) {
+        throw new TypeError(
+          `${module.source}: capability operation has no checked source name`,
+        );
+      }
+      if (typeof operation.contract.suspends !== "boolean") {
+        throw new TypeError(
+          `${module.source}: capability ${capability.name}.${operation.name} has no checked suspension contract`,
+        );
+      }
       const signature = requireSignature(
         module,
         operation.signature,
@@ -658,29 +708,39 @@ export function validateBlotRuntimeModule(
         operation.signature,
       );
       validateEffectOwnership(
-        operation.ownership.input,
+        operation.contract.input,
         `${module.source}: capability ${capability.name}.${operation.name} input ownership`,
       );
       validateEffectOwnership(
-        operation.ownership.result,
+        operation.contract.result,
         `${module.source}: capability ${capability.name}.${operation.name} result ownership`,
       );
       validateEffectOwnershipType(
         module,
-        operation.ownership.input,
+        operation.contract.input,
         signature.parameters[0],
         `${module.source}: capability ${capability.name}.${operation.name} input ownership`,
       );
       validateEffectOwnershipType(
         module,
-        operation.ownership.result,
+        operation.contract.result,
         signature.result,
         `${module.source}: capability ${capability.name}.${operation.name} result ownership`,
       );
     }
   }
   const linkOperations = new Map<string, number>();
+  for (const root of module.resumableRoots) {
+    if (
+      !Number.isSafeInteger(root) || root < 0 || root >= module.functions.length
+    ) {
+      throw new TypeError(`${module.source}: invalid resumable root ${root}`);
+    }
+  }
   for (const link of module.links) {
+    if (typeof link.suspends !== "boolean") {
+      throw new TypeError("development link omitted its suspension contract");
+    }
     if (link.unit.length === 0 || link.name.length === 0) {
       throw new TypeError(
         `${module.source}: development links require non-empty unit and operation names`,

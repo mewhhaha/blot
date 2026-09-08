@@ -1,0 +1,17 @@
+open import "blot:prelude"
+
+const Client = Resource.of "TextClient"
+const Stream = Resource.of "TextStream"
+const IO =
+  @effect.host {
+    .open = Effect.suspends ((Client, Text) -> Stream);
+    .read = Effect.suspends (Stream -> Text);
+  }
+
+let run :: { .client = Client; } -> Text -> Text ~ { IO }
+let run = fn io => fn path => do:
+  use stream <- IO.open (io.client, path)
+  use text <- IO.read stream
+  return text <> "!"
+
+return { .run = run; }

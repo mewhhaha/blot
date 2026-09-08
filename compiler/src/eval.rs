@@ -13,7 +13,7 @@ use crate::diagnostic::Diagnostic;
 use crate::primitives::{constant, primitive_arity, run_primitive};
 use crate::value::{
     ClosureAlternative, DecodedEnvironmentIdentity, DeferredDemands, Domain as ValueDomain,
-    EffectOperationOwnership, EffectOwnership, Env, Environment, OpenedValues, OrderedFields,
+    EffectOperationContract, EffectOwnership, Env, Environment, OpenedValues, OrderedFields,
     RecursiveBindings, Resume, RuntimeMeaning, RuntimeValue, Value, as_tuple, attach_signature,
     capture_env, child_env, contains_type_variables, declaration_env, equal, lookup,
     lookup_signature, opened_members, recursive_env, reusable_across_module_instances, show, tuple,
@@ -150,6 +150,7 @@ pub(crate) enum CompilerApplication {
         position: u8,
     },
     RuntimeExportParameter(u32),
+    HostCallbackEntry,
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -351,7 +352,8 @@ fn application_provenance_is_bounded(
         | CompilerApplication::HandleReturn
         | CompilerApplication::RequirementPredicate
         | CompilerApplication::RecognitionArgument { .. }
-        | CompilerApplication::RuntimeExportParameter(_) => true,
+        | CompilerApplication::RuntimeExportParameter(_)
+        | CompilerApplication::HostCallbackEntry => true,
     })
 }
 
@@ -427,7 +429,8 @@ impl ApplicationSite {
                 | CompilerApplication::HandleReturn
                 | CompilerApplication::RequirementPredicate
                 | CompilerApplication::RecognitionArgument { .. }
-                | CompilerApplication::RuntimeExportParameter(_) => false,
+                | CompilerApplication::RuntimeExportParameter(_)
+                | CompilerApplication::HostCallbackEntry => false,
             })
     }
 }
@@ -472,7 +475,7 @@ impl EffectIdentity {
 
 type EffectSignatures = Vec<(
     OrderedFields,
-    BTreeMap<String, EffectOperationOwnership>,
+    BTreeMap<String, EffectOperationContract>,
     u32,
 )>;
 
@@ -1080,7 +1083,7 @@ impl Context {
         runtime: &Runtime,
         source: ApplicationSite,
         signature: &OrderedFields,
-        ownership: &BTreeMap<String, EffectOperationOwnership>,
+        ownership: &BTreeMap<String, EffectOperationContract>,
         host: bool,
     ) -> u32 {
         let key = EffectIdentity {
@@ -1185,6 +1188,7 @@ impl Context {
                 | Value::Sealed { inner: payload, .. }
                 | Value::RegionType(payload)
                 | Value::ScratchType(payload)
+                | Value::ResourceType { payload, .. }
                 | Value::EmptyArray { element: payload } => pending.push(payload),
                 _ => {}
             }
@@ -1317,7 +1321,7 @@ fn effect_signatures_equal(left: &OrderedFields, right: &OrderedFields) -> bool 
 fn normalize_effect_operations(
     operations: &OrderedFields,
     span: Span,
-) -> Result<(OrderedFields, BTreeMap<String, EffectOperationOwnership>), Diagnostic> {
+) -> Result<(OrderedFields, BTreeMap<String, EffectOperationContract>), Diagnostic> {
     let mut signatures = OrderedFields::default();
     let mut ownership = BTreeMap::new();
     for (name, descriptor) in operations {
@@ -1332,9 +1336,9 @@ fn normalize_effect_operation(
     operation: &str,
     descriptor: &Value,
     span: Span,
-) -> Result<(Value, EffectOperationOwnership), Diagnostic> {
+) -> Result<(Value, EffectOperationContract), Diagnostic> {
     if effect_arrow(descriptor).is_some() {
-        return Ok((descriptor.clone(), EffectOperationOwnership::unrestricted()));
+        return Ok((descriptor.clone(), EffectOperationContract::unrestricted()));
     }
     let Value::Shape(fields) = descriptor else {
         return Err(effect_ownership_error(
@@ -1347,11 +1351,12 @@ fn normalize_effect_operation(
             span,
         ));
     };
-    let expected_fields = ["signature", "input", "result"];
-    if fields.len() != expected_fields.len()
-        || expected_fields
-            .iter()
-            .any(|field| !fields.contains_key(field))
+    let expected_fields = ["signature", "input", "result", "suspends"];
+    if !fields.contains_key("signature")
+        || fields
+            .keys()
+            .any(|field| !expected_fields.contains(&field.as_str()))
+        || fields.contains_key("input") != fields.contains_key("result")
     {
         let found = fields
             .keys()
@@ -1362,7 +1367,7 @@ fn normalize_effect_operation(
             operation,
             "descriptor",
             format!(
-                "expected exactly `.signature`, `.input`, and `.result`, found fields [{found}]"
+                "expected `.signature`, optional `.input` and `.result` together, and optional Boolean `.suspends`, found fields [{found}]"
             ),
             span,
         ));
@@ -1378,27 +1383,40 @@ fn normalize_effect_operation(
             span,
         ));
     };
-    let input = parse_effect_ownership(
-        fields
-            .get("input")
-            .expect("checked effect descriptor input"),
-        domain,
-        operation,
-        "input",
-        span,
-    )?;
-    let result = parse_effect_ownership(
-        fields
-            .get("result")
-            .expect("checked effect descriptor result"),
-        codomain,
-        operation,
-        "result",
-        span,
-    )?;
+    let input = match fields.get("input") {
+        Some(input) => parse_effect_ownership(input, domain, operation, "input", span)?,
+        None => EffectOwnership::Unrestricted,
+    };
+    let result = match fields.get("result") {
+        Some(result) => parse_effect_ownership(result, codomain, operation, "result", span)?,
+        None => EffectOwnership::Unrestricted,
+    };
+    let suspends = match fields.get("suspends") {
+        None => false,
+        Some(Value::Tag {
+            name,
+            payload: None,
+        }) if name == "True" => true,
+        Some(Value::Tag {
+            name,
+            payload: None,
+        }) if name == "False" => false,
+        Some(value) => {
+            return Err(effect_ownership_error(
+                operation,
+                "suspends",
+                format!("expected a Boolean, found {}", show(value)),
+                span,
+            ));
+        }
+    };
     Ok((
         signature.clone(),
-        EffectOperationOwnership { input, result },
+        EffectOperationContract {
+            input,
+            result,
+            suspends,
+        },
     ))
 }
 
@@ -1695,6 +1713,73 @@ fn effect_value_id(value: &Value) -> Option<u32> {
     }
 }
 
+fn contains_effect_declaration(value: &Value) -> bool {
+    match value {
+        Value::Effect { .. } => true,
+        Value::Shape(members) => members
+            .iter()
+            .any(|(_, member)| contains_effect_declaration(member)),
+        Value::Array(elements) => elements.iter().any(contains_effect_declaration),
+        Value::Extended { inner, members } => {
+            contains_effect_declaration(inner)
+                || members
+                    .iter()
+                    .any(|(_, member)| contains_effect_declaration(member))
+        }
+        _ => false,
+    }
+}
+
+fn record_effect_substitutions(
+    expected: &Value,
+    actual: &Value,
+    replacements: &mut BTreeMap<u32, Value>,
+) {
+    match (expected, actual) {
+        (Value::Effect { id: expected, .. }, Value::Effect { id: actual_id, .. })
+            if expected != actual_id =>
+        {
+            replacements.insert(*expected, actual.clone());
+        }
+        (Value::Shape(expected), Value::Shape(actual)) => {
+            for (name, expected) in expected {
+                if let Some(actual) = actual.get(name) {
+                    record_effect_substitutions(expected, actual, replacements);
+                }
+            }
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            for (expected, actual) in expected.iter().zip(actual.iter()) {
+                record_effect_substitutions(expected, actual, replacements);
+            }
+        }
+        (
+            Value::Extended {
+                inner: expected,
+                members: expected_members,
+            },
+            Value::Extended {
+                inner: actual,
+                members: actual_members,
+            },
+        ) => {
+            record_effect_substitutions(expected, actual, replacements);
+            for (name, expected) in expected_members {
+                if let Some(actual) = actual_members.get(name) {
+                    record_effect_substitutions(expected, actual, replacements);
+                }
+            }
+        }
+        (Value::Extended { inner, .. }, actual) => {
+            record_effect_substitutions(inner, actual, replacements)
+        }
+        (expected, Value::Extended { inner, .. }) => {
+            record_effect_substitutions(expected, inner, replacements)
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Phase {
     Comptime,
@@ -1934,6 +2019,7 @@ fn comptime_argument(value: &Value) -> Option<ComptimeArgument> {
         )),
         Value::RegionType(_)
         | Value::ScratchType(_)
+        | Value::ResourceType { payload: _, .. }
         | Value::Scratch { .. }
         | Value::DeferredScratch { .. }
         | Value::Region { .. }
@@ -2159,11 +2245,13 @@ pub struct Perform {
     pub effect_name: String,
     pub operation: String,
     pub argument: Value,
+    pub(crate) argument_type: Option<Value>,
     pub result_type: Value,
-    pub operation_ownership: EffectOperationOwnership,
+    pub operation_ownership: EffectOperationContract,
     pub span: Span,
     pub host: bool,
-    application: ApplicationSite,
+    pub(crate) application: ApplicationSite,
+    pub(crate) runtime: Runtime,
 }
 
 pub fn run(mut computation: Computation) -> Result<Value, Diagnostic> {
@@ -2547,7 +2635,10 @@ pub fn evaluate_expression(
                 environment,
                 runtime,
             )
-            .and_then(move |function| {
+            .and_then(move |mut function| {
+                while let Value::Extended { inner, .. } = function {
+                    function = *inner;
+                }
                 // A deferred parameter is handed the argument unevaluated, so
                 // the decision not to run it belongs to the body's reads.
                 let deferred = match &function {
@@ -2623,7 +2714,7 @@ pub fn evaluate_expression(
             capture_env(&environment);
             let signature = runtime
                 .closure_signature(&context, module_path.as_str(), *body)
-                .map(Box::new);
+                .map(|signature| Box::new(substitute_signature(&signature, &environment)));
             Computation::value(Value::Closure {
                 module: module_path,
                 module_instances: runtime.module_instances.clone(),
@@ -4116,6 +4207,20 @@ fn evaluate_declarations(
                 } else {
                     declaration_env(&next_environment)
                 };
+                if contains_effect_declaration(&value) {
+                    let bindings = binding_context.evaluated_bindings.borrow();
+                    let mut substitutions = bound_environment.effect_substitutions.borrow_mut();
+                    for (_, checked) in bindings
+                        .get(binding_module.as_str())
+                        .into_iter()
+                        .flat_map(|bindings| bindings.iter())
+                        .filter(|((candidate_pattern, candidate_expression, _, _), _)| {
+                            *candidate_pattern == pattern && *candidate_expression == value_id
+                        })
+                    {
+                        record_effect_substitutions(&checked.value, &value, &mut substitutions);
+                    }
+                }
                 if let Pattern::Name { name, .. } = &module.arena.patterns[pattern.0 as usize]
                     && let Some(signature) = lookup_signature(&bound_environment, name)
                 {
@@ -4403,9 +4508,12 @@ struct ApplicationCall {
 
 fn apply_with_expected(
     context: Rc<Context>,
-    function: Value,
+    mut function: Value,
     call: ApplicationCall,
 ) -> Computation {
+    while let Value::Extended { inner, .. } = function {
+        function = *inner;
+    }
     let ApplicationCall {
         argument,
         expected_argument,
@@ -4633,6 +4741,10 @@ fn apply_with_expected(
                             application.compiler_steps.last(),
                             Some(CompilerApplication::RuntimeExportParameter(_))
                         ),
+                        host_callback: matches!(
+                            application.compiler_steps.last(),
+                            Some(CompilerApplication::HostCallbackEntry)
+                        ),
                         crosses_development_boundary,
                     },
                     &argument,
@@ -4641,7 +4753,21 @@ fn apply_with_expected(
                     span,
                 );
                 match call {
-                    Ok(crate::hir::ResidualFunctionCall::Static) => {}
+                    Ok(crate::hir::ResidualFunctionCall::Static(reason)) => {
+                        if matches!(
+                            application.compiler_steps.last(),
+                            Some(CompilerApplication::HostCallbackEntry)
+                        ) {
+                            return Computation::error(
+                                Diagnostic::new(
+                                    "BLOT_UNSUPPORTED_LOWERING",
+                                    format!("Cannot compile a host callback: {reason}."),
+                                    loaded.arena.expression_span(body),
+                                )
+                                .at(&closure_module),
+                            );
+                        }
+                    }
                     Ok(crate::hir::ResidualFunctionCall::Existing(value)) => {
                         return Computation::value(value);
                     }
@@ -4674,6 +4800,12 @@ fn apply_with_expected(
                 record_signature_substitutions(&scope, domain, signature_argument);
                 if let Some(expected_result) = &expected_result {
                     record_signature_substitutions(&scope, codomain, expected_result);
+                    if !contains_type_variables(expected_result)
+                        && let Some(checked_body) =
+                            runtime.expression_type(&context, &closure_module, body)
+                    {
+                        record_signature_substitutions(&scope, &checked_body, expected_result);
+                    }
                 }
             }
             if let Some(name) = self_name {
@@ -4842,8 +4974,25 @@ fn apply_with_expected(
                     span,
                 ));
             };
-            let declared_result = match operations.get(&name) {
-                Some(Value::Arrow { codomain, .. }) => (**codomain).clone(),
+            let declared_result = match operations.get(&name).map(signature_body) {
+                Some(Value::Arrow {
+                    domain, codomain, ..
+                }) => {
+                    let substitutions = child_env(None);
+                    let argument_type = runtime
+                        .residual
+                        .as_ref()
+                        .and_then(|trace| trace.borrow().conservative_value_type(&argument));
+                    record_signature_substitutions(
+                        &substitutions,
+                        domain,
+                        argument_type.as_ref().unwrap_or(&argument),
+                    );
+                    if let Some(expected) = &expected_result {
+                        record_signature_substitutions(&substitutions, codomain, expected);
+                    }
+                    substitute_signature(codomain, &substitutions)
+                }
                 _ => Value::Unbounded,
             };
             let result_type =
@@ -4868,11 +5017,13 @@ fn apply_with_expected(
                 effect_name,
                 operation: name,
                 argument,
+                argument_type: expected_argument,
                 result_type,
                 operation_ownership,
                 span,
                 host,
                 application,
+                runtime,
             };
             Computation::perform(Box::new(request), Computation::value)
         }
@@ -5961,6 +6112,16 @@ pub(crate) fn substitute_signature(signature: &Value, environment: &Environment)
     }
 
     match signature {
+        Value::Effect { id, .. } => {
+            let mut scope = Some(environment.clone());
+            while let Some(current) = scope {
+                if let Some(value) = current.effect_substitutions.borrow().get(id) {
+                    return value.clone();
+                }
+                scope = current.parent.borrow().clone();
+            }
+            signature.clone()
+        }
         Value::TypeVariable(variable) => {
             substitution(environment, *variable).unwrap_or_else(|| signature.clone())
         }
@@ -5979,6 +6140,10 @@ pub(crate) fn substitute_signature(signature: &Value, environment: &Environment)
         Value::ScratchType(element) => {
             Value::ScratchType(Box::new(substitute_signature(element, environment)))
         }
+        Value::ResourceType { family, payload } => Value::ResourceType {
+            family: family.clone(),
+            payload: Box::new(substitute_signature(payload, environment)),
+        },
         Value::EmptyArray { element } => Value::EmptyArray {
             element: Box::new(substitute_signature(element, environment)),
         },
@@ -6034,7 +6199,11 @@ pub(crate) fn substitute_signature(signature: &Value, environment: &Environment)
     }
 }
 
-fn record_signature_substitutions(environment: &Environment, expected: &Value, actual: &Value) {
+pub(crate) fn record_signature_substitutions(
+    environment: &Environment,
+    expected: &Value,
+    actual: &Value,
+) {
     fn value_signature(value: &Value) -> Option<Value> {
         match value {
             Value::Closure {
@@ -6056,6 +6225,7 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
             | Value::Arrow { .. }
             | Value::RegionType(_)
             | Value::ScratchType(_)
+            | Value::ResourceType { payload: _, .. }
             | Value::TypeVariable(_) => Some(value.clone()),
             Value::Shape(fields) => Some(Value::Shape(
                 fields
@@ -6105,6 +6275,18 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
                 }
             }
             (
+                Value::ResourceType {
+                    family: expected_family,
+                    payload: expected,
+                },
+                Value::ResourceType {
+                    family: actual_family,
+                    payload: actual,
+                },
+            ) if expected_family == actual_family => {
+                record_types(environment, expected, actual);
+            }
+            (
                 Value::Arrow {
                     domain: expected_domain,
                     codomain: expected_codomain,
@@ -6123,7 +6305,7 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
         }
     }
 
-    match (signature_body(expected), actual) {
+    match (signature_body(expected), signature_body(actual)) {
         (Value::Shape(expected), Value::Shape(actual)) => {
             for (name, expected) in expected {
                 if let Some(actual) = actual.get(name) {
@@ -6141,11 +6323,28 @@ fn record_signature_substitutions(environment: &Environment, expected: &Value, a
                 record_signature_substitutions(environment, expected, element);
             }
         }
+        (
+            Value::ResourceType {
+                family: expected_family,
+                payload: expected,
+            },
+            Value::ResourceType {
+                family: actual_family,
+                payload: actual,
+            },
+        ) if expected_family == actual_family => {
+            record_types(environment, expected, actual);
+        }
         (expected @ Value::Arrow { .. }, Value::Closure { .. })
         | (expected @ Value::TypeVariable(_), Value::Closure { .. }) => {
             if let Some(actual) = value_signature(actual) {
                 record_types(environment, expected, &actual);
             }
+        }
+        (expected @ Value::Arrow { .. }, actual @ Value::Arrow { .. })
+            if !contains_type_variables(actual) =>
+        {
+            record_types(environment, expected, actual);
         }
         (Value::TypeVariable(variable), actual) => {
             if let Some(actual) = value_signature(actual) {
@@ -6397,14 +6596,16 @@ mod tests {
                     effect_name: "Test".to_owned(),
                     operation: "resume".to_owned(),
                     argument: Value::Unit,
+                    argument_type: None,
                     result_type: Value::Unit,
-                    operation_ownership: EffectOperationOwnership::unrestricted(),
+                    operation_ownership: EffectOperationContract::unrestricted(),
                     span: Span { start: 0, end: 0 },
                     host: true,
                     application: ApplicationSite::expression(
                         ModuleRevision::new("continuation-test.blot"),
                         ExpressionId(0),
                     ),
+                    runtime: Runtime::new(Phase::Runtime, "continuation-test.blot".to_owned()),
                 };
                 let mut computation = Computation::perform(Box::new(request), Computation::value);
                 for _ in 0..20_000 {
@@ -6628,7 +6829,7 @@ mod tests {
             },
         )]);
         let ownership =
-            BTreeMap::from([("map".to_owned(), EffectOperationOwnership::unrestricted())]);
+            BTreeMap::from([("map".to_owned(), EffectOperationContract::unrestricted())]);
 
         let first = context.effect_id(
             &runtime,
@@ -6651,9 +6852,10 @@ mod tests {
         );
         let linear_result = BTreeMap::from([(
             "map".to_owned(),
-            EffectOperationOwnership {
+            EffectOperationContract {
                 input: EffectOwnership::Unrestricted,
                 result: EffectOwnership::Linear,
+                suspends: false,
             },
         )]);
         assert_ne!(

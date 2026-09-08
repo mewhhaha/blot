@@ -385,13 +385,14 @@ test("module grants keep Unit return typing through canonical text imports", asy
       {
         capability: "Init",
         operation: "print",
+        sourceName: "print",
         module: "blot:host/Init",
         name: "print",
         function: {
           parameters: [{ kind: "text" }],
           result: { kind: "unit" },
         },
-        ownership: { input: "unrestricted", result: "unrestricted" },
+        contract: { input: "unrestricted", result: "unrestricted", suspends: false },
       },
     ]);
     const exported = requiredRuntimeExport(manifest, "default");
@@ -446,13 +447,14 @@ test("a module may directly return an effectful computation", async () => {
       {
         capability: "Init",
         operation: "read",
+        sourceName: "read",
         module: "blot:host/Init",
         name: "read",
         function: {
           parameters: [{ kind: "unit" }],
           result: { kind: "signed-integer-64" },
         },
-        ownership: { input: "unrestricted", result: "unrestricted" },
+        contract: { input: "unrestricted", result: "unrestricted", suspends: false },
       },
     ]);
 

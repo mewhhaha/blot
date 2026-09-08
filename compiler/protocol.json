@@ -1,7 +1,7 @@
 {
   "compilerHostAbi": 7,
-  "checkedModuleCertificate": 17,
-  "moduleSnapshotSchema": 2,
-  "valueCapsuleSchema": 4,
-  "runtimeHir": 10
+  "checkedModuleCertificate": 18,
+  "moduleSnapshotSchema": 3,
+  "valueCapsuleSchema": 5,
+  "runtimeHir": 12
 }

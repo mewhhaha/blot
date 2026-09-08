@@ -26,7 +26,7 @@ use crate::typecheck::{
     type_exposes_generative_effect,
 };
 use crate::value::{
-    EffectOperationOwnership, EffectOwnership, OrderedFields, Value,
+    EffectOperationContract, EffectOwnership, OrderedFields, Value,
     reusable_across_module_instances, show,
 };
 use crate::value_capsule::{ValueCapsule, validate_snapshot_message_pack};
@@ -1564,7 +1564,7 @@ fn tool_grants() -> Value {
         name: "Console".to_owned(),
         operation_ownership: BTreeMap::from([(
             "write".to_owned(),
-            EffectOperationOwnership::unrestricted(),
+            EffectOperationContract::unrestricted(),
         )]),
         operations,
         host: true,
@@ -1699,6 +1699,11 @@ fn encode_boundary_value(
             target.push(12);
             identity.include(encode_boundary_value(element, target)?);
         }
+        Value::ResourceType { family, payload } => {
+            target.push(41);
+            append_boundary_string(target, family);
+            identity.include(encode_boundary_value(payload, target)?);
+        }
         Value::Scratch { values, capacity } => {
             target.push(13);
             target.extend_from_slice(&(*capacity as u64).to_le_bytes());
@@ -1815,6 +1820,7 @@ fn encode_boundary_value(
                 append_boundary_string(target, operation);
                 encode_effect_ownership(&ownership.input, target);
                 encode_effect_ownership(&ownership.result, target);
+                target.push(u8::from(ownership.suspends));
             }
         }
         Value::Operation { effect, name } => {
@@ -1990,6 +1996,9 @@ fn json_value(value: &Value) -> serde_json::Value {
             "tag": "scratch-type",
             "element": json_value(element),
         }),
+        Value::ResourceType { family, payload } => {
+            serde_json::json!({ "tag": "resource-type", "family": family, "payload": json_value(payload) })
+        }
         Value::Scratch { values, capacity } => serde_json::json!({
             "tag": "opaque",
             "display": format!("<scratch {}/{}>", values.len(), capacity),
@@ -2066,6 +2075,7 @@ fn json_value(value: &Value) -> serde_json::Value {
                 serde_json::json!([name, {
                     "input": json_effect_ownership(&ownership.input),
                     "result": json_effect_ownership(&ownership.result),
+                    "suspends": ownership.suspends,
                 }])
             }).collect::<Vec<_>>(),
         }),
@@ -4706,6 +4716,149 @@ mod tests {
     }
 
     #[test]
+    fn source_spark_and_channels_emit_precompiled_jobs() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            session
+                .add_source(
+                    "spark.blot".to_owned(),
+                    source(include_str!("../../src/prelude/spark.blot")),
+                )
+                .expect("Spark parses");
+            session
+                .configure_module(
+                    "spark.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("Spark resolves");
+            session
+                .add_source(
+                    "channel.blot".to_owned(),
+                    source(include_str!("../../src/prelude/channel.blot")),
+                )
+                .expect("Channel parses");
+            session
+                .configure_module(
+                    "channel.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("Channel resolves");
+            for example in [
+                include_str!("../../examples/lib/spark.blot"),
+                include_str!("../../examples/lib/channel.blot"),
+                include_str!("../../examples/lib/spark_map_parallel.blot"),
+                include_str!("../../examples/lib/spark_speculate.blot"),
+            ] {
+                session
+                    .add_source("main.blot".to_owned(), source(example))
+                    .expect("Spark example parses");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([
+                            ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                            ("blot:spark".to_owned(), "spark.blot".to_owned()),
+                            ("blot:channel".to_owned(), "channel.blot".to_owned()),
+                        ]),
+                        BTreeMap::new(),
+                    )
+                    .expect("Spark example resolves");
+                let compiled = session.compile_module("main.blot");
+                assert!(compiled.is_ok(), "{:?}", compiled.err());
+                let development = session.compile_development_program(
+                    "main.blot",
+                    "app",
+                    &BTreeMap::from([("app".to_owned(), "main.blot".to_owned())]),
+                );
+                assert!(development.is_ok(), "{:?}", development.err());
+            }
+        });
+    }
+
+    #[test]
+    fn imported_effect_wrappers_use_the_import_instance_identity() {
+        const LIBRARY: &str = "imported-effect-wrappers.blot";
+        const CALLER: &str = "imported-effect-wrapper-caller.blot";
+        let mut session = CompilerSession::default();
+        session.add_source(LIBRARY.to_owned(), source(concat!(
+            "const Echo = @effect.host { .copy = @forall (fn element => element -> element); }\n",
+            "const copy = fn value => Echo.copy value\n",
+                    "return { .Effect = Echo; .copy = copy; .direct = Echo.copy; .add = @int.add; }\n",
+        ))).expect("wrapper library parses");
+        session
+            .configure_module(LIBRARY, BTreeMap::new(), BTreeMap::new())
+            .expect("wrapper library configures");
+        session
+            .add_source(
+                CALLER.to_owned(),
+                source(concat!(
+                    "const Library = import \"library\"\n",
+                    "let run :: @type.int -> @type.int ~ { Library.Effect }\n",
+                    "let run = fn value => Library.copy (Library.direct value)\n",
+                    "return run\n",
+                )),
+            )
+            .expect("wrapper caller parses");
+        session
+            .configure_module(
+                CALLER,
+                BTreeMap::from([("library".to_owned(), LIBRARY.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("wrapper caller configures");
+        let checked = session.check_module(CALLER);
+        assert_eq!(checked["ok"], true, "{checked}");
+        const MIDDLE: &str = "nested-effect-wrapper.blot";
+        session.add_source(MIDDLE.to_owned(), source(concat!(
+            "const Imported = import \"library\"\n",
+            "const copy = fn value => Imported.copy value\n",
+            "return { .Effect = Imported.Effect; .copy = copy; .direct = Imported.direct; }\n",
+        ))).expect("nested wrapper parses");
+        session
+            .configure_module(
+                MIDDLE,
+                BTreeMap::from([("library".to_owned(), LIBRARY.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("nested wrapper resolves");
+        session
+            .configure_module(
+                CALLER,
+                BTreeMap::from([("library".to_owned(), MIDDLE.to_owned())]),
+                BTreeMap::new(),
+            )
+            .expect("nested caller resolves");
+        let checked = session.check_module(CALLER);
+        assert_eq!(checked["ok"], true, "nested imports: {checked}");
+        session
+            .add_source(
+                CALLER.to_owned(),
+                source(concat!(
+                    "const first = import \"library\"\n",
+                    "const second = import \"library\"\n",
+                    "let run :: @type.int -> @type.int ~ { second.Effect }\n",
+                    "let run = fn value => first.copy value\n",
+                    "return run\n",
+                )),
+            )
+            .expect("distinct occurrence caller parses");
+        let rejected = session.check_module(CALLER);
+        assert_eq!(
+            rejected["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+            "{rejected}"
+        );
+    }
+
+    #[test]
     fn aliases_preserve_one_generated_effect_identity() {
         const PATH: &str = "effect-alias-provenance.blot";
         let mut session = CompilerSession::default();
@@ -7068,7 +7221,7 @@ mod tests {
             .as_str()
             .expect("a diagnostic message");
         assert!(
-            message.contains("function choice") && message.contains("ABI 2"),
+            message.contains("function choice") && message.contains("ABI 3"),
             "the refusal must name the private layout: {message}"
         );
     }
@@ -7362,6 +7515,170 @@ return F32.add (-1) 2.5
 
             assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
             assert_eq!(checked["type"], "[Int]");
+        });
+    }
+
+    #[test]
+    fn source_ergonomics_elaborate_and_emit() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            for (example, expected, invocation) in [
+                (
+                    include_str!("../../examples/continuing.blot"),
+                    "248",
+                    "return run 4",
+                ),
+                (
+                    include_str!("../../examples/numeric_literals.blot"),
+                    "1029",
+                    "return run 0.5",
+                ),
+                (
+                    include_str!("../../examples/option_result.blot"),
+                    "[12, 8, 9, 12, 7, 7, 5]",
+                    "return run 5",
+                ),
+            ] {
+                session
+                    .add_source("main.blot".to_owned(), source(example))
+                    .expect("source parses");
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("source resolves");
+                let evaluated = session.evaluate_module("main.blot");
+                assert_eq!(evaluated["display"], expected, "{evaluated}");
+                session
+                    .add_source(
+                        "main.blot".to_owned(),
+                        source(&example.replace(invocation, "return { .run = run; }")),
+                    )
+                    .expect("runtime export parses");
+                let compiled = session.compile_module("main.blot");
+                assert!(compiled.is_ok(), "{:?}", compiled.err());
+            }
+            for (example, code) in [
+                (
+                    include_str!("../../examples/rejected/semantics/continue_outside_loop.blot"),
+                    "BLOT_CONTINUE_OUTSIDE_LOOP",
+                ),
+                (
+                    include_str!(
+                        "../../examples/rejected/semantics/continue_in_value_condition.blot"
+                    ),
+                    "BLOT_CONTINUE_IN_VALUE_CONDITION",
+                ),
+            ] {
+                let rejected = session.add_source("bad.blot".to_owned(), source(example));
+                let AddSourceError::Diagnostics(diagnostics) =
+                    rejected.expect_err("invalid continue is rejected during lowering")
+                else {
+                    panic!("invalid continue needs a source diagnostic");
+                };
+                let diagnostic = diagnostics
+                    .iter()
+                    .find(|diagnostic| diagnostic.code == code)
+                    .expect("invalid continue is diagnosed");
+                assert!(diagnostic.span.end > diagnostic.span.start);
+            }
+
+            session
+                .add_source(
+                    "collections.blot".to_owned(),
+                    source(include_str!("../../examples/lib/collection_effects.blot")),
+                )
+                .expect("effectful collection source parses");
+            session
+                .configure_module(
+                    "collections.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("collections resolve");
+            let compiled = session.compile_module("collections.blot");
+            assert!(compiled.is_ok(), "{:?}", compiled.err());
+            session
+                .add_source(
+                    "handled.blot".to_owned(),
+                    source(include_str!("../../examples/collection_effects.blot")),
+                )
+                .expect("handled source parses");
+            session
+                .configure_module(
+                    "handled.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./lib/collection_effects.blot".to_owned(),
+                            "collections.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .expect("handled source resolves");
+            let evaluated = session.evaluate_module("handled.blot");
+            assert_eq!(evaluated["display"], "48", "{evaluated}");
+        });
+    }
+
+    #[test]
+    fn expression_holes_report_checked_context_and_refuse_emission() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            let example = include_str!("../../examples/rejected/semantics/expression_hole.blot");
+            session
+                .add_source("main.blot".to_owned(), source(example))
+                .expect("hole source parses");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("hole source resolves");
+            let checked = session.check_module("main.blot");
+            let diagnostic = &checked["diagnostic"];
+            assert_eq!(diagnostic["code"], "BLOT_EXPRESSION_HOLE", "{checked}");
+            let message = diagnostic["message"].as_str().expect("diagnostic message");
+            assert!(message.contains("expected Int"), "{message}");
+            assert!(message.contains("input: Int"), "{message}");
+            assert!(message.contains("offset: Int"), "{message}");
+            assert_eq!(
+                diagnostic["span"]["start"],
+                example.find("return _").unwrap() + 7
+            );
+            let refused = session
+                .compile_module("main.blot")
+                .err()
+                .expect("holes cannot emit");
+            assert_eq!(refused.code, "BLOT_EXPRESSION_HOLE");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(&example.replace("return _", "return input + offset")),
+                )
+                .expect("replacement parses");
+            assert!(
+                session.compile_module("main.blot").is_ok(),
+                "filled hole compiles without stale facts"
+            );
         });
     }
 

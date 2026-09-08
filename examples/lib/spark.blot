@@ -1,0 +1,22 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+
+const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
+
+let run ::
+  { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Clock }
+let run = fn io => fn initial => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect, Clock }
+  let body = fn scope => do:
+    let work :: Unit -> Int ~ { Clock }
+    let ?work = fn () => Clock.tick initial
+    use first <- Spark.spawn scope (?work)
+    let other :: Unit -> Int ~ { Clock }
+    let ?other = fn () => Clock.tick (initial + 1)
+    use second <- Spark.spawn scope (?other)
+    use left <- Spark.join first
+    use right <- Spark.join second
+    return left + right
+  return Spark.scope io.executor body
+
+return { .run = run; .Clock = Clock; }

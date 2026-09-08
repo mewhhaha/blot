@@ -1,0 +1,37 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Shared = import "blot:shared"
+
+const Io = { .executor = Spark.Executor; }
+const Input = { .partition = Shared.Partition Int; .progress = Shared.AtomicI32; }
+let kernel :: Input -> Unit ~ { Shared.Access }
+let kernel = fn kernel_io => do:
+  use length <- Shared.length kernel_io.partition
+  for index in Iter.range (0, length):
+    use Shared.write kernel_io.partition index (Shared.read kernel_io.partition index + 10)
+    use Shared.atomic_add kernel_io.progress 1
+
+  return ()
+
+let run :: Io -> { .values = [Int]; .completed = Int; } ~ { Spark.Effect, Shared.Effect, Shared.Access }
+let run = fn io => do:
+  let body :: Spark.Scope -> { .values = [Int]; .completed = Int; } ~ { Spark.Effect, Shared.Effect, Shared.Access }
+  let body = fn scope => do:
+    use values <- Shared.i32 scope [1, 2, 3, 4]
+    use halves <- Shared.split 2 values
+    use counter <- Shared.atomic scope 0
+    let work_left :: Unit -> Unit ~ { Shared.Effect, Shared.Access }
+    let work_left = fn () => Shared.run scope { .partition = halves.left; .progress = counter; } kernel
+    let work_right :: Unit -> Unit ~ { Shared.Effect, Shared.Access }
+    let work_right = fn () => Shared.run scope { .partition = halves.right; .progress = counter; } kernel
+    use left <- Spark.spawn scope work_left
+    use right <- Spark.spawn scope work_right
+    use () <- Spark.join left
+    use () <- Spark.join right
+    use whole <- Shared.join halves.rejoin
+    use values <- Shared.snapshot whole
+    use completed <- Shared.run scope counter Shared.atomic_load
+    return { .values = values; .completed = completed; }
+  return Spark.scope io.executor body
+
+return { .run = run; }

@@ -1,0 +1,19 @@
+open import "blot:prelude"
+
+const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
+
+let step :: Int -> Int ~ { Clock }
+let step = fn index => do:
+  use value <- Clock.tick index
+  return value + 1
+
+let run :: Int -> Int ~ { Clock }
+let run = fn initial => do:
+  let total = initial
+  for index in Iter.range (0, 4):
+    use value <- step index
+    total := total + value
+
+  return total
+
+return { .Clock = Clock; .run = run; }

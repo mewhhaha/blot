@@ -8,6 +8,7 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | --- | --- |
 | `Fn` | `blot:prelude` |
 | `Effect` | `blot:prelude` |
+| `Resource` | `blot:prelude` |
 | `identity` | `blot:prelude` |
 | `freeze` | `blot:prelude` |
 | `always` | `blot:prelude` |
@@ -127,3 +128,13 @@ Focused imports are available as `blot:array`, `blot:collections`, `blot:iter`, 
 | `Op` | `blot:prelude` |
 | `OpOrder` | `blot:prelude` |
 | `OpArithmetic` | `blot:prelude` |
+
+Runtime libraries are ordinary source modules with explicit host capabilities.
+
+| Exports | Import |
+| --- | --- |
+| `Executor`, `Scope`, `Job`, `Effect`, `scope`, `child_scope`, `spawn`, `join`, `parallel`, `speculate`, `map_parallel`, `cancel`, `yield`, `on_exit` | `blot:spark` |
+| `Sender`, `Receiver`, `Ends`, `Effect`, `bounded`, `send`, `receive`, `close` | `blot:channel` |
+| `Clock`, `Http` | `blot:io` |
+| `Source`, `Subscription`, `Policy`, `Effect`, `subscribe`, `next`, `close` | `blot:events` |
+| `Partition`, `Rejoin`, `AtomicI32`, `Access`, `Effect`, `i32`, `f32`, `f64`, `atomic`, `split`, `join`, `snapshot`, `run`, `length`, `read`, `write`, `atomic_load`, `atomic_store`, `atomic_add` | `blot:shared` |

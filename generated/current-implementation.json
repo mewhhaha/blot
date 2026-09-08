@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "publicAbi": {
-    "major": 2,
+    "major": 3,
     "minor": 0
   },
   "semanticCompiler": "rust-wasm",
@@ -15,6 +15,7 @@
     "Float32",
     "Float64",
     "Text",
+    "scope-checked opaque host resources",
     "closed records",
     "closed variants",
     "arrays of supported values",
@@ -25,7 +26,7 @@
     "Scratch and private Region values cannot cross the public ABI",
     "deferred functions must be eliminated before the public ABI",
     "public values must have closed first-order layouts",
-    "ABI 2 host effects are synchronous"
+    "suspending artifacts with owned host transfers require scoped cleanup"
   ],
   "editorFeatures": [
     "diagnostics",
@@ -45,8 +46,8 @@
     "experiments/compiler-profile-matrix.latest.json"
   ],
   "compilerHostAbi": 7,
-  "checkedModuleCertificate": 17,
+  "checkedModuleCertificate": 18,
   "moduleSnapshotSchema": 2,
   "valueCapsuleSchema": 4,
-  "runtimeHir": 10
+  "runtimeHir": 11
 }

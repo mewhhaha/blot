@@ -312,7 +312,7 @@ export class DevelopmentProject {
       throw error;
     }
     this.commitBuild(build);
-    runtime.commitActivation(activation);
+    await runtime.commitActivation(activation);
     return build;
   }
 

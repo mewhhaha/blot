@@ -63,7 +63,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
     }
     let arity = match name {
         "@effect" | "@effect.host" | "@forall" | "@handle" | "@import" => 1,
-        "@include" => 2,
+        "@include" | "@resource.type" => 2,
         "@continuation.cancel"
         | "@type.of"
         | "@type.open"
@@ -310,6 +310,20 @@ pub fn run_primitive(
         }),
         "@type.performs" => performs(&arguments[0], &arguments[1], span),
         "@type.of" => Ok(type_of(&arguments[0])),
+        "@resource.type" => {
+            let family = text(&arguments[0], span, name)?;
+            if family.is_empty() {
+                return Err(Diagnostic::new(
+                    "BLOT_RESOURCE_TYPE",
+                    "A resource family needs a nonempty name.",
+                    span,
+                ));
+            }
+            Ok(Value::ResourceType {
+                family: family.to_owned(),
+                payload: Box::new(arguments[1].clone()),
+            })
+        }
         "@type.inferred" => Err(Diagnostic::new(
             "BLOT_INFERRED_TYPE_DIRECT",
             "`@type.inferred` must be applied directly so the checker can supply the argument type without evaluating the argument.",

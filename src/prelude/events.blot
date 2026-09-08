@@ -1,0 +1,24 @@
+open import "blot:prelude"
+
+const Scope = Resource.of "Spark.Scope"
+const Source = Resource.of_type "Events.Source"
+const Subscription = Resource.of_type "Events.Subscription"
+const Policy = #Latest | #Queue Int
+const Events = @effect.host {
+  .subscribe = Effect.suspends (@forall (fn message => (Scope, Source message, Policy) -> Subscription message));
+  .next = Effect.suspends (@forall (fn message => Subscription message -> Option message));
+  .close = Effect.suspends (@forall (fn message => Subscription message -> Unit));
+}
+
+const subscribe :: @forall (fn message => Scope -> Source message -> Policy -> Subscription message ~ { Events })
+const subscribe = fn scope => fn source => fn policy => Events.subscribe (scope, source, policy)
+
+return {
+  .Source = Source;
+  .Subscription = Subscription;
+  .Policy = Policy;
+  .Effect = Events;
+  .subscribe = subscribe;
+  .next = Events.next;
+  .close = Events.close;
+  }

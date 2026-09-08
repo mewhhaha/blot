@@ -94,6 +94,7 @@ export const compactRuleNames = [
   "signature",
   "bounded_lambda",
   "computed_shape_field",
+  "continuing",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do
@@ -164,6 +165,7 @@ export const compactFieldNames = [
   "recursive",
   "targets",
   "patterns",
+  "annotation",
 ] as const;
 
 // Baba numbers live fields densely in grammar order. Keep this list exactly in
@@ -171,6 +173,7 @@ export const compactFieldNames = [
 export const currentCompactFieldNames = [
   "alternative",
   "alternatives",
+  "annotation",
   "arguments",
   "associativity",
   "body",

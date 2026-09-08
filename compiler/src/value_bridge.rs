@@ -66,6 +66,10 @@ impl<'a> Bridge<'a> {
             }
             Value::RegionType(element) => Some(Type::Region(Rc::new(self.value(element)?))),
             Value::ScratchType(element) => Some(Type::Scratch(Rc::new(self.value(element)?))),
+            Value::ResourceType { family, payload } => Some(Type::Resource {
+                family: family.clone(),
+                payload: Rc::new(self.value(payload)?),
+            }),
             Value::Scratch { values, .. } => Some(Type::Scratch(Rc::new(join_types(
                 values
                     .iter()
@@ -151,6 +155,14 @@ impl<'a> Bridge<'a> {
                 variables: vec![*variable],
                 body: Rc::new(self.value(body)?),
             }),
+            Value::Operation { effect, name } => {
+                let Value::Effect { operations, .. } = effect.as_ref() else {
+                    return None;
+                };
+                let mut type_ = self.value(operations.get(name)?)?;
+                add_function_effect(&mut type_, effect_label(effect)?);
+                Some(type_)
+            }
             Value::Effect { id, name, .. } => Some(Type::Opaque(format!("Effect:{id}:{name}"))),
             Value::Extended { inner, .. } => self.value(inner),
             Value::Sealed { name, inner } => sealed_type(name, &self.value(inner)?),

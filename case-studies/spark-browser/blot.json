@@ -1,0 +1,9 @@
+{
+  "schema": "blot-project",
+  "version": 1,
+  "entryUnit": "app",
+  "units": {
+    "app": "./main.blot",
+    "formula": "./formula.blot"
+  }
+}

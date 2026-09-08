@@ -33,7 +33,7 @@ invoke Cargo or rebuild the compiler on source edits.
 
 `blot.json` declares the two reload boundaries. `main.blot` uses an ordinary
 relative import to call `formula.blot`. Both are pure; the browser supplies the
-runtime integer argument directly through the ABI 2 export.
+runtime integer argument directly through the ABI 3 export.
 
 ## What is reused
 

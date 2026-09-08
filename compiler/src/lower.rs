@@ -22,6 +22,7 @@ enum EscapeBoundary {
 struct LoopControl {
     carried: Vec<String>,
     break_constructor: String,
+    continue_constructor: String,
 }
 
 #[derive(Clone)]
@@ -132,8 +133,8 @@ pub fn lower_module(cst: &CompactCst<'_>) -> Result<Module, String> {
         for declaration in statements {
             let declaration = unwrapped_rule(cst, declaration)?;
             let name = cst.rule_name(declaration)?;
-            lowered.push(
-                lower_declaration(cst, declaration, &context, &mut arena)
+            lowered.extend(
+                lower_declarations(cst, declaration, &context, &mut arena)
                     .map_err(|error| format!("while lowering {name}: {error}"))?,
             );
         }
@@ -218,6 +219,18 @@ fn distribute_immediate_choice_applications(arena: &mut AstArena) {
     }
 }
 
+fn integer_literal(text: &str) -> Result<BigInt, String> {
+    let digits = text.replace('_', "");
+    if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        return BigInt::parse_bytes(hex.as_bytes(), 16)
+            .ok_or_else(|| "invalid hexadecimal integer".to_owned());
+    }
+    BigInt::from_str(&digits).map_err(|error| error.to_string())
+}
+
 fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> {
     let rule = as_rule(cursor)?;
     let associativity = match token_text(cst, required(cst, rule, "associativity")?)?.as_str() {
@@ -227,9 +240,11 @@ fn lower_fixity(cst: &CompactCst<'_>, cursor: Cursor) -> Result<Fixity, String> 
         "prefix" => Associativity::Prefix,
         value => return Err(format!("BLOT_BAD_FIXITY: unknown declaration `{value}`")),
     };
-    let precedence = token_text(cst, required(cst, rule, "precedence")?)?
-        .parse::<u32>()
-        .map_err(|error| format!("BLOT_BAD_FIXITY: invalid precedence: {error}"))?;
+    let precedence = u32::try_from(integer_literal(&token_text(
+        cst,
+        required(cst, rule, "precedence")?,
+    )?)?)
+    .map_err(|error| format!("BLOT_BAD_FIXITY: invalid precedence: {error}"))?;
     let target_rule = as_rule(required(cst, rule, "target")?)?;
     let root = token_text(cst, required(cst, target_rule, "root")?)?;
     let mut target = vec![root];
@@ -489,6 +504,61 @@ fn quantify_effect_row_tails(
     value
 }
 
+fn lower_declarations(
+    cst: &CompactCst<'_>,
+    rule: u32,
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<Vec<DeclarationId>, String> {
+    let declaration = lower_declaration(cst, rule, context, arena)?;
+    if !matches!(cst.rule_name(rule)?, "binding" | "sequencing") {
+        return Ok(vec![declaration]);
+    }
+    let annotation = cst.field_list(rule, "annotation")?;
+    if annotation.is_empty() {
+        return Ok(vec![declaration]);
+    }
+    let Declaration::Binding {
+        kind,
+        pattern,
+        value,
+        span,
+        ..
+    } = arena.declarations[declaration.0 as usize].clone()
+    else {
+        return Err("annotated declaration did not lower to a binding".to_owned());
+    };
+    let Pattern::Name { name, .. } = arena.patterns[pattern.0 as usize].clone() else {
+        return Err(
+            "BLOT_TYPED_BINDING_PATTERN: An inline type annotation requires a named binding."
+                .to_owned(),
+        );
+    };
+    let recursive = matches!(arena.expressions[value.0 as usize], Expression::Rec { .. });
+    let value_cursor = *annotation
+        .get(1)
+        .ok_or_else(|| "inline annotation has no type value".to_owned())?;
+    let row_tails = effect_row_tail_uses(cst, value_cursor)?;
+    if let Some(unconstrained) = row_tails.iter().find(|tail| tail.count < 2) {
+        return Err(format!(
+            "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED: effect-row tail `..{}` must occur at least twice in one signature",
+            unconstrained.name
+        ));
+    }
+    let mut value = lower_value(cst, value_cursor, context, arena)?;
+    if !row_tails.is_empty() {
+        value = quantify_effect_row_tails(value, &row_tails, span, arena);
+    }
+    let signature = arena.declaration(Declaration::Signature {
+        kind,
+        recursive,
+        name,
+        value,
+        span,
+    });
+    Ok(vec![signature, declaration])
+}
+
 fn lower_declaration(
     cst: &CompactCst<'_>,
     rule: u32,
@@ -631,6 +701,20 @@ fn lower_declaration(
                 return Err("BLOT_BREAK_OUTSIDE_LOOP: `break` has no enclosing `for`.".to_owned());
             }
             Err("control break reached declaration lowering".to_owned())
+        }
+        "continuing" => {
+            if context.escape_boundary == EscapeBoundary::ValueCondition {
+                return Err(
+                    "BLOT_CONTINUE_IN_VALUE_CONDITION: `continue` cannot escape a value-producing `if` or `case`."
+                        .to_owned(),
+                );
+            }
+            if context.loop_control.is_none() {
+                return Err(
+                    "BLOT_CONTINUE_OUTSIDE_LOOP: `continue` has no enclosing `for`.".to_owned(),
+                );
+            }
+            Err("control continue reached declaration lowering".to_owned())
         }
         "result" => Err(
             "BLOT_RETURN_OUTSIDE_SCOPE: `return` has no enclosing module or explicit block."
@@ -950,6 +1034,25 @@ fn lower_control_outcome(
         return Err("BLOT_BREAK_OUTSIDE_LOOP: `break` has no enclosing `for`.".to_owned());
     }
 
+    if cst.rule_name(rule)? == "continuing" {
+        if let Some(loop_control) = &context.loop_control {
+            let state = loop_state(&loop_control.carried, rule_span, arena);
+            return Ok(control_outcome(
+                &loop_control.continue_constructor,
+                state,
+                rule_span,
+                arena,
+            ));
+        }
+        if context.escape_boundary == EscapeBoundary::ValueCondition {
+            return Err(
+                "BLOT_CONTINUE_IN_VALUE_CONDITION: `continue` cannot escape a value-producing `if` or `case`."
+                    .to_owned(),
+            );
+        }
+        return Err("BLOT_CONTINUE_OUTSIDE_LOOP: `continue` has no enclosing `for`.".to_owned());
+    }
+
     let remaining = &cursors[1..];
     if cst.rule_name(rule)? == "conditional_statement" {
         return lower_control_statement(
@@ -1015,14 +1118,14 @@ fn lower_control_outcome(
         }));
     }
 
-    let mut declarations = vec![lower_declaration(cst, rule, context, arena)?];
+    let mut declarations = lower_declarations(cst, rule, context, arena)?;
     let mut next_control = remaining;
     while let Some(next) = next_control.first().copied() {
         let next_rule = statement_rule(cst, next)?;
         match cst.rule_name(next_rule)? {
-            "result" | "breaking" | "conditional_statement" | "iteration" => break,
+            "result" | "breaking" | "continuing" | "conditional_statement" | "iteration" => break,
             _ => {
-                declarations.push(lower_declaration(cst, next_rule, context, arena)?);
+                declarations.extend(lower_declarations(cst, next_rule, context, arena)?);
                 next_control = &next_control[1..];
             }
         }
@@ -1065,7 +1168,7 @@ fn lower_control_statement(
         let alternative = statement_suite(cst, body, "alternative")?;
         if statements_can_continue(cst, &alternative)? {
             return Err(
-                "BLOT_GUARD_MAY_CONTINUE: the `else` branch of `if let` must `return` or `break`."
+                "BLOT_GUARD_MAY_CONTINUE: the `else` branch of `if let` must `return`, `break`, or `continue`."
                     .to_owned(),
             );
         }
@@ -1124,6 +1227,8 @@ fn lower_control_statement(
         };
         if let Some(loop_control) = &mut branch_context.loop_control {
             loop_control.break_constructor = synthetic_constructor("ConditionalBreak", rule_span);
+            loop_control.continue_constructor =
+                synthetic_constructor("ConditionalLoopContinue", rule_span);
         }
     }
     let conditional = lower_control_conditional(
@@ -1168,7 +1273,7 @@ fn lower_control_statement(
         )?;
         arms.push(Arm { pattern, body });
     }
-    if statements_contain_loop_break(cst, &[Cursor::Rule(rule)])? {
+    if statements_contain_loop_control(cst, &[Cursor::Rule(rule)], "breaking")? {
         let Some(outer_loop) = &context.loop_control else {
             return Err("BLOT_BREAK_OUTSIDE_LOOP: `break` has no enclosing `for`.".to_owned());
         };
@@ -1184,6 +1289,26 @@ fn lower_control_statement(
         });
         let stopped = variable("stopped$", rule_span, arena);
         let body = control_outcome(&outer_loop.break_constructor, stopped, rule_span, arena);
+        arms.push(Arm { pattern, body });
+    }
+    if statements_contain_loop_control(cst, &[Cursor::Rule(rule)], "continuing")? {
+        let Some(outer_loop) = &context.loop_control else {
+            return Err(
+                "BLOT_CONTINUE_OUTSIDE_LOOP: `continue` has no enclosing `for`.".to_owned(),
+            );
+        };
+        let branch_loop = branch_context
+            .loop_control
+            .as_ref()
+            .ok_or_else(|| "conditional continue lost its loop context".to_owned())?;
+        let payload = control_payload_pattern(Some("stopped$"), rule_span, arena);
+        let pattern = arena.pattern(Pattern::Constructor {
+            name: branch_loop.continue_constructor.clone(),
+            payload: Some(payload),
+            span: rule_span,
+        });
+        let stopped = variable("stopped$", rule_span, arena);
+        let body = control_outcome(&outer_loop.continue_constructor, stopped, rule_span, arena);
         arms.push(Arm { pattern, body });
     }
     Ok(arena.expression(Expression::Case {
@@ -1279,7 +1404,7 @@ fn lower_statement_block(
 ) -> Result<ExpressionId, String> {
     let mut declarations = Vec::new();
     for statement in statements {
-        declarations.push(lower_declaration(
+        declarations.extend(lower_declarations(
             cst,
             unwrapped_rule(cst, statement)?,
             context,
@@ -1338,12 +1463,14 @@ fn lower_control_loop(
     };
     let break_constructor = synthetic_constructor("LoopBreak", span);
     let returns = statements_contain_return(cst, &statements)?;
-    let continues = statements_can_continue(cst, &statements)?;
-    let breaks = statements_contain_loop_break(cst, &statements)?;
+    let continues = statements_can_continue(cst, &statements)?
+        || statements_contain_loop_control(cst, &statements, "continuing")?;
+    let breaks = statements_contain_loop_control(cst, &statements, "breaking")?;
     let mut body_context = context.clone();
     body_context.loop_control = Some(LoopControl {
         carried: carried.clone(),
         break_constructor: break_constructor.clone(),
+        continue_constructor: body_constructors.continue_constructor.clone(),
     });
     let continue_value = loop_state(&carried, span, arena);
     let outcome = lower_control_outcome(
@@ -1447,7 +1574,7 @@ fn lower_iteration(
     let mut body = Vec::new();
     for statement in statements {
         let statement = unwrapped_rule(cst, statement)?;
-        body.push(lower_declaration(cst, statement, &context.body(), arena)?);
+        body.extend(lower_declarations(cst, statement, &context.body(), arena)?);
     }
     let (pattern, value) = desugar_loop(
         binder,
@@ -2064,7 +2191,7 @@ fn statements_need_control(cst: &CompactCst<'_>, statements: &[Cursor]) -> Resul
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
         match cst.rule_name(statement)? {
-            "result" | "breaking" => return Ok(true),
+            "result" | "breaking" | "continuing" => return Ok(true),
             "conditional_statement" => {
                 let body = as_rule(required(cst, statement, "body")?)?;
                 if cst.rule_name(body)? == "conditional_statement_guard" {
@@ -2103,20 +2230,21 @@ fn statements_contain_return(cst: &CompactCst<'_>, statements: &[Cursor]) -> Res
     Ok(false)
 }
 
-fn statements_contain_loop_break(
+fn statements_contain_loop_control(
     cst: &CompactCst<'_>,
     statements: &[Cursor],
+    control: &str,
 ) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "breaking" {
+        if cst.rule_name(statement)? == control {
             return Ok(true);
         }
         if cst.rule_name(statement)? == "iteration" {
             continue;
         }
         for nested in nested_statement_lists(cst, statement)? {
-            if statements_contain_loop_break(cst, &nested)? {
+            if statements_contain_loop_control(cst, &nested, control)? {
                 return Ok(true);
             }
         }
@@ -2151,7 +2279,7 @@ fn statement_can_continue(
         return Ok(*can_continue);
     }
     let name = cst.rule_name(statement)?;
-    let can_continue = if name == "result" || name == "breaking" {
+    let can_continue = if name == "result" || name == "breaking" || name == "continuing" {
         false
     } else if name != "conditional_statement" {
         true
@@ -2180,16 +2308,49 @@ pub(crate) fn reachability_diagnostics(cst: &CompactCst<'_>) -> Result<Vec<Diagn
     let root = as_rule(cst.root())?;
     let mut diagnostics = Vec::new();
     let mut cache = HashMap::new();
-    collect_reachability_diagnostics(cst, root, &mut diagnostics, &mut cache)?;
+    collect_reachability_diagnostics(cst, root, LoopTarget::Absent, &mut diagnostics, &mut cache)?;
     Ok(diagnostics)
+}
+
+#[derive(Clone, Copy)]
+enum LoopTarget {
+    Absent,
+    ValueCondition,
+    Present,
 }
 
 fn collect_reachability_diagnostics(
     cst: &CompactCst<'_>,
     rule: u32,
+    loop_target: LoopTarget,
     diagnostics: &mut Vec<Diagnostic>,
     cache: &mut HashMap<u32, bool>,
 ) -> Result<(), String> {
+    let loop_target = match cst.rule_name(rule)? {
+        "lambda" | "bounded_lambda" => LoopTarget::Absent,
+        "case_expression" => LoopTarget::ValueCondition,
+        _ => loop_target,
+    };
+    if cst.rule_name(rule)? == "continuing" {
+        let failure = match loop_target {
+            LoopTarget::Absent => Some((
+                "BLOT_CONTINUE_OUTSIDE_LOOP",
+                "`continue` has no enclosing `for`.",
+            )),
+            LoopTarget::ValueCondition => Some((
+                "BLOT_CONTINUE_IN_VALUE_CONDITION",
+                "`continue` cannot escape a value-producing `if` or `case`.",
+            )),
+            LoopTarget::Present => None,
+        };
+        if let Some((code, message)) = failure {
+            diagnostics.push(Diagnostic::new(
+                code,
+                message,
+                cst.significant_span(Cursor::Rule(rule))?,
+            ));
+        }
+    }
     let statement_field = match cst.rule_name(rule)? {
         "program" => Some("declarations"),
         "do_block" | "statement_suite" => Some("statements"),
@@ -2202,7 +2363,14 @@ fn collect_reachability_diagnostics(
 
     for child in cst.children(rule)? {
         if let Cursor::Rule(child) = child {
-            collect_reachability_diagnostics(cst, child, diagnostics, cache)?;
+            let child_target = if cst.rule_name(rule)? == "iteration"
+                && cst.field(rule, "body")? == Some(Cursor::Rule(child))
+            {
+                LoopTarget::Present
+            } else {
+                loop_target
+            };
+            collect_reachability_diagnostics(cst, child, child_target, diagnostics, cache)?;
         }
     }
     Ok(())
@@ -2231,6 +2399,7 @@ fn collect_unreachable_statements(
         departure = Some(match cst.rule_name(statement_rule)? {
             "result" => "an earlier `return` leaves this statement sequence",
             "breaking" => "an earlier `break` leaves this statement sequence",
+            "continuing" => "an earlier `continue` leaves this statement sequence",
             "conditional_statement" => "an earlier conditional leaves on every branch",
             name => {
                 return Err(format!(
@@ -2493,7 +2662,7 @@ fn lower_pattern(
         if cst.token_kind(token)? != "INTEGER" {
             return Err("BLOT_BAD_NEGATION: `-` applies only to an integer pattern".to_owned());
         }
-        let value = -BigInt::from_str(&cst.text(core)?).map_err(|error| error.to_string())?;
+        let value = -integer_literal(&cst.text(core)?)?;
         return Ok(arena.pattern(Pattern::Int { value, span }));
     }
     let qualifier = match qualifier_text.as_deref() {
@@ -2513,11 +2682,12 @@ fn lower_pattern(
                 span,
             })),
             "INTEGER" => Ok(arena.pattern(Pattern::Int {
-                value: BigInt::from_str(&text).map_err(|error| error.to_string())?,
+                value: integer_literal(&text)?,
                 span,
             })),
             "FLOAT" => Ok(arena.pattern(Pattern::Float {
                 value: text
+                    .replace('_', "")
                     .parse()
                     .map_err(|error| format!("invalid float: {error}"))?,
                 span,
@@ -2862,11 +3032,12 @@ fn lower_primary(
         return match cst.token_kind(token)?.as_str() {
             "IDENT" | "TYPE_IDENT" => Ok(arena.expression(Expression::Var { name: text, span })),
             "INTEGER" => Ok(arena.expression(Expression::Int {
-                value: BigInt::from_str(&text).map_err(|error| error.to_string())?,
+                value: integer_literal(&text)?,
                 span,
             })),
             "FLOAT" => Ok(arena.expression(Expression::Float {
                 value: text
+                    .replace('_', "")
                     .parse()
                     .map_err(|error| format!("invalid float: {error}"))?,
                 span,
@@ -3172,7 +3343,7 @@ fn lower_primary(
             let mut declarations = Vec::new();
             for statement in statements {
                 let statement = unwrapped_rule(cst, statement)?;
-                declarations.push(lower_declaration(cst, statement, &block_context, arena)?);
+                declarations.extend(lower_declarations(cst, statement, &block_context, arena)?);
             }
             let block = arena.expression(Expression::Block {
                 declarations,
@@ -3253,7 +3424,7 @@ fn lower_early_return_sequence(
             }
             let mut declarations = Vec::with_capacity(statements.len());
             for statement in statements {
-                declarations.push(lower_declaration(
+                declarations.extend(lower_declarations(
                     cst,
                     statement_rule(cst, *statement)?,
                     context,
@@ -3294,7 +3465,7 @@ fn lower_early_return_sequence(
         }
         let mut declarations = Vec::with_capacity(index);
         for statement in &statements[..index] {
-            declarations.push(lower_declaration(
+            declarations.extend(lower_declarations(
                 cst,
                 statement_rule(cst, *statement)?,
                 context,
@@ -3391,7 +3562,7 @@ fn lower_terminal_suite(
     let mut lowered = Vec::new();
     for declaration in declarations {
         let declaration = statement_rule(cst, *declaration)?;
-        lowered.push(lower_declaration(cst, declaration, context, arena)?);
+        lowered.extend(lower_declarations(cst, declaration, context, arena)?);
     }
     let start = cst.span(Cursor::Rule(statement_rule(cst, declarations[0])?))?;
     let end = cst.span(Cursor::Rule(statement_rule(cst, last)?))?;

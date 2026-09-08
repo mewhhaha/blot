@@ -12,11 +12,13 @@ use wasm_encoder::{
 };
 use wasmparser::{BinaryReader, FunctionBody, Operator};
 
+mod boundary_validation;
+pub(crate) mod suspension;
 mod text_search;
 
 use crate::hir::{
     RuntimeBlock, RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation,
-    RuntimeOperationOwnership, RuntimeTerminator, RuntimeType, WireConstant,
+    RuntimeOperationContract, RuntimeTerminator, RuntimeType, WireConstant,
 };
 
 const HEAP_GLOBAL: u32 = 0;
@@ -34,6 +36,7 @@ struct DynamicHelpers {
     text_scalar_offset: Option<u32>,
     text_find_from: Option<u32>,
     utf8_validator: Option<u32>,
+    canonical_validator: Option<u32>,
     i64_to_text: Option<u32>,
 }
 
@@ -138,8 +141,13 @@ impl RuntimeTypeLayouts {
             })?;
             match type_ {
                 RuntimeType::Unit => Ok(Vec::new()),
+                RuntimeType::Callback {
+                    environment_type, ..
+                } => Ok(self.flattened(module, *environment_type)?.to_vec()),
                 RuntimeType::Integer32 | RuntimeType::Boolean => Ok(vec![ValType::I32]),
-                RuntimeType::SignedInteger64 => Ok(vec![ValType::I64]),
+                RuntimeType::SignedInteger64 | RuntimeType::Resource { .. } => {
+                    Ok(vec![ValType::I64])
+                }
                 RuntimeType::Float32 => Ok(vec![ValType::F32]),
                 RuntimeType::Float64 => Ok(vec![ValType::F64]),
                 RuntimeType::Text | RuntimeType::Store { .. } => {
@@ -311,6 +319,15 @@ enum AbiType {
     Float64,
     Boolean,
     Text,
+    Callback {
+        entry: String,
+        function: Box<AbiFunction>,
+        environment: Box<AbiType>,
+    },
+    Resource {
+        name: String,
+        payload: Box<AbiType>,
+    },
     Array {
         element: Box<AbiType>,
     },
@@ -380,16 +397,19 @@ struct AbiExport {
     post_return: Option<String>,
     effects: Vec<String>,
     ownership: Option<&'static str>,
+    execution: &'static str,
 }
 
 #[derive(Clone, Serialize)]
 struct AbiImport {
     capability: String,
     operation: String,
+    #[serde(rename = "sourceName")]
+    source_name: String,
     module: String,
     name: String,
     function: AbiFunction,
-    ownership: RuntimeOperationOwnership,
+    contract: RuntimeOperationContract,
 }
 
 #[derive(Clone, Serialize)]
@@ -398,6 +418,7 @@ struct AbiLink {
     name: String,
     module: String,
     function: AbiFunction,
+    suspends: bool,
 }
 
 #[derive(Serialize)]
@@ -407,13 +428,45 @@ struct AbiManifest {
     source: String,
     exports: Vec<AbiExport>,
     imports: Vec<AbiImport>,
+    callbacks: Vec<AbiCallback>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     links: Vec<AbiLink>,
 }
 
+#[derive(Clone, Serialize)]
+struct AbiCallback {
+    name: String,
+    function: AbiFunction,
+}
+
 pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
+    for root in &runtime.resumable_roots {
+        if !runtime
+            .functions
+            .iter()
+            .any(|function| function.id == *root)
+        {
+            return Err(format!(
+                "{}: resumable root {root} has no checked function",
+                runtime.source
+            ));
+        }
+    }
     let runtime_layouts = RuntimeTypeLayouts::new(&runtime)?;
     let manifest = build_manifest(&runtime, &runtime_layouts)?;
+    if manifest
+        .exports
+        .iter()
+        .any(|exported| exported.execution == "resumable")
+        && manifest.imports.iter().any(|imported| {
+            imported.contract.input.has_linear() || imported.contract.result.has_linear()
+        })
+    {
+        return Err(
+            "Suspending artifacts with linear host transfers require registered scope cleanup."
+                .to_owned(),
+        );
+    }
     let mut manifest_text = serde_json::to_string_pretty(&manifest)
         .map_err(|error| format!("could not serialize Blot ABI manifest: {error}"))?;
     manifest_text.push('\n');
@@ -466,6 +519,7 @@ fn build_manifest(
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
 ) -> Result<AbiManifest, String> {
+    let suspending = suspension::functions(module);
     let mut exports = Vec::new();
     for exported in &module.exports {
         match exported {
@@ -479,6 +533,7 @@ fn build_manifest(
                 post_return: None,
                 effects: Vec::new(),
                 ownership: None,
+                execution: "comptime",
             }),
             RuntimeExport::Runtime {
                 source_name,
@@ -486,6 +541,7 @@ fn build_manifest(
                 wasm_name,
                 signature,
                 ownership,
+                function: function_id,
                 ..
             } => {
                 let signature = module.signatures.get(*signature).ok_or_else(|| {
@@ -517,7 +573,9 @@ fn build_manifest(
                         },
                     )?,
                 };
-                let post_return = if flattened_type(&function.result).len() > 1 {
+                let post_return = if suspending.contains(function_id) {
+                    Some("blot:release".to_owned())
+                } else if flattened_type(&function.result).len() > 1 {
                     Some(format!("cabi_post_{wasm_name}"))
                 } else {
                     None
@@ -532,6 +590,11 @@ fn build_manifest(
                     post_return,
                     effects,
                     ownership: Some(ownership),
+                    execution: if suspending.contains(function_id) {
+                        "resumable"
+                    } else {
+                        "direct"
+                    },
                 });
             }
         }
@@ -548,6 +611,7 @@ fn build_manifest(
             imports.push(AbiImport {
                 capability: capability.name.clone(),
                 operation: operation.name.clone(),
+                source_name: operation.source_name.clone(),
                 module: format!("blot:host/{}", capability.name),
                 name: operation.name.clone(),
                 function: AbiFunction {
@@ -573,7 +637,7 @@ fn build_manifest(
                         },
                     )?,
                 },
-                ownership: operation.ownership.clone(),
+                contract: operation.contract.clone(),
             });
         }
     }
@@ -592,6 +656,7 @@ fn build_manifest(
                 unit: link.unit.clone(),
                 name: link.name.clone(),
                 module: format!("blot:dev/{}", link.unit),
+                suspends: link.suspends,
                 function: AbiFunction {
                     parameters: signature
                         .parameters
@@ -618,10 +683,50 @@ fn build_manifest(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let mut callbacks = BTreeMap::new();
+    for type_ in &module.types {
+        let RuntimeType::Callback {
+            function,
+            signature,
+            ..
+        } = type_
+        else {
+            continue;
+        };
+        let signature = &module.signatures[*signature];
+        callbacks.insert(
+            *function,
+            AbiCallback {
+                name: format!("blot:callback:{function}"),
+                function: AbiFunction {
+                    parameters: signature
+                        .parameters
+                        .iter()
+                        .map(|type_id| canonical_type(module, *type_id, &mut Vec::new()))
+                        .collect::<Result<_, _>>()?,
+                    result: canonical_type(module, signature.result, &mut Vec::new())?,
+                },
+            },
+        );
+    }
+    for callback in callbacks.values() {
+        let width = callback
+            .function
+            .parameters
+            .iter()
+            .flat_map(flattened_type)
+            .count();
+        if width > 16 {
+            return Err(format!(
+                "callback {} requires {width} flat parameters; the callback boundary admits at most 16",
+                callback.name
+            ));
+        }
+    }
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
-            major: 2,
+            major: 3,
             minor: 0,
             core_specification: "3.0",
             required_features,
@@ -636,6 +741,7 @@ fn build_manifest(
         source: module.source.clone(),
         exports,
         imports,
+        callbacks: callbacks.into_values().collect(),
         links,
     })
 }
@@ -860,6 +966,15 @@ fn runtime_layout_type(
             ));
         }
         RuntimeType::SignedInteger64 => Some(AbiType::SignedInteger64),
+        RuntimeType::Resource { name, payload_type } => {
+            resolving.push(type_id);
+            let payload = runtime_layout_type(module, *payload_type, resolving, scope)?;
+            resolving.pop();
+            Some(AbiType::Resource {
+                name: name.clone(),
+                payload: Box::new(payload),
+            })
+        }
         RuntimeType::Float32 => Some(AbiType::Float32),
         RuntimeType::Float64 => Some(AbiType::Float64),
         RuntimeType::Boolean => Some(AbiType::Boolean),
@@ -871,6 +986,31 @@ fn runtime_layout_type(
     }
     resolving.push(type_id);
     let canonical = match type_ {
+        RuntimeType::Callback {
+            function,
+            signature,
+            environment_type,
+        } => {
+            let signature = &module.signatures[*signature];
+            AbiType::Callback {
+                entry: format!("blot:callback:{function}"),
+                function: Box::new(AbiFunction {
+                    parameters: vec![runtime_layout_type(
+                        module,
+                        signature.parameters[0],
+                        resolving,
+                        scope,
+                    )?],
+                    result: runtime_layout_type(module, signature.result, resolving, scope)?,
+                }),
+                environment: Box::new(runtime_layout_type(
+                    module,
+                    *environment_type,
+                    resolving,
+                    scope,
+                )?),
+            }
+        }
         RuntimeType::Store { element_type } => AbiType::Array {
             element: Box::new(runtime_layout_type(
                 module,
@@ -890,20 +1030,20 @@ fn runtime_layout_type(
         },
         RuntimeType::Scratch { .. } => {
             return Err(format!(
-                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
         RuntimeType::Indirect { .. } if scope == LayoutScope::Internal => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
-                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
         RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
             return Err(format!(
-                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 2",
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 3",
                 module.source
             ));
         }
@@ -970,6 +1110,7 @@ fn runtime_layout_type(
         RuntimeType::Unit
         | RuntimeType::Integer32
         | RuntimeType::SignedInteger64
+        | RuntimeType::Resource { .. }
         | RuntimeType::Float32
         | RuntimeType::Float64
         | RuntimeType::Boolean
@@ -984,12 +1125,15 @@ fn flattened_type(type_: &AbiType) -> Vec<ValType> {
         AbiType::Unit => Vec::new(),
         AbiType::InternalPointer => vec![ValType::I32],
         AbiType::Vector128 => vec![ValType::V128],
-        AbiType::SignedInteger64 => vec![ValType::I64],
+        AbiType::SignedInteger64 | AbiType::Resource { .. } => vec![ValType::I64],
         AbiType::Float32 => vec![ValType::F32],
         AbiType::Float64 => vec![ValType::F64],
         AbiType::Boolean => vec![ValType::I32],
         AbiType::Text | AbiType::Array { .. } => vec![ValType::I32, ValType::I32],
-        AbiType::Sealed { inner, .. } => flattened_type(inner),
+        AbiType::Sealed { inner, .. }
+        | AbiType::Callback {
+            environment: inner, ..
+        } => flattened_type(inner),
         AbiType::Record { fields } => fields
             .iter()
             .flat_map(|field| flattened_type(&field.type_))
@@ -1305,7 +1449,7 @@ impl StaticOperationWriter<'_> {
                     offset + layout.payload_offset as usize,
                 )
             }
-            "seal.wrap" | "seal.unwrap" => {
+            "seal.wrap" | "seal.unwrap" | "callback.make" => {
                 let operand = operation.operands.first().ok_or_else(|| {
                     format!(
                         "{}: {} omitted its operand",
@@ -1605,6 +1749,20 @@ fn emit_dynamic_module(
     } else {
         None
     };
+    let canonical_validator_index = if let Some(utf8) = utf8_validator_index {
+        let type_index = types.intern(vec![ValType::I32, ValType::I32], Vec::new());
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        append_code_function(
+            &mut code,
+            &mut branch_hints,
+            function_index,
+            boundary_validation::function(module, function_index, utf8)?,
+        )?;
+        Some(function_index)
+    } else {
+        None
+    };
     let dynamic_helpers = DynamicHelpers {
         realloc: realloc_index,
         heap_start,
@@ -1613,15 +1771,19 @@ fn emit_dynamic_module(
         text_scalar_offset: text_scalar_offset_index,
         text_find_from: text_find_from_index,
         utf8_validator: utf8_validator_index,
+        canonical_validator: canonical_validator_index,
         i64_to_text: i64_to_text_index,
     };
 
+    let suspending = suspension::functions(module);
     let internally_emitted = internally_emitted_runtime_function_ids(module);
     let mut runtime_function_indices = HashMap::new();
     let internal_functions = module
         .functions
         .iter()
-        .filter(|function| internally_emitted.contains(&function.id))
+        .filter(|function| {
+            internally_emitted.contains(&function.id) && !suspending.contains(&function.id)
+        })
         .collect::<Vec<_>>();
     for function in &internal_functions {
         let signature = module.signatures.get(function.signature).ok_or_else(|| {
@@ -1665,7 +1827,20 @@ fn emit_dynamic_module(
         )?;
     }
 
-    let mut function_exports = Vec::new();
+    let mut function_exports = suspension::emit(
+        module,
+        runtime_layouts,
+        manifest,
+        dynamic_helpers,
+        &static_data,
+        &runtime_function_indices,
+        &suspending,
+        &mut types,
+        &mut functions,
+        &mut code,
+        &mut branch_hints,
+        imported_function_count,
+    )?;
     for (export_ordinal, exported) in module.exports.iter().enumerate() {
         let RuntimeExport::Runtime {
             wasm_name,
@@ -1698,6 +1873,9 @@ fn emit_dynamic_module(
             .as_ref()
             .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?;
         let result = &public_function.result;
+        if suspending.contains(function) {
+            continue;
+        }
         let flattened_result = flattened_type(result);
         let wasm_results = if flattened_result.len() <= 1 {
             flattened_result
@@ -1761,9 +1939,11 @@ fn emit_dynamic_module(
     });
     let mut globals = GlobalSection::new();
     add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 2, false);
+    add_i32_global(&mut globals, 3, false);
     add_i32_global(&mut globals, 0, false);
     add_i32_global(&mut globals, 0, true);
+    add_i32_global(&mut globals, 0, true);
+    add_i32_global(&mut globals, heap_start as i32, true);
     add_i32_global(&mut globals, 0, true);
     add_i32_global(&mut globals, heap_start as i32, true);
 
@@ -3840,7 +4020,8 @@ fn emit_dynamic_operation(
                 .local_get(store[1])
                 .local_set(result[2]);
         }
-        "seal.wrap" | "seal.unwrap" | "resource.move" | "resource.borrow" | "resource.freeze" => {
+        "seal.wrap" | "seal.unwrap" | "callback.make" | "resource.move" | "resource.borrow"
+        | "resource.freeze" => {
             let operand = locals_for(module, value_locals, operation.operands[0])?;
             assign_locals(instructions, result, operand)?;
         }
@@ -5233,6 +5414,8 @@ fn runtime_kind(type_: &RuntimeType) -> &'static str {
         RuntimeType::Unit => "unit",
         RuntimeType::Integer32 => "integer-32",
         RuntimeType::SignedInteger64 => "signed-integer-64",
+        RuntimeType::Resource { .. } => "resource",
+        RuntimeType::Callback { .. } => "callback",
         RuntimeType::Float32 => "float-32",
         RuntimeType::Float64 => "float-64",
         RuntimeType::Boolean => "boolean",
@@ -5547,7 +5730,7 @@ fn emit_load_canonical_result(
                 .local_set(destination[0]);
             Ok(1)
         }
-        AbiType::SignedInteger64 => {
+        AbiType::SignedInteger64 | AbiType::Resource { .. } => {
             instructions
                 .local_get(pointer)
                 .i64_load(wasm_encoder::MemArg {
@@ -5672,9 +5855,10 @@ fn emit_load_canonical_result(
             }
             Ok(1 + payload_width)
         }
-        AbiType::Sealed { inner, .. } => {
-            emit_load_canonical_result(instructions, inner, destination, pointer, offset)
-        }
+        AbiType::Sealed { inner, .. }
+        | AbiType::Callback {
+            environment: inner, ..
+        } => emit_load_canonical_result(instructions, inner, destination, pointer, offset),
     }
 }
 
@@ -5698,6 +5882,9 @@ fn public_flat_needs_translation(module: &RuntimeModule, runtime_type: usize) ->
             representation_type,
             ..
         } => public_flat_needs_translation(module, *representation_type),
+        RuntimeType::Callback {
+            environment_type, ..
+        } => public_flat_needs_translation(module, *environment_type),
         _ => false,
     }
 }
@@ -5835,6 +6022,15 @@ fn emit_translate_public_flat_value(
                 ..
             },
             AbiType::Sealed { inner, .. },
+        )
+        | (
+            RuntimeType::Callback {
+                environment_type: representation_type,
+                ..
+            },
+            AbiType::Callback {
+                environment: inner, ..
+            },
         ) => {
             emit_translate_public_flat_value(
                 instructions,
@@ -5879,6 +6075,7 @@ fn emit_store_public_result(
         (
             RuntimeType::Unit
             | RuntimeType::SignedInteger64
+            | RuntimeType::Resource { .. }
             | RuntimeType::Float32
             | RuntimeType::Float64
             | RuntimeType::Boolean
@@ -5889,6 +6086,7 @@ fn emit_store_public_result(
             AbiType::Unit
             | AbiType::Vector128
             | AbiType::SignedInteger64
+            | AbiType::Resource { .. }
             | AbiType::Float32
             | AbiType::Float64
             | AbiType::Boolean
@@ -5919,6 +6117,15 @@ fn emit_store_public_result(
                 ..
             },
             AbiType::Sealed { inner, .. },
+        )
+        | (
+            RuntimeType::Callback {
+                environment_type: representation_type,
+                ..
+            },
+            AbiType::Callback {
+                environment: inner, ..
+            },
         ) => emit_store_public_result(
             instructions,
             module,
@@ -6075,7 +6282,7 @@ fn emit_store_canonical_result(
                 .v128_store(memory_argument(offset, 4));
             *flat_index += 1;
         }
-        AbiType::SignedInteger64 => {
+        AbiType::SignedInteger64 | AbiType::Resource { .. } => {
             instructions
                 .local_get(pointer)
                 .local_get(source[*flat_index])
@@ -6168,7 +6375,10 @@ fn emit_store_canonical_result(
             }
             *flat_index = payload_start + payload_width;
         }
-        AbiType::Sealed { inner, .. } => {
+        AbiType::Sealed { inner, .. }
+        | AbiType::Callback {
+            environment: inner, ..
+        } => {
             emit_store_canonical_result(instructions, inner, source, flat_index, pointer, offset)?;
         }
     }
@@ -6210,7 +6420,10 @@ fn emit_validate_canonical_texts(
                 )?;
             }
         }
-        AbiType::Sealed { inner, .. } => {
+        AbiType::Sealed { inner, .. }
+        | AbiType::Callback {
+            environment: inner, ..
+        } => {
             emit_validate_canonical_texts(
                 instructions,
                 inner,
@@ -6996,6 +7209,7 @@ fn abi_kind(type_: &AbiType) -> &'static str {
         AbiType::InternalPointer => "internal-pointer",
         AbiType::Vector128 => "vector-128",
         AbiType::SignedInteger64 => "signed-integer-64",
+        AbiType::Resource { .. } => "resource",
         AbiType::Float32 => "float-32",
         AbiType::Float64 => "float-64",
         AbiType::Boolean => "boolean",
@@ -7004,6 +7218,7 @@ fn abi_kind(type_: &AbiType) -> &'static str {
         AbiType::Record { .. } => "record",
         AbiType::Variant { .. } => "variant",
         AbiType::Sealed { .. } => "sealed",
+        AbiType::Callback { .. } => "callback",
     }
 }
 
@@ -7057,7 +7272,7 @@ fn memory_layout(type_: &AbiType) -> MemoryLayout {
             alignment: 4,
             size: 4,
         },
-        AbiType::SignedInteger64 | AbiType::Float64 => MemoryLayout {
+        AbiType::SignedInteger64 | AbiType::Float64 | AbiType::Resource { .. } => MemoryLayout {
             alignment: 8,
             size: 8,
         },
@@ -7065,7 +7280,10 @@ fn memory_layout(type_: &AbiType) -> MemoryLayout {
             alignment: 4,
             size: 8,
         },
-        AbiType::Sealed { inner, .. } => memory_layout(inner),
+        AbiType::Sealed { inner, .. }
+        | AbiType::Callback {
+            environment: inner, ..
+        } => memory_layout(inner),
         AbiType::Record { fields } => {
             let fields = record_layout(fields);
             let alignment = fields
@@ -7267,6 +7485,7 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -7507,6 +7726,7 @@ mod tests {
             functions: vec![function],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -7563,6 +7783,7 @@ mod tests {
             functions: vec![function],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -7641,6 +7862,7 @@ mod tests {
             functions: vec![function],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -7709,6 +7931,7 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let mut left = plain_operation(1, Vec::new());
@@ -7751,14 +7974,15 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
         let Err(error) = canonical_type(&module, 1, &mut Vec::new()) else {
-            panic!("a recursive value acquired an ABI 2 layout");
+            panic!("a recursive value acquired an ABI 3 layout");
         };
 
-        assert!(error.contains("cannot cross Blot Core Wasm ABI 2"));
+        assert!(error.contains("cannot cross Blot Core Wasm ABI 3"));
     }
 
     #[test]
@@ -7777,6 +8001,7 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -7806,6 +8031,7 @@ mod tests {
             functions: Vec::new(),
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -8119,6 +8345,7 @@ mod tests {
             functions: vec![function],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: Vec::new(),
         }
     }

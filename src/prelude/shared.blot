@@ -1,0 +1,71 @@
+open import "blot:prelude"
+const Scope = Resource.of "Spark.Scope"
+const Partition = fn element => Resource.of_type "Shared.Partition" element
+const Rejoin = fn element => Resource.of_type "Shared.Rejoin" element
+const AtomicI32 = Resource.of "Shared.AtomicI32"
+
+const SharedAccess = @effect.host {
+  .length = @forall (fn T => Partition T -> Int);
+  .read = @forall (fn T => (Partition T, Int) -> T);
+  .write = @forall (fn T => (Partition T, Int, T) -> Unit);
+  .atomic_load = AtomicI32 -> Int;
+  .atomic_store = (AtomicI32, Int) -> Unit;
+  .atomic_add = (AtomicI32, Int) -> Int;
+}
+
+const SharedRuntime = @effect.host {
+  .i32 = (Scope, [Int]) -> Partition Int;
+  .f32 = (Scope, [F32]) -> Partition F32;
+  .f64 = (Scope, [F64]) -> Partition F64;
+  .atomic = (Scope, Int) -> AtomicI32;
+  .split = {
+    .signature = @forall (fn T => (Partition T, Int) -> { .left = Partition T; .right = Partition T; .rejoin = Rejoin T; });
+    .input = (#Affine, #Unrestricted);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .join = {
+    .signature = @forall (fn T => Rejoin T -> Partition T);
+    .input = #Affine;
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .snapshot = Effect.suspends (@forall (fn T => Partition T -> [T]));
+  .run = {
+    .signature = @forall (fn T => @forall (fn R => ((Scope, T, (T -> R) ~ { SharedAccess }) -> R) ~ { SharedAccess }));
+    .input = (#Unrestricted, #Affine, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+}
+
+const read :: @forall (fn T => Partition T -> Int -> T ~ { SharedAccess })
+const read = fn partition => fn index => SharedAccess.read (partition, index)
+const write :: @forall (fn T => Partition T -> Int -> T -> Unit ~ { SharedAccess })
+const write = fn partition => fn index => fn value => SharedAccess.write (partition, index, value)
+const split :: @forall (fn T => Int -> Partition T -> { .left = Partition T; .right = Partition T; .rejoin = Rejoin T; } ~ { SharedRuntime })
+const split = fn boundary => fn ?partition => SharedRuntime.split (?partition, boundary)
+const run :: @forall (fn T => @forall (fn R => Scope -> T -> (T -> R ~ { SharedAccess }) -> R ~ { SharedAccess, SharedRuntime }))
+const run = fn scope => fn ?argument => fn ?work => SharedRuntime.run (scope, ?argument, ?work)
+
+return {
+  .Partition = Partition;
+  .Rejoin = Rejoin;
+  .AtomicI32 = AtomicI32;
+  .Access = SharedAccess;
+  .Effect = SharedRuntime;
+  .i32 = fn scope => fn values => SharedRuntime.i32 (scope, values);
+  .f32 = fn scope => fn values => SharedRuntime.f32 (scope, values);
+  .f64 = fn scope => fn values => SharedRuntime.f64 (scope, values);
+  .atomic = fn scope => fn initial => SharedRuntime.atomic (scope, initial);
+  .split = split;
+  .join = SharedRuntime.join;
+  .snapshot = SharedRuntime.snapshot;
+  .run = run;
+  .length = SharedAccess.length;
+  .read = read;
+  .write = write;
+  .atomic_load = fn counter => SharedAccess.atomic_load counter;
+  .atomic_store = fn counter => fn value => SharedAccess.atomic_store (counter, value);
+  .atomic_add = fn counter => fn value => SharedAccess.atomic_add (counter, value);
+  }

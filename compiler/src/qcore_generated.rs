@@ -1,6 +1,6 @@
 // Generated from qcore/schema.json by scripts/generate_qcore.ts. Do not edit.
 
-pub const QCORE_SCHEMA_VERSION: u32 = 4;
+pub const QCORE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ValueId(pub u32);
@@ -187,6 +187,7 @@ pub enum ValueTag {
     StructuralTop = 28,
     StructuralBottom = 29,
     StructuralQualified = 30,
+    StructuralResource = 31,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -300,6 +301,10 @@ pub enum Value {
         subjects: Vec<ValueId>,
         members: Vec<ValueId>,
     },
+    StructuralResource {
+        family: String,
+        payload: ValueId,
+    },
 }
 
 impl Value {
@@ -336,6 +341,7 @@ impl Value {
             Self::StructuralTop => ValueTag::StructuralTop,
             Self::StructuralBottom => ValueTag::StructuralBottom,
             Self::StructuralQualified { .. } => ValueTag::StructuralQualified,
+            Self::StructuralResource { .. } => ValueTag::StructuralResource,
         }
     }
 }

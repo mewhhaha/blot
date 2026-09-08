@@ -1,0 +1,17 @@
+open import "blot:prelude"
+
+const Box = fn element => Resource.of_type "Box" element
+
+let same :: @forall (fn element => Box element -> Box element)
+let same = fn value => value
+
+let integers :: Box Int -> Box Int
+let integers = same
+
+let texts :: Box Text -> Box Text
+let texts = same
+
+return {
+  .integers = integers;
+  .texts = texts;
+  }

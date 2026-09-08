@@ -1,0 +1,8 @@
+// BLOT_EXPRESSION_HOLE
+open import "blot:prelude"
+
+let run :: Int -> Int = fn input => do:
+  let offset :: Int = 2
+  return _
+
+return { .run = run; }

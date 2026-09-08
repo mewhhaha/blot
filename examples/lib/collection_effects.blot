@@ -1,0 +1,24 @@
+open import "blot:prelude"
+
+const Tick = @effect.host { .next = Effect.suspends (Int -> Int); }
+
+let run :: [Int] -> Int ~ { Tick }
+let run = fn values => do:
+  let step = fn (total, value) => do:
+    use doubled <- Tick.next value
+    return total + doubled
+  use total <- Iter.fold_with step 0 (Iter.items values)
+  use optional <- Option.map Tick.next (Some total)
+  use selected <- Option.unwrap_or_else (Tick.next 100) optional
+  use result <- Result.map Tick.next (Ok selected)
+  return Result.unwrap_or_else (fn _ => Tick.next 200) result
+
+let each :: [Int] -> Unit ~ { Tick }
+let each = fn values => do:
+  let visit = fn value => do:
+    use Tick.next value
+    return ()
+  use () <- Iter.each visit (Iter.items values)
+  return ()
+
+return { .Tick = Tick; .run = run; .each = each; }

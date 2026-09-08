@@ -40,7 +40,7 @@ return { .score = score; .heading = "\uFEFFWarehouse A"; }`,
       }
       assert.throws(
         () => hosted.call("score", [21]),
-        /synchronous signed-integer-64/,
+        /expected signed-integer-64/,
       );
       assert.throws(
         () => hosted.call("score", [9223372036854775808n]),
@@ -71,7 +71,7 @@ test("host grants exactly the requested scalar operations and preserves order", 
         trace.push("read");
         return 42n;
       }],
-      ["write", (value) => {
+      ["write", (_context, value) => {
         trace.push(`write ${value}`);
         return null;
       }],
@@ -119,7 +119,10 @@ test("host rejects asynchronous Unit handlers instead of silently discarding the
       ]]),
     );
     try {
-      assert.throws(() => hosted.call("default", [null]), /synchronous unit/);
+      assert.throws(
+        () => hosted.call("default", [null]),
+        /synchronous host value/,
+      );
     } finally {
       hosted.destroy();
     }
@@ -164,14 +167,14 @@ test("host checks ABI identity before exposing exports", async () => {
         }),
       /manifests disagree/,
     );
-    manifest.abi.major = 3;
+    manifest.abi.major = 4;
     await assert.rejects(
       () =>
         instantiateArtifact({
           ...artifact,
           manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
         }),
-      /ABI 2.0/,
+      /ABI 3.0/,
     );
     await assert.rejects(
       () => instantiateArtifact(artifact, new Map([["Ambient", new Map()]])),

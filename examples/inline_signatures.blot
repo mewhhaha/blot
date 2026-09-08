@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const Clock = @effect { .read = Unit -> Int; }
+const increment :: Int -> Int = fn x => x + 1
+let rec sum :: Int -> Int = fn n => case n <= 0 of
+  #True => 0
+  #False => n + sum (n - 1)
+
+let calculate :: Unit -> Int ~ { Clock } = fn () => do:
+  use initial :: Int <- Clock.read ()
+  let ?next :: Int -> Int = fn x => x + initial
+  use suspended :: Int <- fn () => Clock.read ()
+  return next (sum (increment suspended))
+
+return @handle (
+  Clock,
+  calculate,
+  {
+    .read = fn ((), ?resume) => resume 4;
+    .return = identity;
+  }
+)

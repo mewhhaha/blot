@@ -462,6 +462,10 @@ fn translate_flat_type(type_: &FlatTypeNode) -> Value {
         FlatTypeNode::Scratch(element) => Value::StructuralScratch {
             element: ValueId(element.0),
         },
+        FlatTypeNode::Resource { family, payload } => Value::StructuralResource {
+            family: family.clone(),
+            payload: ValueId(payload.0),
+        },
         FlatTypeNode::Variant { cases, open } => {
             let (labels, payload_types) = canonical_labeled_types(cases);
             Value::StructuralVariant {
@@ -766,7 +770,8 @@ impl<'module> ModuleValidator<'module> {
                 Value::StructuralForall { body, .. }
                 | Value::StructuralArray { element: body }
                 | Value::StructuralRegion { element: body }
-                | Value::StructuralScratch { element: body } => {
+                | Value::StructuralScratch { element: body }
+                | Value::StructuralResource { payload: body, .. } => {
                     self.ensure_value(source, body)?;
                 }
                 Value::StructuralFunction {
@@ -1278,7 +1283,10 @@ impl<'module> ModuleValidator<'module> {
             }
             Value::StructuralArray { element }
             | Value::StructuralRegion { element }
-            | Value::StructuralScratch { element } => {
+            | Value::StructuralScratch { element }
+            | Value::StructuralResource {
+                payload: element, ..
+            } => {
                 self.visit_value(element, depth, rigids)?;
             }
             Value::StructuralOpenEffects { tail, .. } => {
@@ -1709,15 +1717,19 @@ mod tests {
             FlatTypeNode::Opaque("SIMD.F32x4".to_owned()),
             FlatTypeNode::Top,
             FlatTypeNode::Bottom,
-            FlatTypeNode::Union((1..19).map(FlatTypeId).collect()),
+            FlatTypeNode::Resource {
+                family: "Job".to_owned(),
+                payload: FlatTypeId(4),
+            },
+            FlatTypeNode::Union((1..20).map(FlatTypeId).collect()),
         ];
         let certificate = CheckedModuleCertificate {
             schema: CHECKED_MODULE_CERTIFICATE_SCHEMA,
             types,
-            result: FlatTypeId(19),
+            result: FlatTypeId(20),
             effects: FlatTypeId(8),
             parameter: None,
-            expression_types: vec![(ExpressionId(0), FlatTypeId(19))],
+            expression_types: vec![(ExpressionId(0), FlatTypeId(20))],
             closure_signatures: Vec::new(),
             recursive_closures: Vec::new(),
             ownership_contracts: Vec::new(),
@@ -1751,6 +1763,7 @@ mod tests {
             ValueTag::StructuralArray,
             ValueTag::StructuralRegion,
             ValueTag::StructuralScratch,
+            ValueTag::StructuralResource,
             ValueTag::StructuralVariant,
             ValueTag::StructuralEffects,
             ValueTag::StructuralOpenEffects,
@@ -1795,7 +1808,7 @@ mod tests {
                 if labels == &["None", "Some"]
         ));
         assert!(matches!(
-            &module.arena.values[20].term,
+            &module.arena.values[21].term,
             Value::Universe {
                 universe: Universe::TypeUniverse { level: 0 }
             }

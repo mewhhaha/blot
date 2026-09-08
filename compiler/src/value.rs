@@ -79,7 +79,11 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
             let relates_input_to_output = closure_signature
                 .as_deref()
                 .is_some_and(has_quantified_input_output_relationship);
-            if !relates_input_to_output {
+            let preserves_closed_signature = contains_type_variables(complete_signature)
+                && closure_signature
+                    .as_deref()
+                    .is_some_and(|signature| !contains_type_variables(signature));
+            if !relates_input_to_output && !preserves_closed_signature {
                 *closure_signature = Some(Box::new(complete_signature.clone()));
             }
         }
@@ -172,6 +176,7 @@ pub struct Env {
     pub opens: RefCell<Vec<OpenedValues>>,
     pub signatures: RefCell<BTreeMap<String, Value>>,
     pub type_substitutions: RefCell<BTreeMap<u32, Value>>,
+    pub(crate) effect_substitutions: RefCell<BTreeMap<u32, Value>>,
     pub parent: RefCell<Option<Environment>>,
     pub(crate) recursive_bindings: Option<Rc<RecursiveBindings>>,
     decoded_identity: Option<Rc<DecodedEnvironmentIdentity>>,
@@ -210,6 +215,7 @@ fn child_env_with_identity(
         opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
         type_substitutions: RefCell::new(BTreeMap::new()),
+        effect_substitutions: RefCell::new(BTreeMap::new()),
         parent: RefCell::new(parent),
         recursive_bindings: None,
         decoded_identity,
@@ -390,6 +396,7 @@ fn value_references_environment(value: &Value, target: &Environment) -> bool {
             .any(|value| value_references_environment(value, target)),
         Value::RegionType(value)
         | Value::ScratchType(value)
+        | Value::ResourceType { payload: value, .. }
         | Value::DeferredScratch { capacity: value }
         | Value::EmptyArray { element: value }
         | Value::Forall { body: value, .. }
@@ -496,6 +503,7 @@ fn recursive_env_with_identity(
         opens: RefCell::new(Vec::new()),
         signatures: RefCell::new(BTreeMap::new()),
         type_substitutions: RefCell::new(BTreeMap::new()),
+        effect_substitutions: RefCell::new(BTreeMap::new()),
         parent: RefCell::new(parent),
         recursive_bindings: Some(bindings.clone()),
         decoded_identity,
@@ -946,16 +954,18 @@ pub enum EffectOwnership {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EffectOperationOwnership {
+pub struct EffectOperationContract {
     pub input: EffectOwnership,
     pub result: EffectOwnership,
+    pub suspends: bool,
 }
 
-impl EffectOperationOwnership {
+impl EffectOperationContract {
     pub fn unrestricted() -> Self {
         Self {
             input: EffectOwnership::Unrestricted,
             result: EffectOwnership::Unrestricted,
+            suspends: false,
         }
     }
 }
@@ -983,6 +993,10 @@ pub enum Value {
     RegionType(Box<Value>),
     /// Private type value produced only by `@scratch.type`.
     ScratchType(Box<Value>),
+    ResourceType {
+        family: String,
+        payload: Box<Value>,
+    },
     /// Affine initialized-prefix builder. Capacity is operational only; source
     /// observation can recover only `values` through `@scratch.finish`.
     Scratch {
@@ -1084,7 +1098,7 @@ pub enum Value {
         id: u32,
         name: String,
         operations: OrderedFields,
-        operation_ownership: BTreeMap<String, EffectOperationOwnership>,
+        operation_ownership: BTreeMap<String, EffectOperationContract>,
         host: bool,
     },
     Operation {
@@ -1335,6 +1349,10 @@ pub fn substitute_type_variable(
         },
         Value::RegionType(element) => Value::RegionType(Box::new(substitute(element)?)),
         Value::ScratchType(element) => Value::ScratchType(Box::new(substitute(element)?)),
+        Value::ResourceType { family, payload } => Value::ResourceType {
+            family: family.clone(),
+            payload: Box::new(substitute(payload)?),
+        },
         Value::DeferredScratch { capacity } => Value::DeferredScratch {
             capacity: Box::new(substitute(capacity)?),
         },
@@ -1543,6 +1561,10 @@ fn union_member_fingerprint(value: &Value) -> Option<u64> {
         Value::Unbounded => Some(word(start, 10)),
         Value::RegionType(inner) => Some(word(union_member_fingerprint(inner)?, 11)),
         Value::ScratchType(inner) => Some(word(union_member_fingerprint(inner)?, 12)),
+        Value::ResourceType { family, payload } => Some(bytes(
+            word(union_member_fingerprint(payload)?, 41),
+            family.as_bytes(),
+        )),
         Value::DeferredScratch { capacity } => Some(word(union_member_fingerprint(capacity)?, 13)),
         Value::Tag { name, payload } => {
             let mut hash = bytes(word(start, 14), name.as_bytes());
@@ -1654,6 +1676,16 @@ pub fn equal(left: &Value, right: &Value) -> bool {
         }
         (Value::RegionType(left), Value::RegionType(right)) => equal(left, right),
         (Value::ScratchType(left), Value::ScratchType(right)) => equal(left, right),
+        (
+            Value::ResourceType {
+                family: left_family,
+                payload: left,
+            },
+            Value::ResourceType {
+                family: right_family,
+                payload: right,
+            },
+        ) => left_family == right_family && equal(left, right),
         (
             Value::Scratch {
                 values: left_values,
@@ -2089,6 +2121,7 @@ pub fn show(value: &Value) -> String {
         }
         Value::RegionType(element) => format!("Region {}", show(element)),
         Value::ScratchType(element) => format!("Scratch {}", show(element)),
+        Value::ResourceType { family, payload } => format!("Resource:{family} {}", show(payload)),
         Value::Scratch { values, capacity } => {
             format!("<scratch {}/{}>", values.len(), capacity)
         }

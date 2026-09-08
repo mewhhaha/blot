@@ -1,0 +1,59 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Channel = import "blot:channel"
+
+let run ::
+  { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Channel.Effect }
+let run = fn io => fn capacity => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect, Channel.Effect }
+  let body = fn scope => do:
+    use channel :: Channel.Ends Int <- Channel.bounded scope capacity
+    let produce :: Unit -> Int ~ { Channel.Effect }
+    let ?produce = fn () => do:
+      for index in Iter.range (0, 10):
+        use accepted <- Channel.send channel.sender (?index)
+        if not accepted:
+          return index
+
+      use Channel.close channel.sender
+      return 10
+    use producer <- Spark.spawn scope (?produce)
+    let total = 0
+    for crossing in Iter.range (0, 11):
+      use message <- Channel.receive channel.receiver
+      if let #Some value = message else:
+        break
+
+      total := total + value
+
+    use sent <- Spark.join producer
+    return total + sent
+  return Spark.scope io.executor body
+
+let closed ::
+  { .executor = Spark.Executor; } -> Bool ~ { Spark.Effect, Channel.Effect }
+let closed = fn io => do:
+  let body :: Spark.Scope -> Bool ~ { Channel.Effect }
+  let body = fn scope => do:
+    use channel :: Channel.Ends Int <- Channel.bounded scope 1
+    use Channel.close channel.sender
+    use Channel.close channel.sender
+    use accepted <- Channel.send channel.sender (?10)
+    return accepted
+  return Spark.scope io.executor body
+
+let wait ::
+  { .executor = Spark.Executor; } -> Bool -> Int ~ { Spark.Effect, Channel.Effect }
+let wait = fn io => fn sending => do:
+  let body :: Spark.Scope -> Int ~ { Channel.Effect }
+  let body = fn scope => do:
+    use channel :: Channel.Ends Int <- Channel.bounded scope 0
+    if sending:
+      use Channel.send channel.sender (?1)
+      return 0
+
+    use Channel.receive channel.receiver
+    return 0
+  return Spark.scope io.executor body
+
+return { .run = run; .closed = closed; .wait = wait; }

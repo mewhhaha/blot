@@ -1,0 +1,39 @@
+open import "blot:prelude"
+
+const Scope = Resource.of "Spark.Scope"
+const Sender = Resource.of_type "Channel.Sender"
+const Receiver = Resource.of_type "Channel.Receiver"
+const Ends = fn message => { .sender = Sender message; .receiver = Receiver message; }
+
+const ChannelRuntime = @effect.host {
+  .bounded = Effect.suspends (@forall (fn message => (Scope, Int) -> Ends message));
+  .send = {
+    .signature = @forall (fn message => (Sender message, message) -> Bool);
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .receive = {
+    .signature = @forall (fn message => Receiver message -> Option message);
+    .input = #Unrestricted;
+    .result = #Affine;
+    .suspends = True;
+  };
+  .close = Effect.suspends (@forall (fn message => Sender message -> Unit));
+}
+
+const bounded :: @forall (fn message => Scope -> Int -> Ends message ~ { ChannelRuntime })
+const bounded = fn scope => fn capacity => ChannelRuntime.bounded (scope, capacity)
+const send :: @forall (fn message => Sender message -> message -> Bool ~ { ChannelRuntime })
+const send = fn sender => fn ?message => ChannelRuntime.send (sender, ?message)
+
+return {
+  .Sender = Sender;
+  .Receiver = Receiver;
+  .Ends = Ends;
+  .Effect = ChannelRuntime;
+  .bounded = bounded;
+  .send = send;
+  .receive = ChannelRuntime.receive;
+  .close = ChannelRuntime.close;
+  }

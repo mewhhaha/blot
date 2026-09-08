@@ -218,7 +218,7 @@ async function bridgeFixture(
   let postReturn: string | null = null;
   if (width > 1) postReturn = "cabi_post_echo";
   const abi = {
-    major: 2,
+    major: 3,
     minor: 0,
     memory: "memory32",
     stringEncoding: "utf-8",
@@ -236,6 +236,7 @@ async function bridgeFixture(
       sourceName: "echo",
       name: "blot:dev:echo",
       phase: "runtime",
+      execution: "direct",
       function: function_,
       postReturn,
       effects: [],
@@ -254,6 +255,7 @@ async function bridgeFixture(
       name: "echo",
       module: "blot:dev/provider",
       function: function_,
+      suspends: false,
     }],
   };
   const providerBytes = new TextEncoder().encode(
@@ -369,7 +371,7 @@ async function bridgeFixture(
       },
     };
   });
-  runtime.commitActivation(await runtime.prepareActivation(build));
+  await runtime.commitActivation(await runtime.prepareActivation(build));
   const providerMemory = runtime.unitInstance("provider").exports
     .memory as WebAssembly.Memory;
   const consumerMemory = runtime.entryInstance.exports

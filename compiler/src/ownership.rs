@@ -3343,6 +3343,7 @@ fn type_may_carry_ownership(type_: &Type) -> bool {
         | Type::Effects(_)
         | Type::OpenEffects { .. }
         | Type::Opaque(_)
+        | Type::Resource { .. }
         | Type::Bottom => false,
     }
 }
@@ -3354,7 +3355,8 @@ fn contains_type_value(type_: &Type) -> bool {
         Type::Forall { body, .. }
         | Type::Array(body)
         | Type::Region(body)
-        | Type::Scratch(body) => contains_type_value(body),
+        | Type::Scratch(body)
+        | Type::Resource { payload: body, .. } => contains_type_value(body),
         Type::Function {
             parameter,
             effects,
@@ -3385,6 +3387,11 @@ fn function_contract(
         parameter, result, ..
     } = produced
     {
+        if let Some((parameter, input, _, requirements, module)) =
+            imported_function_contract(expression, analysis)
+        {
+            return (parameter, input, (**result).clone(), requirements, module);
+        }
         let contract = analysis
             .contracts
             .values()
@@ -3582,7 +3589,18 @@ fn imported_function_contract(
     expression: ExpressionId,
     analysis: &Analysis,
 ) -> Option<FunctionContract> {
-    let Value::Closure { module, body, .. } = analysis.callee_value(expression)? else {
+    let mut callee = expression;
+    let mut applied = 0;
+    while let Expression::Apply { function, .. } =
+        analysis.module.arena.expressions[callee.0 as usize]
+    {
+        callee = function;
+        applied += 1;
+    }
+    let Value::Closure {
+        module, mut body, ..
+    } = analysis.callee_value(callee)?
+    else {
         return None;
     };
     let defining_module = analysis
@@ -3592,6 +3610,16 @@ fn imported_function_contract(
         .get(module.as_str())?
         .module
         .clone();
+    // A written curried lambda has a checked contract for each parameter. The
+    // earlier arguments need not be comptime values to select that contract.
+    for _ in 0..applied {
+        let Expression::Lambda { body: nested, .. } =
+            defining_module.arena.expressions[body.0 as usize]
+        else {
+            return None;
+        };
+        body = nested;
+    }
     let contract = if std::ptr::eq(defining_module.as_ref(), analysis.module) {
         analysis.contracts.get(&body).cloned()
     } else {
@@ -4438,7 +4466,7 @@ fn recursive_structural_owned_result(
 fn recursive_result_ownership(type_: &Type, candidate: Produced) -> Option<Produced> {
     match type_ {
         Type::Forall { body, .. } => recursive_result_ownership(body, candidate),
-        Type::Array(_) | Type::Scratch(_) => Some(candidate),
+        Type::Array(_) | Type::Scratch(_) | Type::Resource { payload: _, .. } => Some(candidate),
         Type::Region(element) => {
             let region = region_authority(candidate);
             if type_may_carry_ownership(element) {

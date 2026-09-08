@@ -1,0 +1,24 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
+
+let run :: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Clock }
+let run = fn io => fn mode => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect, Clock }
+  let body = fn scope => do:
+    if mode == 0:
+      let child :: Spark.Scope -> Int ~ { Clock } = fn nested => Clock.tick 3
+      use result <- Spark.child_scope scope child
+      return result
+
+    let ?work :: Unit -> Int ~ { Clock } = fn () => Clock.tick 4
+    use job <- Spark.spawn scope (?work)
+    use Spark.yield scope
+    if mode == 1:
+      use Spark.cancel job
+      return 10
+
+    return 20
+  return Spark.scope io.executor body
+
+return { .run = run; }

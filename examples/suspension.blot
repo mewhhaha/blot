@@ -1,0 +1,14 @@
+// A suspension declaration also works with an ordinary source handler.
+open import "blot:prelude"
+const example = import "./lib/suspension.blot"
+
+let clock =
+  {
+    .tick = fn (index, ?resume) => do:
+      use result <- resume (index * 2)
+      return result
+    ;
+    .return = fn value => value;
+  }
+
+return @handle (example.Clock, fn () => example.run 10, clock)

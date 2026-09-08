@@ -4,6 +4,8 @@ import { join, relative, sep } from "node:path";
 const excludedRegressionTests = new Set([
   // Distribution checks pack and install the project under a dedicated Node baseline.
   "scripts/package_contents.test.ts",
+  // This transport needs native Web Workers and runs in test:web-workers.
+  "src/web_worker_executor.test.ts",
   // Standalone experiments remain outside the ordinary regression suite.
   "experiments/generated-code/benchmark.test.ts",
   "experiments/owned-regions/wasm_region.test.ts",

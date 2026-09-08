@@ -105,7 +105,13 @@ const Effect =
     .operation = identity;
     .consumes = effect_consumes;
     .produces = effect_produces;
+    .suspends = fn signature => { .signature = signature; .suspends = #True; };
   }
+
+const Resource = {
+  .of = fn family => @resource.type family @type.unit;
+  .of_type = @resource.type;
+}
 
 // --- declaration tags ------------------------------------------------------
 
@@ -1966,6 +1972,64 @@ const Result = fn (ok, error) => #Ok ok | #Error error
 const Ok = fn value => #Ok value
 const Error = fn value => #Error value
 
+const option_map ::
+  @forall (fn e => @forall (fn T => @forall (fn U => ((T -> U) ~ [e]) -> (Option T -> Option U) ~ [e])))
+const option_map = fn transform => fn option => case option of
+  #None => #None
+  #Some value => do:
+    use mapped <- transform value
+    return #Some mapped
+
+const option_and_then ::
+  @forall (fn e => @forall (fn T => @forall (fn U => ((T -> Option U) ~ [e]) -> (Option T -> Option U) ~ [e])))
+const option_and_then = fn transform => fn option => case option of
+  #None => #None
+  #Some value => transform value
+
+const option_or_else :: @forall (fn T => Option T ~> Option T -> Option T)
+const option_or_else = fn ~fallback => fn option => case option of
+  #None => fallback
+  #Some value => #Some value
+
+const option_unwrap_or_else :: @forall (fn T => T ~> Option T -> T)
+const option_unwrap_or_else = fn ~fallback => fn option => case option of
+  #None => fallback
+  #Some value => value
+
+const result_map ::
+  @forall (fn e => @forall (fn T => @forall (fn U => @forall (fn E => ((T -> U) ~ [e]) -> (Result (T, E) -> Result (U, E)) ~ [e]))))
+const result_map = fn transform => fn result => case result of
+  #Error error => #Error error
+  #Ok value => do:
+    use mapped <- transform value
+    return #Ok mapped
+
+const result_map_error ::
+  @forall (fn e => @forall (fn T => @forall (fn E => @forall (fn F => ((E -> F) ~ [e]) -> (Result (T, E) -> Result (T, F)) ~ [e]))))
+const result_map_error = fn transform => fn result => case result of
+  #Ok value => #Ok value
+  #Error error => do:
+    use mapped <- transform error
+    return #Error mapped
+
+const result_and_then ::
+  @forall (fn e => @forall (fn T => @forall (fn U => @forall (fn E => ((T -> Result (U, E)) ~ [e]) -> (Result (T, E) -> Result (U, E)) ~ [e]))))
+const result_and_then = fn transform => fn result => case result of
+  #Error error => #Error error
+  #Ok value => transform value
+
+const result_or_else ::
+  @forall (fn e => @forall (fn T => @forall (fn E => @forall (fn F => ((E -> Result (T, F)) ~ [e]) -> (Result (T, E) -> Result (T, F)) ~ [e]))))
+const result_or_else = fn recover => fn result => case result of
+  #Ok value => #Ok value
+  #Error error => recover error
+
+const result_unwrap_or_else ::
+  @forall (fn e => @forall (fn T => @forall (fn E => ((E -> T) ~ [e]) -> (Result (T, E) -> T) ~ [e])))
+const result_unwrap_or_else = fn recover => fn result => case result of
+  #Ok value => value
+  #Error error => recover error
+
 const Iterable = fn (collection, value, state) => {
   .items = collection -> {
     .state = state;
@@ -2094,6 +2158,24 @@ const collect = fn iterator => do:
     #None => []
     #Some (value, next) => go (next, [value])
 
+const iter_fold_with ::
+  @forall (fn e => @forall (fn S => @forall (fn T => @forall (fn I => (((S, T) -> S) ~ [e]) -> S -> ({ .state = I; .step = I -> Option (T, I); } -> S) ~ [e]))))
+const iter_fold_with = fn visit => fn initial => fn iterator => do:
+  let carried = initial
+  for value in iterator:
+    use next <- visit (carried, value)
+    carried := next
+
+  return carried
+
+const iter_each ::
+  @forall (fn e => @forall (fn T => @forall (fn I => ((T -> @type.unit) ~ [e]) -> ({ .state = I; .step = I -> Option (T, I); } -> @type.unit) ~ [e])))
+const iter_each = fn visit => fn iterator => do:
+  for value in iterator:
+    use () <- visit value
+
+  return ()
+
 // Namespaced because `range` is already the type constructor — `I32` is a
 // range — and two things called `range` in one scope would be worse than a
 // prefix. Every other group in this file is a record for the same reason.
@@ -2107,6 +2189,8 @@ const Iter =
     .indexed = @array.indexed;
     .iterate = iterate;
     .collect = collect;
+    .fold_with = iter_fold_with;
+    .each = iter_each;
   }
 
 // --- polymorphic collections -----------------------------------------------
@@ -2527,6 +2611,21 @@ const attach = fn target => fn members => do:
     fn (extended, name) => do:
       return @type.attach extended name (@shape.get members name)
   )
+
+const Option = attach Option {
+  .map = option_map;
+  .and_then = option_and_then;
+  .or_else = option_or_else;
+  .unwrap_or_else = option_unwrap_or_else;
+}
+
+const Result = attach Result {
+  .map = result_map;
+  .map_error = result_map_error;
+  .and_then = result_and_then;
+  .or_else = result_or_else;
+  .unwrap_or_else = result_unwrap_or_else;
+}
 
 // The GPU frontend requires every integer literal to fit the signed 32-bit
 // domain, so wider bounds are computed rather than spelled. Compile time is the
@@ -3265,9 +3364,11 @@ const Type =
     .attach = attach;
   }
 
+
 return {
   .Fn = Fn;
   .Effect = Effect;
+  .Resource = Resource;
   .identity = identity;
   .freeze = freeze;
   .always = always;

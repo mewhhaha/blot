@@ -296,6 +296,7 @@ pub(crate) fn split_runtime_module(
         .map(|function| (function.id, function))
         .collect::<HashMap<_, _>>();
     let mut included = BTreeMap::<String, BTreeSet<usize>>::new();
+    let framed = crate::backend::suspension::framed_functions(module);
     let mut demands = BTreeSet::new();
     let mut pending = module
         .exports
@@ -338,6 +339,10 @@ pub(crate) fn split_runtime_module(
                     "development unit {unit:?} exposes closure function {target} from unit {:?}; functions may be called through a reload boundary but cannot cross it as values",
                     target_unit.expect("checked target unit")
                 ));
+            }
+            if operation.kind == "callback.make" {
+                pending.push((unit.clone(), target));
+                continue;
             }
             if operation.kind != "call.direct" && operation.kind != "closure.make" {
                 continue;
@@ -409,6 +414,7 @@ pub(crate) fn split_runtime_module(
                 &unit_by_root,
                 &demands,
                 &link_names,
+                &framed,
             )?)
         };
         units.push(DevelopmentUnit {
@@ -444,6 +450,7 @@ fn build_unit_module(
     unit_by_root: &HashMap<String, String>,
     demands: &BTreeSet<LinkDemand>,
     link_names: &BTreeMap<LinkDemand, String>,
+    framed: &BTreeSet<usize>,
 ) -> Result<RuntimeModule, String> {
     let functions_by_id = module
         .functions
@@ -482,12 +489,14 @@ fn build_unit_module(
                 link_names,
                 &mut links,
                 &mut linked_imports,
+                framed,
             )?;
         }
         functions.push(function);
     }
 
     let mut exports = Vec::new();
+    let mut resumable_roots = Vec::new();
     if unit == entry_unit {
         for exported in &module.exports {
             let mut exported = exported.clone();
@@ -526,9 +535,13 @@ fn build_unit_module(
                 link_names,
                 &mut links,
                 &mut linked_imports,
+                framed,
             )?;
         }
         let exported_function = wrapper.id;
+        if framed.contains(&demand.function) {
+            resumable_roots.push(exported_function);
+        }
         functions.push(wrapper);
         let link_name = link_names[demand].clone();
         exports.push(RuntimeExport::Runtime {
@@ -551,8 +564,16 @@ fn build_unit_module(
         functions,
         capabilities: module.capabilities.clone(),
         links,
+        resumable_roots,
         exports,
     };
+    for type_ in &mut unit_module.types {
+        if let crate::hir::RuntimeType::Callback { function, .. } = type_
+            && let Some(mapped) = function_map.get(function)
+        {
+            *function = *mapped;
+        }
+    }
     normalize_unit_module(&mut unit_module)?;
     Ok(unit_module)
 }
@@ -566,6 +587,14 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
         for operation in function.blocks.iter().flat_map(|block| &block.operations) {
             if let Some(signature) = operation.signature {
                 signature_ids.insert(signature);
+            }
+            if operation.kind == "callback.make" {
+                let crate::hir::RuntimeType::Callback { signature, .. } =
+                    &module.types[operation.type_id]
+                else {
+                    return Err("development callback has no checked callback type".to_owned());
+                };
+                signature_ids.insert(*signature);
             }
             if operation.kind == "host.call" {
                 let capability = operation.capability.clone().ok_or_else(|| {
@@ -661,8 +690,15 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
             )
         })?;
         let dependencies = match type_ {
+            crate::hir::RuntimeType::Callback {
+                environment_type, ..
+            } => vec![*environment_type],
             crate::hir::RuntimeType::Store { element_type }
-            | crate::hir::RuntimeType::Scratch { element_type } => vec![*element_type],
+            | crate::hir::RuntimeType::Scratch { element_type }
+            | crate::hir::RuntimeType::Resource {
+                payload_type: element_type,
+                ..
+            } => vec![*element_type],
             crate::hir::RuntimeType::Indirect { target_type } => vec![*target_type],
             crate::hir::RuntimeType::Product { fields, .. } => {
                 fields.iter().map(|field| field.type_id).collect()
@@ -699,8 +735,20 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
         .collect::<Vec<_>>();
     for (type_id, type_) in types.iter_mut().enumerate() {
         match type_ {
+            crate::hir::RuntimeType::Callback {
+                signature,
+                environment_type,
+                ..
+            } => {
+                *signature = signature_map[signature];
+                *environment_type = type_map[environment_type];
+            }
             crate::hir::RuntimeType::Store { element_type }
-            | crate::hir::RuntimeType::Scratch { element_type } => {
+            | crate::hir::RuntimeType::Scratch { element_type }
+            | crate::hir::RuntimeType::Resource {
+                payload_type: element_type,
+                ..
+            } => {
                 *element_type = type_map[element_type];
             }
             crate::hir::RuntimeType::Indirect { target_type } => {
@@ -822,6 +870,7 @@ fn rewrite_operation(
     link_names: &BTreeMap<LinkDemand, String>,
     links: &mut Vec<RuntimeLink>,
     linked_imports: &mut HashSet<(String, String)>,
+    framed: &BTreeSet<usize>,
 ) -> Result<(), String> {
     let Some(target) = operation.function else {
         return Ok(());
@@ -852,6 +901,7 @@ fn rewrite_operation(
                 unit: provider.clone(),
                 name: link_name.clone(),
                 signature: target_function.signature,
+                suspends: framed.contains(&target),
             });
         }
         operation.kind = "call.external";
@@ -936,8 +986,15 @@ fn development_type_identity(
     })?;
     let identity = match type_ {
         crate::hir::RuntimeType::Unit => "unit".to_owned(),
+        crate::hir::RuntimeType::Callback { .. } => {
+            return Err("Development callback links require a scoped callback adapter.".to_owned());
+        }
         crate::hir::RuntimeType::Integer32 => "integer-32".to_owned(),
         crate::hir::RuntimeType::SignedInteger64 => "signed-integer-64".to_owned(),
+        crate::hir::RuntimeType::Resource { name, payload_type } => format!(
+            "resource({name:?}){}",
+            development_type_identity(module, *payload_type, active)?
+        ),
         crate::hir::RuntimeType::Float32 => "float-32".to_owned(),
         crate::hir::RuntimeType::Float64 => "float-64".to_owned(),
         crate::hir::RuntimeType::Boolean => "boolean".to_owned(),
@@ -1341,6 +1398,7 @@ mod tests {
             ],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",
@@ -1433,6 +1491,7 @@ mod tests {
             ],
             capabilities: Vec::new(),
             links: Vec::new(),
+            resumable_roots: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",

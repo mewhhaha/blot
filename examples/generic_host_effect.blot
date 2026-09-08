@@ -1,0 +1,11 @@
+open import "blot:prelude"
+const example = import "./lib/generic_host_effect.blot"
+
+let echo =
+  {
+    .copy = fn (value, ?resume) => resume value;
+    .return = identity;
+  }
+
+let observed = @handle (example.Echo, fn () => example.run 42, echo)
+return [Text.of_int observed.number, observed.text]

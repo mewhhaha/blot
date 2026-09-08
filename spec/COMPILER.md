@@ -213,6 +213,35 @@ Surface elaboration is hygienic and preserves source origins. Every function
 application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
+`continue` elaborates to the nearest loop's ordinary accumulator constructor.
+Conditional forwarding preserves rebindings made before departure and skips
+the remaining statements. Lambdas and value conditionals reset the loop target;
+invalid departures retain their source spans. No loop or continue node reaches
+checking. Baba owns numeric token boundaries, including digit separators,
+hexadecimal integers, and exponent floats. Materialization removes separators
+and converts the accepted token in the declared radix; it does not scan source
+for additional numeric tokens.
+
+Attached namespaces are transparent when applying their underlying function,
+including deferred argument selection before argument evaluation. Option/Result
+combinators and effectful iterator traversal are ordinary source definitions;
+they introduce no checking or lowering rules.
+
+Expression holes use the existing `_` name expression. The checker records a
+fresh variable and lexical environment by expression identity, then reports its
+negative type bound and the local binding types after constraints settle.
+These are editing facts only: an unresolved hole prevents checked-interface
+publication, certification, evaluation, and Runtime-HIR emission. Invalidation
+removes hole facts with the module's other inference facts. Pattern wildcards
+and signature inference holes retain their separate elaboration meanings.
+
+Inline named `let`, `const`, and `use` annotations expand to the existing
+signature declaration followed by its binding, in the same lexical scope.
+The checker records a typed `use` result after forcing; the expression fact
+retains a nullary computation wrapper when the written expression is deferred.
+Residual specialization consumes that checked result representation, including
+output-only polymorphic resource parameters.
+
 A multi-subject case becomes strict nullary subject computations and ordinary
 nested cases. A subject is demanded only when the selected row first tests its
 column. The first structural probe retains its binders for the rest of that
@@ -560,6 +589,15 @@ readers. It redirects each constructor edge to its arm and passes the payload as
 an arm parameter. If any premise is absent, the switch remains unchanged for the
 ordinary validator and emitter path.
 
+Self-tail-call recovery also follows unconditional paths that only construct
+`Unit` constants and return `Unit`. A discarded self-call result is equivalent
+to a fresh `()` on such a path, so the call becomes an entry back edge with its
+arguments. Return-path discovery uses an inverse-edge worklist; it does not
+recognize cycles without a return. Any intervening call, host operation,
+allocation, read, arithmetic, conditional dispatch, or trap prevents this
+recovery. Effectful iterator folds therefore retain bounded call-stack use when
+their tail result is erased, without dropping work after non-tail calls.
+
 The validator independently checks:
 
 1. structural reference validity;
@@ -568,7 +606,8 @@ The validator independently checks:
 4. exact relationship-certificate replay;
 5. exact ownership and reuse permission;
 6. Store/root and capability-family lineage;
-7. capability operation ownership matches the exact closed input/result types;
+7. capability operation contracts contain checked suspension and ownership
+   matching the exact closed input/result types;
 8. absence of compile-time and proof-only values;
 9. target-policy admission; and
 10. complete public-layout inputs.
@@ -592,7 +631,61 @@ must not accept a boundary whose required malformed-input validation is
 unimplemented.
 
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
-ABI 2 bytes and caller ownership.
+ABI 3 bytes and caller ownership.
+
+ABI closure computes the transitive set of functions that can reach a checked
+suspending host operation or development link through direct calls. Emission splits those functions
+at suspension and call boundaries into typed frames with explicit block state,
+parent frames, and result destinations. The poll trampoline performs bounded
+block work and reports host requests using canonical arguments and results.
+The Node host schedules requests; it does not interpret Runtime HIR or guest
+instructions. Direct functions keep their ordinary Wasm calling convention.
+Suspension participates in effect identity, boundary fingerprints, and the
+checked-module certificate. Runtime HIR schema 12 names capability metadata
+`contract` with `input`, `result`, and mandatory Boolean `suspends` fields.
+Capability operations also preserve `sourceName` independently of their concrete
+operation identifier. Residual staging interns each closed argument/result
+signature and contract for a polymorphic host operation. The host binds its
+source name once; each concrete import marshals against its own checked type.
+No host performs type inference or selects a source specialization.
+
+Development partitioning preserves the whole-module framed call graph. Link
+metadata records mandatory `suspends`; a provider's `resumableRoots` names the
+export wrappers that must retain frames and cooperative checkpoints, including
+pure callees of worker callbacks. Function remapping and module merging remap
+those roots. A link's suspension contract must match the provider export before
+activation. The poll request ordinal selects ordinary host imports first and
+development links afterward; both use canonical request/result storage.
+The host invokes the captured provider with the caller's explicit scope and
+execution authority, preserving cancellation and resource ancestry across units.
+
+Generative import instantiation records effect substitutions through matching
+members of imported records and namespace attachments, including nested imports.
+Wrapper signatures and re-exported effect values consume the same substitution;
+recording only a binding whose entire value is an effect loses this authority.
+
+The compile-time primitive `@resource.type` produces an opaque source type for
+a nonempty family name and an invariant payload type parameter. Checking
+preserves the family and payload through constraint interning, freshening,
+module interfaces, and specialization; it never equates the type with an
+integer. Runtime HIR represents it as `resource { name, payloadType }`, whose
+public layout is an opaque i64 token. QCore schema 5 carries its family and
+payload reference in a structural resource certificate. Value capsules use
+schema 5 and module snapshots schema 3. The canonical
+adapter preserves the token without interpreting it as a private heap address.
+The host registry owns the additional token-to-resource relation and validates
+family, payload type, runtime, liveness, and ancestor-scope provenance before a token enters
+or leaves guest execution. Suspended result validation checks canonical memory
+before translating it into private frame slots. No source constructor, bitcast,
+or host-language type assertion grants resource authority.
+
+The source `blot:shared` library reuses these resource and host-effect contracts.
+Its kernel's checked argument shape selects which resource leaves the host
+worker protocol may replace with numeric buffer descriptors; captures and
+results retain the private canonical-value restriction. Descriptor validation,
+exact partition witnesses, loan admission, and crash invalidation belong to the
+host resource relation in `RUNTIME.md`, not to a second inference engine or a
+new Runtime-HIR ownership family. No guest heap address crosses a worker.
 
 For every admitted type, lifting validates before constructing a source value,
 and valid values round-trip through lowering and lifting up to the
@@ -667,7 +760,7 @@ separate from target refusal.
 
 Target refusal means a checked program lies outside the selected target or ABI
 policy. It is permitted only at an explicit policy boundary, such as a public
-vector type refused by ABI 2 or an experimental target feature not enabled for
+vector type refused by ABI 3 or an experimental target feature not enabled for
 production.
 
 It cannot hide an unresolved production-supported internal representation,
@@ -778,7 +871,7 @@ most 1,048,576 nodes. The AST also sums that expansion across its parameter,
 declaration, and result roots; the certificate sums its result, effects,
 parameter, expression-type, and closure-signature roots. Snapshot and portable-
 AST export run the same admission, so the compiler cannot publish an artifact
-its installer refuses. The decoded schema-4 value capsule reapplies the logical
+its installer refuses. The decoded schema-5 value capsule reapplies the logical
 depth, node, and allocation budget before recursive value, environment,
 effect-scope, or application work; its flat identity graphs are then checked
 iteratively for missing edges, cycles, and their separate bounds: a 1,024-edge
@@ -821,6 +914,20 @@ validated program as a fresh production compilation. A versioned project
 manifest supplies a named entry unit and a one-to-one map from unit names to
 reachable module roots. It does not change resolution or introduce a second
 module system.
+
+When a strict host callback still has an open result, the ordinary Rust checker
+specializes its source body against checked lexical captures and its closed
+argument. The compiled callback retains that checked source signature as an SSA
+fact. Preparing a host request substitutes the callback's original result
+variables from that fact into the host operation result, including invariant
+resource payloads. Emission does not infer callback types from machine layouts.
+
+Development units may contain precompiled host callbacks. The splitter retains
+each callback entry in its creating unit, follows its direct calls, and remaps
+its function, signature, and capture type identities with the unit. Callback
+values across unit links and suspending unit links remain explicit target
+refusals until their scoped adapters are supported. Pure links from a resumable
+callback preserve ordinary canonical call behavior.
 
 After representation-closing specialization, the development splitter assigns
 each demanded residual function to the configured root containing its stable
@@ -965,6 +1072,50 @@ hosts. Target-only finite outcomes and infinite administrative stuttering are
 excluded.
 
 ## 18. Validation and test obligations
+
+Checked strict closures passed to host operations specialize before Runtime HIR.
+The residual callback application uses the checked arrow domain and a symbolic
+argument, records a standalone function entry, and closes its runtime captures
+into a product. `callback.make` references that function and its signature;
+the `Callback` representation names the entry, signature, and environment type.
+Function/type/signature compaction and module merge must remap those identities
+together. The ABI exposes a canonical capture record and a separately declared
+start adapter. Hosts consume these facts; they never check or compile work at
+submission time. Latent effects come from the checked callback signature and
+remain in the enclosing operation's polymorphic effect row.
+
+Evaluating a generative import rebinds effect identities from checked declaration
+values to that import's values. The lexical value environment retains this
+substitution separately from quantified type substitutions. Closure signatures
+and effect-bearing fields of a compile-time record use those instantiated facts;
+unrelated inferred variables are not converted into rigid reified variables.
+Source checking of a closure instance copies the nearest substitutions, and
+residual cache identities include them. Environments carrying generative
+substitutions cannot become reusable value capsules. Attachments remain on their
+original signature structure while substitution changes the underlying effect.
+
+A statically known imported curried lambda retains the checked ownership
+contract for each written parameter. Applying an earlier runtime argument
+selects the next lambda's contract in its defining module; it cannot reinterpret
+that module's pattern identities in the caller. This lookup follows direct
+lambda bodies only and does not guess which closure an arbitrary computation
+returns. A contextual open signature cannot erase an already closed callback
+signature. Polymorphic operation results instantiate from checked argument
+signatures, including callback results and invariant resource parameters;
+an unresolved polymorphic host result is a target refusal. A concrete caller
+result also instantiates the checked body expression's quantified variables in
+the call's lexical substitution environment. This connects output-only type
+parameters to their already-checked evidence without rechecking widened runtime
+carriers against source singleton refinements. Existing checked unused-result
+Unit boundary policy remains separate from polymorphic specialization.
+
+Suspension emission frames every callback and its direct-call closure, plus
+functions reachable from suspending calls. Pure exports keep their direct path.
+Frame segments bound polling work. A tail call preserves the current parent and
+return destination; its frame capacity is the least fixed point of local frame
+size and capacities of tail-call successors. Root-result adapters cover those
+tail successors, including mutually recursive entries. This optimization changes
+neither Runtime HIR observations nor the public result representation.
 
 Production acceptance requires layered evidence:
 

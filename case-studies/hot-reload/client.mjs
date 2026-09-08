@@ -84,7 +84,7 @@ async function refresh() {
           edges: snapshot.edges,
           durationMilliseconds: snapshot.durationMilliseconds,
         });
-        runtime.commitActivation(activation);
+        await runtime.commitActivation(activation);
       }
       activeUnits = next;
       generation = snapshot.generation;

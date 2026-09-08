@@ -19,7 +19,9 @@ export function declaredFixities(root: Rule): readonly Fixity[] {
     const declaration = tokenOf(required(rule, "associativity")).text;
     const associativity = declaredAssociativity(declaration, rule.span);
 
-    const precedence = Number(tokenOf(required(rule, "precedence")).text);
+    const precedence = Number(
+      tokenOf(required(rule, "precedence")).text.replaceAll("_", ""),
+    );
     if (
       !Number.isSafeInteger(precedence) || precedence < 0 ||
       precedence > 0xffff_ffff

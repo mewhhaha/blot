@@ -123,11 +123,17 @@ function acceptedModule(): BlotRuntimeModule {
       name: "Console",
       operations: [{
         name: "write",
+        sourceName: "write",
         signature: 1,
-        ownership: { input: "unrestricted", result: "unrestricted" },
+        contract: {
+          input: "unrestricted",
+          result: "unrestricted",
+          suspends: false,
+        },
       }],
     }],
     links: [],
+    resumableRoots: [],
     exports: [{
       sourceName: "default",
       phase: "runtime",
@@ -164,8 +170,10 @@ Deno.test("Blot Runtime HIR accepts structural operation ownership matching its 
       ...module.capabilities[0],
       operations: [...module.capabilities[0].operations, {
         name: "submit",
+        sourceName: "submit",
         signature: 2,
-        ownership: {
+        contract: {
+          suspends: false,
           input: {
             kind: "record",
             fields: [
@@ -190,7 +198,8 @@ Deno.test("Blot Runtime HIR rejects structural ownership that disagrees with its
       ...module.capabilities[0],
       operations: [{
         ...module.capabilities[0].operations[0],
-        ownership: {
+        contract: {
+          suspends: false,
           input: {
             kind: "record",
             fields: [{ name: "handle", ownership: "linear" }],

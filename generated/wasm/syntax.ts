@@ -149,6 +149,7 @@ export type LiteralKind =
   | ":"
   | "in"
   | "break"
+  | "continue"
   | "open"
   | "return"
   | ","
@@ -238,6 +239,7 @@ export type RuleName =
   | "iteration"
   | "iteration_source"
   | "breaking"
+  | "continuing"
   | "opening"
   | "result"
   | "binding_pattern"
@@ -367,6 +369,7 @@ export interface SignatureCursor extends RuleCursorBase<"signature"> {
 }
 
 export interface BindingCursor extends RuleCursorBase<"binding"> {
+  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
   field(name: "kind"): TokenCursor<"literal", "const"> | TokenCursor<"literal", "let">;
   field(name: "pattern"): BindingPatternCursor;
   field(name: "recursive"): TokenCursor<"literal", "rec"> | null;
@@ -397,6 +400,7 @@ export interface RebindingCursor extends RuleCursorBase<"rebinding"> {
 }
 
 export interface SequencingCursor extends RuleCursorBase<"sequencing"> {
+  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
   field(name: "head"): ValueCursor;
   field(name: "value"): ValueCursor | null;
   field(name: string): CursorFieldValue | undefined;
@@ -419,6 +423,9 @@ export interface IterationSourceCursor extends RuleCursorBase<"iteration_source"
 }
 
 export interface BreakingCursor extends RuleCursorBase<"breaking"> {
+}
+
+export interface ContinuingCursor extends RuleCursorBase<"continuing"> {
 }
 
 export interface OpeningCursor extends RuleCursorBase<"opening"> {
@@ -770,6 +777,7 @@ export type AnyRuleCursor =
   | IterationCursor
   | IterationSourceCursor
   | BreakingCursor
+  | ContinuingCursor
   | OpeningCursor
   | ResultCursor
   | BindingPatternCursor

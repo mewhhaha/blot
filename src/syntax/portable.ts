@@ -836,7 +836,7 @@ export function decodePortableModule(
       case "signature":
         decoded = {
           tag,
-          kind: signatureKind(
+          kind: declarationKind(
             node.kind,
             `${location} declaration ${index} signature kind`,
           ),
@@ -1067,11 +1067,6 @@ function declarationKind(
   location: string,
 ): "let" | "effect" | "const" {
   if (value === "let" || value === "effect" || value === "const") return value;
-  throw new Error(`${location} has unknown value ${String(value)}`);
-}
-
-function signatureKind(value: unknown, location: string): "let" | "const" {
-  if (value === "let" || value === "const") return value;
   throw new Error(`${location} has unknown value ${String(value)}`);
 }
 

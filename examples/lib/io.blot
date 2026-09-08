@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const Io = import "blot:io"
+
+let get ::
+  Io.Http.Capability -> Text -> Result (Io.Http.Response, Text) ~ { Io.Http.Effect }
+let get = fn http => fn path => Io.Http.get http path
+
+let sleep :: Io.Clock.Capability -> Int -> Int ~ { Io.Clock.Effect }
+let sleep = fn clock => fn delay => do:
+  use () <- Io.Clock.sleep clock delay
+  return Io.Clock.now clock
+
+return { .get = get; .sleep = sleep; }

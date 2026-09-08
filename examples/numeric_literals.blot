@@ -1,0 +1,13 @@
+open import "blot:prelude"
+
+const classify :: Int -> Int = fn value => case value of
+  -0x10 => 1_000
+  0XFF => 2_000
+  _ => 3_000
+
+const run :: F64 -> Int = fn value => do:
+  let scaled :: F64 = value + 1_0.0e-1
+  let narrow :: F32 = 1.25E+1
+  return F64.truncate scaled + F32.truncate narrow + 0x1_0 + classify (-16)
+
+return run 0.5

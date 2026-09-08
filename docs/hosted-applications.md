@@ -62,7 +62,7 @@ try {
 }
 ```
 
-The adapter supports closed ABI 2.0 artifacts with scalar input parameters:
+The adapter supports closed ABI 3.0 artifacts with canonical input parameters:
 `Int` uses JavaScript `bigint`, `F32`/`F64` use `number`, `Bool` uses `boolean`,
 and `Unit` uses `null`. Signatures requiring more than 16 flattened input lanes
 are refused rather than incorrectly passed as scalar arguments. The argument
@@ -85,7 +85,7 @@ import type { HostOperation } from "@mewhhaha/blot";
 
 const operations = new Map<string, HostOperation>([
   ["read", () => 42n],
-  ["write", (value) => {
+  ["write", (_context, value) => {
     console.log(value);
     return null;
   }],
@@ -96,14 +96,17 @@ const capabilities = new Map([["Device", operations]]);
 Pass `capabilities` as the second argument to `instantiateArtifact`. Both
 missing and unused capabilities/operations are rejected. The maps are
 snapshotted before asynchronous Wasm compilation. The actual Wasm import set
-must match the manifest. This adapter currently accepts only scalar
-host-operation parameters and results with unrestricted ownership; it refuses
-aggregate imports, owned resource transfers, and split development-unit links.
-Those restrictions belong to this adapter, not to the language's complete ABI 2
-support.
+must match the manifest. Host operation parameters and results use the same
+canonical JavaScript values as exports. Owned resource transfers and split
+development-unit links require their additional lifecycle adapters.
 
-A handler must return synchronously. Returning a Promise is rejected even for a
-Unit operation, whose result might otherwise be discarded unnoticed. Calling an
+The maps use source operation names. A polymorphic operation can appear in
+several manifest imports with different concrete signatures and Wasm names;
+their shared `sourceName` selects the same host function. The adapter validates
+and copies each invocation using that specialization's signature.
+
+An operation with `contract.suspends: false` must return synchronously. Returning
+a Promise is rejected even for Unit. Calling an
 async JavaScript function can already start work before that rejection; the
 adapter cannot undo host actions. Reentrant guest calls and destroying the
 instance during a guest call are refused. `destroy` invalidates subsequent calls
@@ -132,11 +135,52 @@ policy, not proof that all quantities terminate or avoid traps.
 
 ## Boundaries retained
 
-ABI 2 host effects are still synchronous. This change does not add guest
-suspension, a scheduler, continuation serialization, asynchronous cancellation,
-or a WASI Component Model adapter. A future suspending ABI needs an explicit
-version, continuation ownership, failure/cleanup rules, and reload interaction;
-a Promise wrapper is not an implementation of those semantics.
+Source `Effect.suspends (Input -> Output)` declares a suspending operation.
+Use `guest.callAsync(name, arguments, { signal })` for exports that perform one.
+The compiler emits explicit frames and a bounded Wasm polling trampoline; the
+host awaits the operation and resumes the saved frame. Operations receive
+`{ signal, scope }` as their first argument and must use the signal to cancel pending platform
+work. `await guest.close()` cancels and drains active calls. `destroy()` remains
+available for an idle instance. These APIs do not provide a WASI Component
+Model adapter.
+
+`examples/lib/resource_context.blot` demonstrates explicit I/O: an ordinary
+`io.client` field has type `Resource.of "TextClient"`, and the source passes it
+to an effect operation. The host creates a `HostScope`, registers a family with
+`scope.resource<NativeClient>("TextClient")`, and supplies the lease returned
+by `family.grant(scope, client, dispose)`. Pass that scope to
+`instantiateArtifact(artifact, capabilities, { scope })`.
+
+An operation can use `family.acquire(context.scope, create, dispose,
+{ signal: context.signal })` to register a new resource before returning its
+lease. A cancelled acquisition disposes a late result. Invocation exit drains
+child work and acquisitions, then awaits all releases in reverse order even
+when a release fails. The parent client survives individual calls; close its
+owning scope to release it. Resources acquired inside a call cannot escape in
+its result. This protocol manages host resources without making a source `&`
+borrow survive suspension.
+
+`examples/lib/spark.blot`, `examples/lib/channel.blot`, and
+`examples/lib/spark_cleanup.blot` exercise the concurrency libraries. Construct
+`new SparkRuntime(root)` and `new ChannelRuntime(root, sparks)`, merge their
+`capabilitiesFor(artifact)` maps, and pass `sparks.executor` in the ordinary
+`io` argument. The maps select only operations used by that artifact.
+`Spark.on_exit scope (?cleanup)` registers an asynchronous source finalizer.
+Shutdown drains ordinary work and runs finalizers in reverse registration order
+under cancellation masking, retaining the old artifact and ancestor resources
+until cleanup finishes. A Wasm trap skips source finalizers and still releases
+host-owned resources. Node integration tests exercise those real Wasm paths.
+
+`examples/lib/shared.blot` demonstrates numeric work with disjoint partitions
+and an atomic progress counter. Create a Node or Web Worker executor, pass it to
+`new SparkRuntime(root, { workers })` and `new SharedRuntime(root, sparks,
+workers)`, then merge both capability maps for the artifact. The source gives
+each kernel its partition and counter explicitly through `Shared.run`. The
+counter and allocation stay under their selected Spark scope. Browser servers
+must provide `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`; both development examples already
+serve these headers. Wasm heaps stay private, and only the selected numeric
+buffers cross workers.
 
 Compilation can execute compile-time code and read declared includes and
 packages. Effects expose dependencies but are not a complete sandbox. This host

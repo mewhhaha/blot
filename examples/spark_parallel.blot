@@ -1,0 +1,3 @@
+open import "blot:prelude"
+const example = import "./lib/spark_parallel.blot"
+return example.kernel 2000 + example.kernel 2001

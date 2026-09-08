@@ -23,6 +23,7 @@ Deno.test("regression discovery stays inside the repository under test", async (
       writeFile(join(root, "examples.test.ts"), ""),
       writeFile(join(root, "src", "syntax", "layout.test.ts"), ""),
       writeFile(join(root, "src", "node", "pipeline.test.ts"), ""),
+      writeFile(join(root, "src", "web_worker_executor.test.ts"), ""),
       writeFile(join(root, "scripts", "package_contents.test.ts"), ""),
       writeFile(join(root, ".agent", "worktree", "nested.test.ts"), ""),
       writeFile(join(root, "dist", "generated", "nested.test.ts"), ""),

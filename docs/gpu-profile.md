@@ -19,22 +19,37 @@ in a benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
-| `lexerStates`               |     119 | direct multiplier in the parallel DFA summary pass |
+| `lexerStates`               |     125 | direct multiplier in the parallel DFA summary pass |
 | `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
 | `islandCount`               |      69 | one island for every grammar rule                  |
-| `islandStates`              |     415 |                                                    |
-| `islandTransitions`         |     428 |                                                    |
+| `islandStates`              |     419 |                                                    |
+| `islandTransitions`         |     435 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 627,480 | immutable device table                             |
-| `packedBytes`               | 489,681 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 633,528 | immutable device table                             |
+| `packedBytes`               | 494,517 | version-3 runtime section                          |
 | `scratch.summaries`         |      24 | summaries retained per scratch region              |
-| `rootLoopIsland`            |       5 | root loop still proven under general throughput    |
-| `parallelLongRegionIslands` |       6 | islands admitted to parallel long-region execution |
+| `rootLoopIsland`            |    null | no root loop proof in the current general plan     |
+| `parallelLongRegionIslands` |       7 | islands admitted to parallel long-region execution |
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
 and edge arrays directly. Declaring all 69 rules as islands is what preserves
 the full CST shape needed by source lowering.
+
+`continue` and numeric separators, hexadecimal integers, and exponent floats
+add twelve lexer states, one island, six island states, five transitions,
+18,984 dense-transition bytes, and 13,582 packed bytes. Scratch summaries rise
+from 23 to 24 and parallel long-region islands from six to seven. Candidate
+multiplicity and contraction rounds stay fixed; the version-3 general profile
+is accepted without parser resolutions.
+
+Inline `let`, `const`, and `use` annotations add four island states, seven
+island transitions, 5,952 dense-transition bytes, and 4,717 packed bytes to the
+checked-in plan. No parser resolutions are needed. Lexer states, island count,
+candidate multiplicity, contraction rounds, and parallel admission are unchanged.
+The table also corrects stale baseline counters: the preceding checked-in plan
+had 113 lexer states, 68 islands, 409 states, 423 transitions, 608,592 dense
+bytes, 476,218 packed bytes, 23 scratch summaries, and no root-loop proof.
 
 Comma-separated case subjects and arm patterns add two island states, four
 island transitions, 3,024 dense-transition bytes, and 2,434 packed bytes. They

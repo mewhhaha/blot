@@ -41,13 +41,17 @@ export class AbiMemoryLayouts {
     if (type.kind === "unit") return { alignment: 1, size: 0 };
     if (type.kind === "boolean") return { alignment: 1, size: 1 };
     if (type.kind === "float-32") return { alignment: 4, size: 4 };
-    if (type.kind === "signed-integer-64" || type.kind === "float-64") {
+    if (
+      type.kind === "signed-integer-64" || type.kind === "float-64" ||
+      type.kind === "resource"
+    ) {
       return { alignment: 8, size: 8 };
     }
     if (type.kind === "text" || type.kind === "array") {
       return { alignment: 4, size: 8 };
     }
     if (type.kind === "sealed") return this.get(type.inner);
+    if (type.kind === "callback") return this.get(type.environment);
     if (type.kind === "record") {
       let offset = 0;
       let alignment = 1;

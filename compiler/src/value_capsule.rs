@@ -454,6 +454,10 @@ enum CapsuleValue {
     Array(Vec<CapsuleValue>),
     RegionType(Box<CapsuleValue>),
     ScratchType(Box<CapsuleValue>),
+    ResourceType {
+        family: String,
+        payload: Box<CapsuleValue>,
+    },
     DeferredScratch {
         capacity: Box<CapsuleValue>,
     },
@@ -544,6 +548,7 @@ enum CapsuleCompilerApplication {
         position: u8,
     },
     RuntimeExportParameter(u32),
+    HostCallbackEntry,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1208,6 +1213,7 @@ fn measure_capsule_value(
         }
         CapsuleValue::RegionType(value)
         | CapsuleValue::ScratchType(value)
+        | CapsuleValue::ResourceType { payload: value, .. }
         | CapsuleValue::DeferredScratch { capacity: value }
         | CapsuleValue::EmptyArray { element: value }
         | CapsuleValue::Forall { body: value, .. } => {
@@ -1338,6 +1344,7 @@ fn collect_environment_references(value: &CapsuleValue, references: &mut Vec<u32
             | CapsuleValue::Union(values) => pending.extend(values),
             CapsuleValue::RegionType(value)
             | CapsuleValue::ScratchType(value)
+            | CapsuleValue::ResourceType { payload: value, .. }
             | CapsuleValue::DeferredScratch { capacity: value }
             | CapsuleValue::EmptyArray { element: value }
             | CapsuleValue::Forall { body: value, .. }
@@ -1494,6 +1501,9 @@ impl CapsuleEncoder {
         &mut self,
         environment: &Environment,
     ) -> Result<u32, CapsuleEncodingFailure> {
+        if !environment.effect_substitutions.borrow().is_empty() {
+            return Err(CapsuleEncodingFailure::Ineligible);
+        }
         let identity = Rc::as_ptr(environment) as usize;
         if let Some(id) = self.environment_ids.get(&identity) {
             return Ok(*id);
@@ -1651,6 +1661,10 @@ impl CapsuleEncoder {
             Value::ScratchType(element) => {
                 CapsuleValue::ScratchType(Box::new(self.encode_value(element, depth + 1)?))
             }
+            Value::ResourceType { family, payload } => CapsuleValue::ResourceType {
+                family: family.clone(),
+                payload: Box::new(self.encode_value(payload, depth + 1)?),
+            },
             Value::DeferredScratch { capacity } => CapsuleValue::DeferredScratch {
                 capacity: Box::new(self.encode_value(capacity, depth + 1)?),
             },
@@ -1911,6 +1925,7 @@ impl CapsuleEncoder {
             CompilerApplication::RuntimeExportParameter(parameter) => {
                 CapsuleCompilerApplication::RuntimeExportParameter(*parameter)
             }
+            CompilerApplication::HostCallbackEntry => CapsuleCompilerApplication::HostCallbackEntry,
         })
     }
 
@@ -2137,6 +2152,7 @@ fn decode_compiler_application(
         CapsuleCompilerApplication::RuntimeExportParameter(parameter) => {
             CompilerApplication::RuntimeExportParameter(*parameter)
         }
+        CapsuleCompilerApplication::HostCallbackEntry => CompilerApplication::HostCallbackEntry,
     })
 }
 
@@ -2264,6 +2280,17 @@ fn decode_value(
             module,
             context,
         )?)),
+        CapsuleValue::ResourceType { family, payload } => Value::ResourceType {
+            family: family.clone(),
+            payload: Box::new(decode_value(
+                payload,
+                environments,
+                provenance,
+                module_path,
+                module,
+                context,
+            )?),
+        },
         CapsuleValue::DeferredScratch { capacity } => Value::DeferredScratch {
             capacity: Box::new(decode_value(
                 capacity,

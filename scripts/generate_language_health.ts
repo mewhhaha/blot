@@ -35,6 +35,13 @@ const focusedModules = [
   "sort",
   "types",
 ];
+const runtimeModules = ["spark", "channel", "io", "events", "shared"];
+const runtimeExports = await Promise.all(runtimeModules.map(async (name) => ({
+  name,
+  exports: exportsOfPrelude(
+    await Deno.readTextFile(`src/prelude/${name}.blot`),
+  ),
+})));
 
 const hotspots = await Promise.all(sourceFiles.map(async (path) => ({
   path,
@@ -81,7 +88,13 @@ const stdlib = `# Standard library index\n\n` +
   preludeExports.map((name) => `| \`${name}\` | \`blot:prelude\` |`).join(
     "\n",
   ) +
-  `\n`;
+  `\n\nRuntime libraries are ordinary source modules with explicit host capabilities.\n\n` +
+  `| Exports | Import |\n| --- | --- |\n` +
+  runtimeExports.map((module) =>
+    `| ${
+      module.exports.map((name) => `\`${name}\``).join(", ")
+    } | \`blot:${module.name}\` |`
+  ).join("\n") + `\n`;
 
 const outputs = [
   ["generated/language-health.json", health],

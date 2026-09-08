@@ -45,6 +45,13 @@ impl Checker {
         }
         let mut scope = Some(closure.captures.clone());
         while let Some(current) = scope {
+            for (effect, value) in current.effect_substitutions.borrow().iter() {
+                captures
+                    .effect_substitutions
+                    .borrow_mut()
+                    .entry(*effect)
+                    .or_insert_with(|| value.clone());
+            }
             for (variable, type_) in current.type_substitutions.borrow().iter() {
                 captures
                     .type_substitutions
@@ -224,7 +231,12 @@ impl Checker {
         let body =
             match source {
                 RuntimeType::Unit => Type::Unit,
+                RuntimeType::Callback { .. } => return None,
                 RuntimeType::Integer32 | RuntimeType::SignedInteger64 => int_type(),
+                RuntimeType::Resource { name, payload_type } => Type::Resource {
+                    family: name.clone(),
+                    payload: Rc::new(self.residual_carrier(*payload_type, types, memo)?),
+                },
                 RuntimeType::Float32 => float32_type(),
                 RuntimeType::Float64 => float_type(),
                 RuntimeType::Boolean => bool_type(),

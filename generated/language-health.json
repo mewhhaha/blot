@@ -1,10 +1,10 @@
 {
   "protocol": {
-    "compilerHostAbi": 6,
-    "checkedModuleCertificate": 17,
-    "moduleSnapshotSchema": 2,
-    "valueCapsuleSchema": 4,
-    "runtimeHir": 10
+    "compilerHostAbi": 7,
+    "checkedModuleCertificate": 18,
+    "moduleSnapshotSchema": 3,
+    "valueCapsuleSchema": 5,
+    "runtimeHir": 12
   },
   "operators": [
     {
@@ -196,6 +196,8 @@
     "BLOT_CANNOT_OPEN",
     "BLOT_COMPILER_INVARIANT",
     "BLOT_CONST_CAPTURES_RUNTIME",
+    "BLOT_CONTINUE_IN_VALUE_CONDITION",
+    "BLOT_CONTINUE_OUTSIDE_LOOP",
     "BLOT_DEFERRED_AT_RUNTIME",
     "BLOT_DEFERRED_DEMANDED_TWICE",
     "BLOT_DIVIDE_BY_ZERO",
@@ -215,6 +217,7 @@
     "BLOT_EMPTY_REFINEMENT",
     "BLOT_EMPTY_TYPE",
     "BLOT_EVALUATION_LIMIT",
+    "BLOT_EXPRESSION_HOLE",
     "BLOT_FILTERING_LOOP_WITHOUT_PATTERN",
     "BLOT_FORWARD_REFERENCE",
     "BLOT_GUARD_MAY_CONTINUE",
@@ -311,6 +314,7 @@
     "BLOT_REGION_SPLIT_NOT_OWNED",
     "BLOT_REQUIREMENT_NOT_COMPTIME",
     "BLOT_RESERVED_LAYOUT_CHARACTER",
+    "BLOT_RESOURCE_TYPE",
     "BLOT_RESUME_TWICE",
     "BLOT_RETIRED_IMPORT",
     "BLOT_RETURN_OUTSIDE_SCOPE",
@@ -331,6 +335,7 @@
     "BLOT_TARGET_REFUSAL",
     "BLOT_TEXT_BOUNDS",
     "BLOT_TYPE",
+    "BLOT_TYPED_BINDING_PATTERN",
     "BLOT_TYPE_ERROR",
     "BLOT_TYPE_INSTANTIATE",
     "BLOT_TYPE_NOT_REIFIABLE",
@@ -546,6 +551,7 @@
     "@region.split",
     "@region.swap",
     "@region.type",
+    "@resource.type",
     "@satisfies",
     "@scratch.finish",
     "@scratch.push",
@@ -604,6 +610,7 @@
   "preludeExports": [
     "Fn",
     "Effect",
+    "Resource",
     "identity",
     "freeze",
     "always",
@@ -735,59 +742,59 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 16860
+      "lines": 17132
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 14816
+      "lines": 15641
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10426
+      "lines": 10948
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8196
+      "lines": 8423
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 6908
+      "lines": 7179
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6691
+      "lines": 6719
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 4461
+      "lines": 4635
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3516
+      "lines": 3673
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3396
+      "lines": 3497
     },
     {
       "path": "compiler/src/value_capsule.rs",
-      "lines": 3376
+      "lines": 3403
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 3218
-    },
-    {
-      "path": "compiler/src/value.rs",
-      "lines": 2325
+      "lines": 3361
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2322
+      "lines": 2336
     },
     {
       "path": "compiler/src/qcore.rs",
-      "lines": 2289
+      "lines": 2302
+    },
+    {
+      "path": "compiler/src/value.rs",
+      "lines": 2237
     },
     {
       "path": "src/tooling/lint.test.ts",

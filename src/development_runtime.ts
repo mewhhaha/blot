@@ -10,6 +10,13 @@ import type {
 } from "./development.ts";
 import type { DevelopmentUnitArtifact } from "./compiler/session.ts";
 import { developmentRevision } from "./development_identity.ts";
+import {
+  type HostCapabilities,
+  type HostedModule,
+  instantiateArtifact,
+} from "./host.ts";
+import { HostScope } from "./resources.ts";
+import type { RuntimeValue } from "./abi_values.ts";
 
 const memoryLayouts = new AbiMemoryLayouts();
 
@@ -21,7 +28,7 @@ type Reallocate = (
   newSize: number,
 ) => number;
 
-interface DevelopmentManifest {
+export interface DevelopmentManifest {
   readonly source: string;
   readonly abi: {
     readonly memoryExport: "memory";
@@ -30,20 +37,29 @@ interface DevelopmentManifest {
     readonly name: string | null;
     readonly function: BlotAbiFunction | null;
     readonly postReturn: string | null;
+    readonly execution: "direct" | "resumable" | "comptime";
   }[];
   readonly links: readonly {
     readonly unit: string;
     readonly name: string;
     readonly module: string;
     readonly function: BlotAbiFunction;
+    readonly suspends: boolean;
   }[];
 }
 
-interface UnitActivation {
+export interface LinkedDevelopmentUnit {
+  readonly artifact: Pick<DevelopmentUnitArtifact, "name">;
+  readonly manifest: DevelopmentManifest;
+  readonly instance: WebAssembly.Instance;
+}
+
+interface UnitActivation extends LinkedDevelopmentUnit {
   readonly artifact: DevelopmentUnitArtifact;
   readonly manifest: DevelopmentManifest;
   readonly module: WebAssembly.Module;
   readonly instance: WebAssembly.Instance;
+  readonly hosted?: HostedModule;
 }
 
 interface PreparedDevelopmentUnit {
@@ -82,7 +98,7 @@ type DevelopmentRuntimeState =
   | { readonly tag: "ready" }
   | { readonly tag: "preparing" }
   | {
-    readonly tag: "pending";
+    readonly tag: "pending" | "draining";
     readonly candidate: PendingDevelopmentActivation;
   };
 
@@ -103,13 +119,33 @@ export type DevelopmentRuntimeImports = (
 
 export class DevelopmentRuntime {
   readonly #imports: DevelopmentRuntimeImports;
+  readonly #lifetime: HostScope;
+  readonly #capabilities:
+    | ((artifact: DevelopmentUnitArtifact) => HostCapabilities)
+    | undefined;
+  readonly #calls = new Set<
+    {
+      unit: string;
+      controller: AbortController;
+      completion: Promise<RuntimeValue>;
+    }
+  >();
+  #closing: Promise<void> | undefined;
+  #blockedUnits = new Set<string>();
   #units = new Map<string, UnitActivation>();
   #entryUnit: string | undefined;
   #revision: string | undefined;
   #state: DevelopmentRuntimeState = { tag: "ready" };
 
-  constructor(imports: DevelopmentRuntimeImports = () => ({})) {
+  constructor(imports: DevelopmentRuntimeImports = () => ({}), options: {
+    readonly scope?: HostScope;
+    readonly capabilities?: (
+      artifact: DevelopmentUnitArtifact,
+    ) => HostCapabilities;
+  } = {}) {
     this.#imports = imports;
+    this.#lifetime = new HostScope(options.scope);
+    this.#capabilities = options.capabilities;
   }
 
   get revision(): string | undefined {
@@ -137,7 +173,9 @@ export class DevelopmentRuntime {
     build: unknown,
   ): Promise<DevelopmentActivation> {
     this.#requireReady("prepare an activation");
+    this.#lifetime.assertOpen();
     this.#state = { tag: "preparing" };
+    const candidates = new Map<string, UnitActivation>();
     try {
       const validated = validateBuildTransition(
         build,
@@ -147,7 +185,7 @@ export class DevelopmentRuntime {
       this.#requireRetainedUnits(validated.retainedUnits);
       const compiled = await Promise.all(
         validated.changedUnits.map(async (artifact) => {
-          const manifest = decodeManifest(artifact);
+          const manifest = decodeDevelopmentManifest(artifact);
           const interfaceDigest = await sha256(artifact.manifestBytes);
           if (interfaceDigest !== artifact.interfaceDigest) {
             throw new Error(
@@ -228,7 +266,9 @@ export class DevelopmentRuntime {
             );
           }
           if (
-            JSON.stringify(exported.function) !== JSON.stringify(link.function)
+            JSON.stringify(exported.function) !==
+              JSON.stringify(link.function) ||
+            link.suspends !== (exported.execution === "resumable")
           ) {
             throw new Error(
               `development link ${JSON.stringify(link.name)} from ${
@@ -318,7 +358,6 @@ export class DevelopmentRuntime {
           } has canonical revision ${JSON.stringify(revision)}`,
         );
       }
-      const candidates = new Map<string, UnitActivation>();
       for (const prepared of compiled) {
         const links = resolvedLinks.get(prepared.artifact.name);
         if (links === undefined) {
@@ -349,7 +388,7 @@ export class DevelopmentRuntime {
           },
         };
         const imports = await this.#imports(context);
-        const linkedImports = this.#linkImports(
+        const linkedImports = developmentLinkImports(
           prepared.artifact.name,
           prepared.manifest,
           links,
@@ -364,14 +403,78 @@ export class DevelopmentRuntime {
             }
             return activation.instance;
           },
+          (unit) => this.#units.get(unit),
         );
-        activation.instance = await WebAssembly.instantiate(
-          prepared.module,
-          linkedImports,
-        );
+        let hosted: HostedModule | undefined;
+        if (this.#capabilities === undefined) {
+          activation.instance = await WebAssembly.instantiate(
+            prepared.module,
+            linkedImports,
+          );
+        } else {
+          if (Object.keys(imports).length > 0) {
+            throw new TypeError(
+              "hosted development units use capabilities instead of raw host imports",
+            );
+          }
+          hosted = await instantiateArtifact(
+            {
+              module: prepared.module,
+              manifestBytes: prepared.artifact.manifestBytes,
+            },
+            this.#capabilities(prepared.artifact),
+            {
+              scope: this.#lifetime,
+              links: linkedImports,
+              callLink: async (link, arguments_, context) => {
+                const provider = this.#units.get(link.unit);
+                if (provider?.hosted === undefined) {
+                  throw new Error(
+                    `inactive hosted development provider ${link.unit}`,
+                  );
+                }
+                return provider.hosted.callLinked(
+                  `blot:dev:${link.name}`,
+                  arguments_,
+                  context,
+                );
+              },
+              development: () => {
+                const units = new Map<string, UnitActivation>();
+                const pending = [prepared.artifact.name];
+                while (pending.length > 0) {
+                  const name = pending.pop();
+                  if (name === undefined) {
+                    throw new Error("development dependency queue lost a unit");
+                  }
+                  if (units.has(name)) continue;
+                  const unit = this.#units.get(name);
+                  if (unit === undefined) {
+                    throw new Error(
+                      `inactive development callback unit ${name}`,
+                    );
+                  }
+                  units.set(name, unit);
+                  pending.push(...unit.manifest.links.map((link) => link.unit));
+                }
+                return {
+                  entryUnit: prepared.artifact.name,
+                  units: [...units.values()].map((unit) => ({
+                    name: unit.artifact.name,
+                    root: unit.artifact.root,
+                    module: unit.module,
+                    manifestBytes: unit.artifact.manifestBytes,
+                  })),
+                };
+              },
+            },
+          );
+          activation.instance = hosted.instance;
+        }
         candidates.set(prepared.artifact.name, {
           ...prepared,
           instance: activation.instance,
+          hosted,
         });
       }
 
@@ -400,21 +503,134 @@ export class DevelopmentRuntime {
       return activation;
     } catch (error) {
       if (this.#state.tag === "preparing") this.#state = { tag: "ready" };
+      const cleanup = await Promise.allSettled(
+        [...candidates.values()].map((unit) => unit.hosted?.close()),
+      );
+      const failures = cleanup.filter((outcome) =>
+        outcome.status === "rejected"
+      ).map((outcome) => outcome.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(
+          [error, ...failures],
+          "development preparation cleanup failed",
+        );
+      }
       throw error;
     }
   }
 
-  commitActivation(activation: DevelopmentActivation): void {
+  commitActivation(activation: DevelopmentActivation): Promise<void> {
     const pending = this.#pendingActivation(activation, "commit");
-    this.#units = pending.units;
-    this.#entryUnit = pending.build.entryUnit;
-    this.#revision = pending.build.revision;
-    this.#state = { tag: "ready" };
+    const replaced = new Set([
+      ...pending.build.changedUnits.map((unit) => unit.name),
+      ...pending.build.removedUnits,
+    ]);
+    const affected = new Set(replaced);
+    for (;;) {
+      const before = affected.size;
+      for (const [name, unit] of this.#units) {
+        if (unit.manifest.links.some((link) => affected.has(link.unit))) {
+          affected.add(name);
+        }
+      }
+      if (before === affected.size) break;
+    }
+    const calls = [...this.#calls].filter((call) => affected.has(call.unit));
+    const retired = [...this.#units].filter(([name]) => replaced.has(name)).map(
+      ([, unit]) => unit,
+    );
+    const publish = () => {
+      this.#units = pending.units;
+      this.#entryUnit = pending.build.entryUnit;
+      this.#revision = pending.build.revision;
+      this.#blockedUnits.clear();
+      this.#state = { tag: "ready" };
+    };
+    if (
+      calls.length === 0 && retired.every((unit) => unit.hosted === undefined)
+    ) {
+      publish();
+      return Promise.resolve();
+    }
+    this.#state = { tag: "draining", candidate: pending };
+    this.#blockedUnits = affected;
+    const cancellation = new DOMException(
+      "development unit replaced",
+      "AbortError",
+    );
+    for (const call of calls) call.controller.abort(cancellation);
+    return (async () => {
+      const outcomes = await Promise.allSettled(
+        calls.map((call) => call.completion),
+      );
+      const cleanup = await Promise.allSettled(
+        retired.map((unit) => unit.hosted?.close()),
+      );
+      const failures: unknown[] = [];
+      for (const outcome of [...outcomes, ...cleanup]) {
+        if (outcome.status === "rejected" && outcome.reason !== cancellation) {
+          failures.push(outcome.reason);
+        }
+      }
+      publish();
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "development activation cleanup failed",
+        );
+      }
+    })();
   }
 
-  abortActivation(activation: DevelopmentActivation): void {
-    this.#pendingActivation(activation, "abort");
+  abortActivation(activation: DevelopmentActivation): Promise<void> {
+    const pending = this.#pendingActivation(activation, "abort");
     this.#state = { tag: "ready" };
+    return Promise.all(
+      [...pending.units].filter(([name, unit]) =>
+        this.#units.get(name) !== unit
+      ).map(([, unit]) => unit.hosted?.close()),
+    ).then(() => {});
+  }
+
+  callAsync(
+    name: string,
+    arguments_: readonly RuntimeValue[] = [],
+    options: { readonly unit?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<RuntimeValue> {
+    let unit = options.unit;
+    if (unit === undefined) unit = this.#entryUnit;
+    if (unit === undefined) {
+      throw new Error("development runtime has no active entry unit");
+    }
+    if (this.#blockedUnits.has(unit)) {
+      throw new Error(`development unit ${unit} is draining for replacement`);
+    }
+    this.#lifetime.assertOpen();
+    const hosted = this.#units.get(unit)?.hosted;
+    if (hosted === undefined) {
+      throw new Error(
+        `development unit ${unit} requires hosted capabilities for callAsync`,
+      );
+    }
+    const controller = new AbortController();
+    let signal = controller.signal;
+    if (options.signal !== undefined) {
+      signal = AbortSignal.any([signal, options.signal]);
+    }
+    const completion = hosted.callAsync(name, arguments_, { signal }).finally(
+      () => this.#calls.delete(call),
+    );
+    const call = { unit, controller, completion };
+    this.#calls.add(call);
+    return completion;
+  }
+
+  close(): Promise<void> {
+    if (this.#closing !== undefined) return this.#closing;
+    this.#closing = this.#lifetime.close().then(() => {
+      this.#units.clear();
+    });
+    return this.#closing;
   }
 
   #pendingActivation(
@@ -476,70 +692,76 @@ export class DevelopmentRuntime {
       }
     }
   }
-
-  #linkImports(
-    consumerName: string,
-    consumerManifest: DevelopmentManifest,
-    links: DevelopmentManifest["links"],
-    hostImports: WebAssembly.Imports,
-    consumerInstance: () => WebAssembly.Instance,
-  ): WebAssembly.Imports {
-    const imports: Record<string, WebAssembly.ModuleImports> = {
-      ...hostImports,
-    };
-    const developmentModules = new Map<
-      string,
-      WebAssembly.ModuleImports
-    >();
-    for (const link of links) {
-      const exportName = `blot:dev:${link.name}`;
-      let moduleImports = developmentModules.get(link.module);
-      if (moduleImports === undefined) {
-        if (Object.hasOwn(hostImports, link.module)) {
-          throw new Error(
-            `host imports for unit ${
-              JSON.stringify(consumerName)
-            } collide with development module ${JSON.stringify(link.module)}`,
-          );
-        }
-        moduleImports = {};
-        developmentModules.set(link.module, moduleImports);
-        imports[link.module] = moduleImports;
-      }
-      if (Object.hasOwn(moduleImports, exportName)) {
-        throw new Error(
-          `development unit ${JSON.stringify(consumerName)} repeats import ${
-            JSON.stringify(exportName)
-          } from ${JSON.stringify(link.module)}`,
-        );
-      }
-      moduleImports[exportName] = (...arguments_: WasmValue[]) => {
-        const consumer = consumerInstance();
-        const provider = this.#units.get(link.unit);
-        if (provider === undefined) {
-          throw new Error(
-            `unit ${JSON.stringify(consumerName)} called inactive provider ${
-              JSON.stringify(link.unit)
-            }`,
-          );
-        }
-        return invokeLink(
-          consumerName,
-          consumer,
-          consumerManifest,
-          link.function,
-          provider,
-          link.name,
-          arguments_,
-        );
-      };
-    }
-    return imports;
-  }
 }
 
-function decodeManifest(
-  artifact: DevelopmentUnitArtifact,
+export function developmentLinkImports(
+  consumerName: string,
+  consumerManifest: DevelopmentManifest,
+  links: DevelopmentManifest["links"],
+  hostImports: WebAssembly.Imports,
+  consumerInstance: () => WebAssembly.Instance,
+  providerFor: (unit: string) => LinkedDevelopmentUnit | undefined,
+): WebAssembly.Imports {
+  const imports: Record<string, WebAssembly.ModuleImports> = {
+    ...hostImports,
+  };
+  const developmentModules = new Map<
+    string,
+    WebAssembly.ModuleImports
+  >();
+  for (const link of links) {
+    const exportName = `blot:dev:${link.name}`;
+    let moduleImports = developmentModules.get(link.module);
+    if (moduleImports === undefined) {
+      if (Object.hasOwn(hostImports, link.module)) {
+        throw new Error(
+          `host imports for unit ${
+            JSON.stringify(consumerName)
+          } collide with development module ${JSON.stringify(link.module)}`,
+        );
+      }
+      moduleImports = {};
+      developmentModules.set(link.module, moduleImports);
+      imports[link.module] = moduleImports;
+    }
+    if (Object.hasOwn(moduleImports, exportName)) {
+      throw new Error(
+        `development unit ${JSON.stringify(consumerName)} repeats import ${
+          JSON.stringify(exportName)
+        } from ${JSON.stringify(link.module)}`,
+      );
+    }
+    moduleImports[exportName] = (...arguments_: WasmValue[]) => {
+      if (link.suspends) {
+        throw new Error(
+          "suspending development link reached its direct import",
+        );
+      }
+      const consumer = consumerInstance();
+      const provider = providerFor(link.unit);
+      if (provider === undefined) {
+        throw new Error(
+          `unit ${JSON.stringify(consumerName)} called inactive provider ${
+            JSON.stringify(link.unit)
+          }`,
+        );
+      }
+      return invokeLink(
+        consumerName,
+        consumer,
+        consumerManifest,
+        link.function,
+        provider,
+        link.name,
+        arguments_,
+      );
+    };
+  }
+  return imports;
+}
+
+export function decodeDevelopmentManifest(
+  artifact: Pick<DevelopmentUnitArtifact, "name" | "root" | "manifestBytes">,
 ): DevelopmentManifest {
   let decoded: unknown;
   try {
@@ -562,7 +784,7 @@ function decodeManifest(
   }
   const abi = requireRecord(decoded.abi, `${position}.abi`);
   if (
-    abi.major !== 2 || abi.minor !== 0 || abi.memory !== "memory32" ||
+    abi.major !== 3 || abi.minor !== 0 || abi.memory !== "memory32" ||
     abi.stringEncoding !== "utf-8" || abi.maximumFlatParameters !== 16 ||
     abi.maximumFlatResults !== 1 || abi.memoryExport !== "memory" ||
     abi.reallocExport !== "cabi_realloc"
@@ -892,7 +1114,12 @@ function parseExport(
         `${position} has runtime fields for a comptime export`,
       );
     }
-    return { name: null, function: null, postReturn: null };
+    return {
+      name: null,
+      function: null,
+      postReturn: null,
+      execution: "comptime",
+    };
   }
   if (phase !== "runtime") {
     throw new TypeError(`${position}.phase is ${JSON.stringify(phase)}`);
@@ -903,7 +1130,11 @@ function parseExport(
   if (encoded.postReturn !== null) {
     postReturn = requireString(encoded.postReturn, `${position}.postReturn`);
   }
-  return { name, function: function_, postReturn };
+  const execution = requireString(encoded.execution, `${position}.execution`);
+  if (execution !== "direct" && execution !== "resumable") {
+    throw new TypeError(`${position}.execution is invalid`);
+  }
+  return { name, function: function_, postReturn, execution };
 }
 
 function parseLink(
@@ -914,6 +1145,9 @@ function parseLink(
   const unit = requireString(encoded.unit, `${position}.unit`);
   const name = requireString(encoded.name, `${position}.name`);
   const module = requireString(encoded.module, `${position}.module`);
+  if (typeof encoded.suspends !== "boolean") {
+    throw new TypeError(`${position}.suspends must be Boolean`);
+  }
   if (module !== `blot:dev/${unit}`) {
     throw new TypeError(
       `${position}.module is ${JSON.stringify(module)}, expected ${
@@ -926,6 +1160,7 @@ function parseLink(
     name,
     module,
     function: parseFunction(encoded.function, `${position}.function`),
+    suspends: encoded.suspends,
   };
 }
 
@@ -956,6 +1191,13 @@ function parseAbiType(
   if (kind === "float-64") return { kind: "float-64" };
   if (kind === "boolean") return { kind: "boolean" };
   if (kind === "text") return { kind: "text" };
+  if (kind === "resource") {
+    return {
+      kind: "resource",
+      name: requireString(encoded.name, `${position}.name`),
+      payload: parseAbiType(encoded.payload, `${position}.payload`, depth + 1),
+    };
+  }
   if (kind === "array") {
     return {
       kind: "array",
@@ -1098,7 +1340,7 @@ function invokeLink(
   consumer: WebAssembly.Instance,
   consumerManifest: DevelopmentManifest,
   function_: BlotAbiFunction,
-  provider: UnitActivation,
+  provider: LinkedDevelopmentUnit,
   linkName: string,
   arguments_: readonly WasmValue[],
 ): WasmValue | undefined {
@@ -1262,6 +1504,11 @@ function copyFlatValue(
   targetReallocate: Reallocate,
   allocations: Allocation[],
 ): WasmValue[] {
+  if (type.kind === "resource" || type.kind === "callback") {
+    throw new TypeError(
+      "resource and callback links require a scope-aware development runtime",
+    );
+  }
   if (type.kind === "unit") return [];
   if (
     type.kind === "signed-integer-64" || type.kind === "float-32" ||
@@ -1365,6 +1612,11 @@ function copyMemoryValue(
   allocations: Allocation[],
 ): void {
   const layout = memoryLayouts.get(type);
+  if (type.kind === "resource" || type.kind === "callback") {
+    throw new TypeError(
+      "resource and callback links require a scope-aware development runtime",
+    );
+  }
   requireMemoryRange(sourceMemory, sourcePointer, layout.size, "source value");
   requireMemoryRange(targetMemory, targetPointer, layout.size, "target value");
   if (type.kind === "unit") return;
@@ -1548,7 +1800,7 @@ function requiredMemory(
   return memory;
 }
 
-function requiredReallocate(active: UnitActivation): Reallocate {
+function requiredReallocate(active: LinkedDevelopmentUnit): Reallocate {
   return requiredReallocateFromInstance(active.instance, active.artifact.name);
 }
 

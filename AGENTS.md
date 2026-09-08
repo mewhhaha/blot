@@ -74,7 +74,8 @@ an implicit binding scope; do not seed values to make that dependency disappear.
 
 **A loop is a fold, not an assignment.** `for` desugars during CST lowering:
 the names its body rebinds with `:=` become the accumulator record, and nothing
-downstream of the parser knows a loop exists. `break;` carries that record out
+downstream of the parser knows a loop exists. `continue` carries the current
+record to the next iteration. `break;` carries that record out
 of the nearest `for`; `return` carries its value through the repeated body to
 the nearest enclosing module or explicit `do` scope.
 `ever` is an ordinary prelude iterator, not a keyword
@@ -82,7 +83,9 @@ or compiler special case. Do not give these forms AST nodes, typing rules, or
 backend paths — each would be a second way to say what recursion and cases
 already say. And do not add assignment to make a loop read more directly; that
 would put mutation in a language whose ownership analysis assumes there is
-none.
+none. Verify tail-recursive effectful folds with large emitted-Wasm runs:
+discarding a `Unit` result must not turn their entry back edge into stack growth,
+and operations after a recursive call must still execute in order.
 
 **`:=` preserves type.** It shadows an existing binding with another value of
 the same stable type; singleton literals widen to their integer or text domain
@@ -90,7 +93,7 @@ when rebound. A repeated `let` or `const` is the explicit way to shadow a name
 while changing its type.
 
 **Surface forms desugar; they do not get machinery.** `for` becomes
-`rec`/`case` recursion, `break;` becomes loop-local control, and early `return`
+`rec`/`case` recursion, `break;` and `continue` become loop-local control, and early `return`
 becomes an unspellable compiler-local tagged result eliminated by a `case` at
 the nearest module or explicit `do` boundary. A standalone `if` becomes an ordinary
 conditional over those results, and `use x <- e` explicitly sequences the already
@@ -107,13 +110,13 @@ already says, and every pass has to learn it.
 **Value conditionals do not transfer control.** An expression `if` or `case`
 produces one of its branch values in a separate result scope that does not
 inherit surrounding control targets. A branch's explicit `return` supplies the
-expression result; `break` cannot escape it to reach an enclosing loop. A
+expression result; `break` and `continue` cannot escape it to reach an enclosing loop. A
 standalone `if condition:` suite inherits the surrounding return and loop
 targets. Expression `if` requires `else`; statement `if` does not.
 
 **A deconstructing guard must leave on failure.**
 `if let pattern = value else:` binds the pattern in the statements
-that follow it. Its `else` path must `return` or `break`; allowing that path to
+that follow it. Its `else` path must `return`, `break`, or `continue`; allowing that path to
 continue would put names in scope that were never bound. There is no success
 suite because success continues after the guard rather than entering a block.
 
@@ -158,7 +161,7 @@ inside the runnable workspace artifact. A downloaded binary must match those
 inputs before use. Every semantic compiler command requires the artifact and
 must never fall back to TypeScript.
 
-**The caller never sees backend-private values.** Blot Core Wasm ABI 2 is the stable
+**The caller never sees backend-private values.** Blot Core Wasm ABI 3 is the stable
 memory32, UTF-8 caller contract in `docs/abi.md`. Exports and host effects use
 its canonical adapters; internal tagged words, constructor numbers, and heap
 headers remain private. An incompatible layout, signature, ownership, import,

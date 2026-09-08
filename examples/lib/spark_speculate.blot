@@ -1,0 +1,36 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+
+const kernel :: Int -> Int = fn count => do:
+  let total = 0
+  for index in Iter.range (0, count):
+    total := total + index
+
+  return total / count
+
+const choose = fn wanted => fn ~fallback => case wanted of
+  #True => fallback
+  #False => 42
+
+let run ::
+  { .executor = Spark.Executor; } -> Int -> Bool -> Int ~ { Spark.Effect }
+let run = fn io => fn count => fn wanted => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect }
+  let body = fn scope => do:
+    let ?work :: Unit -> Int = fn () => kernel count
+    use spark <- Spark.speculate scope (?work)
+    return choose wanted (Spark.join spark)
+  return Spark.scope io.executor body
+
+let progress :: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect }
+let progress = fn io => fn count => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect }
+  let body = fn scope => do:
+    let ?unused :: Unit -> Int = fn () => kernel count
+    use spark <- Spark.speculate scope (?unused)
+    let ?needed :: Unit -> Int = fn () => kernel (count / 100000000)
+    use required <- Spark.parallel scope (?needed)
+    return Spark.join required
+  return Spark.scope io.executor body
+
+return { .run = run; .progress = progress; }

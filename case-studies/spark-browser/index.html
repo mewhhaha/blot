@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blot · Events</title>
+    <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      color: #183328;
+      background: #f4f4ed;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 40px 20px;
+    }
+    main {
+      max-width: 880px;
+      margin: auto;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+    .brand {
+      font-weight: 750;
+      letter-spacing: -.06em;
+      font-size: 28px;
+    }
+    #status {
+      font-size: 13px;
+      color: #426b51;
+    }
+    h1 {
+      font-size: clamp(32px, 6vw, 56px);
+      line-height: 1.1;
+      letter-spacing: -.05em;
+      max-width: 620px;
+      margin: 64px 0 18px;
+    }
+    .intro {
+      color: #55715e;
+      line-height: 1.6;
+      max-width: 620px;
+    }
+    .calculator {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      background: #fff;
+      border: 1px solid #d7dfd3;
+      padding: 32px;
+      border-radius: 18px;
+      margin: 32px 0 24px;
+    }
+    label,
+    .label {
+      display: block;
+      font-size: 13px;
+      color: #55715e;
+      margin-bottom: 12px;
+    }
+    input {
+      width: 100%;
+      max-width: 240px;
+      border: 1px solid #b6c9b6;
+      border-radius: 8px;
+      font: inherit;
+      font-size: 34px;
+      padding: 10px 14px;
+      color: inherit;
+    }
+    button { font: inherit; padding: 9px 16px; border: 1px solid #b6c9b6; border-radius: 8px; background: white; color: inherit; cursor: pointer; }
+    input:focus-visible, button:focus-visible {
+      outline: 3px solid #7db18c;
+      outline-offset: 3px;
+    }
+    output {
+      display: block;
+      font-size: 56px;
+      font-weight: 650;
+      line-height: 1.2;
+      letter-spacing: -.04em;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin: 24px 0;
+    }
+    .metrics strong {
+      display: block;
+      font-size: 22px;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .metrics span {
+      color: #55715e;
+      font-size: 12px;
+    }
+    .units {
+      padding: 16px 0;
+      border-block: 1px solid #d7dfd3;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 30px;
+      font-size: 13px;
+    }
+    h2 {
+      font-size: 20px;
+      margin-top: 32px;
+    }
+    ol {
+      padding-left: 24px;
+      line-height: 1.7;
+      color: #46604e;
+    }
+    li {
+      padding: 6px 0;
+    }
+    code {
+      font-size: .92em;
+      color: #183328;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding: 20px;
+      background: #fff0e9;
+      border-radius: 10px;
+      color: #802e12;
+    }
+    footer {
+      margin-top: 36px;
+      font-size: 12px;
+      color: #607561;
+    }
+    @media (max-width: 480px) {
+      .calculator {
+        padding: 22px;
+        gap: 16px;
+      }
+      .metrics {
+        gap: 10px;
+      }
+      .metrics strong {
+        font-size: 18px;
+      }
+    }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><span class="brand">blot / development</span><span id="status" role="status">Connecting…</span></header>
+      <h1 id="message">Live events, editable code.</h1>
+      <p
+        class="intro">A Blot actor receives input events, keeps its own counter, and awaits a clock. Reloading the formula drains the actor and runs its cleanup before starting the next one.</p>
+      <section class="calculator" aria-label="Live formula">
+        <div><label for="quantity">Quantity</label><input id="quantity" type="number" value="21" min="-1000000" max="1000000" step="1" required></div>
+        <div><span class="label">Result</span><output id="result" for="quantity" aria-live="polite">…</output></div>
+      </section>
+      <p><button id="toggle" type="button">Stop actor</button> · Events received: <b id="received">0</b> · Cleanups finished: <b id="stopped">0</b></p>
+      <section class="metrics" aria-label="Reload timing">
+        <div><span>Server update</span><strong id="build-time">—</strong></div>
+        <div><span>Fetch + activation</span><strong id="activation-time">—</strong></div>
+        <div><span>Compiler builds</span><strong id="compilations">0</strong></div>
+      </section>
+      <div
+        class="units"><span>Replaced: <b id="replaced">—</b></span><span>Retained: <b id="retained">—</b></span></div>
+      <pre id="error" role="alert" hidden></pre>
+      <p
+        class="units">Last source build: <span><b id="specialized">0</b> functions compiled</span><span><b id="reused">0</b> reused</span><span><b id="restored">0</b> graphs restored from disk</span></p>
+      <pre id="cache-warning" role="status" hidden></pre>
+      <h2>Try three edits</h2>
+      <ol>
+        <li>In <code>formula.blot</code>, change <code>quantity * 2</code> to <code>quantity * 3</code>. Only the formula unit is replaced.</li>
+        <li>Edit <code>message.txt</code>. This heading updates without a compiler build.</li>
+        <li>Make a syntax error, then fix it. The last working formula stays active until the repair is ready.</li>
+      </ol>
+      <footer>Development mode · revision <code id="revision">—</code> · Files are in <code>case-studies/spark-browser/</code></footer>
+    </main>
+    <script type="module" src="/client.js"></script>
+  </body>
+</html>

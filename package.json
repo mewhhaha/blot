@@ -5,6 +5,16 @@
   "license": "MIT",
   "types": "./dist/mod.d.ts",
   "exports": {
+    "./node": {
+      "types": "./dist/src/node/worker_executor.d.ts",
+      "import": "./dist/src/node/worker_executor.js",
+      "default": "./dist/src/node/worker_executor.js"
+    },
+    "./worker": {
+      "types": "./dist/src/web_worker.d.ts",
+      "import": "./dist/src/web_worker.js",
+      "default": "./dist/src/web_worker.js"
+    },
     ".": {
       "types": "./dist/mod.d.ts",
       "import": "./dist/mod.js",
@@ -31,8 +41,10 @@
     "blot": "tsx src/node/cli.ts",
     "check": "tsx src/node/cli.ts check examples/minimal.blot",
     "example:hot-reload": "node --import tsx case-studies/hot-reload/serve.ts",
-    "test": "pnpm test:node && pnpm test:regression",
+    "example:spark-browser": "node --import tsx case-studies/spark-browser/serve.ts",
+    "test": "pnpm test:node && pnpm test:web-workers && pnpm test:regression",
     "test:node": "tsx --test --test-timeout=300000 src/node/*.test.ts",
+    "test:web-workers": "deno test --allow-read src/web_worker_executor.test.ts",
     "test:v8-wasm": "tsx --test src/node/v8_wasm.test.ts",
     "test:regression": "node scripts/node_regression_tests.mjs",
     "package:build": "node scripts/build_node_package.mjs",

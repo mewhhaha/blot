@@ -1,0 +1,29 @@
+open import "blot:prelude"
+
+const Clock = @effect.host { .tick = Effect.suspends (Int -> Int); }
+const Executor =
+  @effect.host {
+    .run = {
+      .signature = @forall (fn e => @forall (fn result => (((Unit -> result) ~ [
+        e
+      ]) -> result) ~ [e]));
+      .input = #Affine;
+      .result = #Unrestricted;
+      .suspends = True;
+    };
+  }
+
+let run :: Int -> Int ~ { Executor, Clock }
+let run = fn initial => do:
+  let work :: Unit -> Int ~ { Clock }
+  let ?work = fn () => do:
+    let total = initial
+    for index in Iter.range (0, 4):
+      use value <- Clock.tick index
+      total := total + value
+
+    return total
+  use result <- Executor.run (?work)
+  return result + 1
+
+return { .Executor = Executor; .Clock = Clock; .run = run; }

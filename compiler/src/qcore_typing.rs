@@ -392,6 +392,7 @@ impl<'module> PureLowerer<'module> {
             | Value::StructuralArray { .. }
             | Value::StructuralRegion { .. }
             | Value::StructuralScratch { .. }
+            | Value::StructuralResource { .. }
             | Value::StructuralVariant { .. }
             | Value::StructuralEffects { .. }
             | Value::StructuralOpenEffects { .. }

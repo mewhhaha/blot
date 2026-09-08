@@ -1,0 +1,23 @@
+open import "blot:prelude"
+
+const run :: Int -> [Int] = fn input => do:
+  let present :: Option Int = Some input
+  let absent :: Option Int = None
+  let success :: Result (Int, Text) = Ok input
+  let failure :: Result (Int, Text) = Error "missing"
+  let increment = fn value => value + 1
+  let optional = present |> Option.map increment |> Option.and_then (fn value => Some (value * 2))
+  let recovered = absent |> Option.or_else (Some (input + 3))
+  let mapped = success |> Result.map increment |> Result.and_then (fn value => Ok (value * 2))
+  let corrected = failure |> Result.map_error Text.length |> Result.or_else (fn length => Ok length)
+  return [
+    Option.unwrap_or_else (1 / 0) optional,
+    Option.unwrap_or_else (1 / 0) recovered,
+    Option.unwrap_or_else (input + 4) absent,
+    Result.unwrap_or_else (fn _ => 1 / 0) mapped,
+    Result.unwrap_or_else (fn _ => 1 / 0) corrected,
+    Result.unwrap_or_else Text.length failure,
+    Option.unwrap_or_else (1 / 0) (Option.or_else (Some (1 / 0)) present)
+    ]
+
+return run 5

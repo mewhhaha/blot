@@ -1,4 +1,10 @@
 import {
+  type CompiledDevelopmentProgram,
+  createHostCallback,
+  type HostCallbackFactory,
+} from "./callbacks.ts";
+import { AbiCodec } from "./abi_codec.ts";
+import {
   decodeManifest,
   readDirect,
   readMemory,
@@ -7,82 +13,125 @@ import {
   type RuntimeValue,
 } from "./abi_values.ts";
 import {
+  type BlotAbiFunction,
   type BlotAbiManifest,
   type BlotAbiType,
   flattenedAbiType,
 } from "./compiler/backend/runtime/abi.ts";
 import type { CompilerArtifact } from "./compiler.ts";
+import { HostScope } from "./resources.ts";
+import type { BlotEffectOwnership } from "./runtime/hir.ts";
 
 export type HostScalar = null | boolean | bigint | number;
 export type HostResult = RuntimeValue;
+export interface ExecutionContext {
+  readonly signal: AbortSignal;
+  readonly scope: HostScope;
+  readonly authority: HostScope;
+}
+export interface HostCallContext extends ExecutionContext {
+  readonly operation: BlotAbiManifest["imports"][number];
+}
 export type HostOperation = (
-  ...arguments_: readonly HostScalar[]
-) => HostScalar;
+  context: HostCallContext,
+  ...arguments_: readonly RuntimeValue[]
+) => RuntimeValue | PromiseLike<RuntimeValue>;
 export type HostCapabilities = ReadonlyMap<
   string,
   ReadonlyMap<string, HostOperation>
 >;
 
-/** An ABI 2 instance with scalar inputs and copied canonical result values. */
 export interface HostedModule {
-  call(name: string, arguments_?: readonly HostScalar[]): HostResult;
+  readonly instance: WebAssembly.Instance;
+  call(name: string, arguments_?: readonly RuntimeValue[]): HostResult;
+  callAsync(
+    name: string,
+    arguments_?: readonly RuntimeValue[],
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<HostResult>;
+  callLinked(
+    name: string,
+    arguments_: readonly RuntimeValue[],
+    context: ExecutionContext,
+  ): Promise<HostResult>;
+  callCallback(
+    entry: string,
+    arguments_: readonly RuntimeValue[],
+    options?: { readonly signal?: AbortSignal; readonly scope?: HostScope },
+  ): Promise<HostResult>;
+  close(): Promise<void>;
   destroy(): void;
 }
 
-/**
- * Instantiate compiler-produced ABI 2 bytes with an exact, explicit set of
- * synchronous scalar capabilities. This is a host adapter, not a sandbox or a
- * suspending guest ABI. It rejects owned capability transfers and split units.
- */
+/** Instantiate ABI 3 with explicit host operations and portable Wasm suspension. */
 export async function instantiateArtifact(
-  artifact: Pick<CompilerArtifact, "wasm" | "manifestBytes">,
+  artifact: Pick<CompilerArtifact, "wasm" | "manifestBytes"> | {
+    readonly module: WebAssembly.Module;
+    readonly manifestBytes: Uint8Array;
+  },
   capabilities: HostCapabilities = new Map(),
+  options: {
+    readonly scope?: HostScope;
+    readonly links?: WebAssembly.Imports;
+    readonly development?: () => CompiledDevelopmentProgram;
+    readonly callLink?: (
+      link: NonNullable<BlotAbiManifest["links"]>[number],
+      arguments_: readonly RuntimeValue[],
+      context: ExecutionContext,
+    ) => Promise<RuntimeValue>;
+  } = {},
 ): Promise<HostedModule> {
-  const wasm = Uint8Array.from(artifact.wasm);
+  const hostLifetime = options.scope;
+  const invokeDevelopmentLink = options.callLink;
   const bytes = Uint8Array.from(artifact.manifestBytes);
   const manifest = decodeManifest(bytes);
   if (
-    manifest.abi.major !== 2 || manifest.abi.minor !== 0 ||
+    manifest.abi.major !== 3 || manifest.abi.minor !== 0 ||
     manifest.abi.memory !== "memory32" ||
     manifest.abi.stringEncoding !== "utf-8"
-  ) throw new TypeError("host requires Blot Core Wasm ABI 2.0");
-  if (manifest.links !== undefined && manifest.links.length > 0) {
+  ) {
+    throw new TypeError("host requires Blot Core Wasm ABI 3.0");
+  }
+  if (
+    manifest.links !== undefined && manifest.links.length > 0 &&
+    options.links === undefined
+  ) {
     throw new TypeError("host requires a closed artifact, not a split unit");
   }
-  // Snapshot capability maps before an asynchronous Wasm compilation can yield.
   const supplied = new Map(
     [...capabilities].map(([name, operations]) => [name, new Map(operations)]),
   );
   const imports: WebAssembly.Imports = Object.create(null);
   const requested = new Map<string, Set<string>>();
   const externalNames = new Set<string>();
+  const operations: HostOperation[] = [];
+  let codec: AbiCodec;
+  let activeContext: ExecutionContext | undefined;
   for (const imported of manifest.imports) {
     if (
-      imported.ownership.input !== "unrestricted" ||
-      imported.ownership.result !== "unrestricted"
+      hasLinear(imported.contract.input) ||
+      hasLinear(imported.contract.result)
     ) {
       throw new TypeError(
-        "scalar host operations require unrestricted ownership",
+        "linear host transfers require registered scope cleanup",
       );
     }
     requireParameters(imported.function.parameters);
-    requireScalar(imported.function.result);
-    const operations = supplied.get(imported.capability);
-    const operation = operations?.get(imported.operation);
+    const operation = supplied.get(imported.capability)?.get(
+      imported.sourceName,
+    );
     if (typeof operation !== "function") {
       throw new TypeError(
-        `missing host operation ${imported.capability}.${imported.operation}`,
+        `missing host operation ${imported.capability}.${imported.sourceName}`,
       );
     }
+    operations.push(operation);
     let names = requested.get(imported.capability);
     if (names === undefined) {
       names = new Set();
       requested.set(imported.capability, names);
     }
-    if (names.has(imported.operation)) {
-      throw new TypeError("duplicate host operation");
-    }
-    names.add(imported.operation);
+    names.add(imported.sourceName);
     const externalName = JSON.stringify([imported.module, imported.name]);
     if (externalNames.has(externalName)) {
       throw new TypeError("duplicate Wasm import");
@@ -94,38 +143,62 @@ export async function instantiateArtifact(
       imports[imported.module] = namespace;
     }
     namespace[imported.name] = (...raw: readonly (number | bigint)[]) => {
+      if (imported.contract.suspends) {
+        throw new Error("suspending operation reached a direct Wasm import");
+      }
+      if (activeContext === undefined) {
+        throw new Error("host operation has no active execution context");
+      }
+      const marshaller = new AbiCodec(
+        codec.memory,
+        codec.allocate,
+        activeContext.scope,
+        callbackFactory(activeContext.scope, activeContext.authority),
+      );
       let position = 0;
-      const arguments_ = imported.function.parameters.map((parameter) => {
-        if (parameter.kind === "unit") return null;
-        const value = liftScalar(parameter, raw[position]);
-        position += 1;
+      const arguments_ = imported.function.parameters.map((type) => {
+        const width = flattenedAbiType(type).length;
+        const value = marshaller.lift(
+          type,
+          raw.slice(position, position + width),
+        );
+        position += width;
         return value;
       });
-      if (position !== raw.length) {
+      const indirect = flattenedAbiType(imported.function.result).length > 1;
+      let expected = position;
+      if (indirect) expected += 1;
+      if (expected !== raw.length) {
         throw new TypeError("host import arity mismatch");
       }
-      const result = operation(...arguments_);
-      // Invalid objects may be rejected Promises, including cross-realm
-      // Promises or thenables. Observe their rejection before refusing the
-      // synchronous call so a caught contract error cannot later crash Node.
-      if (
-        (typeof result === "object" && result !== null) ||
-        typeof result === "function"
-      ) {
+      const result = operation(
+        { ...activeContext, operation: imported },
+        ...arguments_,
+      );
+      if (isThenable(result)) {
         void Promise.resolve(result).catch(() => {});
+        throw new TypeError(
+          "expected synchronous host value; declare the operation with Effect.suspends",
+        );
       }
-      // In particular, a Promise must not silently become a Unit result.
-      const lowered = lowerScalar(imported.function.result, result);
-      if (lowered.length === 0) return undefined;
+      const lowered = marshaller.lower(imported.function.result, result);
+      if (indirect) {
+        marshaller.writeFlat(
+          imported.function.result,
+          lowered,
+          Number(raw[position]) >>> 0,
+        );
+        return undefined;
+      }
       return lowered[0];
     };
   }
-  for (const [capability, operations] of supplied) {
+  for (const [capability, provided] of supplied) {
     const names = requested.get(capability);
     if (names === undefined) {
       throw new TypeError(`unused host capability ${capability}`);
     }
-    for (const name of operations.keys()) {
+    for (const name of provided.keys()) {
       if (!names.has(name)) {
         throw new TypeError(`unused host operation ${capability}.${name}`);
       }
@@ -141,18 +214,41 @@ export async function instantiateArtifact(
       throw new TypeError("duplicate export name");
     }
     requireParameters(exported.function.parameters);
+    if (exported.execution !== "direct" && exported.execution !== "resumable") {
+      throw new TypeError("invalid export execution contract");
+    }
     if (
       flattenedAbiType(exported.function.result).length > 1 &&
       exported.postReturn === null
-    ) {
-      throw new TypeError("indirect result has no post-return operation");
-    }
+    ) throw new TypeError("indirect result has no post-return operation");
     exports.set(exported.sourceName, exported);
   }
-  const module = await WebAssembly.compile(wasm);
+  let module: WebAssembly.Module;
+  if ("module" in artifact) module = artifact.module;
+  else module = await WebAssembly.compile(Uint8Array.from(artifact.wasm));
   const sections = WebAssembly.Module.customSections(module, "blot:abi");
   if (sections.length !== 1 || !sameBytes(bytes, new Uint8Array(sections[0]))) {
     throw new TypeError("embedded and sidecar ABI manifests disagree");
+  }
+  if (manifest.links !== undefined) {
+    for (const link of manifest.links) {
+      const name = `blot:dev:${link.name}`;
+      const callable = options.links?.[link.module]?.[name];
+      if (typeof callable !== "function") {
+        throw new TypeError(
+          `missing canonical development link ${link.unit}.${link.name}`,
+        );
+      }
+      const key = JSON.stringify([link.module, name]);
+      if (externalNames.has(key)) throw new TypeError("duplicate Wasm import");
+      externalNames.add(key);
+      let namespace = imports[link.module];
+      if (namespace === undefined) {
+        namespace = Object.create(null) as WebAssembly.ModuleImports;
+        imports[link.module] = namespace;
+      }
+      namespace[name] = callable;
+    }
   }
   const actualImports = WebAssembly.Module.imports(module);
   if (actualImports.length !== externalNames.size) {
@@ -166,127 +262,515 @@ export async function instantiateArtifact(
       throw new TypeError("Wasm import set disagrees with manifest");
     }
   }
-  let instance: WebAssembly.Instance | null = await WebAssembly.instantiate(
-    module,
-    imports,
+  const instance = await WebAssembly.instantiate(module, imports);
+  const memory = requiredMemory(instance, manifest);
+  const realloc = requiredFunction(instance, manifest.abi.reallocExport);
+  const moduleScope = new HostScope(options.scope);
+  codec = new AbiCodec(
+    memory,
+    (size, alignment) => Number(realloc(0, 0, alignment, size)) >>> 0,
+    moduleScope,
   );
+  let destroyed = false;
+  let trapped = false;
+  let closing = false;
+  let closingPromise: Promise<void> | undefined;
   let calling = false;
-  return Object.freeze({
-    call(name: string, arguments_: readonly HostScalar[] = []): HostResult {
-      if (instance === null) throw new Error("hosted module is destroyed");
-      if (calling) throw new Error("reentrant guest calls are not supported");
-      const exported = exports.get(name);
-      if (
-        exported === undefined || exported.function === null ||
-        exported.name === null
-      ) {
-        throw new TypeError(`unknown runtime export ${name}`);
+  const running = new Map<AbortController, Promise<HostResult>>();
+  const cleanupCalls = new Set<AbortController>();
+
+  const invoke = (
+    context: ExecutionContext,
+    name: string,
+    ...arguments_: readonly (number | bigint)[]
+  ) => {
+    if (calling) throw new Error("reentrant guest calls are not supported");
+    calling = true;
+    activeContext = context;
+    try {
+      return requiredFunction(instance, name)(...arguments_);
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) {
+        trapped = true;
+        moduleScope.reclaimAfterTrap(error);
       }
-      if (arguments_.length !== exported.function.parameters.length) {
+      throw error;
+    } finally {
+      activeContext = undefined;
+      calling = false;
+    }
+  };
+  const resolve = (name: string, arguments_: readonly RuntimeValue[]) => {
+    if (destroyed || trapped || closing) {
+      throw new Error("hosted module is destroyed or closing");
+    }
+    moduleScope.assertOpen();
+    if (calling) throw new Error("reentrant guest calls are not supported");
+    const exported = exports.get(name);
+    if (
+      exported === undefined || exported.function === null ||
+      exported.name === null
+    ) throw new TypeError(`unknown runtime export ${name}`);
+    if (arguments_.length !== exported.function.parameters.length) {
+      throw new TypeError(
+        `export ${name} requires ${exported.function.parameters.length} arguments`,
+      );
+    }
+    return { ...exported, name: exported.name, function: exported.function };
+  };
+
+  const start = (
+    exported: BlotAbiManifest["callbacks"][number],
+    arguments_: readonly RuntimeValue[],
+    parent: HostScope,
+    resultScope: HostScope,
+    options: { readonly signal?: AbortSignal; readonly authority?: HostScope } =
+      {},
+  ): Promise<HostResult> => {
+    if (destroyed || trapped || (closing && !parent.isCleanup)) {
+      throw new Error("hosted module is destroyed or closing");
+    }
+    parent.assertOpen();
+    const controller = new AbortController();
+    if (parent.isCleanup) cleanupCalls.add(controller);
+    const abort = () => controller.abort(options.signal?.reason);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const execute = async (): Promise<HostResult> => {
+      const signal = controller.signal;
+      signal.throwIfAborted();
+      const scope = new HostScope(parent);
+      const cancelScope = () => scope.cancel(signal.reason);
+      const cancelCall = () => controller.abort(scope.signal.reason);
+      signal.addEventListener("abort", cancelScope, { once: true });
+      scope.signal.addEventListener("abort", cancelCall, { once: true });
+      let authority = moduleScope;
+      if (options.authority !== undefined) authority = options.authority;
+      const execution = { signal, scope, authority };
+      const marshaller = new AbiCodec(
+        memory,
+        codec.allocate,
+        scope,
+        callbackFactory(scope, authority),
+      );
+      let failure: { readonly cause: unknown } | undefined;
+      invoke(execution, "cabi_enter");
+      let frame: number | undefined;
+      let completed = false;
+      try {
+        const lowered = arguments_.flatMap((value, index) =>
+          marshaller.lower(exported.function.parameters[index], value)
+        );
+        frame = Number(invoke(execution, exported.name, ...lowered)) >>> 0;
+        for (;;) {
+          signal.throwIfAborted();
+          const status = invoke(execution, "blot:poll", frame, 1024);
+          if (status === 4) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            continue;
+          }
+          const view = new DataView(memory.buffer);
+          if (status === 2) {
+            const result = readMemory(
+              exported.function.result,
+              view,
+              view.getUint32(frame + 20, true),
+              undefined,
+              resultScope,
+              callbackFactory(resultScope, authority),
+            );
+            completed = true;
+            return result;
+          }
+          if (status !== 1) {
+            throw new Error(`invalid Wasm suspension status ${status}`);
+          }
+          const ordinal = view.getUint32(frame + 8, true);
+          const imported = manifest.imports[ordinal];
+          let signature: BlotAbiFunction;
+          let perform: (
+            inputs: readonly RuntimeValue[],
+          ) => Promise<RuntimeValue>;
+          if (imported !== undefined) {
+            if (!imported.contract.suspends) {
+              throw new Error("Wasm requested a nonsuspending operation");
+            }
+            signature = imported.function;
+            perform = async (inputs) =>
+              operations[ordinal](
+                { ...execution, operation: imported },
+                ...inputs,
+              );
+          } else {
+            const link = manifest.links?.[ordinal - manifest.imports.length];
+            const callLink = invokeDevelopmentLink;
+            if (
+              link === undefined || !link.suspends || callLink === undefined
+            ) {
+              throw new Error(
+                "Wasm requested an undeclared suspending development link",
+              );
+            }
+            signature = link.function;
+            perform = (inputs) => callLink(link, inputs, execution);
+          }
+          let offset = view.getUint32(frame + 12, true);
+          const inputs = signature.parameters.map((type) => {
+            const layout = marshaller.layouts.get(type);
+            offset = Math.ceil(offset / layout.alignment) * layout.alignment;
+            const value = readMemory(
+              type,
+              view,
+              offset,
+              marshaller.layouts,
+              scope,
+              marshaller.callbacks,
+            );
+            offset += layout.size;
+            return value;
+          });
+          const result = await perform(inputs);
+          signal.throwIfAborted();
+          const destination = new DataView(memory.buffer).getUint32(
+            frame + 16,
+            true,
+          );
+          marshaller.write(signature.result, result, destination);
+          invoke(execution, "blot:resume", frame);
+        }
+      } catch (error) {
+        failure = { cause: error };
+        throw error;
+      } finally {
+        const cleanup: unknown[] = [];
+        try {
+          if (frame !== undefined) {
+            if (!completed) invoke(execution, "blot:cancel", frame);
+            invoke(execution, "blot:release", frame);
+          }
+        } catch (error) {
+          cleanup.push(error);
+        }
+        try {
+          invoke(execution, "cabi_leave");
+        } catch (error) {
+          cleanup.push(error);
+        }
+        signal.removeEventListener("abort", cancelScope);
+        scope.signal.removeEventListener("abort", cancelCall);
+        try {
+          await scope.close();
+        } catch (error) {
+          cleanup.push(error);
+        }
+        if (cleanup.length > 0) {
+          if (failure !== undefined) cleanup.unshift(failure.cause);
+          throw new AggregateError(cleanup, "guest call cleanup failed");
+        }
+      }
+    };
+    // Install lifetime bookkeeping before a synchronous failure or completion.
+    const promise = Promise.resolve().then(execute).finally(() => {
+      options.signal?.removeEventListener("abort", abort);
+      running.delete(controller);
+      cleanupCalls.delete(controller);
+    });
+    running.set(controller, promise);
+    return promise;
+  };
+
+  const callbackFactory = (
+    scope: HostScope,
+    authority: HostScope = moduleScope,
+  ): HostCallbackFactory =>
+  (type, environment) => {
+    const entry = manifest.callbacks.find((entry) => entry.name === type.entry);
+    if (
+      entry === undefined || type.environment.kind !== "record" ||
+      environment === null || typeof environment !== "object" ||
+      !("kind" in environment) || environment.kind !== "record"
+    ) {
+      throw new TypeError(
+        "compiled callback has an invalid entry or environment",
+      );
+    }
+    const captures = type.environment.fields.map((field) => {
+      const value = environment.fields.get(field.name);
+      if (value === undefined) {
+        throw new Error("compiled callback capture is missing");
+      }
+      return value;
+    });
+    return createHostCallback(
+      scope,
+      (destination) => {
+        if (!destination.isWithin(authority)) {
+          throw new TypeError(
+            "compiled callback cannot escape its execution authority",
+          );
+        }
+        validateCaptureScope(type.environment, environment, destination);
+      },
+      (owner, argument, signal) =>
+        start(entry, [argument, ...captures], owner, owner, {
+          signal,
+          authority,
+        }),
+      {
+        module,
+        manifestBytes: bytes,
+        entry: entry.name,
+        environmentType: type.environment,
+        captures,
+        development: options.development?.(),
+      },
+    );
+  };
+
+  const hosted: HostedModule = {
+    instance,
+    callLinked(name, arguments_, context) {
+      if (
+        options.scope === undefined || !context.scope.isWithin(options.scope) ||
+        !context.scope.isWithin(context.authority)
+      ) {
         throw new TypeError(
-          `export ${name} requires ${exported.function.parameters.length} arguments`,
+          "development call requires a scope under the shared host lifetime",
         );
       }
-      const signature = exported.function;
-      const lowered = arguments_.flatMap((value, index) =>
-        lowerScalar(signature.parameters[index], value)
+      const declaration = manifest.exports.find((exported) =>
+        exported.name === name
       );
-      calling = true;
+      if (declaration === undefined) {
+        throw new TypeError(`unknown development export ${name}`);
+      }
+      const exported = resolve(declaration.sourceName, arguments_);
+      if (exported.execution !== "resumable") {
+        throw new TypeError(
+          "scoped development call requires a resumable export",
+        );
+      }
+      return start(exported, arguments_, context.scope, context.scope, context);
+    },
+    callCallback(name, arguments_, options = {}) {
+      const entry = manifest.callbacks.find((entry) => entry.name === name);
+      if (entry === undefined) {
+        throw new TypeError(`unknown compiled callback ${name}`);
+      }
+      if (arguments_.length !== entry.function.parameters.length) {
+        throw new TypeError(
+          `callback ${name} requires ${entry.function.parameters.length} arguments`,
+        );
+      }
+      let lifetime = moduleScope;
+      if (options.scope !== undefined) {
+        if (
+          hostLifetime === undefined || !options.scope.isWithin(hostLifetime)
+        ) {
+          throw new TypeError(
+            "callback scope must belong to the module's host lifetime",
+          );
+        }
+        lifetime = options.scope;
+      }
+      return start(entry, arguments_, lifetime, lifetime, {
+        signal: options.signal,
+        authority: lifetime,
+      });
+    },
+    call(name, arguments_ = []) {
+      const exported = resolve(name, arguments_);
+      if (exported.execution === "resumable") {
+        throw new TypeError(`export ${name} suspends; use callAsync`);
+      }
+      const execution = {
+        signal: new AbortController().signal,
+        scope: moduleScope,
+        authority: moduleScope,
+      };
+      invoke(execution, "cabi_enter");
       try {
-        const raw = requiredFunction(instance, exported.name)(...lowered);
+        const lowered = arguments_.flatMap((value, index) =>
+          codec.lower(exported.function.parameters[index], value)
+        );
+        const raw = invoke(execution, exported.name, ...lowered);
         if (flattenedAbiType(exported.function.result).length <= 1) {
-          return readDirect(exported.function.result, raw);
+          return readDirect(exported.function.result, raw, moduleScope);
         }
         if (typeof raw !== "number" || exported.postReturn === null) {
           throw new TypeError("invalid indirect result pointer");
         }
-        const postReturn = requiredFunction(instance, exported.postReturn);
-        const pointer = raw >>> 0;
         try {
-          const memory = requiredMemory(instance, manifest);
           return readMemory(
             exported.function.result,
             new DataView(memory.buffer),
-            pointer,
+            raw >>> 0,
+            undefined,
+            moduleScope,
           );
         } finally {
-          postReturn(pointer);
+          invoke(execution, exported.postReturn, raw);
         }
       } finally {
-        calling = false;
+        invoke(execution, "cabi_leave");
       }
     },
-    destroy(): void {
+    callAsync(name, arguments_ = [], options = {}) {
+      const exported = resolve(name, arguments_);
+      if (exported.execution === "direct") {
+        return Promise.resolve().then(() => {
+          options.signal?.throwIfAborted();
+          return hosted.call(name, arguments_);
+        });
+      }
+      return start(exported, arguments_, moduleScope, moduleScope, options);
+    },
+    close() {
+      if (calling) throw new Error("cannot close a module during a guest call");
+      if (closingPromise !== undefined) return closingPromise;
+      closing = true;
+      let cancellation: unknown = new DOMException(
+        "hosted module closed",
+        "AbortError",
+      );
+      if (moduleScope.signal.aborted) cancellation = moduleScope.signal.reason;
+      closingPromise = Promise.resolve().then(async () => {
+        const outcomes = await Promise.allSettled(running.values());
+        const failures: unknown[] = outcomes.filter((outcome) =>
+          outcome.status === "rejected" && outcome.reason !== cancellation
+        ).map((failure) => {
+          if (failure.status !== "rejected") {
+            throw new Error("unfiltered close outcome");
+          }
+          return failure.reason;
+        });
+        try {
+          await moduleScope.close(cancellation);
+        } catch (error) {
+          failures.push(error);
+        }
+        destroyed = true;
+        detach?.();
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            "hosted module failed while closing",
+          );
+        }
+      });
+      moduleScope.cancel(cancellation);
+      for (const controller of running.keys()) {
+        if (!cleanupCalls.has(controller)) controller.abort(cancellation);
+      }
+      return closingPromise;
+    },
+    destroy() {
       if (calling) {
         throw new Error("cannot destroy a module during a guest call");
       }
-      instance = null;
+      if (running.size > 0) {
+        throw new Error("module has active calls; await close()");
+      }
+      if (moduleScope.hasLifetimes) {
+        throw new Error("module owns resources; await close()");
+      }
+      destroyed = true;
+      detach?.();
+      void moduleScope.close();
     },
-  });
+  };
+  const detach = options.scope?.own(() => hosted.close());
+  return Object.freeze(hosted);
 }
 
 function requireParameters(types: readonly BlotAbiType[]): void {
-  types.forEach(requireScalar);
-  const lanes = types.reduce(
-    (count, type) => count + flattenedAbiType(type).length,
-    0,
-  );
-  if (lanes > 16) {
-    throw new TypeError(
-      "scalar host adapter does not marshal indirect parameter blocks",
-    );
-  }
-}
-
-function requireScalar(type: BlotAbiType): void {
   if (
-    !["unit", "boolean", "signed-integer-64", "float-32", "float-64"].includes(
-      type.kind,
-    )
+    types.reduce((count, type) => count + flattenedAbiType(type).length, 0) > 16
   ) {
     throw new TypeError(
-      `scalar host adapter does not accept ${type.kind} inputs`,
+      "host adapter does not marshal indirect parameter blocks",
     );
   }
 }
 
-function lowerScalar(
-  type: BlotAbiType,
-  value: HostScalar,
-): (number | bigint)[] {
-  if (type.kind === "unit" && value === null) return [];
-  if (type.kind === "boolean" && typeof value === "boolean") {
-    if (value) return [1];
-    return [0];
+function hasLinear(ownership: BlotEffectOwnership): boolean {
+  if (typeof ownership === "string") return ownership === "linear";
+  if (ownership.kind === "record") {
+    return ownership.fields.some((field) => hasLinear(field.ownership));
   }
-  if (type.kind === "signed-integer-64" && typeof value === "bigint") {
-    if (value >= -9223372036854775808n && value <= 9223372036854775807n) {
-      return [value];
-    }
-    throw new RangeError("Int host value is outside signed 64-bit range");
-  }
-  if (
-    (type.kind === "float-32" || type.kind === "float-64") &&
-    typeof value === "number"
-  ) return [value];
-  throw new TypeError(`expected synchronous ${type.kind} host value`);
+  return ownership.cases.some((case_) => hasLinear(case_.ownership));
 }
 
-function liftScalar(type: BlotAbiType, raw: unknown): HostScalar {
-  if (type.kind === "boolean") {
-    if (raw === 0) return false;
-    if (raw === 1) return true;
-    throw new TypeError("invalid host Boolean");
-  }
-  if (type.kind === "signed-integer-64" && typeof raw === "bigint") return raw;
-  if (
-    (type.kind === "float-32" || type.kind === "float-64") &&
-    typeof raw === "number"
-  ) return raw;
-  throw new TypeError(`invalid host ${type.kind}`);
+function isThenable(
+  value: RuntimeValue | PromiseLike<RuntimeValue>,
+): value is PromiseLike<RuntimeValue> {
+  return value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    "then" in value;
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length &&
     left.every((value, index) => value === right[index]);
+}
+
+function validateCaptureScope(
+  type: BlotAbiType,
+  value: RuntimeValue,
+  scope: HostScope,
+): void {
+  if (type.kind === "resource") {
+    if (
+      value === null || typeof value !== "object" || !("kind" in value) ||
+      value.kind !== "resource"
+    ) {
+      throw new TypeError("compiled callback has an invalid resource capture");
+    }
+    scope.lower(type.name, value, type.payload);
+  } else if (type.kind === "array") {
+    if (!Array.isArray(value)) {
+      throw new Error("compiled callback array capture is invalid");
+    }
+    for (const element of value) {
+      validateCaptureScope(type.element, element, scope);
+    }
+  } else if (type.kind === "record") {
+    if (
+      value === null || typeof value !== "object" || !("kind" in value) ||
+      value.kind !== "record"
+    ) {
+      throw new Error("compiled callback record capture is invalid");
+    }
+    for (const field of type.fields) {
+      validateCaptureScope(field.type, value.fields.get(field.name)!, scope);
+    }
+  } else if (type.kind === "sealed") {
+    if (
+      value === null || typeof value !== "object" || !("kind" in value) ||
+      value.kind !== "sealed"
+    ) {
+      throw new Error("compiled callback sealed capture is invalid");
+    }
+    validateCaptureScope(type.inner, value.value, scope);
+  } else if (type.kind === "variant") {
+    if (
+      value === null || typeof value !== "object" || !("kind" in value) ||
+      value.kind !== "variant"
+    ) {
+      throw new Error("compiled callback variant capture is invalid");
+    }
+    const selected = type.cases.find((candidate) =>
+      candidate.name === value.name
+    );
+    if (selected === undefined) {
+      throw new Error("compiled callback variant is absent");
+    }
+    if (selected.payload !== undefined) {
+      validateCaptureScope(selected.payload, value.payload!, scope);
+    }
+  } else if (type.kind === "callback") {
+    throw new TypeError(
+      "compiled callback captures cannot contain another host callback",
+    );
+  }
 }

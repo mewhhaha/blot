@@ -1,0 +1,85 @@
+open import "blot:prelude"
+
+const SparkExecutor = Resource.of "Spark.Executor"
+const SparkScope = Resource.of "Spark.Scope"
+const SparkJob = Resource.of_type "Spark.Job"
+
+const SparkRuntime = @effect.host {
+  .scope = {
+    .signature = @forall (fn e => @forall (fn result => ((SparkExecutor, (SparkScope -> result) ~ [e]) -> result) ~ [e]));
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .child_scope = {
+    .signature = @forall (fn e => @forall (fn result => ((SparkScope, (SparkScope -> result) ~ [e]) -> result) ~ [e]));
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .spawn = {
+    .signature = @forall (fn e => @forall (fn result => ((SparkScope, (Unit -> result) ~ [e]) -> SparkJob result) ~ [e]));
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .join = Effect.suspends (@forall (fn result => SparkJob result -> result));
+  .parallel = {
+    .signature = @forall (fn result => (SparkScope, Unit -> result) -> SparkJob result);
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .cancel = Effect.suspends (@forall (fn result => SparkJob result -> Unit));
+  .speculate = {
+    .signature = @forall (fn result => (SparkScope, Unit -> result) -> SparkJob result);
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+  .yield = Effect.suspends (SparkScope -> Unit);
+  .on_exit = {
+    .signature = @forall (fn e => ((SparkScope, (Unit -> Unit) ~ [e]) -> Unit) ~ [e]);
+    .input = (#Unrestricted, #Affine);
+    .result = #Unrestricted;
+    .suspends = True;
+  };
+}
+
+const map_parallel = fn scope => fn transform => fn values => do:
+  let iterator = Iter.items values
+  return case iterator.step iterator.state of
+    #None => []
+    #Some (first, remaining) => do:
+      let ?work = fn () => transform first
+      use initial <- SparkRuntime.parallel (scope, ?work)
+      let jobs = [initial]
+      for value in { ...iterator; .state = remaining; }:
+        let ?work = fn () => transform value
+        use job <- SparkRuntime.parallel (scope, ?work)
+        jobs := @array.push jobs job
+
+      use first_result <- SparkRuntime.join initial
+      let results = [first_result]
+      for job in Iter.slice (jobs, 1, Array.length jobs):
+        use value <- SparkRuntime.join job
+        results := @array.push results value
+
+      return results
+
+return {
+  .Executor = SparkExecutor;
+  .Scope = SparkScope;
+  .Job = SparkJob;
+  .Effect = SparkRuntime;
+  .scope = fn executor => fn body => SparkRuntime.scope (executor, ?body);
+  .child_scope = fn parent => fn body => SparkRuntime.child_scope (parent, ?body);
+  .spawn = fn scope => fn ?work => SparkRuntime.spawn (scope, ?work);
+  .join = SparkRuntime.join;
+  .parallel = fn scope => fn ?work => SparkRuntime.parallel (scope, ?work);
+  .speculate = fn scope => fn ?work => SparkRuntime.speculate (scope, ?work);
+  .map_parallel = map_parallel;
+  .cancel = SparkRuntime.cancel;
+  .yield = SparkRuntime.yield;
+  .on_exit = fn scope => fn ?cleanup => SparkRuntime.on_exit (scope, ?cleanup);
+  }

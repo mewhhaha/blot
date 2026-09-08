@@ -9,6 +9,9 @@ Deno.test("tooling and Rust normalize representative source to the same AST", as
     "examples/operators.blot",
     "examples/short_circuit.blot",
     "examples/polymorphic_collections.blot",
+    "examples/inline_signatures.blot",
+    "examples/continuing.blot",
+    "examples/numeric_literals.blot",
   ];
   const compiler = await Compiler.create();
   try {
