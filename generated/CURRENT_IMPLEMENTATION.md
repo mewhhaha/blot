@@ -7,7 +7,7 @@
 | Frontend | `baba-general-cpu-hosted-by-rust-wasm` |
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
-| Compiler-host ABI | 6 |
+| Compiler-host ABI | 7 |
 | Checked-module certificate | 17 |
 | Module snapshot | 2 |
 | Value capsule | 4 |

@@ -7,5 +7,6 @@ formal/lean/.lake/
 target/
 dist/
 .blot-package-*/
+**/.blot/cache/
 node_modules/
 .pnp.cjs

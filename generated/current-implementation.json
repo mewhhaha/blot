@@ -44,7 +44,7 @@
     "experiments/revision-key-performance.md",
     "experiments/compiler-profile-matrix.latest.json"
   ],
-  "compilerHostAbi": 6,
+  "compilerHostAbi": 7,
   "checkedModuleCertificate": 17,
   "moduleSnapshotSchema": 2,
   "valueCapsuleSchema": 4,

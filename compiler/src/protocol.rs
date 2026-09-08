@@ -1,6 +1,6 @@
 // Generated from compiler/protocol.json. Do not edit.
 
-pub(crate) const COMPILER_HOST_ABI_VERSION: u32 = 6;
+pub(crate) const COMPILER_HOST_ABI_VERSION: u32 = 7;
 pub(crate) const CHECKED_MODULE_CERTIFICATE_SCHEMA: u32 = 17;
 pub(crate) const MODULE_SNAPSHOT_SCHEMA: u32 = 2;
 pub(crate) const VALUE_CAPSULE_SCHEMA: u32 = 4;

@@ -52,8 +52,17 @@ pub(crate) struct CompiledDevelopmentProgram {
     pub(crate) entry_unit: String,
     pub(crate) units: Vec<DevelopmentCompilationUnit>,
     pub(crate) edges: Vec<DevelopmentUnitEdge>,
+    pub(crate) work: DevelopmentWork,
     #[cfg(feature = "development-profile")]
     pub(crate) memory_profile: DevelopmentMemoryProfile,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DevelopmentWork {
+    pub(crate) specialized_functions: BTreeMap<String, usize>,
+    pub(crate) reused_functions: BTreeMap<String, usize>,
+    pub(crate) emitted_units: usize,
 }
 
 #[cfg(feature = "development-profile")]
@@ -881,7 +890,15 @@ fn development_export_name(
     let encoded = serde_json::to_vec(&(
         provider,
         &function.span.file,
-        function.span.start,
+        &function.name,
+        module
+            .functions
+            .iter()
+            .take_while(|candidate| candidate.id != function.id)
+            .filter(|candidate| {
+                candidate.span.file == function.span.file && candidate.name == function.name
+            })
+            .count(),
         parameters,
         result,
         &signature.effects,

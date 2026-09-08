@@ -1782,7 +1782,7 @@ fn emit_dynamic_module(
     }
     let mut wasm = Module::new();
     wasm.section(&types.section);
-    if !manifest.imports.is_empty() {
+    if !manifest.imports.is_empty() || !manifest.links.is_empty() {
         wasm.section(&imports);
     }
     wasm.section(&functions)

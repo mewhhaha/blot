@@ -190,7 +190,9 @@ async function lintFiles(
 }
 
 async function watchDevelopmentProject(manifestPath: string): Promise<void> {
-  let project = await DevelopmentProject.create(manifestPath);
+  let project = await DevelopmentProject.create(manifestPath, {
+    cache: { mode: "disk" },
+  });
   const watcher = Deno.watchFs(dirname(project.manifest.path), {
     recursive: true,
   });
@@ -198,12 +200,16 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
     await reportDevelopmentBuild(project);
     for await (const event of watcher) {
       if (event.kind === "access") continue;
+      const paths = event.paths.filter((path) => !project.isCachePath(path));
+      if (paths.length === 0) continue;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
       try {
         if (
-          event.paths.some((path) => resolve(path) === project.manifest.path)
+          paths.some((path) => resolve(path) === project.manifest.path)
         ) {
-          const replacement = await DevelopmentProject.create(manifestPath);
+          const replacement = await DevelopmentProject.create(manifestPath, {
+            cache: { mode: "disk" },
+          });
           try {
             await reportDevelopmentBuild(replacement);
           } catch (error) {
@@ -214,7 +220,7 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
           project = replacement;
           continue;
         }
-        for (const path of event.paths) await project.markChanged(path);
+        for (const path of paths) await project.markChanged(path);
         await reportDevelopmentBuild(project);
       } catch (error) {
         report(project.manifest.path, error);
@@ -231,6 +237,7 @@ async function reportDevelopmentBuild(
 ): Promise<void> {
   const build = await project.prepareBuild();
   try {
+    for (const warning of build.cache.warnings) console.warn(warning);
     const changed = build.changedUnits.map((unit) => unit.name).join(", ");
     const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
     const removed = build.removedUnits.join(", ");

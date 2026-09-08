@@ -9,7 +9,10 @@ current language, and the [specification map](spec/README.md) for the language
 model, compiler theorem, typechecking theory, staging, safety, lowering,
 incrementality, and cost model. The
 [development project guide](docs/development.md) covers split Wasm units, watch
-compilation, runtime activation, and the rebuild latency gate. The
+compilation, runtime activation, and the rebuild latency gate. Run
+`pnpm example:hot-reload` for a
+[small browser example](case-studies/hot-reload/README.md) that replaces changed
+Wasm units while keeping the page running. The
 [algorithm memory guide](docs/algorithm-memory.md) records when a consuming
 `Slice -> Slice` formulation is actually appropriate. Executable application
 studies live in [case-studies/](case-studies/): a grep-like file search, an

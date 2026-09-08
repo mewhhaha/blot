@@ -149,6 +149,20 @@ impl Default for CompilerSession {
     }
 }
 
+impl CompilerSession {
+    pub(crate) fn disable_development_cache(&self) {
+        self.context.residual_cache.borrow_mut().disable();
+    }
+
+    pub(crate) fn take_development_cache_entries(&self) -> Vec<Vec<u8>> {
+        self.context.residual_cache.borrow_mut().take_pending()
+    }
+
+    pub(crate) fn import_development_cache_entry(&self, bytes: &[u8]) -> Result<(), String> {
+        self.context.residual_cache.borrow_mut().import(bytes)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DependencySite {
@@ -996,6 +1010,7 @@ impl CompilerSession {
         entry_unit: &str,
         units: &BTreeMap<String, String>,
     ) -> Result<CompiledDevelopmentProgram, Diagnostic> {
+        *self.context.development_work.borrow_mut() = Default::default();
         self.pending_development_artifacts.borrow_mut().take();
         #[cfg(feature = "development-profile")]
         let mut memory_profile = DevelopmentMemoryProfile::start();
@@ -1133,6 +1148,7 @@ impl CompilerSession {
                             unit.partition,
                         ),
                     );
+                    self.context.development_work.borrow_mut().emitted_units += 1;
                     DevelopmentUnitArtifact::Compiled(compiled)
                 };
                 (artifact, implementation_key)
@@ -1172,6 +1188,7 @@ impl CompilerSession {
             entry_unit: split.entry_unit,
             units: compiled_units,
             edges: split.edges,
+            work: self.context.development_work.borrow().clone(),
             #[cfg(feature = "development-profile")]
             memory_profile,
         })
@@ -1289,6 +1306,7 @@ impl CompilerSession {
     }
 
     fn begin_semantic_request(&self, path: &str) -> Result<(), Diagnostic> {
+        self.context.residual_cache.borrow_mut().begin_request();
         let pending_reasons = self.invalidation.borrow().invalidation_reasons.clone();
         let mut invalidation = InvalidationTelemetry::default();
         for dirty in self.dirty_modules.borrow().iter() {
@@ -5765,6 +5783,17 @@ mod tests {
         let initial = session
             .compile_development_program(ENTRY, "game", &units)
             .expect("initial development program should compile");
+        for unit in &initial.units {
+            let crate::development::DevelopmentUnitArtifact::Compiled(artifact) = &unit.artifact
+            else {
+                panic!("initial unit {} should compile", unit.name);
+            };
+            wasmparser::Validator::new()
+                .validate_all(&artifact.wasm)
+                .expect("development links must import without host effects");
+        }
+        assert_eq!(initial.work.emitted_units, 2);
+        assert!(initial.work.specialized_functions.contains_key(PROVIDER));
         session
             .commit_development_program(initial.transaction_id)
             .expect("initial development program should commit");
@@ -5785,6 +5814,15 @@ mod tests {
             artifact_sources,
             BTreeMap::from([("game", "unit-cache"), ("project", "compiled")])
         );
+        assert_eq!(edited.work.emitted_units, 1);
+        session
+            .commit_development_program(edited.transaction_id)
+            .expect("edited development program should commit");
+        let unchanged = session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("unchanged development program should compile");
+        assert!(unchanged.work.specialized_functions.is_empty());
+        assert_eq!(unchanged.work.emitted_units, 0);
     }
 
     #[test]
@@ -5860,6 +5898,127 @@ mod tests {
             ])
         );
         assert_eq!(crate::development::module_identity_computations(), 2);
+        assert_eq!(edited.work.reused_functions.get(SECOND), Some(&1));
+        assert!(!edited.work.specialized_functions.contains_key(SECOND));
+    }
+
+    #[test]
+    fn development_scalar_graph_memos_survive_a_new_session() {
+        let mut entries: Vec<Vec<u8>> = Vec::new();
+        for restart in [false, true] {
+            let mut session = CompilerSession::default();
+            for (path, text) in [
+                (
+                    "app.blot",
+                    "const lib = import \"lib\"\nconst run :: @type.int -> @type.int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
+                ),
+                (
+                    "lib.blot",
+                    "const step :: @type.int -> @type.int\nconst step = fn value => @int.add value 3\nconst run :: @type.int -> @type.int\nconst run = fn value => step value\nreturn { .run = run; }\n",
+                ),
+            ] {
+                session.add_source(path.to_owned(), source(text)).unwrap();
+            }
+            session
+                .configure_module(
+                    "app.blot",
+                    BTreeMap::from([("lib".into(), "lib.blot".into())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session
+                .configure_module("lib.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            for entry in &entries {
+                session.import_development_cache_entry(entry).unwrap();
+            }
+            let build = session
+                .compile_development_program(
+                    "app.blot",
+                    "app",
+                    &BTreeMap::from([
+                        ("app".into(), "app.blot".into()),
+                        ("lib".into(), "lib.blot".into()),
+                    ]),
+                )
+                .unwrap();
+            if restart {
+                assert_eq!(build.work.reused_functions.get("lib.blot"), Some(&2));
+                assert!(!build.work.specialized_functions.contains_key("lib.blot"));
+            } else {
+                entries = session.take_development_cache_entries();
+                assert_eq!(entries.len(), 1);
+                assert!(
+                    session
+                        .import_development_cache_entry(&entries[0][..entries[0].len() - 1])
+                        .is_err()
+                );
+            }
+            assert_eq!(build.work.emitted_units, 2);
+            for unit in &build.units {
+                let artifact = unit
+                    .artifact
+                    .compiled()
+                    .expect("a fresh session must return every unit");
+                wasmparser::Validator::new()
+                    .validate_all(&artifact.wasm)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn development_scalar_graph_cache_admits_prelude_operators() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            for (path, text) in [
+                (
+                    "app.blot",
+                    "open import \"blot:prelude\"\nconst lib = import \"lib\"\nconst run :: Int -> Int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
+                ),
+                (
+                    "lib.blot",
+                    "open import \"blot:prelude\"\nconst step :: Int -> Int\nconst step = fn value => value + 3\nconst run :: Int -> Int\nconst run = fn value => step value\nreturn { .run = run; }\n",
+                ),
+            ] {
+                session.add_source(path.to_owned(), source(text)).unwrap();
+            }
+            session
+                .configure_module(
+                    "app.blot",
+                    BTreeMap::from([
+                        ("lib".into(), "lib.blot".into()),
+                        ("blot:prelude".into(), "prelude.blot".into()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "lib.blot",
+                    BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session
+                .compile_development_program(
+                    "app.blot",
+                    "app",
+                    &BTreeMap::from([
+                        ("app".into(), "app.blot".into()),
+                        ("lib".into(), "lib.blot".into()),
+                    ]),
+                )
+                .unwrap();
+            assert_eq!(session.take_development_cache_entries().len(), 1);
+        });
     }
 
     #[test]

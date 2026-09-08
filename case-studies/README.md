@@ -35,6 +35,12 @@ module into a candidate worker. The active worker keeps rendering until the
 candidate produces its first frame, so compilation and guest startup do not
 interrupt the last working revision.
 
+## Browser development mode
+
+Run `pnpm example:hot-reload` for a [small HTTP example](hot-reload/README.md)
+with two Blot units executing in the browser. Formula edits replace only the
+provider; a text-resource edit invokes no compiler. It needs no WebGPU adapter.
+
 ## grep
 
 `grep/main.blot` owns matching, iteration, output selection, and the exit count.

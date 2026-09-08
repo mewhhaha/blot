@@ -55,6 +55,9 @@ pub struct LoadedModule {
     pub imports: BTreeMap<String, String>,
     pub includes: BTreeMap<String, IncludedFile>,
     revision: ModuleRevision,
+    pub(crate) expression_addresses: Rc<std::cell::OnceCell<HashMap<ExpressionId, String>>>,
+    pub(crate) scalar_cache_bodies: Rc<RefCell<HashMap<ExpressionId, bool>>>,
+    pub(crate) scalar_cache_source_digest: Rc<std::cell::OnceCell<[u8; 32]>>,
 }
 
 impl LoadedModule {
@@ -69,11 +72,15 @@ impl LoadedModule {
             imports,
             includes,
             revision: ModuleRevision::new(path),
+            expression_addresses: Rc::new(std::cell::OnceCell::new()),
+            scalar_cache_bodies: Rc::new(RefCell::new(HashMap::new())),
+            scalar_cache_source_digest: Rc::new(std::cell::OnceCell::new()),
         }
     }
 
     pub(crate) fn renew_revision(&mut self, path: &str) {
         self.revision = ModuleRevision::new(path);
+        self.scalar_cache_source_digest = Rc::new(std::cell::OnceCell::new());
     }
 
     pub(crate) fn revision(&self) -> ModuleRevision {
@@ -98,6 +105,10 @@ impl ModuleRevision {
     fn references_module(&self, module: &str) -> bool {
         self.module == module
     }
+
+    pub(crate) fn source_path(&self) -> &str {
+        &self.module
+    }
 }
 
 impl PartialEq for ModuleRevision {
@@ -115,7 +126,7 @@ impl Hash for ModuleRevision {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, serde::Serialize)]
 pub(crate) enum RecognitionProbe {
     Integer { left: i8, right: i8 },
     Boolean { left: bool, right: bool },
@@ -778,6 +789,9 @@ impl ResidentEffectValue {
 
 #[derive(Default)]
 pub struct Context {
+    pub(crate) development_work: RefCell<crate::development::DevelopmentWork>,
+    pub(crate) residual_cache: RefCell<crate::hir::residual_cache::ResidualCache>,
+    operator_attachment_revision: Cell<u64>,
     pub modules: RefCell<HashMap<String, LoadedModule>>,
     pub module_results: RefCell<HashMap<String, Value>>,
     pub(crate) reusable_module_results: RefCell<HashSet<String>>,
@@ -804,6 +818,30 @@ pub struct Context {
 }
 
 impl Context {
+    pub(crate) fn residual_cache_effect_stamp(&self) -> (u32, u64) {
+        (
+            self.next_effect.get(),
+            self.operator_attachment_revision.get(),
+        )
+    }
+
+    pub(crate) fn residual_operator_extensions(&self) -> Vec<(String, String, Value)> {
+        self.operator_extensions
+            .borrow()
+            .iter()
+            .flat_map(|extension| {
+                extension.members.iter().filter_map(|(name, member)| {
+                    member.materialize().map(|value| {
+                        (
+                            extension.owner.clone(),
+                            format!("{}:{name}", extension.key),
+                            value,
+                        )
+                    })
+                })
+            })
+            .collect()
+    }
     pub(crate) fn expression_type(&self, module: &str, expression: ExpressionId) -> Option<Value> {
         if let Some(type_) = self
             .expression_types
@@ -1100,6 +1138,8 @@ impl Context {
         let mut extensions = self.operator_extensions.borrow_mut();
         extensions.retain(|existing| existing.owner != module || existing.key != extension.key);
         extensions.push(extension);
+        self.operator_attachment_revision
+            .set(self.operator_attachment_revision.get() + 1);
     }
 
     pub(crate) fn register_operator_attachments_from_environment(

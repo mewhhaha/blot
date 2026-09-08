@@ -25,6 +25,7 @@ mod relational;
 mod safety;
 mod session;
 mod source;
+mod source_identity;
 mod typecheck;
 mod value;
 mod value_capsule;
@@ -860,6 +861,7 @@ pub unsafe extern "C" fn compile_compiler_session_development_program(
                 "entryUnit": program.entry_unit,
                 "units": units,
                 "edges": program.edges,
+                "work": program.work,
             });
             #[cfg(feature = "development-profile")]
             let result = {
@@ -916,6 +918,71 @@ pub extern "C" fn development_unit_wasm_pointer(index: u32) -> *const u8 {
             .and_then(|unit| unit.artifact.compiled())
             .map_or(std::ptr::null(), |compiled| compiled.wasm.as_ptr())
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn disable_compiler_session_development_cache(handle: u32) -> u32 {
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            session.disable_development_cache();
+            Ok(Vec::new())
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn take_compiler_session_development_cache(handle: u32) -> u32 {
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            let entries = session.take_development_cache_entries();
+            let mut bytes = (entries.len() as u32).to_le_bytes().to_vec();
+            for entry in entries {
+                bytes.extend_from_slice(&(entry.len() as u32).to_le_bytes());
+                bytes.extend(entry);
+            }
+            Ok(bytes)
+        })
+    });
+    write_result(host_transport::encode_response(result))
+}
+
+#[unsafe(no_mangle)]
+/// Loads a disposable graph memo; this cannot install source or checked facts.
+///
+/// # Safety
+/// `pointer` must address `length` initialized bytes in this module's memory.
+pub unsafe extern "C" fn import_compiler_session_development_cache(
+    handle: u32,
+    pointer: *const u8,
+    length: u32,
+) -> u32 {
+    let bytes = unsafe { std::slice::from_raw_parts(pointer, length as usize) };
+    let result = session_index(handle).and_then(|index| {
+        SESSIONS.with(|sessions| {
+            let sessions = sessions.borrow();
+            let session = sessions
+                .get(index)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("unknown compiler session {handle}"))?;
+            let status = match session.import_development_cache_entry(bytes) {
+                Ok(()) => serde_json::json!({"accepted": true}),
+                Err(reason) => serde_json::json!({"accepted": false, "reason": reason}),
+            };
+            Ok(serde_json::to_vec(&status).expect("cache admission result serialization"))
+        })
+    });
+    write_result(host_transport::encode_response(result))
 }
 
 #[unsafe(no_mangle)]
@@ -1095,6 +1162,7 @@ mod tests {
                     implementation_key: "test-identity".to_owned(),
                 }],
                 edges: Vec::new(),
+                work: development::DevelopmentWork::default(),
                 #[cfg(feature = "development-profile")]
                 memory_profile: development::DevelopmentMemoryProfile::start(),
             });

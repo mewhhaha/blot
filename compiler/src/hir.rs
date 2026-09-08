@@ -1,8 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+// Cached HIR decodes words through the finite compiler vocabulary.
+type RuntimeWord = &'static str;
+
+#[path = "residual_cache.rs"]
+pub(crate) mod residual_cache;
 #[path = "residual_identity.rs"]
 mod residual_identity;
 use residual_identity::{ResidualEnvironmentKey, residual_environment_key};
@@ -21,7 +26,7 @@ use crate::value::{
     recursive_env,
 };
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub(crate) enum RuntimeType {
     Unit,
@@ -36,11 +41,13 @@ pub(crate) enum RuntimeType {
     Boolean,
     Text,
     Vector {
-        element: &'static str,
+        #[serde(deserialize_with = "residual_cache::word")]
+        element: RuntimeWord,
         lanes: u8,
     },
     Mask {
-        element: &'static str,
+        #[serde(deserialize_with = "residual_cache::word")]
+        element: RuntimeWord,
         lanes: u8,
     },
     Store {
@@ -315,40 +322,43 @@ fn runtime_type_contains_scratch(
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RuntimeField {
     pub(crate) name: String,
     #[serde(rename = "type")]
     pub(crate) type_id: usize,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RuntimeCase {
     pub(crate) name: String,
     #[serde(rename = "payloadType")]
     pub(crate) payload_type: usize,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RuntimeSignature {
     pub(crate) parameters: Vec<usize>,
     pub(crate) result: usize,
     pub(crate) effects: Vec<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeOperation {
-    pub(crate) kind: &'static str,
+    #[serde(deserialize_with = "residual_cache::word")]
+    pub(crate) kind: RuntimeWord,
     pub(crate) result: usize,
     #[serde(rename = "type")]
     pub(crate) type_id: usize,
     pub(crate) operands: Vec<usize>,
-    pub(crate) ownership: &'static str,
+    #[serde(deserialize_with = "residual_cache::word")]
+    pub(crate) ownership: RuntimeWord,
     pub(crate) span: RuntimeSpan,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) value: Option<WireConstant>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) update: Option<&'static str>,
+    #[serde(default, deserialize_with = "residual_cache::optional_word")]
+    pub(crate) update: Option<RuntimeWord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) case: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -356,9 +366,11 @@ pub(crate) struct RuntimeOperation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) operation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) operator: Option<&'static str>,
+    #[serde(default, deserialize_with = "residual_cache::optional_word")]
+    pub(crate) operator: Option<RuntimeWord>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) conversion: Option<&'static str>,
+    #[serde(default, deserialize_with = "residual_cache::optional_word")]
+    pub(crate) conversion: Option<RuntimeWord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) lane: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -371,7 +383,7 @@ pub(crate) struct RuntimeOperation {
     pub(crate) static_store: Option<usize>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub(crate) enum WireConstant {
     Unit,
@@ -394,20 +406,20 @@ pub(crate) struct RuntimeStaticStore {
     pub(crate) values: Vec<WireConstant>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeSwitchCase {
     pub(crate) value: WireConstant,
     pub(crate) target: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeSpan {
     pub(crate) file: String,
     pub(crate) start: u32,
     pub(crate) end: u32,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub(crate) enum RuntimeTerminator {
     Branch {
@@ -444,16 +456,17 @@ pub(crate) enum RuntimeTerminator {
     },
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeBlockParameter {
     pub(crate) value: usize,
     #[serde(rename = "type")]
     pub(crate) type_id: usize,
-    pub(crate) ownership: &'static str,
+    #[serde(deserialize_with = "residual_cache::word")]
+    pub(crate) ownership: RuntimeWord,
     pub(crate) span: RuntimeSpan,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeBlock {
     pub(crate) id: usize,
     pub(crate) parameters: Vec<RuntimeBlockParameter>,
@@ -461,13 +474,14 @@ pub(crate) struct RuntimeBlock {
     pub(crate) terminator: RuntimeTerminator,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct RuntimeFunction {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) signature: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reuse: Option<&'static str>,
+    #[serde(default, deserialize_with = "residual_cache::optional_word")]
+    pub(crate) reuse: Option<RuntimeWord>,
     #[serde(rename = "entryBlock")]
     pub(crate) entry_block: usize,
     pub(crate) blocks: Vec<RuntimeBlock>,
@@ -828,6 +842,7 @@ struct LexicalClosure<'a> {
 }
 
 pub(crate) struct ResidualFunctionCompilation {
+    cache_request: Option<Box<residual_cache::Request>>,
     pub(crate) instance_facts: Option<Rc<crate::typecheck::ResidualInstanceFacts>>,
     pub(crate) argument: Value,
     pub(crate) environment: Environment,
@@ -4610,6 +4625,92 @@ impl ResidualTrace {
             return Ok(ResidualFunctionCall::Existing(value));
         }
 
+        let cache_request = if crosses_development_boundary
+            && context.residual_cache.borrow().enabled()
+            && captures.is_empty()
+            && effects.is_empty()
+            && argument_reuse == StoreReuseWitness::None
+            && !self.pending_recursive_types.contains(&result_type)
+        {
+            environment_key
+                .portable(
+                    context,
+                    signature_value,
+                    checked_argument_type,
+                    expected_result,
+                    actual_evidence.as_ref(),
+                )?
+                .map(|mut key| {
+                    key.extend(
+                        rmp_serde::to_vec(&(
+                            self.development_units
+                                .as_ref()
+                                .expect("development boundary has configured roots")
+                                .iter()
+                                .collect::<BTreeSet<_>>(),
+                            &self.source,
+                            span,
+                            caller_argument.type_id,
+                            result_type,
+                        ))
+                        .expect("residual cache call identity serialization"),
+                    );
+                    Box::new(residual_cache::Request::new(
+                        context,
+                        key,
+                        self,
+                        RuntimeSignature {
+                            parameters: vec![caller_argument.type_id],
+                            result: result_type,
+                            effects: Vec::new(),
+                        },
+                    ))
+                })
+        } else {
+            None
+        };
+        if let Some(request) = &cache_request {
+            let function = self.next_function;
+            let runtime_signature = self.signatures.len();
+            if request.restore(self) {
+                self.function_ids.push(ResidualFunctionIdentity {
+                    environment_key,
+                    module: module.to_owned(),
+                    body,
+                    argument_type: caller_argument.type_id,
+                    argument_reuse,
+                    result_reuse: StoreReuseWitness::None,
+                    result_type,
+                    capture_types: Vec::new(),
+                    signature: signature_value.clone(),
+                    function,
+                    runtime_signature,
+                });
+                return self
+                    .direct_call(function, result_type, vec![caller_argument.id], span)
+                    .map(ResidualFunctionCall::Existing);
+            }
+        }
+        if self.development_units.is_some() {
+            *context
+                .development_work
+                .borrow_mut()
+                .specialized_functions
+                .entry(module.to_owned())
+                .or_default() += 1;
+        }
+        let name = if self.development_units.is_some() {
+            let modules = context.modules.borrow();
+            let loaded = modules.get(module).expect("checked residual source module");
+            loaded
+                .expression_addresses
+                .get_or_init(|| crate::source_identity::expression_addresses(&loaded.module))
+                .get(&body)
+                .cloned()
+                .ok_or_else(|| hir_error("A development closure has no lexical source address."))?
+        } else {
+            name
+        };
         let signature_id = self.signatures.len();
         self.signatures.push(RuntimeSignature {
             parameters: std::iter::once(caller_argument.type_id)
@@ -4697,6 +4798,7 @@ impl ResidualTrace {
         let mut caller_arguments = vec![caller_argument.id];
         caller_arguments.extend(captures.iter().map(|capture| capture.id));
         Ok(ResidualFunctionCall::Compile(ResidualFunctionCompilation {
+            cache_request,
             instance_facts,
             argument,
             environment,
@@ -4876,6 +4978,11 @@ impl ResidualTrace {
         let result_reuse =
             settle_store_reuse_witness(&identity.result_reuse, &observed_result_reuse);
         identity.result_reuse = result_reuse.clone();
+        if result_reuse == StoreReuseWitness::None
+            && let Some(request) = compilation.cache_request
+        {
+            request.store(self);
+        }
         let frame = self
             .function_frames
             .pop()
@@ -4884,6 +4991,7 @@ impl ResidualTrace {
         self.blocks = frame.blocks;
         self.current_block = frame.current_block;
         self.next_value = frame.next_value;
+        self.source = frame.source;
         let call = self.direct_call(
             compilation.function,
             compilation.result_type,
@@ -4892,7 +5000,6 @@ impl ResidualTrace {
         )?;
         let call = apply_store_reuse_witness(&result_reuse, call, &self.types);
         let call = mark_reusable_stores(&compilation.result_ownership, call, &self.types);
-        self.source = frame.source;
         Ok(call)
     }
 

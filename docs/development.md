@@ -7,6 +7,58 @@ and unit artifacts, and reports the exact units a host must replace.
 This mode does not change Blot imports or source semantics. A production
 `blot build` still emits one whole-program artifact.
 
+## Browser example
+
+```bash
+pnpm example:hot-reload
+```
+
+Open `http://127.0.0.1:8323`. The
+[hot-reload example](../case-studies/hot-reload/README.md) serves a two-unit
+development project from a small Node HTTP server. Edit `formula.blot` to
+replace only its Wasm unit; edit `message.txt` to update the page without a
+compiler build. The browser retains the app instance and input value, displays
+compilation failures, and reconnects using the latest snapshot. The page reports
+server update time, fetch-and-activation time, compiler build count, and the
+names of replaced and retained units.
+
+The normal compiler distribution supports development projects. The separate
+`compiler:build-development-profile` task adds compiler profiling counters; it
+is not needed to run this example. Source edits still incur checking; unchanged
+closed scalar call graphs can reuse specialization, and unchanged unit artifacts
+and browser instances are retained. Ordinary static resources bypass compilation.
+
+## Caching across restarts
+
+The HTTP example and `blot dev` persist graph memos in
+`.blot/cache/development/`. Deleting that directory is safe. The library defaults
+to memory caching; opt into persistence with named options:
+
+```ts
+const project = await DevelopmentProject.create("./blot.json", {
+  compiler: {},
+  cache: { mode: "disk" },
+});
+```
+
+Use `{ mode: "memory" }` or `{ mode: "disabled" }` to select the other modes.
+Disk mode accepts an optional `directory`. Watch hosts should ignore paths for
+which `project.isCachePath(path)` is true.
+
+The current cache covers closed scalar functions, their helpers, generic
+instances, and recursive calls without runtime captures or effects. It validates
+cached graphs in Rust and still checks source after restart. Changed imports,
+includes, static captures, call demands, or representation prefixes force misses;
+an unchanged function signature alone is insufficient. Other functions compile
+normally. Restart still emits initial Wasm units and gives each browser a
+complete initial build.
+
+`build.work` separates specialized bodies, reused bodies, and emitted units.
+`build.cache` reports disk loads, rejected entries, writes, and actual warnings.
+Graph entries have a 64 MiB encoded resident budget (plus object overhead) and a
+512 MiB disk budget. Compiler/prelude/target identities separate namespaces;
+atomic writes and digest checks make interrupted or corrupt entries disposable.
+
 ## Project manifest
 
 A project uses a `blot-project` manifest:
@@ -56,7 +108,7 @@ The Deno CLI exposes the same command when embedded with filesystem read and
 watch permissions:
 
 ```bash
-deno run --allow-read --allow-env src/cli.ts dev \
+deno run --allow-read --allow-write --allow-env src/cli.ts dev \
   case-studies/engine/browser.blot.json
 ```
 
@@ -140,6 +192,10 @@ commits that cache before returning the prepared project build. If copying,
 identity validation, or hashing fails, Rust retains its former committed map and
 the next call recompiles the abandoned replacements. Caller-visible buffers and
 capability arrays do not alias either private cache.
+
+`runtime.prepareActivation` accepts an external transition as `unknown` and
+validates it before issuing a runtime-owned activation capability. An HTTP host
+can reconstruct the byte arrays without manufacturing a project commit token.
 
 The runtime copies the complete external build transition before its first
 asynchronous step. It hashes and compiles those private bytes, then recomputes

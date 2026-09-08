@@ -134,6 +134,13 @@ interface CompilerWasmExports {
   development_unit_wasm_length(index: number): number;
   development_unit_manifest_pointer(index: number): number;
   development_unit_manifest_length(index: number): number;
+  disable_compiler_session_development_cache(handle: number): number;
+  take_compiler_session_development_cache(handle: number): number;
+  import_compiler_session_development_cache(
+    handle: number,
+    pointer: number,
+    length: number,
+  ): number;
 }
 
 export type CompilerLoweringResult =
@@ -451,6 +458,12 @@ export interface CompilerDevelopmentMemoryProfile {
   readonly checkpoints: readonly CompilerDevelopmentMemoryCheckpoint[];
 }
 
+export interface DevelopmentWork {
+  readonly specializedFunctions: Readonly<Record<string, number>>;
+  readonly reusedFunctions: Readonly<Record<string, number>>;
+  readonly emittedUnits: number;
+}
+
 export type CompilerDevelopmentCompilationResult =
   | {
     readonly ok: true;
@@ -459,6 +472,7 @@ export type CompilerDevelopmentCompilationResult =
     readonly units: readonly CompilerDevelopmentUnit[];
     readonly edges: readonly CompilerDevelopmentEdge[];
     readonly developmentProfile?: CompilerDevelopmentMemoryProfile;
+    readonly work: DevelopmentWork;
   }
   | CompilerTransportFailure;
 
@@ -857,8 +871,8 @@ export class CompilerWasm {
       if (!result.ok) throw new Error(result.message);
       return new Uint8Array(
         this.#exports.memory.buffer,
-        this.#exports.module_snapshot_pointer(),
-        this.#exports.module_snapshot_length(),
+        this.#exports.module_snapshot_pointer() >>> 0,
+        this.#exports.module_snapshot_length() >>> 0,
       ).slice();
     } finally {
       this.#free(pathAllocation);
@@ -929,13 +943,13 @@ export class CompilerWasm {
       if (!result.ok) return result;
       const wasm = new Uint8Array(
         this.#exports.memory.buffer,
-        this.#exports.compiled_wasm_pointer(),
-        this.#exports.compiled_wasm_length(),
+        this.#exports.compiled_wasm_pointer() >>> 0,
+        this.#exports.compiled_wasm_length() >>> 0,
       ).slice();
       const manifestBytes = new Uint8Array(
         this.#exports.memory.buffer,
-        this.#exports.compiled_manifest_pointer(),
-        this.#exports.compiled_manifest_length(),
+        this.#exports.compiled_manifest_pointer() >>> 0,
+        this.#exports.compiled_manifest_length() >>> 0,
       ).slice();
       return {
         ok: true,
@@ -985,6 +999,7 @@ export class CompilerWasm {
           }[];
           readonly edges: readonly CompilerDevelopmentEdge[];
           readonly developmentProfile?: CompilerDevelopmentMemoryProfile;
+          readonly work: DevelopmentWork;
         }
         | Exclude<CompilerDevelopmentCompilationResult, { readonly ok: true }>;
       if (!result.ok) return result;
@@ -995,6 +1010,27 @@ export class CompilerWasm {
       ) {
         throw new Error(
           `Rust compiler returned invalid development transaction ${result.transactionId}`,
+        );
+      }
+      const work = result.work;
+      if (
+        typeof work !== "object" || work === null ||
+        !Number.isSafeInteger(work.emittedUnits) || work.emittedUnits < 0 ||
+        typeof work.specializedFunctions !== "object" ||
+        work.specializedFunctions === null ||
+        Array.isArray(work.specializedFunctions) ||
+        Object.values(work.specializedFunctions).some((count) =>
+          !Number.isSafeInteger(count) || count < 0
+        ) ||
+        typeof work.reusedFunctions !== "object" ||
+        work.reusedFunctions === null ||
+        Array.isArray(work.reusedFunctions) ||
+        Object.values(work.reusedFunctions).some((count) =>
+          !Number.isSafeInteger(count) || count < 0
+        )
+      ) {
+        throw new Error(
+          "Rust compiler returned invalid development work counters",
         );
       }
       const compiledUnits = result.units.map((unit, index) => {
@@ -1012,13 +1048,13 @@ export class CompilerWasm {
           root: unit.root,
           wasm: new Uint8Array(
             this.#exports.memory.buffer,
-            this.#exports.development_unit_wasm_pointer(index),
-            this.#exports.development_unit_wasm_length(index),
+            this.#exports.development_unit_wasm_pointer(index) >>> 0,
+            this.#exports.development_unit_wasm_length(index) >>> 0,
           ).slice(),
           manifestBytes: new Uint8Array(
             this.#exports.memory.buffer,
-            this.#exports.development_unit_manifest_pointer(index),
-            this.#exports.development_unit_manifest_length(index),
+            this.#exports.development_unit_manifest_pointer(index) >>> 0,
+            this.#exports.development_unit_manifest_length(index) >>> 0,
           ).slice(),
           capabilities: unit.capabilities.slice(),
           implementationKey: unit.implementationKey,
@@ -1032,6 +1068,11 @@ export class CompilerWasm {
         units: compiledUnits,
         edges: result.edges.slice(),
         developmentProfile: result.developmentProfile,
+        work: Object.freeze({
+          emittedUnits: work.emittedUnits,
+          specializedFunctions: Object.freeze({ ...work.specializedFunctions }),
+          reusedFunctions: Object.freeze({ ...work.reusedFunctions }),
+        }),
       };
     } finally {
       this.#free(configurationAllocation);
@@ -1055,7 +1096,7 @@ export class CompilerWasm {
   }
 
   #allocate(words: Int32Array): Allocation {
-    const pointer = this.#exports.allocate_words(words.length);
+    const pointer = this.#exports.allocate_words(words.length) >>> 0;
     new Int32Array(this.#exports.memory.buffer, pointer, words.length).set(
       words,
     );
@@ -1066,8 +1107,48 @@ export class CompilerWasm {
     this.#exports.deallocate_words(allocation.pointer, allocation.wordCount);
   }
 
+  disableDevelopmentCache(handle: number): void {
+    this.#readBinaryResponse(
+      this.#exports.disable_compiler_session_development_cache(handle),
+    );
+  }
+
+  takeDevelopmentCacheEntries(handle: number): Uint8Array[] {
+    const decoder = new BinaryDecoder(this.#readBinaryResponse(
+      this.#exports.take_compiler_session_development_cache(handle),
+    ));
+    const count = decoder.u32("development cache entry count");
+    const entries: Uint8Array[] = [];
+    for (let index = 0; index < count; index += 1) {
+      entries.push(decoder.bytes("development cache entry").slice());
+    }
+    decoder.finish();
+    return entries;
+  }
+
+  importDevelopmentCacheEntry(
+    handle: number,
+    bytes: Uint8Array,
+  ): { readonly accepted: true } | {
+    readonly accepted: false;
+    readonly reason: string;
+  } {
+    const allocation = this.#allocateBytes(bytes);
+    try {
+      return JSON.parse(new TextDecoder().decode(this.#readBinaryResponse(
+        this.#exports.import_compiler_session_development_cache(
+          handle,
+          allocation.pointer,
+          allocation.byteCount,
+        ),
+      )));
+    } finally {
+      this.#freeBytes(allocation);
+    }
+  }
+
   #allocateBytes(bytes: Uint8Array): ByteAllocation {
-    const pointer = this.#exports.allocate_bytes(bytes.length);
+    const pointer = this.#exports.allocate_bytes(bytes.length) >>> 0;
     new Uint8Array(this.#exports.memory.buffer, pointer, bytes.length).set(
       bytes,
     );
@@ -1089,8 +1170,8 @@ export class CompilerWasm {
   #readBinaryResponse(length: number): Uint8Array {
     const bytes = new Uint8Array(
       this.#exports.memory.buffer,
-      this.#exports.lower_result_pointer(),
-      length,
+      this.#exports.lower_result_pointer() >>> 0,
+      length >>> 0,
     );
     const decoder = new BinaryDecoder(bytes);
     const magic = decoder.u32("response magic");
@@ -1113,8 +1194,8 @@ export class CompilerWasm {
   #readResult(length: number): unknown {
     const bytes = new Uint8Array(
       this.#exports.memory.buffer,
-      this.#exports.lower_result_pointer(),
-      length,
+      this.#exports.lower_result_pointer() >>> 0,
+      length >>> 0,
     );
     return JSON.parse(new TextDecoder().decode(bytes));
   }

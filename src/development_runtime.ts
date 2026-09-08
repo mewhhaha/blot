@@ -134,7 +134,7 @@ export class DevelopmentRuntime {
   }
 
   async prepareActivation(
-    build: DevelopmentBuild,
+    build: unknown,
   ): Promise<DevelopmentActivation> {
     this.#requireReady("prepare an activation");
     this.#state = { tag: "preparing" };
@@ -595,7 +595,7 @@ function decodeManifest(
 }
 
 function validateBuildTransition(
-  build: DevelopmentBuild,
+  build: unknown,
   activeUnits: ReadonlyMap<string, UnitActivation>,
   activeRevision: string | undefined,
 ): ValidatedDevelopmentBuild {

@@ -79,6 +79,48 @@ artifact omits this instrumentation and reports
 This workload does not cover interface edits or demand changes. Those require
 separate scenarios because they intentionally change the consumer closure.
 
+`pnpm benchmark:development-active` compares active call graphs: 10, 20, and 40
+providers plus their entry unit, with 32 reachable helpers per provider, Int/F32
+generic applications, and runtime recursion. Pass provider counts as positional
+arguments for a smaller run. For each count, separate processes measure
+cache-disabled, memory, and disk modes at the same source paths, each with
+initial activation and 20 provider edits. A fourth process restarts the disk
+project at the final saved revision. Every activation verifies integer and float
+results, and every warm edit must transfer only its provider, including when a
+constant grows from `9` to `10`. The JSON report includes the same artifact and
+harness provenance as the catalog benchmark, raw startup/build/commit timings,
+memory, cache observations, and Rust work counters. Disk writes are included in
+build timings. Do not edit measured inputs during a run: provenance drift
+rejects the report. This comparison reports latency without imposing a speed
+threshold.
+
+`work.specializedFunctions` counts residual call bodies actually specialized by
+source module, excluding export wrappers and calls resolved entirely at compile
+time. `work.reusedFunctions` counts bodies restored from scalar graph memos, and
+`work.emittedUnits` counts emitter invocations. A retained Wasm unit can still
+have nonzero specialization work; an unchanged closed-program request reports
+zero for all three. Disk restart restores graph memos, then checks source and
+emits all initial units. Compare elapsed timings as well as the skipped work.
+
+On 2026-09-08, artifact
+`6944c7882b0fb242c57800242a6d293e93374bdbd0c65d69fcedce6196c5412f` produced
+these committed warm-edit medians on a Ryzen 7 7800X3D with Deno 2.9.6:
+
+| Providers | Cache disabled | Memory cache | Disk cache |
+| --------- | -------------- | ------------ | ---------- |
+| 10        | 325.4 ms       | 283.6 ms     | 317.0 ms   |
+| 20        | 799.7 ms       | 606.6 ms     | 563.7 ms   |
+| 40        | 1309.2 ms      | 837.8 ms     | 903.1 ms   |
+
+At 40 providers, each warm edit specialized 37 bodies and restored 1,443;
+disabled caching specialized all 1,480. Every edit transferred only its
+provider. Disk restart restored all 1,480 bodies and still checked source and
+emitted the 41 initial units. Its build took 1953.5 ms plus 144.1 ms startup.
+Populating a cold cache costs extra: the initial disk build took 3395.2 ms
+versus 2599.8 ms with caching disabled. These are observations from one paired
+run, not latency guarantees; the small ten-provider disk improvement is within
+ordinary noise.
+
 On 2026-09-01, the production artifact identified by SHA-256
 `aacb245e0d3f3c6cbe1984fb7d4e6b3bf8ed83826c4199758a78da694d586b21` compiled the
 5,273,553-byte workload at 81.3 ms committed p50 and 90.7 ms p95. Only the

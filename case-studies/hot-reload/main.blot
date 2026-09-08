@@ -1,0 +1,7 @@
+open import "blot:prelude"
+const formula = import "./formula.blot"
+
+const score :: Int -> Int
+const score = fn quantity => formula.score quantity
+
+return { .score = score; }

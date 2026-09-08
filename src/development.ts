@@ -4,8 +4,21 @@ import {
   type DevelopmentEdge,
   type DevelopmentMemoryProfile,
   type DevelopmentUnitArtifact,
+  type DevelopmentWork,
 } from "./compiler/session.ts";
 import { CompilerInvariantFailure } from "./compiler/policy.ts";
+import { dirname, resolve } from "@std/path";
+import {
+  type DevelopmentCacheOptions,
+  type DevelopmentCacheReport,
+  DevelopmentDiskCache,
+  isDevelopmentCachePath,
+} from "./development_cache.ts";
+export type {
+  DevelopmentCacheOptions,
+  DevelopmentCacheReport,
+} from "./development_cache.ts";
+
 import {
   type DevelopmentUnitName,
   type ProjectManifest,
@@ -15,6 +28,11 @@ import type {
   DevelopmentActivation,
   DevelopmentRuntime,
 } from "./development_runtime.ts";
+
+export interface DevelopmentProjectOptions {
+  readonly compiler?: CompilerOptions;
+  readonly cache?: DevelopmentCacheOptions;
+}
 
 const developmentBuildBrand: unique symbol = Symbol("DevelopmentBuild");
 
@@ -26,6 +44,8 @@ export interface RetainedDevelopmentUnit {
 }
 
 export interface DevelopmentBuild {
+  readonly work: DevelopmentWork;
+  readonly cache: DevelopmentCacheReport;
   readonly [developmentBuildBrand]: true;
   readonly baseRevision: string | undefined;
   readonly revision: string;
@@ -55,23 +75,71 @@ type DevelopmentProjectState =
 export class DevelopmentProject {
   readonly manifest: ProjectManifest;
   readonly #compiler: Compiler;
+  readonly #cacheMode: DevelopmentCacheOptions["mode"];
+  readonly #diskCache: DevelopmentDiskCache | undefined;
   #units = new Map<string, DevelopmentUnitArtifact>();
   #artifactReservoir = new Map<string, DevelopmentUnitArtifact>();
   #revision: string | undefined;
   #state: DevelopmentProjectState = { tag: "ready" };
 
-  private constructor(manifest: ProjectManifest, compiler: Compiler) {
+  private constructor(
+    manifest: ProjectManifest,
+    compiler: Compiler,
+    mode: DevelopmentCacheOptions["mode"],
+    diskCache: DevelopmentDiskCache | undefined,
+  ) {
     this.manifest = manifest;
     this.#compiler = compiler;
+    this.#cacheMode = mode;
+    this.#diskCache = diskCache;
   }
 
   static async create(
     manifestPath: string,
-    compilerOptions: CompilerOptions = {},
+    options: DevelopmentProjectOptions = {},
   ): Promise<DevelopmentProject> {
     const manifest = await readProjectManifest(manifestPath);
-    const compiler = await Compiler.create(compilerOptions);
-    return new DevelopmentProject(manifest, compiler);
+    let cache = options.cache;
+    if (cache === undefined) cache = { mode: "memory" };
+    if (!["disabled", "memory", "disk"].includes(cache.mode)) {
+      throw new Error(`Unknown development cache mode ${cache.mode}`);
+    }
+    const compiler = await Compiler.create(options.compiler);
+    try {
+      let diskCache: DevelopmentDiskCache | undefined;
+      if (cache.mode === "disabled") await compiler.disableDevelopmentCache();
+      if (cache.mode === "disk") {
+        diskCache = new DevelopmentDiskCache(
+          manifest.path,
+          compiler.developmentCacheNamespace,
+          cache.directory,
+        );
+        for (const source of [manifest.path, ...manifest.units.values()]) {
+          if (
+            isDevelopmentCachePath(source, diskCache.directory) ||
+            isDevelopmentCachePath(diskCache.directory, source)
+          ) {
+            throw new Error(
+              `Development cache directory ${diskCache.directory} overlaps project source ${source}`,
+            );
+          }
+        }
+        await diskCache.load(compiler);
+      }
+      return new DevelopmentProject(manifest, compiler, cache.mode, diskCache);
+    } catch (error) {
+      compiler.destroy();
+      throw error;
+    }
+  }
+
+  isCachePath(path: string): boolean {
+    if (this.#diskCache === undefined) return false;
+    if (isDevelopmentCachePath(path, this.#diskCache.directory)) return true;
+    const projectDirectory = dirname(this.manifest.path);
+    return resolve(path) !== projectDirectory &&
+      isDevelopmentCachePath(path, projectDirectory) &&
+      isDevelopmentCachePath(this.#diskCache.directory, path);
   }
 
   async setOverlay(
@@ -109,6 +177,11 @@ export class DevelopmentProject {
         entryUnit: this.manifest.entryUnit,
         units: this.manifest.units,
       });
+      if (this.#diskCache !== undefined) {
+        await this.#diskCache.store(
+          await this.#compiler.takeDevelopmentCacheEntries(),
+        );
+      }
       const next = new Map(
         compiled.units.map((unit) => {
           let artifact: DevelopmentUnitArtifact;
@@ -197,6 +270,8 @@ export class DevelopmentProject {
         edges,
         durationMilliseconds: performance.now() - started,
         developmentProfile: compiled.developmentProfile,
+        work: compiled.work,
+        cache: this.#cacheReport(),
       });
       this.#state = {
         tag: "pending",
@@ -258,6 +333,17 @@ export class DevelopmentProject {
       );
     }
     return root;
+  }
+
+  #cacheReport(): DevelopmentCacheReport {
+    if (this.#diskCache !== undefined) return this.#diskCache.report();
+    return Object.freeze({
+      mode: this.#cacheMode,
+      loadedEntries: 0,
+      rejectedEntries: 0,
+      storedEntries: 0,
+      warnings: Object.freeze([]),
+    });
   }
 
   #pendingBuild(

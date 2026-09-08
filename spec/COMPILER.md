@@ -92,7 +92,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 6. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 7. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -109,6 +109,15 @@ source AST into a semantic session by shared Rust ownership and exports compact
 syntax snapshots on demand. The receiving session creates its own revision,
 configuration, checked facts, and artifacts; sharing the AST allocation grants
 no semantic cache authority. The graph-delta frame remains schema 3.
+
+ABI 7 adds opaque scalar graph-cache import/export and development work counters.
+Import admits disposable Rust graph memos; it cannot install checked modules or
+move an artifact transaction. Counters count residual function bodies actually
+specialized or restored, grouped by source module, and units actually emitted.
+Root export wrappers and fully static applications are outside these body counts.
+Counters describe the current request, including
+zero work on a closed-program cache hit; they are observations, not checked
+facts or cache authority.
 
 Host frame construction may use geometrically grown typed storage and bulk
 copies, but a finished frame owns its exact bytes independently of its inputs
@@ -821,6 +830,17 @@ belongs to another unit is refused because it would move a function value over
 the boundary. Each link carries one closed first-order signature derived from
 the checker facts. The splitter does not infer a replacement signature from
 backend layout.
+
+Development link names use lexical declaration/field addresses and closed
+signatures rather than byte offsets. Multiple instances of the same source
+closure have distinct specialization ordinals. Length changes or inserted
+unrelated named declarations therefore do not rename a later boundary. A changed
+specialization demand can conservatively rename links. Diagnostic spans remain
+source offsets; lexical addresses do not replace their evidence.
+
+Development mode may restore closed scalar call graphs under the admission and
+exact-prefix obligations in `INCREMENTAL.md` section 8.1. This memoization does
+not replace checking or change residual outlining.
 
 Production and development preparation use the same residual outlining rule. The
 splitter partitions the resulting graph; it does not cause additional closures

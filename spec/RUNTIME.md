@@ -100,7 +100,9 @@ A development Runtime-HIR module may contain `links` after whole-program
 specialization has closed every representation. Each link names a provider unit,
 a stable compiler-generated export name, and one existing closed signature. A
 `call.external` operation names that link instead of a local function.
-Production Runtime HIR has no links.
+Production Runtime HIR has no links. An emitted development unit includes its
+Wasm function imports whenever it has host imports or unit links. A unit whose
+only imports are development links uses the same imported-function index space.
 
 Splitting preserves the original direct-call observation. The provider wrapper
 executes the same residual function, and the consumer observes the same return,

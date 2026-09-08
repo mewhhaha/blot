@@ -6,11 +6,16 @@
 
 use super::{LexicalClosure, hir_error};
 use crate::diagnostic::Diagnostic;
-use crate::eval::{Context, EffectScope, ModuleInstanceScope, closure_free_names};
+use crate::eval::{
+    ApplicationRoot, ApplicationSite, CompilerApplication, Context, EffectScope,
+    ModuleInstanceScope, closure_free_names,
+};
 use crate::value::{
     ChoiceSource, Domain, EffectOperationOwnership, OrderedFields, RuntimeMeaning, RuntimeValue,
     Value, lookup, lookup_signature,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::mem::{Discriminant, discriminant};
 use std::rc::Rc;
@@ -22,8 +27,12 @@ pub(super) struct ResidualEnvironmentKey(Vec<Part>);
 // string or a hash. Scope values retain their revision-qualified identities.
 #[derive(Clone, PartialEq)]
 enum Part {
+    Source(String),
+    Body(String, crate::ast::ExpressionId),
+    SessionOnly,
     Value(Discriminant<Value>),
     Number(u64),
+    Variable(u32),
     Integer(num_bigint::BigInt),
     Text(String),
     Domain(Option<Domain>),
@@ -33,6 +42,350 @@ enum Part {
     Instances(Rc<ModuleInstanceScope>),
     Scope(Rc<EffectScope>),
     Ownership(EffectOperationOwnership),
+}
+
+#[derive(Serialize)]
+enum PortablePart<'a> {
+    Source(&'a str),
+    Body(&'a str, crate::ast::ExpressionId),
+    Value(Rc<str>),
+    Number(u64),
+    Variable(usize),
+    Integer(Vec<u8>),
+    Text(&'a str),
+    Domain(u8),
+    Closure(usize),
+    Reference(usize),
+    Instances([u8; 32]),
+    Scope([u8; 32]),
+}
+
+impl ResidualEnvironmentKey {
+    pub(super) fn portable(
+        &self,
+        context: &Rc<Context>,
+        signature: &Value,
+        checked_argument: Option<&Value>,
+        expected_result: Option<&Value>,
+        actual_evidence: Option<&Value>,
+    ) -> Result<Option<Vec<u8>>, Diagnostic> {
+        let stamp = context.residual_cache_effect_stamp();
+        let memo = context.residual_cache.borrow().registry.clone();
+        let registry = if let Some(memo) = memo.filter(|memo| memo.stamp == stamp) {
+            memo.evidence
+        } else {
+            let mut registry = Builder::new(context, &[]);
+            let mut supported = true;
+            for (owner, name, value) in context.residual_operator_extensions() {
+                registry.parts.push(Part::Source(owner));
+                registry.text(&name);
+                if !registry.value(&value)? {
+                    supported = false;
+                    break;
+                }
+            }
+            let evidence = if supported {
+                portable_evidence(context, registry.parts.iter(), HashMap::new())?.map(Rc::new)
+            } else {
+                None
+            };
+            context.residual_cache.borrow_mut().registry = Some(RegistryMemo {
+                stamp,
+                evidence: evidence.clone(),
+            });
+            evidence
+        };
+        let Some(registry) = registry else {
+            return Ok(None);
+        };
+        let mut extra = Builder::new(context, &[]);
+        if !extra.value(signature)?
+            || !extra.optional_value(checked_argument)?
+            || !extra.optional_value(expected_result)?
+            || !extra.optional_value(actual_evidence)?
+        {
+            return Ok(None);
+        }
+        let Some(evidence) = portable_evidence(
+            context,
+            self.0.iter().chain(&extra.parts),
+            registry.variables.clone(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let mut digest = Sha256::new();
+        digest.update(registry.digest);
+        digest.update(evidence.digest);
+        Ok(Some(digest.finalize().to_vec()))
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct RegistryMemo {
+    pub(super) stamp: (u32, u64),
+    evidence: Option<Rc<PortableEvidence>>,
+}
+
+struct PortableEvidence {
+    digest: [u8; 32],
+    variables: HashMap<u32, usize>,
+}
+
+fn portable_evidence<'a>(
+    context: &Rc<Context>,
+    parts: impl Iterator<Item = &'a Part>,
+    mut variables: HashMap<u32, usize>,
+) -> Result<Option<PortableEvidence>, Diagnostic> {
+    let modules = context.modules.borrow();
+    let mut sources = std::collections::BTreeSet::new();
+    let mut transitive = Vec::new();
+    let mut encoded = Vec::new();
+    let mut tags = HashMap::<Discriminant<Value>, Rc<str>>::new();
+    let mut instances = HashMap::new();
+    let mut scopes = HashMap::new();
+    for part in parts {
+        let value = match part {
+            Part::SessionOnly => return Ok(None),
+            Part::Body(module, body) => {
+                let loaded = modules
+                    .get(module)
+                    .ok_or_else(|| hir_error("A residual cache body lost its module."))?;
+                let mut bodies = loaded.scalar_cache_bodies.borrow_mut();
+                let portable = *bodies.entry(*body).or_insert_with(|| {
+                    crate::source_identity::expression_subtree(&loaded.module, *body)
+                        .into_iter()
+                        .all(|expression| {
+                            match &loaded.module.arena.expressions[expression.0 as usize] {
+                                crate::ast::Expression::Intrinsic { name, .. } => {
+                                    portable_primitive(name)
+                                }
+                                _ => true,
+                            }
+                        })
+                });
+                if !portable {
+                    return Ok(None);
+                }
+                transitive.push(module.clone());
+                PortablePart::Body(module, *body)
+            }
+            Part::Source(module) => {
+                transitive.push(module.clone());
+                PortablePart::Source(module)
+            }
+            Part::Value(tag) => PortablePart::Value(
+                tags.entry(*tag)
+                    .or_insert_with(|| Rc::from(format!("{tag:?}")))
+                    .clone(),
+            ),
+            Part::Number(number) => PortablePart::Number(*number),
+            Part::Variable(variable) => {
+                let next = variables.len();
+                let index = variables.entry(*variable).or_insert(next);
+                PortablePart::Variable(*index)
+            }
+            Part::Integer(number) => PortablePart::Integer(number.to_signed_bytes_le()),
+            Part::Text(text) => PortablePart::Text(text),
+            Part::Domain(domain) => PortablePart::Domain(match domain {
+                None => 0,
+                Some(Domain::Int) => 1,
+                Some(Domain::Text) => 2,
+                Some(Domain::Float) => 3,
+                Some(Domain::Float32) => 4,
+            }),
+            Part::Closure(index) => PortablePart::Closure(*index),
+            Part::Reference(index) => PortablePart::Reference(*index),
+            Part::Instances(scope) => {
+                let pointer = Rc::as_ptr(scope);
+                let digest = if let Some(digest) = instances.get(&pointer) {
+                    *digest
+                } else {
+                    let Some(encoded) = (PortableProvenance {
+                        remaining: 256,
+                        sources: &mut sources,
+                    })
+                    .instances(scope) else {
+                        return Ok(None);
+                    };
+                    let digest = Sha256::digest(
+                        rmp_serde::to_vec(&encoded).expect("portable instance serialization"),
+                    )
+                    .into();
+                    instances.insert(pointer, digest);
+                    digest
+                };
+                PortablePart::Instances(digest)
+            }
+            Part::Scope(scope) => {
+                let pointer = Rc::as_ptr(scope);
+                let digest = if let Some(digest) = scopes.get(&pointer) {
+                    *digest
+                } else {
+                    let Some(encoded) = (PortableProvenance {
+                        remaining: 256,
+                        sources: &mut sources,
+                    })
+                    .scope(scope, 0) else {
+                        return Ok(None);
+                    };
+                    let digest = Sha256::digest(
+                        rmp_serde::to_vec(&encoded).expect("portable scope serialization"),
+                    )
+                    .into();
+                    scopes.insert(pointer, digest);
+                    digest
+                };
+                PortablePart::Scope(digest)
+            }
+            Part::Runtime(..) | Part::Ownership(_) => return Ok(None),
+        };
+        encoded.push(value);
+    }
+    let mut visited = std::collections::HashSet::new();
+    while let Some(path) = transitive.pop() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let loaded = modules
+            .get(&path)
+            .ok_or_else(|| hir_error("A residual cache dependency lost its module."))?;
+        transitive.extend(loaded.imports.values().cloned());
+        sources.insert(path);
+    }
+    let sources = sources
+        .into_iter()
+        .map(|path| {
+            let loaded = &modules[&path];
+            let digest = loaded.scalar_cache_source_digest.get_or_init(|| {
+                let includes = loaded
+                    .includes
+                    .iter()
+                    .map(|(specifier, included)| (specifier, (&included.path, &included.text)))
+                    .collect::<BTreeMap<_, _>>();
+                let arena = &loaded.module.arena;
+                let synthetic = [
+                    &arena.synthetic_expressions,
+                    &arena.synthetic_closure_bodies,
+                    &arena.synthetic_runtime_type_expressions,
+                    &arena.synthetic_static_closure_bodies,
+                ]
+                .map(|expressions| {
+                    let mut ids = expressions
+                        .iter()
+                        .map(|expression| expression.0)
+                        .collect::<Vec<_>>();
+                    ids.sort_unstable();
+                    ids
+                });
+                let bytes = serde_json::to_vec(&(
+                    loaded.module.as_ref(),
+                    synthetic,
+                    &loaded.imports,
+                    includes,
+                ))
+                .expect("checked module input serialization");
+                Sha256::digest(bytes).into()
+            });
+            (path, *digest)
+        })
+        .collect::<BTreeMap<_, _>>();
+    rmp_serde::to_vec(&(encoded, sources))
+        .map(|bytes| {
+            Some(PortableEvidence {
+                digest: Sha256::digest(bytes).into(),
+                variables,
+            })
+        })
+        .map_err(|error| hir_error(&format!("Residual cache key encoding failed: {error}")))
+}
+
+// These are administrative addresses only for the non-generative scalar
+// cache. ModuleRevision itself deliberately has no portable serialization.
+struct PortableProvenance<'a> {
+    remaining: usize,
+    sources: &'a mut std::collections::BTreeSet<String>,
+}
+
+impl PortableProvenance<'_> {
+    fn scope(&mut self, scope: &EffectScope, depth: usize) -> Option<serde_json::Value> {
+        if depth > 32 {
+            return None;
+        }
+        let mut frames = Vec::new();
+        for frame in scope {
+            let application = self.site(&frame.application, depth + 1)?;
+            let creation = self.scope(&frame.creation_scope, depth + 1)?;
+            frames.push(serde_json::json!([application, creation]));
+        }
+        Some(serde_json::json!(frames))
+    }
+
+    fn instances(&mut self, instances: &ModuleInstanceScope) -> Option<serde_json::Value> {
+        let mut encoded = Vec::new();
+        for instance in instances {
+            self.sources
+                .insert(instance.imported.source_path().to_owned());
+            encoded.push(serde_json::json!([
+                self.site(&instance.application, 0)?,
+                instance.imported.source_path()
+            ]));
+        }
+        Some(serde_json::json!(encoded))
+    }
+
+    fn site(&mut self, site: &ApplicationSite, depth: usize) -> Option<serde_json::Value> {
+        if depth > 32 || self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        let revision = match &site.root {
+            ApplicationRoot::Expression { revision, .. }
+            | ApplicationRoot::Declaration { revision, .. } => revision,
+        };
+        self.sources.insert(revision.source_path().to_owned());
+        let root = match &site.root {
+            ApplicationRoot::Expression {
+                revision,
+                expression,
+            } => serde_json::json!(["expression", revision.source_path(), expression]),
+            ApplicationRoot::Declaration {
+                revision,
+                declaration,
+            } => serde_json::json!(["declaration", revision.source_path(), declaration]),
+        };
+        let mut steps = Vec::new();
+        for step in &site.compiler_steps {
+            if self.remaining == 0 {
+                return None;
+            }
+            self.remaining -= 1;
+            steps.push(match step {
+                CompilerApplication::ForceEffectDeclaration => {
+                    serde_json::json!(["effect-declaration"])
+                }
+                CompilerApplication::ForallBody => serde_json::json!(["forall-body"]),
+                CompilerApplication::IncludeParser => serde_json::json!(["include-parser"]),
+                CompilerApplication::HandleThunk => serde_json::json!(["handle-thunk"]),
+                CompilerApplication::HandleReturn => serde_json::json!(["handle-return"]),
+                CompilerApplication::HandleOperation { operation, request } => serde_json::json!([
+                    "handle-operation",
+                    operation,
+                    self.site(request, depth + 1)?
+                ]),
+                CompilerApplication::RequirementPredicate => {
+                    serde_json::json!(["requirement-predicate"])
+                }
+                CompilerApplication::RecognitionArgument { probe, position } => {
+                    serde_json::json!(["recognition-argument", probe, position])
+                }
+                CompilerApplication::RuntimeExportParameter(index) => {
+                    serde_json::json!(["export-parameter", index])
+                }
+            });
+        }
+        Some(serde_json::json!([root, steps]))
+    }
 }
 
 pub(super) fn residual_environment_key(
@@ -142,6 +495,8 @@ impl<'a> Builder<'a> {
         let index = self.closures.len();
         self.closures.insert(identity, index);
         self.parts.push(Part::Closure(index));
+        self.parts
+            .push(Part::Body(closure.module.to_owned(), closure.body));
         self.text(closure.module);
         self.number(closure.parameter.0 as u64);
         self.number(closure.body.0 as u64);
@@ -164,7 +519,7 @@ impl<'a> Builder<'a> {
         }
         self.number(substitutions.len() as u64);
         for (variable, value) in substitutions {
-            self.number(variable as u64);
+            self.parts.push(Part::Variable(variable));
             if !self.value(&value)? {
                 return Ok(false);
             }
@@ -222,19 +577,23 @@ impl<'a> Builder<'a> {
             }
             Value::Text(value) | Value::OpaqueType(value) => self.text(value),
             Value::Unit | Value::Unbounded => {}
-            Value::TypeVariable(variable) => self.number(*variable as u64),
+            Value::TypeVariable(variable) => self.parts.push(Part::Variable(*variable)),
             Value::Shape(fields) => return self.fields(fields),
             Value::Array(values) => return self.values(values.iter()),
             Value::Union(values) => return self.values(values.iter()),
             Value::IndexedStep { elements } => return self.values(elements.iter()),
             Value::Scratch { values, capacity } => {
+                self.parts.push(Part::SessionOnly);
                 self.number(*capacity as u64);
                 return self.values(values.iter());
             }
             Value::RegionType(value)
             | Value::ScratchType(value)
-            | Value::EmptyArray { element: value }
-            | Value::DeferredScratch { capacity: value } => return self.value(value),
+            | Value::EmptyArray { element: value } => return self.value(value),
+            Value::DeferredScratch { capacity } => {
+                self.parts.push(Part::SessionOnly);
+                return self.value(capacity);
+            }
             Value::Tag { name, payload } => {
                 self.text(name);
                 return self.optional_value(payload.as_deref());
@@ -244,6 +603,9 @@ impl<'a> Builder<'a> {
                 arity,
                 applied,
             } => {
+                if !portable_primitive(name) {
+                    self.parts.push(Part::SessionOnly);
+                }
                 self.text(name);
                 self.number(*arity as u64);
                 return self.values(applied.iter());
@@ -262,14 +624,14 @@ impl<'a> Builder<'a> {
                 self.number(u64::from(*deferred));
                 self.number(u64::from(effect_tail.is_some()));
                 if let Some(tail) = effect_tail {
-                    self.number(*tail as u64);
+                    self.parts.push(Part::Variable(*tail));
                 }
                 return Ok(self.value(domain)?
                     && self.value(codomain)?
                     && self.values(effects.iter())?);
             }
             Value::Forall { variable, body } => {
-                self.number(*variable as u64);
+                self.parts.push(Part::Variable(*variable));
                 return self.value(body);
             }
             Value::Effect {
@@ -279,6 +641,7 @@ impl<'a> Builder<'a> {
                 operation_ownership,
                 host,
             } => {
+                self.parts.push(Part::SessionOnly);
                 self.number(*id as u64);
                 self.text(name);
                 self.number(u64::from(*host));
@@ -300,7 +663,10 @@ impl<'a> Builder<'a> {
             Value::Extended { inner, members } => {
                 return Ok(self.value(inner)? && self.fields(members)?);
             }
-            Value::ModuleClosure { module } => self.text(module),
+            Value::ModuleClosure { module } => {
+                self.parts.push(Part::SessionOnly);
+                self.text(module);
+            }
             Value::Runtime(value) => return self.runtime(value),
             Value::Closure {
                 module,
@@ -404,6 +770,11 @@ impl<'a> Builder<'a> {
         }
         Ok(true)
     }
+}
+
+fn portable_primitive(name: &str) -> bool {
+    !matches!(name, "@effect" | "@effect.host" | "@handle" | "@import")
+        && !name.starts_with("@continuation.")
 }
 
 #[cfg(test)]

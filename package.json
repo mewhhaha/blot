@@ -30,6 +30,7 @@
   "scripts": {
     "blot": "tsx src/node/cli.ts",
     "check": "tsx src/node/cli.ts check examples/minimal.blot",
+    "example:hot-reload": "node --import tsx case-studies/hot-reload/serve.ts",
     "test": "pnpm test:node && pnpm test:regression",
     "test:node": "tsx --test --test-timeout=300000 src/node/*.test.ts",
     "test:v8-wasm": "tsx --test src/node/v8_wasm.test.ts",
@@ -52,6 +53,7 @@
     "benchmark:compiler-soak": "tsx experiments/compiler-soak.ts",
     "benchmark:compiler-profiles": "tsx experiments/compiler-profile-matrix.ts",
     "benchmark:development": "deno run --allow-read --allow-write --allow-env --allow-sys=cpus --allow-run=cat,deno,git experiments/development-bench/benchmark.ts",
+    "benchmark:development-active": "deno run --allow-read --allow-write --allow-env --allow-sys=cpus --allow-run=cat,deno,git experiments/development-bench/active.ts",
     "benchmark:development-profile": "deno run --allow-read --allow-write --allow-env --allow-sys=cpus --allow-run=cat,deno,git experiments/development-bench/benchmark.ts --development-profile --report-only",
     "compiler:build": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts",
     "compiler:build-development-profile": "deno run --allow-read --allow-write --allow-run=cargo,git,rustc --allow-env scripts/build_compiler.ts --development-profile",

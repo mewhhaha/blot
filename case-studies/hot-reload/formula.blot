@@ -1,0 +1,6 @@
+open import "blot:prelude"
+
+const score :: Int -> Int
+const score = fn quantity => quantity * 2
+
+return { .score = score; }

@@ -346,7 +346,13 @@ cross that link: unit, integers, floats, booleans, text, arrays, records,
 variants, and seals. Functions, compiler-private storage or indirection,
 continuations, and unresolved source effects cannot cross a reload boundary. The
 development target refuses such a checked program rather than assigning it new
-source semantics.
+source semantics. Unit links do not require a host effect; a pure program may
+cross a reload boundary using only ordinary imported functions.
+
+Development caching preserves these same checking and execution rules. It may
+reuse a previously specialized closed scalar call graph, including generic
+instances and recursion, after its current source inputs have been checked.
+Restarting a development server does not restore a browser's live module state.
 
 Each unit has independent runtime memory and module state. Activating a changed
 unit creates a fresh instance, so its state resets. An unchanged unit retains

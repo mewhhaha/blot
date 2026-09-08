@@ -60,7 +60,10 @@ import {
   type CompilerTypeFact,
   CompilerWasm,
   type CompilerWork,
+  type DevelopmentWork,
 } from "./wasm.ts";
+
+export type { DevelopmentWork } from "./wasm.ts";
 
 const bundledCompiler = new URL(
   "../../generated/compiler/compiler.wasm",
@@ -76,6 +79,7 @@ const bundledPreludeSnapshot = new URL(
 );
 
 interface BundledCompilerDistribution {
+  readonly compilerDigest: string;
   readonly module: WebAssembly.Module;
   readonly preludeSnapshot: Uint8Array;
   readonly preludeSnapshotDigest: string;
@@ -140,6 +144,7 @@ export type DevelopmentCompilationUnit =
   | (DevelopmentUnitIdentity & { readonly artifactSource: "unit-cache" });
 
 export interface DevelopmentCompilation {
+  readonly work: DevelopmentWork;
   readonly revision: string;
   readonly entryUnit: string;
   readonly units: readonly DevelopmentCompilationUnit[];
@@ -233,6 +238,7 @@ interface InspectedSource {
 
 /** The sole high-level host for Blot's Rust/Wasm semantic compiler. */
 export class Compiler implements CompilerHost {
+  readonly developmentCacheNamespace: string;
   readonly #compiler: CompilerWasm;
   readonly #handle: number;
   readonly #inspectionHandle: number;
@@ -254,7 +260,9 @@ export class Compiler implements CompilerHost {
     compiler: CompilerWasm,
     preludeSnapshot: Uint8Array,
     preludeSnapshotDigest: string,
+    cacheNamespace: string,
   ) {
+    this.developmentCacheNamespace = cacheNamespace;
     this.#compiler = compiler;
     this.#handle = compiler.createCompilerSession();
     this.#inspectionHandle = compiler.createCompilerSession();
@@ -301,6 +309,7 @@ export class Compiler implements CompilerHost {
     let preludeSnapshot = options.preludeSnapshot;
     let preludeSnapshotDigest: string | undefined;
     let compilerModule: WebAssembly.Module | undefined;
+    let compilerDigest: string;
     if (wasm === undefined) {
       if (bundledCompilerDistribution === undefined) {
         bundledCompilerDistribution = (async () => {
@@ -324,6 +333,7 @@ export class Compiler implements CompilerHost {
           const [, module] = await Promise.all([validation, compilation]);
           return {
             module,
+            compilerDigest: manifest.sha256,
             preludeSnapshot: prelude,
             preludeSnapshotDigest: digest,
           };
@@ -332,6 +342,7 @@ export class Compiler implements CompilerHost {
       try {
         const distribution = await bundledCompilerDistribution;
         compilerModule = distribution.module;
+        compilerDigest = distribution.compilerDigest;
         preludeSnapshot = distribution.preludeSnapshot;
         preludeSnapshotDigest = distribution.preludeSnapshotDigest;
       } catch (error) {
@@ -344,6 +355,8 @@ export class Compiler implements CompilerHost {
           ),
         );
       }
+    } else {
+      compilerDigest = await sha256(wasm);
     }
     if (preludeSnapshot === undefined) {
       throw new CompilerInvariantFailure(
@@ -369,6 +382,14 @@ export class Compiler implements CompilerHost {
         compiler,
         preludeSnapshot,
         preludeSnapshotDigest,
+        await sha256(new TextEncoder().encode(JSON.stringify({
+          schema: "blot-development-cache",
+          version: 1,
+          compiler: compilerDigest,
+          prelude: preludeSnapshotDigest,
+          hostAbi: COMPILER_HOST_ABI_VERSION,
+          target: resolveTargetPolicy(options.targetPolicy),
+        }))),
       );
     } catch (error) {
       throw new CompilerInvariantFailure("compiler initialization", error);
@@ -605,6 +626,36 @@ export class Compiler implements CompilerHost {
     });
   }
 
+  async disableDevelopmentCache(): Promise<void> {
+    await this.#request(() => {
+      this.#compiler.disableDevelopmentCache(this.#handle);
+      return Promise.resolve();
+    });
+  }
+
+  async takeDevelopmentCacheEntries(): Promise<readonly Uint8Array[]> {
+    return await this.#request(() =>
+      Promise.resolve(
+        this.#compiler.takeDevelopmentCacheEntries(this.#handle),
+      )
+    );
+  }
+
+  async importDevelopmentCacheEntry(
+    bytes: Uint8Array,
+  ): Promise<
+    { readonly accepted: true } | {
+      readonly accepted: false;
+      readonly reason: string;
+    }
+  > {
+    return await this.#request(() =>
+      Promise.resolve(
+        this.#compiler.importDevelopmentCacheEntry(this.#handle, bytes),
+      )
+    );
+  }
+
   async compileDevelopment(
     request: DevelopmentCompilationRequest,
   ): Promise<DevelopmentCompilation> {
@@ -725,6 +776,7 @@ export class Compiler implements CompilerHost {
         units: artifacts,
         edges,
         developmentProfile: result.developmentProfile,
+        work: result.work,
       };
     });
   }

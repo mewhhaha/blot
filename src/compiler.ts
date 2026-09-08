@@ -15,12 +15,16 @@ export {
   type DevelopmentMemoryProfile,
   type DevelopmentUnitArtifact,
   type DevelopmentUnitIdentity,
+  type DevelopmentWork,
   type EvaluatedModule,
   explanationAt,
 } from "./compiler/session.ts";
 export {
   type DevelopmentBuild,
+  type DevelopmentCacheOptions,
+  type DevelopmentCacheReport,
   DevelopmentProject,
+  type DevelopmentProjectOptions,
   type RetainedDevelopmentUnit,
 } from "./development.ts";
 export {

@@ -227,7 +227,9 @@ async function lintFiles(
 }
 
 async function watchDevelopmentProject(manifestPath: string): Promise<void> {
-  let project = await DevelopmentProject.create(manifestPath);
+  let project = await DevelopmentProject.create(manifestPath, {
+    cache: { mode: "disk" },
+  });
   const projectRoot = dirname(project.manifest.path);
   const cancellation = new AbortController();
   const stop = () => cancellation.abort();
@@ -239,6 +241,10 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
       signal: cancellation.signal,
     });
     for await (const change of changes) {
+      if (
+        change.filename !== null &&
+        project.isCachePath(resolve(projectRoot, change.filename))
+      ) continue;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
       try {
         let manifestChanged = false;
@@ -247,7 +253,9 @@ async function watchDevelopmentProject(manifestPath: string): Promise<void> {
             project.manifest.path;
         }
         if (manifestChanged) {
-          const replacement = await DevelopmentProject.create(manifestPath);
+          const replacement = await DevelopmentProject.create(manifestPath, {
+            cache: { mode: "disk" },
+          });
           try {
             await reportDevelopmentBuild(replacement);
           } catch (error) {
@@ -279,6 +287,7 @@ async function reportDevelopmentBuild(
 ): Promise<void> {
   const build = await project.prepareBuild();
   try {
+    for (const warning of build.cache.warnings) console.warn(warning);
     const changed = build.changedUnits.map((unit) => unit.name).join(", ");
     const retained = build.retainedUnits.map((unit) => unit.name).join(", ");
     const removed = build.removedUnits.join(", ");

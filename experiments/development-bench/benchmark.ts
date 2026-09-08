@@ -45,7 +45,7 @@ try {
   });
   const project = await DevelopmentProject.create(
     workload.manifestPath,
-    compilerOptions,
+    { compiler: compilerOptions },
   );
   const runtime = new DevelopmentRuntime(() => ({
     "blot:host/Source": { value: () => 10n },
