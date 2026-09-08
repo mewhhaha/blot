@@ -8,10 +8,10 @@
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
 | Compiler-host ABI | 7 |
-| Checked-module certificate | 18 |
-| Module snapshot | 2 |
-| Value capsule | 4 |
-| Runtime HIR | 11 |
+| Checked-module certificate | 19 |
+| Module snapshot | 3 |
+| Value capsule | 5 |
+| Runtime HIR | 12 |
 | Public ABI | 3.0 |
 
 ## Supported public values

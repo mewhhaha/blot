@@ -13,7 +13,7 @@ use wasm_encoder::{
 use wasmparser::{BinaryReader, FunctionBody, Operator};
 
 mod boundary_validation;
-pub(crate) mod suspension;
+mod suspension;
 mod text_search;
 
 use crate::hir::{
@@ -519,7 +519,8 @@ fn build_manifest(
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
 ) -> Result<AbiManifest, String> {
-    let suspending = suspension::functions(module);
+    let plan = crate::suspension::SuspensionPlan::new(module);
+    let suspending = &plan.suspending;
     let mut exports = Vec::new();
     for exported in &module.exports {
         match exported {
@@ -1775,7 +1776,8 @@ fn emit_dynamic_module(
         i64_to_text: i64_to_text_index,
     };
 
-    let suspending = suspension::functions(module);
+    let plan = crate::suspension::SuspensionPlan::new(module);
+    let suspending = &plan.suspending;
     let internally_emitted = internally_emitted_runtime_function_ids(module);
     let mut runtime_function_indices = HashMap::new();
     let internal_functions = module
@@ -1834,7 +1836,7 @@ fn emit_dynamic_module(
         dynamic_helpers,
         &static_data,
         &runtime_function_indices,
-        &suspending,
+        &plan,
         &mut types,
         &mut functions,
         &mut code,

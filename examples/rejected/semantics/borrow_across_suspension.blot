@@ -1,0 +1,9 @@
+open import "blot:prelude"
+
+const Device = @effect.host { .read = Effect.suspends (Int -> Int); }
+
+const run = fn &values => do:
+  use answer <- Device.read 1
+  return Array.length (&values) + answer
+
+return { .run = run; }

@@ -222,7 +222,7 @@ export class SparkRuntime {
       failures: new Set(),
       phase: "open",
     };
-    let failure: { readonly cause: unknown } | undefined;
+    let outcome: { readonly value: RuntimeValue } | { readonly cause: unknown };
     try {
       moveHostCallback(body, lifetime);
       const handle = this.#scopes.grant(lifetime, scope);
@@ -241,24 +241,24 @@ export class SparkRuntime {
       if (scope.failures.size > 0) {
         throw new AggregateError(scope.failures, "Spark scope failed");
       }
-      return result;
+      outcome = { value: result };
     } catch (cause) {
-      failure = { cause };
-      throw cause;
-    } finally {
-      scope.phase = "closed";
-      try {
-        await lifetime.close();
-      } catch (error) {
-        if (failure !== undefined) {
-          throw new AggregateError(
-            [failure.cause, error],
-            "Spark scope cleanup failed",
-          );
-        }
-        throw error;
-      }
+      outcome = { cause };
     }
+    scope.phase = "closed";
+    try {
+      await lifetime.close();
+    } catch (error) {
+      if ("cause" in outcome) {
+        throw new AggregateError(
+          [outcome.cause, error],
+          "Spark scope cleanup failed",
+        );
+      }
+      throw error;
+    }
+    if ("cause" in outcome) throw outcome.cause;
+    return outcome.value;
   }
 
   #assertOpen(scope: SparkScope): void {

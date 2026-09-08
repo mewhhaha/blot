@@ -125,20 +125,19 @@ export class HostScope {
         await finalize(masked);
       } catch (cause) {
         failure = { cause };
-        throw cause;
-      } finally {
-        try {
-          await masked.close();
-        } catch (error) {
-          if (failure !== undefined) {
-            throw new AggregateError(
-              [failure.cause, error],
-              "masked cleanup failed",
-            );
-          }
-          throw error;
-        }
       }
+      try {
+        await masked.close();
+      } catch (error) {
+        if (failure !== undefined) {
+          throw new AggregateError(
+            [failure.cause, error],
+            "masked cleanup failed",
+          );
+        }
+        throw error;
+      }
+      if (failure !== undefined) throw failure.cause;
     });
   }
 
@@ -149,7 +148,8 @@ export class HostScope {
   }
 
   isWithin(ancestor: HostScope): boolean {
-    let scope: HostScope | undefined = this;
+    if (this === ancestor) return true;
+    let scope = this.#parent;
     while (scope !== undefined) {
       if (scope === ancestor) return true;
       scope = scope.#parent;
@@ -350,11 +350,7 @@ export class HostScope {
     ) {
       throw new TypeError("resource scope has ended");
     }
-    let scope: HostScope | undefined = this;
-    while (scope !== undefined) {
-      if (scope === lease.owner) return;
-      scope = scope.#parent;
-    }
+    if (this.isWithin(lease.owner)) return;
     throw new TypeError("resource cannot escape its owning scope");
   }
 }

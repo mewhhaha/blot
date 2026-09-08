@@ -48,7 +48,7 @@ test("masked finalizers share reverse ordering with resource disposal and aggreg
     assert.equal(masked.lift("CleanupLease", token), first);
     assert.equal(masked.signal.aborted, false);
     trace.push("finalize first");
-    throw firstFailure;
+    await Promise.reject(firstFailure);
   });
   const second = leases.grant(root, "second", () => {
     trace.push("release second");
@@ -149,7 +149,7 @@ test("Blot receives explicit opaque I/O capabilities and closes acquired resourc
       assert.equal(typeof path, "string");
       return streams.acquire(scope, async () => {
         trace.push("opened");
-        return connection.prefix + String(path);
+        return await Promise.resolve(connection.prefix + String(path));
       }, async () => {
         await Promise.resolve();
         trace.push("stream closed");
@@ -157,7 +157,7 @@ test("Blot receives explicit opaque I/O capabilities and closes acquired resourc
     };
     const read: HostOperation = async (_context, stream) => {
       trace.push("read");
-      return streams.get(stream);
+      return await Promise.resolve(streams.get(stream));
     };
     const hosted = await instantiateArtifact(
       artifact,
@@ -306,7 +306,7 @@ let run = fn () => do:
 return run
 `,
     );
-    const open: HostOperation = async ({ scope }) =>
+    const open: HostOperation = ({ scope }) =>
       streams.grant(scope, "stream", () => {
         trace.push("closed");
       });

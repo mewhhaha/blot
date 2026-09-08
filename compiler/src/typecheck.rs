@@ -2238,7 +2238,7 @@ fn copy_boundary_type(
                     | FlatTypeNode::Array(_)
                     | FlatTypeNode::Region(_)
                     | FlatTypeNode::Scratch(_)
-                    | FlatTypeNode::Resource { payload: _, .. }
+                    | FlatTypeNode::Resource { .. }
                     | FlatTypeNode::OpenEffects { .. } => {}
                 }
                 children.clear();
@@ -4186,14 +4186,39 @@ impl Checker {
                 .flatten()
                 .map(|(body, type_)| (*body, type_.clone())),
         );
+        let callees = module
+            .arena
+            .expressions
+            .iter()
+            .filter_map(|expression| {
+                if let Expression::Apply { function, .. } = expression {
+                    Some(*function)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>();
         let expression_types = self
             .analysis_expression_types
             .borrow()
             .module(path)
             .into_iter()
             .flatten()
-            .filter(|(_, type_)| ownership_uses_expression_type(type_))
-            .map(|(expression, type_)| (*expression, self.settle(type_.clone(), true)))
+            .filter(|(expression, type_)| {
+                callees.contains(expression) || ownership_uses_expression_type(type_)
+            })
+            .map(|(expression, type_)| {
+                let mut settled = self.settle(type_.clone(), true);
+                if callees.contains(expression) && matches!(settled, Type::Bottom | Type::Top) {
+                    // An inferred callback parameter can have only an upper
+                    // call constraint. Its positive view has no effect facts.
+                    let upper = self.settle(type_.clone(), false);
+                    if matches!(upper, Type::Function { .. }) {
+                        settled = upper;
+                    }
+                }
+                (*expression, settled)
+            })
             .collect::<HashMap<_, _>>();
         let ownership = crate::ownership::check(
             path,
@@ -12266,7 +12291,7 @@ fn ownership_uses_expression_type(type_: &Type) -> bool {
         | Type::RecordUpdate { .. }
         | Type::Region(_)
         | Type::Scratch(_)
-        | Type::Resource { payload: _, .. }
+        | Type::Resource { .. }
         | Type::Variant { .. }
         | Type::Effects(_)
         | Type::OpenEffects { .. }
@@ -12747,7 +12772,7 @@ fn expression_field_path(module: &Module, expression: ExpressionId) -> Option<Ve
 fn instantiate_effect_identities(type_: &Type, replacements: &BTreeMap<u32, Value>) -> Type {
     let label = |label: &String| {
         let replacement = label
-            .splitn(3, ':')
+            .split(':')
             .nth(1)
             .and_then(|id| id.parse::<u32>().ok())
             .and_then(|id| replacements.get(&id))
@@ -12762,7 +12787,7 @@ fn instantiate_effect_identities(type_: &Type, replacements: &BTreeMap<u32, Valu
         },
         Type::Opaque(name) if name.starts_with("Effect:") => {
             let effect = name
-                .splitn(3, ':')
+                .split(':')
                 .nth(1)
                 .and_then(|id| id.parse::<u32>().ok())
                 .and_then(|id| replacements.get(&id));
@@ -13063,7 +13088,7 @@ fn coverage_matrix(rows: &[CoverageRow], types: &[Type]) -> bool {
         | Type::Array(_)
         | Type::Region(_)
         | Type::Scratch(_)
-        | Type::Resource { payload: _, .. }
+        | Type::Resource { .. }
         | Type::Effects(_)
         | Type::OpenEffects { .. }
         | Type::Opaque(_)

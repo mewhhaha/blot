@@ -2501,6 +2501,24 @@ mod tests {
     const CLOSURE_PROVENANCE_SOURCE: &str = "const make = fn captured => fn constructor => constructor { .raise = @type.unit -> @type.unit; }\n\u{e000}const first = make 1\n\u{e000}const second = make 2\n\u{e000}return { .first = first; .second = second; }\u{e000}\n";
 
     #[test]
+    fn borrowed_callback_requires_synchronous_effects() {
+        let mut session = CompilerSession::default();
+        let path = "borrow-suspension.blot";
+        let source = "const run = fn read => fn &values => do:\n  use answer <- read 1\n  return @array.len (&values)\nreturn run\n";
+        session
+            .add_source(path.to_owned(), source.encode_utf16().collect())
+            .unwrap();
+        session
+            .configure_module(path, BTreeMap::new(), BTreeMap::new())
+            .unwrap();
+        let checked = session.check_module(path);
+        assert_eq!(
+            checked["diagnostic"]["code"], "BLOT_BORROW_ACROSS_SUSPENSION",
+            "{checked}"
+        );
+    }
+
+    #[test]
     fn source_ast_is_shared_between_inspection_and_semantic_sessions() {
         const PATH: &str = "shared-source.blot";
         let mut inspection = CompilerSession::default();

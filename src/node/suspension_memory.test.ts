@@ -7,6 +7,67 @@ import {
   requiredMemory,
 } from "../abi_values.ts";
 
+test("concurrent frames retain their arena until the last caller leaves", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = "/tmp/blot-suspension-arena.blot";
+    await compiler.checkSource(
+      path,
+      `open import "blot:prelude"
+const Counter = @effect.host { .next = Effect.suspends (Int -> Int); }
+const run = fn total => Counter.next total
+return { .run = run; }
+`,
+    );
+    const artifact = await compiler.compile(path);
+    const manifest = decodeManifest(artifact.manifestBytes);
+    const instance = await WebAssembly.instantiate(
+      await WebAssembly.compile(Uint8Array.from(artifact.wasm)),
+      {
+        "blot:host/Counter": {
+          next() {
+            throw new Error("unexpected direct import");
+          },
+        },
+      },
+    );
+    const invoke = (name: string, ...arguments_: (number | bigint)[]) =>
+      Number(requiredFunction(instance, name)(...arguments_));
+    const memory = requiredMemory(instance, manifest);
+    const exported = manifest.exports.find((entry) =>
+      entry.sourceName === "run"
+    );
+    assert(exported !== undefined && exported.name !== null);
+    invoke("cabi_enter");
+    const checkpoint = invoke("cabi_realloc", 0, 0, 16, 16);
+    const first = invoke(exported.name, 10n);
+    const second = invoke(exported.name, 20n);
+    assert.equal(invoke("blot:poll", first, 1024), 1);
+    assert.equal(invoke("blot:poll", second, 1024), 1);
+    const pendingResult = new DataView(memory.buffer).getUint32(
+      first + 16,
+      true,
+    );
+    invoke("blot:cancel", second);
+    invoke("blot:release", second);
+    const retained = invoke("cabi_realloc", 0, 0, 16, 16);
+    assert.ok(retained > first && retained > second);
+    new DataView(memory.buffer).setBigInt64(pendingResult, 42n, true);
+    invoke("blot:resume", first);
+    assert.equal(invoke("blot:poll", first, 1024), 2);
+    const view = new DataView(memory.buffer);
+    assert.equal(view.getBigInt64(view.getUint32(first + 20, true), true), 42n);
+    invoke("blot:release", first);
+    assert.ok(invoke("cabi_realloc", 0, 0, 16, 16) > retained);
+    invoke("cabi_leave");
+    invoke("cabi_enter");
+    assert.equal(invoke("cabi_realloc", 0, 0, 16, 16), checkpoint);
+    invoke("cabi_leave");
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("a scalar event fold reuses request slots over 100000 suspensions", async () => {
   const compiler = await Compiler.create();
   try {

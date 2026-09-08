@@ -12605,6 +12605,7 @@ fn evaluate_checked_module(
     evaluate_module(context, path.to_owned(), argument, runtime)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_host_argument(
     context: &Rc<Context>,
     trace: &Rc<std::cell::RefCell<ResidualTrace>>,

@@ -296,7 +296,8 @@ pub(crate) fn split_runtime_module(
         .map(|function| (function.id, function))
         .collect::<HashMap<_, _>>();
     let mut included = BTreeMap::<String, BTreeSet<usize>>::new();
-    let framed = crate::backend::suspension::framed_functions(module);
+    let plan = crate::suspension::SuspensionPlan::new(module);
+    let framed = plan.functions.keys().copied().collect::<BTreeSet<_>>();
     let mut demands = BTreeSet::new();
     let mut pending = module
         .exports

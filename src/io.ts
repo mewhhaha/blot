@@ -1,11 +1,7 @@
 import { decodeManifest, type RuntimeValue } from "./abi_values.ts";
 import type { CompilerArtifact } from "./compiler.ts";
 import type { HostCapabilities, HostOperation } from "./host.ts";
-import {
-  type HostResource,
-  HostScope,
-  type ResourceFamily,
-} from "./resources.ts";
+import type { HostResource, HostScope, ResourceFamily } from "./resources.ts";
 
 interface ClockService {
   readonly now: () => bigint;

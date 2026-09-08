@@ -71,10 +71,10 @@ Reserved words and capitalized names remain valid field names: `.return`,
 ### 2.2 Literals
 
 An integer literal contains decimal digits or begins with `0x` or `0X` followed
-by hexadecimal digits. A single underscore may separate adjacent digits:
-`1_000` and `0xFF_FF` denote 1000 and 65535. Negative integers use prefix
-negation rather than a distinct token. Baba identifies the complete token;
-Blot materializes its arbitrary-precision integer value from that token.
+by hexadecimal digits. A single underscore may separate adjacent digits: `1_000`
+and `0xFF_FF` denote 1000 and 65535. Negative integers use prefix negation
+rather than a distinct token. Baba identifies the complete token; Blot
+materializes its arbitrary-precision integer value from that token.
 
 Runtime integers are signed 64-bit values and trap on overflow. Compile-time
 integer arithmetic is arbitrary precision.
@@ -102,11 +102,11 @@ not a signed-`Int` runtime type; a full-width unsigned runtime value would need
 a distinct word domain and operations.
 
 A float literal contains decimal digits and either a decimal point or an
-exponent, or both. A point requires digits on both sides, preserving `pair.0`
-as a projection. An exponent starts with `e` or `E`, an optional `+` or `-`,
-and decimal digits: `1e3`, `1.25E-2`, and `1_0.0e+1` are floats. A single
-underscore may separate adjacent digits in any decimal group. Leading,
-trailing, or repeated separators are invalid. Negation is the prefix operator.
+exponent, or both. A point requires digits on both sides, preserving `pair.0` as
+a projection. An exponent starts with `e` or `E`, an optional `+` or `-`, and
+decimal digits: `1e3`, `1.25E-2`, and `1_0.0e+1` are floats. A single underscore
+may separate adjacent digits in any decimal group. Leading, trailing, or
+repeated separators are invalid. Negation is the prefix operator.
 
 Numeric literals select a numeric domain from their immediate type context. An
 integer literal can keep its singleton `Int` type, flow into any integer range
@@ -1291,9 +1291,9 @@ where its result is short.
 
 A statement after an earlier statement that always leaves the same sequence is
 `BLOT_UNREACHABLE_STATEMENT`. The frontend proves this structurally for a
-`return`, a `break`, a `continue`, or a statement conditional with an `else` whose every
-branch leaves. A conditional without `else` and a loop may continue, so neither
-alone makes a following statement unreachable.
+`return`, a `break`, a `continue`, or a statement conditional with an `else`
+whose every branch leaves. A conditional without `else` and a loop may continue,
+so neither alone makes a following statement unreachable.
 
 ### 6.5 Recursion
 
@@ -1546,8 +1546,8 @@ if let #Some value = candidate else:
 
 On a successful match, the pattern's names are in scope for all following
 statements in the surrounding body. On failure, the `else` statements run. That
-path must leave through `return`, `break`, or `continue`; allowing it to fall through would leave
-the pattern names unbound.
+path must leave through `return`, `break`, or `continue`; allowing it to fall
+through would leave the pattern names unbound.
 
 The guard is a `case` with a wildcard alternative, so it types its names the
 same way one does: `value` above has the type the matched constructor carries,
@@ -2070,8 +2070,8 @@ for value in Iter.range (0, 10):
   total := total + value
 ```
 
-During CST lowering, `continue` returns the ordinary accumulator constructor
-to the loop's recursive step. It introduces no AST node or runtime operation.
+During CST lowering, `continue` returns the ordinary accumulator constructor to
+the loop's recursive step. It introduces no AST node or runtime operation.
 
 ### 9.2 Proof-producing iteration
 
@@ -2884,15 +2884,17 @@ may carry an exact record of its constructor cases. Arrays, seals, functions,
 and unresolved generic positions admit only a root mode. Borrowing is not an
 effect-boundary mode; a borrow cannot cross an operation request.
 
-`Effect.operation`, `Effect.consumes`, `Effect.produces`, and `Effect.suspends` are ordinary
-prelude functions that construct those records. `@effect` interprets their
-compile-time result, not the builder's name. A direct arrow remains shorthand
-for unrestricted input and result with synchronous execution. `Effect.suspends
-signature` constructs `{ .signature = signature; .suspends = #True; }`. It does
-not create a scheduler or an ambient execution context. A source handler can
-handle such an operation normally; an unhandled host operation requires the
-resumable caller protocol. The complete normalized operation contract is part of
-the generative effect identity together with the operation signatures.
+`Effect.operation`, `Effect.consumes`, `Effect.produces`, and `Effect.suspends`
+are ordinary prelude functions that construct those records. `@effect`
+interprets their compile-time result, not the builder's name. A direct arrow
+remains shorthand for unrestricted input and result with synchronous execution.
+`Effect.suspends
+signature` constructs
+`{ .signature = signature; .suspends = #True; }`. It does not create a scheduler
+or an ambient execution context. A source handler can handle such an operation
+normally; an unhandled host operation requires the resumable caller protocol.
+The complete normalized operation contract is part of the generative effect
+identity together with the operation signatures.
 
 Ordinary effects are generative by semantic occurrence. Two written calls of an
 effect-producing function create distinct effect values even when their
@@ -3038,11 +3040,17 @@ Every host operation carries its normalized input and result ownership contract
 through Runtime HIR into the Core Wasm manifest. A synchronous operation borrows
 its canonical memory parameters for the duration of the call. A suspending
 operation copies them before awaiting and returns through the resume protocol.
-The ownership contract governs the logical Blot values: consuming
-input transfers source authority to the host, and a linear or affine result
-transfers a fresh obligation back to the program. A conforming host must obey
-that protocol even when the boundary carrier is a scalar with no allocated
-memory.
+The ownership contract governs the logical Blot values: consuming input
+transfers source authority to the host, and a linear or affine result transfers
+a fresh obligation back to the program. A conforming host must obey that
+protocol even when the boundary carrier is a scalar with no allocated memory.
+
+A lexical borrow cannot remain in scope across a possibly suspending call.
+Ownership checking rejects both direct suspending operations and calls whose
+effect rows may suspend, including open effect rows. A direct synchronous
+operation remains allowed even when its effect declares other suspending
+operations. Move owned state into resumable computations; a borrow does not
+acquire a longer lifetime because a host copies its canonical arguments.
 
 ### 12.4 Written effect rows
 
@@ -3820,19 +3828,21 @@ an intermediate array (§9.3). `struct` builds positional storage with a named
 constructor, accessors, and metadata attached to the type value.
 
 `Iter.fold_with visit initial iterator` and `Iter.each visit iterator` consume
-an iterator with ordinary `use` sequencing. Their visitor may perform effects
-or suspend. The fold passes `(accumulator, element)` to its visitor; `each`
+an iterator with ordinary `use` sequencing. Their visitor may perform effects or
+suspend. The fold passes `(accumulator, element)` to its visitor; `each`
 requires a unit result. They retain their iterator state across suspension.
 `Iter.items` freezes its input into an owned immutable capture. A borrowed array
 fold remains nonsuspending; borrowing does not grant a resumable lifetime.
+`List.fold` likewise requires a synchronous visitor because traversal borrows
+its backing node array.
 
 `Option` and `Result` remain callable type constructors and also expose source
 combinators. Namespace attachment preserves the underlying function's call and
 deferred-argument behavior. Combinators put configuration first and the variant
 last, so `value |> Option.map transform` works with ordinary application:
 
-- Both provide `map transform` and `and_then transform`, operating on `#Some`
-  or `#Ok`; the other branch passes through.
+- Both provide `map transform` and `and_then transform`, operating on `#Some` or
+  `#Ok`; the other branch passes through.
 - `Result.map_error transform` maps `#Error`. `Result.or_else recover` handles
   only `#Error` and returns the recovery result.
 - `Option.or_else fallback` evaluates its affine deferred fallback only for
@@ -3841,7 +3851,8 @@ last, so `value |> Option.map transform` works with ordinary application:
   returns an `#Ok` payload directly. All callbacks retain their effects.
 
 The existing tuple-taking `unwrap_or` is eager. `blot:pipeline` provides the
-data-last `map_with`, `filter_with`, and `fold_with` adapters for borrowed arrays.
+data-last `map_with`, `filter_with`, and `fold_with` adapters for borrowed
+arrays.
 
 Changing the prelude's public record is a language-library change and must
 update this specification.
@@ -4133,26 +4144,29 @@ for staging and WebAssembly lowering.
 
 `Resource.of name` constructs an opaque host capability type from a nonempty
 compile-time Text family name. It is the ordinary source binding of
-`@resource.type name Unit`; it does not construct resource values. Integers, records, and
-other families do not inhabit that type. Equal family names denote the same
-source type, allowing independently imported interfaces to describe one host
-service. The host supplies the actual authority as an unforgeable lease.
+`@resource.type name Unit`; it does not construct resource values. Integers,
+records, and other families do not inhabit that type. Equal family names denote
+the same source type, allowing independently imported interfaces to describe one
+host service. The host supplies the actual authority as an unforgeable lease.
 
-`Resource.of_type name payload` is the source binding of `@resource.type name
-payload`. The payload is an invariant type parameter, not a stored source value:
-`Resource.of_type "Box" Int` and `Resource.of_type "Box" Text` are distinct types.
-It participates in inference, specialization, module certificates, and host
-lease validation. `Resource.of name` is the Unit specialization. The ABI carries
-one token for all specializations and records the payload type in its manifest.
+`Resource.of_type name payload` is the source binding of
+`@resource.type name
+payload`. The payload is an invariant type parameter, not a
+stored source value: `Resource.of_type "Box" Int` and
+`Resource.of_type "Box" Text` are distinct types. It participates in inference,
+specialization, module certificates, and host lease validation.
+`Resource.of name` is the Unit specialization. The ABI carries one token for all
+specializations and records the payload type in its manifest.
 
-An ordinary record such as `{ .client = Resource.of "TextClient"; }` can describe
-the explicit I/O context of a function. Its effect row names the operations
-the function may perform; the passed lease selects the provider. A lease is
-reusable while its owning host scope remains open. It is not a borrowed source
-value or an ownership transfer of the external resource. The host checks the
-family, runtime identity, and scope provenance when crossing the ABI boundary.
-An invocation can use its own or an ancestor's leases; a child-owned lease
-cannot escape to its parent or a sibling. Revoked identities are never reused.
+An ordinary record such as `{ .client = Resource.of "TextClient"; }` can
+describe the explicit I/O context of a function. Its effect row names the
+operations the function may perform; the passed lease selects the provider. A
+lease is reusable while its owning host scope remains open. It is not a borrowed
+source value or an ownership transfer of the external resource. The host checks
+the family, runtime identity, and scope provenance when crossing the ABI
+boundary. An invocation can use its own or an ancestor's leases; a child-owned
+lease cannot escape to its parent or a sibling. Revoked identities are never
+reused.
 
 The host adapter consumes the versioned ABI 3.0 manifest and emitted Wasm; it
 does not introduce source types or reinterpret effect rows. It exposes `call`
@@ -4161,20 +4175,19 @@ canonical arguments and results and explicit host operation maps. Each host
 operation receives an execution context containing its cancellation signal and
 `HostScope`. The optional scope passed to `instantiateArtifact` owns that
 instance; each resumable invocation has a child scope. The host registers a
-resource's release before publishing its lease, and disposes an acquisition
-that completes after cancellation before allowing the invocation to finish.
-Scope exit stops admission, cancels and drains descendants, then runs releases
-in reverse acquisition order. Releases may suspend and run without the
-cancelled operation signal. Cleanup continues after failures and reports them
-together with any primary failure. This host cleanup does not execute arbitrary
-Blot finalizers after a trap.
-Promise results require a checked suspending operation. Missing/extra
-capabilities, reentrant calls, and sidecar/embedded manifest disagreement are
-refused. `callAsync` accepts an optional caller cancellation signal; cancellation
-is observed between Wasm blocks and after host completion. `close` cancels and
-drains active calls. The adapter admits affine transfers of canonical values and
-refuses linear host transfers without registered scope cleanup. It never
-silently discards an owned host result. `blot pack` uses the
+resource's release before publishing its lease, and disposes an acquisition that
+completes after cancellation before allowing the invocation to finish. Scope
+exit stops admission, cancels and drains descendants, then runs releases in
+reverse acquisition order. Releases may suspend and run without the cancelled
+operation signal. Cleanup continues after failures and reports them together
+with any primary failure. This host cleanup does not execute arbitrary Blot
+finalizers after a trap. Promise results require a checked suspending operation.
+Missing/extra capabilities, reentrant calls, and sidecar/embedded manifest
+disagreement are refused. `callAsync` accepts an optional caller cancellation
+signal; cancellation is observed between Wasm blocks and after host completion.
+`close` cancels and drains active calls. The adapter admits affine transfers of
+canonical values and refuses linear host transfers without registered scope
+cleanup. It never silently discards an owned host result. `blot pack` uses the
 existing package semantics, and `blot explain` displays existing Rust compiler
 facts; neither adds an alternative semantic compiler.
 
@@ -4185,25 +4198,28 @@ the canonical ABI and retain resource family and scope checks. Callback handles
 are one-shot and are revoked when their owning scope ends; moving an unconsumed
 callback requires its captures to be valid in the destination scope and cannot
 extend the artifact lifetime. Affine operation inputs express consumption of
-source work. Deferred arrows and open callback results are not this boundary.
-An operation signature can quantify the callback's latent effect row with an
-ordinary `@forall` value, for example `@forall (fn e => @forall (fn result =>
-(((Unit -> result) ~ [e]) -> result) ~ [e]))`. Those effects remain visible to the
-caller even when the executor performs the callback later. There is no implicit
-execution capability or effect discharge from merely passing a closure.
+source work. Deferred arrows and open callback results are not this boundary. An
+operation signature can quantify the callback's latent effect row with an
+ordinary `@forall` value, for example
+`@forall (fn e => @forall (fn result =>
+(((Unit -> result) ~ [e]) -> result) ~ [e]))`.
+Those effects remain visible to the caller even when the executor performs the
+callback later. There is no implicit execution capability or effect discharge
+from merely passing a closure.
 
 The host may instantiate an already compiled `WebAssembly.Module` together with
 its matching manifest. Manifest/import validation is unchanged. Its checked
-synthetic callback entries are callable through `callCallback(entry, arguments,
-options)` using the entry's complete canonical signature. Source one-shot
-ownership is enforced by the consumed callback handle, rather than by making
-the reusable compiled entry itself one-shot.
+synthetic callback entries are callable through
+`callCallback(entry, arguments,
+options)` using the entry's complete canonical
+signature. Source one-shot ownership is enforced by the consumed callback
+handle, rather than by making the reusable compiled entry itself one-shot.
 
 Source wrappers and aliases of an imported operation carry the same effect
 identity as the effect value exported by that import. Distinct generative import
-occurrences remain distinct. Checked closure signatures follow that instantiation;
-wrapping an operation does not discharge its effect or revert to the module's
-definition-time identity.
+occurrences remain distinct. Checked closure signatures follow that
+instantiation; wrapping an operation does not discharge its effect or revert to
+the module's definition-time identity.
 
 The same rule applies through nested imports and re-exported records. Effect
 identity substitutions follow the corresponding record members, so exporting
@@ -4212,48 +4228,51 @@ both a wrapper and its dependency's effect keeps them in agreement.
 `import "blot:spark"` provides the ordinary source `Spark` library. Its
 `Executor`, `Scope`, and `Job result` types are opaque resources. The host
 supplies an executor in an explicit record such as `io.executor`.
-`Spark.scope executor body` calls `body scope`, and `Spark.child_scope parent
-body` creates a nested lifetime. `Spark.spawn scope (?work)` consumes a strict
-`Unit -> result` closure and schedules it once; `Spark.join job` suspends until
-its result is available. Scope return joins required jobs. A failed job cancels
-the scope and its siblings. `Spark.cancel job` cancels and drains that job;
-`Spark.yield scope` yields to the host. Jobs cannot escape their scope, and
-callbacks cannot escape their defining artifact. There is no ambient executor.
-The function's effect row still includes `Spark.Effect` and the effects of its
-body and jobs.
+`Spark.scope executor body` calls `body scope`, and
+`Spark.child_scope parent
+body` creates a nested lifetime.
+`Spark.spawn scope (?work)` consumes a strict `Unit -> result` closure and
+schedules it once; `Spark.join job` suspends until its result is available.
+Scope return joins required jobs. A failed job cancels the scope and its
+siblings. `Spark.cancel job` cancels and drains that job; `Spark.yield scope`
+yields to the host. Jobs cannot escape their scope, and callbacks cannot escape
+their defining artifact. There is no ambient executor. The function's effect row
+still includes `Spark.Effect` and the effects of its body and jobs.
 
 Development runtimes can supply the same checked host capabilities and invoke
-async exports with `callAsync`. Preparing an activation validates and instantiates
-its candidates before stopping work. Committing it cancels calls whose unit or
-transitive provider changes, waits for their cleanup against the old unit map,
-then publishes the replacement map. Retained independent calls continue.
-`commitActivation` and `abortActivation` return promises that callers must await.
-Cleanup failures are aggregated and reported after the drained replacement is
-published. Precompiled callbacks can remain inside a development unit and call
-pure or suspending providers. Linked calls retain the caller's logical scope
-and cancellation authority while executing the provider's compiled code. A
-provider can register cleanup in that scope. Callback values themselves still
-require an additional adapter to cross a unit link and are currently refused.
+async exports with `callAsync`. Preparing an activation validates and
+instantiates its candidates before stopping work. Committing it cancels calls
+whose unit or transitive provider changes, waits for their cleanup against the
+old unit map, then publishes the replacement map. Retained independent calls
+continue. `commitActivation` and `abortActivation` return promises that callers
+must await. Cleanup failures are aggregated and reported after the drained
+replacement is published. Precompiled callbacks can remain inside a development
+unit and call pure or suspending providers. Linked calls retain the caller's
+logical scope and cancellation authority while executing the provider's compiled
+code. A provider can register cleanup in that scope. Callback values themselves
+still require an additional adapter to cross a unit link and are currently
+refused.
 
-Worker callbacks capture the precompiled transitive unit bundle active when
-the callback is created. A bundle's identity includes each dependency module,
-so retaining the consumer cannot accidentally reuse an old provider after
-reload. Workers instantiate those modules directly and use the same canonical
+Worker callbacks capture the precompiled transitive unit bundle active when the
+callback is created. A bundle's identity includes each dependency module, so
+retaining the consumer cannot accidentally reuse an old provider after reload.
+Workers instantiate those modules directly and use the same canonical
 development-link bridge as the main host. Each worker retains at most sixteen
 recently used program instances; eviction drains cleanup before another job
 starts. Host-side development bundle identities are also bounded. A trapped
 bundle is discarded as a whole; its required job is never replayed.
 
-`Spark.parallel scope (?work)` schedules a required pure `Unit -> result` callback
-on the scope executor's worker pool. A host configures that pool explicitly;
-absence of a pool is an error. Workers reuse precompiled modules and callback
-entries and keep separate private Wasm heaps. Jobs carry copied canonical
-captures, with no source compilation or Wasm compilation per submission.
-Resource and callback captures require an explicit cross-worker protocol and
-are refused by the private-value worker executor. At most one job runs in each
-worker; additional jobs queue in admission order. Cancellation removes queued
-jobs or waits for a running job to acknowledge cancellation at a compiler-emitted
-polling checkpoint. Required work is never retried after a worker failure.
+`Spark.parallel scope (?work)` schedules a required pure `Unit -> result`
+callback on the scope executor's worker pool. A host configures that pool
+explicitly; absence of a pool is an error. Workers reuse precompiled modules and
+callback entries and keep separate private Wasm heaps. Jobs carry copied
+canonical captures, with no source compilation or Wasm compilation per
+submission. Resource and callback captures require an explicit cross-worker
+protocol and are refused by the private-value worker executor. At most one job
+runs in each worker; additional jobs queue in admission order. Cancellation
+removes queued jobs or waits for a running job to acknowledge cancellation at a
+compiler-emitted polling checkpoint. Required work is never retried after a
+worker failure.
 
 `Spark.speculate scope (?work)` admits pure work with optional execution. A pool
 may leave it queued; `Spark.join spark` demands its result and promotes it to
@@ -4282,16 +4301,19 @@ that artifact, cancels its calls, and skips guest finalizers while reclaiming
 host-owned resources. Source linear transfers that lack a supported registered
 ownership protocol are refused at the boundary.
 
-`import "blot:shared"` provides explicit shared numeric storage. `Shared.i32
-scope values`, `Shared.f32 scope values`, and `Shared.f64 scope values` allocate
-scope-owned contiguous storage and return `Shared.Partition Int`, `Partition
-F32`, and `Partition F64` respectively. The `i32` API uses source `Int` values;
-allocation and writes require values in `-2147483648..2147483647` and reject
-overflow. Float writes use their storage precision. `Shared.atomic scope
-initial` creates a `Shared.AtomicI32` counter with the same checked input range.
-These are opaque host resources over shared numeric buffers; guest heaps and
-object graphs remain private. Browser hosts must provide cross-origin isolation
-and `SharedArrayBuffer`.
+`import "blot:shared"` provides explicit shared numeric storage.
+`Shared.i32
+scope values`, `Shared.f32 scope values`, and
+`Shared.f64 scope values` allocate scope-owned contiguous storage and return
+`Shared.Partition Int`, `Partition
+F32`, and `Partition F64` respectively. The
+`i32` API uses source `Int` values; allocation and writes require values in
+`-2147483648..2147483647` and reject overflow. Float writes use their storage
+precision. `Shared.atomic scope
+initial` creates a `Shared.AtomicI32` counter
+with the same checked input range. These are opaque host resources over shared
+numeric buffers; guest heaps and object graphs remain private. Browser hosts
+must provide cross-origin isolation and `SharedArrayBuffer`.
 
 `Shared.split boundary (?partition)` consumes the parent's authority and returns
 `{ .left; .right; .rejoin; }`. The children cover `[0, boundary)` and
@@ -4305,20 +4327,21 @@ Host lease generations and phase checks reject aliased, stale, duplicate, or
 overlapping access even when a caller retains an unrestricted handle.
 
 `Shared.run scope (?argument) (?kernel)` consumes a checked strict
-`argument -> result ~ { Shared.Access }` callback and suspends until its required
-worker execution and cleanup finish. The explicit argument may contain private
-canonical values, partitions, and atomic counters owned by this scope or an
-ancestor. Captures and results must be private canonical values. Partitions
+`argument -> result ~ { Shared.Access }` callback and suspends until its
+required worker execution and cleanup finish. The explicit argument may contain
+private canonical values, partitions, and atomic counters owned by this scope or
+an ancestor. Captures and results must be private canonical values. Partitions
 are exclusively loaned until the call drains; counters can be shared across
-loans. Inside a kernel, `Shared.length partition`, `Shared.read partition index`,
-and `Shared.write partition index value` access only that partition, with bounds
-checks. `Shared.atomic_load counter`, `atomic_store counter value`, and
-`atomic_add counter value` use sequentially consistent signed 32-bit atomics.
-`atomic_add` wraps on overflow and returns the previous value. These access
-operations require the explicit kernel loan in the provided runtime.
+loans. Inside a kernel, `Shared.length partition`,
+`Shared.read partition index`, and `Shared.write partition index value` access
+only that partition, with bounds checks. `Shared.atomic_load counter`,
+`atomic_store counter value`, and `atomic_add counter value` use sequentially
+consistent signed 32-bit atomics. `atomic_add` wraps on overflow and returns the
+previous value. These access operations require the explicit kernel loan in the
+provided runtime.
 
-Use `Spark.spawn` to run multiple `Shared.run` calls concurrently, then join
-the jobs before rejoining their partitions. The source effect row includes
+Use `Spark.spawn` to run multiple `Shared.run` calls concurrently, then join the
+jobs before rejoining their partitions. The source effect row includes
 `Shared.Effect`, `Shared.Access`, and any scheduling effects. `Spark.parallel`
 and `Spark.speculate` keep their pure callback contracts; shared writes cannot
 be speculative. Cancelling a queued loan before worker dispatch restores idle
@@ -4328,38 +4351,42 @@ snapshotted or rejoined successfully. Worker loss drains physical termination
 before releasing a loan. Required kernels are never replayed. Atomic updates
 already observed are retained; cancellation is not a transaction or rollback.
 
-`import "blot:channel"` provides `Channel.Sender message`, `Channel.Receiver
-message`, and `Channel.Ends message`. `Channel.bounded scope capacity` returns
-the endpoint record; capacity zero is a rendezvous and a positive capacity is a
-FIFO buffer. Capacity must be an integer from zero through 2147483647. An
-output-only message type can be supplied with `use channel :: Channel.Ends Int
-<- Channel.bounded scope 8`. `Channel.send sender (?message)` waits for space or
-a receiver and returns whether it was accepted. `Channel.receive receiver`
-waits for a message and returns `#Some message`, or `#None` after closure and
-buffer drainage. `Channel.close sender` is idempotent, refuses further sends,
-and wakes blocked senders with `False` and empty receivers with `#None`.
-Scope cancellation rejects pending operations and discards queued canonical
-values; it does not promote invocation-owned resources into the channel's
-lifetime. Source calls expose `Channel.Effect` in their effect rows.
+`import "blot:channel"` provides `Channel.Sender message`,
+`Channel.Receiver
+message`, and `Channel.Ends message`.
+`Channel.bounded scope capacity` returns the endpoint record; capacity zero is a
+rendezvous and a positive capacity is a FIFO buffer. Capacity must be an integer
+from zero through 2147483647. An output-only message type can be supplied with
+`use channel :: Channel.Ends Int
+<- Channel.bounded scope 8`.
+`Channel.send sender (?message)` waits for space or a receiver and returns
+whether it was accepted. `Channel.receive receiver` waits for a message and
+returns `#Some message`, or `#None` after closure and buffer drainage.
+`Channel.close sender` is idempotent, refuses further sends, and wakes blocked
+senders with `False` and empty receivers with `#None`. Scope cancellation
+rejects pending operations and discards queued canonical values; it does not
+promote invocation-owned resources into the channel's lifetime. Source calls
+expose `Channel.Effect` in their effect rows.
 
-`import "blot:io"` provides `Io.Clock` and `Io.Http`. Each exposes a `Capability`
-resource type and an `Effect` value. `Io.Clock.now clock` returns elapsed
-milliseconds from that granted clock; `Io.Clock.sleep clock milliseconds`
-suspends and accepts durations from zero through 2147483647.
-`Io.Http.get http path` returns `Result (Io.Http.Response, Text)`, where a
-response contains `.status :: Int` and `.body :: Text`. HTTP status codes,
-including error status codes, are responses. Transport and origin-policy
-failures produce `#Error`; cancellation remains cancellation. The standard host
-HTTP grant resolves paths against its base URL, restricts requests to that
-origin, and refuses redirects. These services have no ambient source binding.
+`import "blot:io"` provides `Io.Clock` and `Io.Http`. Each exposes a
+`Capability` resource type and an `Effect` value. `Io.Clock.now clock` returns
+elapsed milliseconds from that granted clock;
+`Io.Clock.sleep clock milliseconds` suspends and accepts durations from zero
+through 2147483647. `Io.Http.get http path` returns
+`Result (Io.Http.Response, Text)`, where a response contains `.status :: Int`
+and `.body :: Text`. HTTP status codes, including error status codes, are
+responses. Transport and origin-policy failures produce `#Error`; cancellation
+remains cancellation. The standard host HTTP grant resolves paths against its
+base URL, restricts requests to that origin, and refuses redirects. These
+services have no ambient source binding.
 
 `import "blot:events"` provides `Events.Source message`,
 `Events.Subscription message`, `Events.Policy`, and `Events.Effect`.
 `Events.subscribe scope source policy` registers a scope-owned subscription.
-`#Latest` retains only the newest undelivered message; `#Queue capacity` keeps
-a FIFO with a positive capacity through 2147483647 and fails on overflow.
-The policy is required at the call site. `Events.next subscription` suspends
-until `#Some message`, or returns `#None` after closure and buffer drainage.
+`#Latest` retains only the newest undelivered message; `#Queue capacity` keeps a
+FIFO with a positive capacity through 2147483647 and fails on overflow. The
+policy is required at the call site. `Events.next subscription` suspends until
+`#Some message`, or returns `#None` after closure and buffer drainage.
 `Events.close subscription` stops delivery and detaches once. Scope exit
 discards queued messages and releases the subscription; pending waits cancel
 with their call. An event source's host registration must return its disposer

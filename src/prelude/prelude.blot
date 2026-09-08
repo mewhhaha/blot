@@ -2216,6 +2216,8 @@ const list_uncons = fn list => do:
       #Some node => #Cons (node.0, (nodes, node.1))
       #None => #Nil
 
+const rec list_fold_nodes ::
+  @forall (fn T => @forall (fn S => ([(T, @type.int)], @type.int, S, (S, T) -> S) -> S))
 const rec list_fold_nodes =
   fn (&nodes, address, state, visit) => do:
     if is_less (@int.cmp address 0):

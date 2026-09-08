@@ -1,7 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { Compiler } from "../compiler.ts";
 import { type HostOperation, instantiateArtifact } from "../host.ts";
+
+test("lexical borrows require a provably synchronous call", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = "examples/rejected/semantics/borrow_across_suspension.blot";
+    await assert.rejects(
+      compiler.checkSource(path, await readFile(path, "utf8")),
+      /BLOT_BORROW_ACROSS_SUSPENSION/,
+    );
+    await assert.rejects(
+      compiler.checkSource(
+        "/tmp/blot-transitive-borrow.blot",
+        `open import "blot:prelude"
+const Device = @effect.host { .read = Effect.suspends (Int -> Int); }
+const read = fn n => do:
+  use value <- Device.read n
+  return value
+const run = fn &values => do:
+  use answer <- read 1
+  return Array.length (&values) + answer
+return { .run = run; }
+`,
+      ),
+      /BLOT_BORROW_ACROSS_SUSPENSION/,
+    );
+    await assert.rejects(
+      compiler.checkSource(
+        "/tmp/blot-open-effects-borrow.blot",
+        `open import "blot:prelude"
+const run = fn read => fn &values => do:
+  use answer <- read 1
+  return Array.length (&values) + answer
+return { .run = run; }
+`,
+      ),
+      /BLOT_BORROW_ACROSS_SUSPENSION/,
+    );
+    await compiler.checkSource(
+      "/tmp/blot-synchronous-borrow.blot",
+      `open import "blot:prelude"
+const Device = @effect.host {
+  .read = Int -> Int;
+  .wait = Effect.suspends (Int -> Int);
+}
+const run = fn &values => do:
+  use answer <- Device.read 1
+  return Array.length (&values) + answer
+return { .run = run; }
+`,
+    );
+    await compiler.checkSource(
+      "/tmp/blot-pure-callback-borrow.blot",
+      `open import "blot:prelude"
+const run :: (Int -> Int) -> [Int] -> Int
+const run = fn read => fn &values => do:
+  use answer <- read 1
+  return Array.length (&values) + answer
+return { .run = run; }
+`,
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
 
 test("one generic host operation accepts independently specialized argument and result types", async () => {
   const compiler = await Compiler.create();
@@ -30,7 +95,7 @@ test("one generic host operation accepts independently specialized argument and 
     const observed: unknown[] = [];
     const copy: HostOperation = async (_context, value) => {
       observed.push(value);
-      return value;
+      return await Promise.resolve(value);
     };
     const hosted = await instantiateArtifact(
       artifact,
@@ -40,7 +105,10 @@ test("one generic host operation accepts independently specialized argument and 
       const result = await hosted.callAsync("run", [42n]);
       assert.deepEqual(result, {
         kind: "record",
-        fields: new Map<string, bigint | string>([["number", 42n], ["text", "hello"]]),
+        fields: new Map<string, bigint | string>([["number", 42n], [
+          "text",
+          "hello",
+        ]]),
       });
       assert.deepEqual(observed, [42n, "hello"]);
       const handled = await instantiateArtifact(
@@ -68,7 +136,7 @@ test("nested resumable calls agree with the Rust evaluator and source handlers",
     const artifact = await compiler.compile("examples/lib/suspension.blot");
     const tick: HostOperation = async (_context, index) => {
       assert.equal(typeof index, "bigint");
-      return BigInt(String(index)) * 2n;
+      return await Promise.resolve(BigInt(String(index)) * 2n);
     };
     const hosted = await instantiateArtifact(
       artifact,
@@ -279,6 +347,74 @@ return run
   }
 });
 
+test("close drains a late host completion without resuming the cancelled guest", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = "/tmp/blot-suspension-late-close.blot";
+    await compiler.checkSource(
+      path,
+      `open import "blot:prelude"
+const Device = @effect.host {
+  .read = Effect.suspends (Unit -> Int);
+  .after = Int -> Unit;
+}
+const run = fn () => do:
+  use answer <- Device.read ()
+  use Device.after answer
+  return answer
+return { .run = run; }
+`,
+    );
+    let begin!: () => void;
+    const started = new Promise<void>((resolve) => {
+      begin = resolve;
+    });
+    let complete!: (value: bigint) => void;
+    const pending = new Promise<bigint>((resolve) => {
+      complete = resolve;
+    });
+    let hostSignal: AbortSignal | undefined;
+    let continued = false;
+    const operations = new Map<string, HostOperation>([
+      ["read", ({ signal }) => {
+        hostSignal = signal;
+        begin();
+        return pending;
+      }],
+      ["after", () => {
+        continued = true;
+        return null;
+      }],
+    ]);
+    const hosted = await instantiateArtifact(
+      await compiler.compile(path),
+      new Map([["Device", operations]]),
+    );
+    try {
+      const rejected = assert.rejects(hosted.callAsync("run", [null]), {
+        name: "AbortError",
+      });
+      await started;
+      let finished = false;
+      const closing = hosted.close().then(() => {
+        finished = true;
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(hostSignal?.aborted, true);
+      assert.equal(finished, false);
+      complete(42n);
+      await closing;
+      await rejected;
+      assert.equal(continued, false);
+    } finally {
+      complete(42n);
+      await hosted.close();
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("resuming canonical records, variants, and arrays preserves their source values", async () => {
   const compiler = await Compiler.create();
   try {
@@ -307,7 +443,7 @@ return run
     };
     const reply: HostOperation = async (_context, value) => {
       assert.deepEqual(value, payload);
-      return value;
+      return await Promise.resolve(value);
     };
     const hosted = await instantiateArtifact(
       artifact,

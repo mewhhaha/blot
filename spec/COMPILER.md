@@ -110,14 +110,14 @@ syntax snapshots on demand. The receiving session creates its own revision,
 configuration, checked facts, and artifacts; sharing the AST allocation grants
 no semantic cache authority. The graph-delta frame remains schema 3.
 
-ABI 7 adds opaque scalar graph-cache import/export and development work counters.
-Import admits disposable Rust graph memos; it cannot install checked modules or
-move an artifact transaction. Counters count residual function bodies actually
-specialized or restored, grouped by source module, and units actually emitted.
-Root export wrappers and fully static applications are outside these body counts.
-Counters describe the current request, including
-zero work on a closed-program cache hit; they are observations, not checked
-facts or cache authority.
+ABI 7 adds opaque scalar graph-cache import/export and development work
+counters. Import admits disposable Rust graph memos; it cannot install checked
+modules or move an artifact transaction. Counters count residual function bodies
+actually specialized or restored, grouped by source module, and units actually
+emitted. Root export wrappers and fully static applications are outside these
+body counts. Counters describe the current request, including zero work on a
+closed-program cache hit; they are observations, not checked facts or cache
+authority.
 
 Host frame construction may use geometrically grown typed storage and bulk
 copies, but a finished frame owns its exact bytes independently of its inputs
@@ -214,8 +214,8 @@ application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
 `continue` elaborates to the nearest loop's ordinary accumulator constructor.
-Conditional forwarding preserves rebindings made before departure and skips
-the remaining statements. Lambdas and value conditionals reset the loop target;
+Conditional forwarding preserves rebindings made before departure and skips the
+remaining statements. Lambdas and value conditionals reset the loop target;
 invalid departures retain their source spans. No loop or continue node reaches
 checking. Baba owns numeric token boundaries, including digit separators,
 hexadecimal integers, and exponent floats. Materialization removes separators
@@ -229,17 +229,17 @@ they introduce no checking or lowering rules.
 
 Expression holes use the existing `_` name expression. The checker records a
 fresh variable and lexical environment by expression identity, then reports its
-negative type bound and the local binding types after constraints settle.
-These are editing facts only: an unresolved hole prevents checked-interface
+negative type bound and the local binding types after constraints settle. These
+are editing facts only: an unresolved hole prevents checked-interface
 publication, certification, evaluation, and Runtime-HIR emission. Invalidation
 removes hole facts with the module's other inference facts. Pattern wildcards
 and signature inference holes retain their separate elaboration meanings.
 
 Inline named `let`, `const`, and `use` annotations expand to the existing
-signature declaration followed by its binding, in the same lexical scope.
-The checker records a typed `use` result after forcing; the expression fact
-retains a nullary computation wrapper when the written expression is deferred.
-Residual specialization consumes that checked result representation, including
+signature declaration followed by its binding, in the same lexical scope. The
+checker records a typed `use` result after forcing; the expression fact retains
+a nullary computation wrapper when the written expression is deferred. Residual
+specialization consumes that checked result representation, including
 output-only polymorphic resource parameters.
 
 A multi-subject case becomes strict nullary subject computations and ordinary
@@ -633,21 +633,36 @@ unimplemented.
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
 ABI 3 bytes and caller ownership.
 
-ABI closure computes the transitive set of functions that can reach a checked
-suspending host operation or development link through direct calls. Emission splits those functions
-at suspension and call boundaries into typed frames with explicit block state,
-parent frames, and result destinations. The poll trampoline performs bounded
-block work and reports host requests using canonical arguments and results.
-The Node host schedules requests; it does not interpret Runtime HIR or guest
-instructions. Direct functions keep their ordinary Wasm calling convention.
-Suspension participates in effect identity, boundary fingerprints, and the
-checked-module certificate. Runtime HIR schema 12 names capability metadata
-`contract` with `input`, `result`, and mandatory Boolean `suspends` fields.
-Capability operations also preserve `sourceName` independently of their concrete
-operation identifier. Residual staging interns each closed argument/result
-signature and contract for a polymorphic host operation. The host binds its
-source name once; each concrete import marshals against its own checked type.
-No host performs type inference or selects a source specialization.
+The Rust suspension planner consumes validated Runtime HIR before emission. It
+indexes direct callers and callees once, then propagates suspension from host
+operations, development links, and explicit resumable roots through a caller
+worklist. A separate callee worklist includes pure callback dependencies for
+cooperative execution without changing their direct export convention. The plan
+records block entries and segments ending at framed calls and host requests; the
+emitter consumes those boundaries without reconstructing the call graph.
+Emission assigns typed frames with explicit block state, parent frames, and
+result destinations. The poll trampoline performs bounded block work and reports
+host requests using canonical arguments and results. The Node host schedules
+requests; it does not interpret Runtime HIR or guest instructions. Direct
+functions keep their ordinary Wasm calling convention. Suspension participates
+in effect identity, boundary fingerprints, and the checked-module certificate.
+Runtime HIR schema 12 names capability metadata `contract` with `input`,
+`result`, and mandatory Boolean `suspends` fields. Capability operations also
+preserve `sourceName` independently of their concrete operation identifier.
+Residual staging interns each closed argument/result signature and contract for
+a polymorphic host operation. The host binds its source name once; each concrete
+import marshals against its own checked type. No host performs type inference or
+selects a source specialization.
+
+Checked-module certificate schema 19 invalidates ownership evidence produced
+before lexical borrows were excluded from possibly suspending calls. The guest
+ABI layout and suspension protocol are unchanged. `SUSPENSION.md` owns the
+planning and lifetime obligations shared by closure, emission, and hosts. When
+an inferred callee has no positive type bounds, ownership receives its checked
+upper function constraint. This preserves the open effect row of an unannotated
+callback instead of treating its bottom positive view as proof of synchronous
+execution. Ownership consumes these inference facts without reconstructing a
+function type.
 
 Development partitioning preserves the whole-module framed call graph. Link
 metadata records mandatory `suspends`; a provider's `resumableRoots` names the
@@ -655,33 +670,33 @@ export wrappers that must retain frames and cooperative checkpoints, including
 pure callees of worker callbacks. Function remapping and module merging remap
 those roots. A link's suspension contract must match the provider export before
 activation. The poll request ordinal selects ordinary host imports first and
-development links afterward; both use canonical request/result storage.
-The host invokes the captured provider with the caller's explicit scope and
-execution authority, preserving cancellation and resource ancestry across units.
+development links afterward; both use canonical request/result storage. The host
+invokes the captured provider with the caller's explicit scope and execution
+authority, preserving cancellation and resource ancestry across units.
 
 Generative import instantiation records effect substitutions through matching
 members of imported records and namespace attachments, including nested imports.
 Wrapper signatures and re-exported effect values consume the same substitution;
 recording only a binding whose entire value is an effect loses this authority.
 
-The compile-time primitive `@resource.type` produces an opaque source type for
-a nonempty family name and an invariant payload type parameter. Checking
-preserves the family and payload through constraint interning, freshening,
-module interfaces, and specialization; it never equates the type with an
-integer. Runtime HIR represents it as `resource { name, payloadType }`, whose
-public layout is an opaque i64 token. QCore schema 5 carries its family and
-payload reference in a structural resource certificate. Value capsules use
-schema 5 and module snapshots schema 3. The canonical
-adapter preserves the token without interpreting it as a private heap address.
-The host registry owns the additional token-to-resource relation and validates
-family, payload type, runtime, liveness, and ancestor-scope provenance before a token enters
-or leaves guest execution. Suspended result validation checks canonical memory
-before translating it into private frame slots. No source constructor, bitcast,
-or host-language type assertion grants resource authority.
+The compile-time primitive `@resource.type` produces an opaque source type for a
+nonempty family name and an invariant payload type parameter. Checking preserves
+the family and payload through constraint interning, freshening, module
+interfaces, and specialization; it never equates the type with an integer.
+Runtime HIR represents it as `resource { name, payloadType }`, whose public
+layout is an opaque i64 token. QCore schema 5 carries its family and payload
+reference in a structural resource certificate. Value capsules use schema 5 and
+module snapshots schema 3. The canonical adapter preserves the token without
+interpreting it as a private heap address. The host registry owns the additional
+token-to-resource relation and validates family, payload type, runtime,
+liveness, and ancestor-scope provenance before a token enters or leaves guest
+execution. Suspended result validation checks canonical memory before
+translating it into private frame slots. No source constructor, bitcast, or
+host-language type assertion grants resource authority.
 
-The source `blot:shared` library reuses these resource and host-effect contracts.
-Its kernel's checked argument shape selects which resource leaves the host
-worker protocol may replace with numeric buffer descriptors; captures and
+The source `blot:shared` library reuses these resource and host-effect
+contracts. Its kernel's checked argument shape selects which resource leaves the
+host worker protocol may replace with numeric buffer descriptors; captures and
 results retain the private canonical-value restriction. Descriptor validation,
 exact partition witnesses, loan admission, and crash invalidation belong to the
 host resource relation in `RUNTIME.md`, not to a second inference engine or a
@@ -1076,23 +1091,24 @@ excluded.
 Checked strict closures passed to host operations specialize before Runtime HIR.
 The residual callback application uses the checked arrow domain and a symbolic
 argument, records a standalone function entry, and closes its runtime captures
-into a product. `callback.make` references that function and its signature;
-the `Callback` representation names the entry, signature, and environment type.
+into a product. `callback.make` references that function and its signature; the
+`Callback` representation names the entry, signature, and environment type.
 Function/type/signature compaction and module merge must remap those identities
 together. The ABI exposes a canonical capture record and a separately declared
 start adapter. Hosts consume these facts; they never check or compile work at
 submission time. Latent effects come from the checked callback signature and
 remain in the enclosing operation's polymorphic effect row.
 
-Evaluating a generative import rebinds effect identities from checked declaration
-values to that import's values. The lexical value environment retains this
-substitution separately from quantified type substitutions. Closure signatures
-and effect-bearing fields of a compile-time record use those instantiated facts;
-unrelated inferred variables are not converted into rigid reified variables.
-Source checking of a closure instance copies the nearest substitutions, and
-residual cache identities include them. Environments carrying generative
-substitutions cannot become reusable value capsules. Attachments remain on their
-original signature structure while substitution changes the underlying effect.
+Evaluating a generative import rebinds effect identities from checked
+declaration values to that import's values. The lexical value environment
+retains this substitution separately from quantified type substitutions. Closure
+signatures and effect-bearing fields of a compile-time record use those
+instantiated facts; unrelated inferred variables are not converted into rigid
+reified variables. Source checking of a closure instance copies the nearest
+substitutions, and residual cache identities include them. Environments carrying
+generative substitutions cannot become reusable value capsules. Attachments
+remain on their original signature structure while substitution changes the
+underlying effect.
 
 A statically known imported curried lambda retains the checked ownership
 contract for each written parameter. Applying an earlier runtime argument
@@ -1101,10 +1117,10 @@ that module's pattern identities in the caller. This lookup follows direct
 lambda bodies only and does not guess which closure an arbitrary computation
 returns. A contextual open signature cannot erase an already closed callback
 signature. Polymorphic operation results instantiate from checked argument
-signatures, including callback results and invariant resource parameters;
-an unresolved polymorphic host result is a target refusal. A concrete caller
-result also instantiates the checked body expression's quantified variables in
-the call's lexical substitution environment. This connects output-only type
+signatures, including callback results and invariant resource parameters; an
+unresolved polymorphic host result is a target refusal. A concrete caller result
+also instantiates the checked body expression's quantified variables in the
+call's lexical substitution environment. This connects output-only type
 parameters to their already-checked evidence without rechecking widened runtime
 carriers against source singleton refinements. Existing checked unused-result
 Unit boundary policy remains separate from polymorphic specialization.

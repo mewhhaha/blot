@@ -1,4 +1,5 @@
 use super::*;
+use crate::suspension::{ResumableFunction, ResumeSegment, SuspensionPlan};
 
 const ACTIVE_CONTEXTS: u32 = 6;
 const CONTEXT_CHECKPOINT: u32 = 7;
@@ -14,98 +15,9 @@ const ARGUMENTS: u32 = 12;
 const PENDING_RESULT: u32 = 16;
 const RESULT: u32 = 20;
 
-pub(crate) fn functions(module: &RuntimeModule) -> BTreeSet<usize> {
-    let operations = module
-        .capabilities
-        .iter()
-        .flat_map(|capability| {
-            capability
-                .operations
-                .iter()
-                .filter(|operation| operation.contract.suspends)
-                .map(|operation| (capability.name.as_str(), operation.name.as_str()))
-        })
-        .collect::<BTreeSet<_>>();
-    let mut suspended = module
-        .resumable_roots
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    loop {
-        let before = suspended.len();
-        for function in &module.functions {
-            if function
-                .blocks
-                .iter()
-                .flat_map(|block| &block.operations)
-                .any(|operation| {
-                    (operation.kind == "host.call"
-                        && operations.contains(&(
-                            operation
-                                .capability
-                                .as_deref()
-                                .expect("checked host capability"),
-                            operation
-                                .operation
-                                .as_deref()
-                                .expect("checked host operation"),
-                        )))
-                        || (operation.kind == "call.direct"
-                            && suspended
-                                .contains(&operation.function.expect("checked direct call target")))
-                        || (operation.kind == "call.external"
-                            && module.links.iter().any(|link| {
-                                link.suspends
-                                    && Some(link.unit.as_str()) == operation.capability.as_deref()
-                                    && Some(link.name.as_str()) == operation.operation.as_deref()
-                            }))
-                })
-            {
-                suspended.insert(function.id);
-            }
-        }
-        if before == suspended.len() {
-            return suspended;
-        }
-    }
-}
-
-pub(crate) fn framed_functions(module: &RuntimeModule) -> BTreeSet<usize> {
-    let mut framed = functions(module);
-    framed.extend(module.types.iter().filter_map(|type_| {
-        if let RuntimeType::Callback { function, .. } = type_ {
-            Some(*function)
-        } else {
-            None
-        }
-    }));
-    loop {
-        let before = framed.len();
-        let callees = module
-            .functions
-            .iter()
-            .filter(|function| framed.contains(&function.id))
-            .flat_map(|function| &function.blocks)
-            .flat_map(|block| &block.operations)
-            .filter(|operation| operation.kind == "call.direct")
-            .filter_map(|operation| operation.function)
-            .collect::<Vec<_>>();
-        framed.extend(callees);
-        if framed.len() == before {
-            return framed;
-        }
-    }
-}
-
 struct SuspensionImport<'a> {
     function: &'a AbiFunction,
     suspends: bool,
-}
-
-struct Segment {
-    block: usize,
-    start: usize,
-    end: usize,
 }
 
 struct Frame {
@@ -115,8 +27,8 @@ struct Frame {
     value_locals: HashMap<usize, Vec<u32>>,
     value_types: HashMap<usize, usize>,
     lane_types: Vec<ValType>,
-    segments: Vec<Segment>,
-    entries: HashMap<usize, usize>,
+    segments: Vec<ResumeSegment>,
+    entries: BTreeMap<usize, usize>,
 }
 
 impl Frame {
@@ -125,7 +37,7 @@ impl Frame {
         layouts: &RuntimeTypeLayouts,
         function: &RuntimeFunction,
         manifest: &AbiManifest,
-        suspended: &BTreeSet<usize>,
+        plan: &ResumableFunction,
     ) -> Result<Self, String> {
         let mut definitions = BTreeMap::new();
         for block in &function.blocks {
@@ -143,27 +55,6 @@ impl Frame {
             let first = 2 + lane_types.len() as u32;
             value_locals.insert(*value, (first..first + lanes.len() as u32).collect());
             lane_types.extend_from_slice(lanes);
-        }
-        let mut segments = Vec::new();
-        let mut entries = HashMap::new();
-        for block in &function.blocks {
-            entries.insert(block.id, segments.len());
-            let mut start = 0;
-            for (index, operation) in block.operations.iter().enumerate() {
-                if boundary(operation, manifest, suspended) {
-                    segments.push(Segment {
-                        block: block.id,
-                        start,
-                        end: index + 1,
-                    });
-                    start = index + 1;
-                }
-            }
-            segments.push(Segment {
-                block: block.id,
-                start,
-                end: block.operations.len(),
-            });
         }
         let argument_offset = FRAME_HEADER + lane_types.len() as u32 * LANE_SIZE;
         let mut argument_size = 0;
@@ -188,8 +79,8 @@ impl Frame {
             value_locals,
             value_types: definitions.into_iter().collect(),
             lane_types,
-            segments,
-            entries,
+            segments: plan.segments.clone(),
+            entries: plan.block_entries.clone(),
         })
     }
 
@@ -203,17 +94,6 @@ impl Frame {
             store_lane(instructions, *type_, lane_offset(index as u32 + 2));
         }
     }
-}
-
-fn boundary(
-    operation: &RuntimeOperation,
-    manifest: &AbiManifest,
-    suspended: &BTreeSet<usize>,
-) -> bool {
-    if operation.kind == "call.direct" {
-        return suspended.contains(&operation.function.expect("checked direct call target"));
-    }
-    host_import(operation, manifest).is_some_and(|(_, imported)| imported.suspends)
 }
 
 fn host_import<'a>(
@@ -338,14 +218,14 @@ pub(super) fn emit(
     helpers: DynamicHelpers,
     static_data: &StaticData,
     direct: &HashMap<usize, u32>,
-    suspended: &BTreeSet<usize>,
+    plan: &SuspensionPlan,
     types: &mut FunctionTypes,
     functions: &mut FunctionSection,
     code: &mut CodeSection,
     hints: &mut BranchHints,
     imports: u32,
 ) -> Result<Vec<(String, u32)>, String> {
-    let framed = framed_functions(module);
+    let framed = plan.functions.keys().copied().collect::<BTreeSet<_>>();
     let callbacks = module
         .types
         .iter()
@@ -364,7 +244,13 @@ pub(super) fn emit(
         .map(|function| {
             Ok((
                 function.id,
-                Frame::new(module, layouts, function, manifest, &framed)?,
+                Frame::new(
+                    module,
+                    layouts,
+                    function,
+                    manifest,
+                    &plan.functions[&function.id],
+                )?,
             ))
         })
         .collect::<Result<BTreeMap<_, _>, String>>()?;
@@ -437,7 +323,6 @@ pub(super) fn emit(
                 helpers,
                 static_data,
                 direct,
-                &framed,
                 &roots,
             )?,
         )?;
@@ -453,7 +338,7 @@ pub(super) fn emit(
         else {
             continue;
         };
-        if !suspended.contains(function) {
+        if !plan.suspending.contains(function) {
             continue;
         }
         let Some(frame) = frames.get(function) else {
@@ -572,7 +457,6 @@ fn step(
     helpers: DynamicHelpers,
     static_data: &StaticData,
     direct: &HashMap<usize, u32>,
-    suspended: &BTreeSet<usize>,
     roots: &BTreeSet<usize>,
 ) -> Result<Function, String> {
     let mut locals = frame.lane_types.clone();
@@ -653,8 +537,9 @@ fn step(
             }
         }
         let mut stopped = false;
-        for operation in &block.operations[segment.start..segment.end] {
-            if !boundary(operation, manifest, suspended) {
+        for index in segment.start..segment.end {
+            let operation = &block.operations[index];
+            if !segment.suspends || index + 1 < segment.end {
                 emit_dynamic_operation(
                     &mut ins,
                     module,

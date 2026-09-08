@@ -433,7 +433,7 @@ export class DevelopmentRuntime {
                     `inactive hosted development provider ${link.unit}`,
                   );
                 }
-                return provider.hosted.callLinked(
+                return await provider.hosted.callLinked(
                   `blot:dev:${link.name}`,
                   arguments_,
                   context,

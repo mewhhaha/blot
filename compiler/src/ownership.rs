@@ -1764,6 +1764,50 @@ fn walk_apply(
     scope: &ScopeRef,
     analysis: &mut Analysis,
 ) -> Produced {
+    let operation_suspension = match analysis.callee_value(function) {
+        Some(Value::Operation { effect, name }) => match effect.as_ref() {
+            Value::Effect {
+                operation_ownership,
+                ..
+            } => Some(
+                operation_ownership
+                    .get(&name)
+                    .expect("checked operation has no suspension contract")
+                    .suspends,
+            ),
+            _ => unreachable!("checked operation has no effect declaration"),
+        },
+        _ => None,
+    };
+    let call_suspends = match operation_suspension {
+        Some(suspends) => suspends,
+        None => analysis
+            .expression_types
+            .get(&function)
+            .is_some_and(|type_| callable_may_suspend(type_, analysis.context)),
+    };
+    if call_suspends {
+        let mut current = Some(scope.clone());
+        while let Some(scope) = current {
+            let scope = scope.borrow();
+            for binding in scope.bindings.values() {
+                let binding = binding.borrow();
+                if binding.moved.is_none()
+                    && (binding.qualifier == Qualifier::Borrow || contains_borrow(&binding.owned))
+                {
+                    analysis.report(
+                        "BLOT_BORROW_ACROSS_SUSPENSION",
+                        format!("`{}` is borrowed in this scope and cannot remain live while this call suspends. Move owned state into the computation instead.", binding.name),
+                        span,
+                    );
+                }
+            }
+            if scope.lambda {
+                break;
+            }
+            current = scope.parent.clone();
+        }
+    }
     if let Expression::Intrinsic { name, .. } =
         &analysis.module.arena.expressions[function.0 as usize]
     {
@@ -2452,6 +2496,43 @@ fn walk_apply(
         resolve_pending(result, span, analysis),
         analysis,
     )
+}
+
+fn callable_may_suspend(type_: &Type, context: &Context) -> bool {
+    match type_ {
+        Type::Function { effects, .. } => effects_may_suspend(effects, context),
+        Type::Forall { body, .. } | Type::Qualified { body, .. } => {
+            callable_may_suspend(body, context)
+        }
+        Type::Union(members) => members
+            .iter()
+            .any(|member| callable_may_suspend(member, context)),
+        _ => false,
+    }
+}
+
+fn effects_may_suspend(effects: &Type, context: &Context) -> bool {
+    match effects {
+        Type::Effects(labels) => labels.iter().any(|label| {
+            let Some(Value::Effect {
+                operation_ownership,
+                ..
+            }) = context.effect_value(label)
+            else {
+                // Certificate replay can expose a row before its declaration is
+                // resident. That row cannot prove a borrowed call synchronous.
+                return true;
+            };
+            operation_ownership
+                .values()
+                .any(|contract| contract.suspends)
+        }),
+        Type::OpenEffects { .. } | Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| effects_may_suspend(member, context)),
+        _ => false,
+    }
 }
 
 fn validate_effect_handler_ownership(
@@ -4466,7 +4547,7 @@ fn recursive_structural_owned_result(
 fn recursive_result_ownership(type_: &Type, candidate: Produced) -> Option<Produced> {
     match type_ {
         Type::Forall { body, .. } => recursive_result_ownership(body, candidate),
-        Type::Array(_) | Type::Scratch(_) | Type::Resource { payload: _, .. } => Some(candidate),
+        Type::Array(_) | Type::Scratch(_) | Type::Resource { .. } => Some(candidate),
         Type::Region(element) => {
             let region = region_authority(candidate);
             if type_may_carry_ownership(element) {

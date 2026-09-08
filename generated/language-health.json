@@ -1,7 +1,7 @@
 {
   "protocol": {
     "compilerHostAbi": 7,
-    "checkedModuleCertificate": 18,
+    "checkedModuleCertificate": 19,
     "moduleSnapshotSchema": 3,
     "valueCapsuleSchema": 5,
     "runtimeHir": 12
@@ -187,6 +187,7 @@
     "BLOT_BAD_REBINDING_TARGET",
     "BLOT_BAD_TEST",
     "BLOT_BINDING_MISMATCH",
+    "BLOT_BORROW_ACROSS_SUSPENSION",
     "BLOT_BORROW_ARGUMENT_ESCAPES",
     "BLOT_BORROW_MOVED",
     "BLOT_BORROW_RESULT_ESCAPES",
@@ -742,19 +743,19 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 17132
+      "lines": 17157
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 15641
+      "lines": 15642
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 10948
+      "lines": 10966
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 8423
+      "lines": 8425
     },
     {
       "path": "compiler/src/eval.rs",
@@ -762,7 +763,7 @@
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 6719
+      "lines": 6800
     },
     {
       "path": "compiler/src/lower.rs",
@@ -774,7 +775,7 @@
     },
     {
       "path": "src/prelude/prelude.blot",
-      "lines": 3497
+      "lines": 3499
     },
     {
       "path": "compiler/src/value_capsule.rs",

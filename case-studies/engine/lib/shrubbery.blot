@@ -69,6 +69,7 @@ let selection_of = fn key => do:
 
 const render_voxels_with_simd = fn &voxels => do:
   let count = Array.length (&voxels)
+  let paint :: R.Paint
   let paint = fn draw => do:
     for index in Iter.range (0, count):
       let voxel = Array.expect_get ((&voxels), index)

@@ -358,8 +358,8 @@ const draw_sprite = fn (position, scale, texture, camera) => do:
 // and a different field subset at each of the four places that reads one, and
 // the shapes only agree because inference sees the record reach them — which it
 // can only do while the record does not leave.
-let frame ::
-  ({
+const Paint =
+  {
     .mesh = {
       .position = F32x4;
       .angle = Int;
@@ -371,7 +371,8 @@ let frame ::
       .scale = F32;
       .texture = Text;
     } -> Unit ~ { Canvas };
-  } -> Unit ~ { Canvas }) -> Unit ~ { Canvas, View }
+  } -> Unit ~ { Canvas }
+let frame :: Paint -> Unit ~ { Canvas, View }
 let frame = fn &paint => do:
   use Canvas.clear ()
   use yaw <- View.yaw ()
@@ -417,4 +418,5 @@ return {
   .unit = unit;
   .point = point;
   .frame = frame;
+  .Paint = Paint;
 }

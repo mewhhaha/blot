@@ -209,6 +209,12 @@ path but cannot duplicate it. A borrow preserves the ownership tree but cannot
 recover or move the owning parent, escape its lexical region, or cross the host
 boundary.
 
+At a possibly suspending call, ownership checking rejects every unconsumed
+borrow in the current lexical function scope. Direct operation contracts decide
+their own suspension mode; other calls consult their checked effect row. Open
+rows and effect declarations unavailable during certificate replay cannot prove
+synchronous execution. This is a lexical restriction, not last-use liveness.
+
 A function publishes a type-independent ownership summary describing parameter,
 callback, and result-path use. Passing a linear closure once to a function that
 invokes it twice is a duplication and is rejected.

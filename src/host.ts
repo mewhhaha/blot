@@ -105,7 +105,6 @@ export async function instantiateArtifact(
   const requested = new Map<string, Set<string>>();
   const externalNames = new Set<string>();
   const operations: HostOperation[] = [];
-  let codec: AbiCodec;
   let activeContext: ExecutionContext | undefined;
   for (const imported of manifest.imports) {
     if (
@@ -266,7 +265,7 @@ export async function instantiateArtifact(
   const memory = requiredMemory(instance, manifest);
   const realloc = requiredFunction(instance, manifest.abi.reallocExport);
   const moduleScope = new HostScope(options.scope);
-  codec = new AbiCodec(
+  const codec = new AbiCodec(
     memory,
     (size, alignment) => Number(realloc(0, 0, alignment, size)) >>> 0,
     moduleScope,
@@ -353,7 +352,7 @@ export async function instantiateArtifact(
         scope,
         callbackFactory(scope, authority),
       );
-      let failure: { readonly cause: unknown } | undefined;
+      let outcome: { readonly value: HostResult } | { readonly cause: unknown };
       invoke(execution, "cabi_enter");
       let frame: number | undefined;
       let completed = false;
@@ -380,7 +379,8 @@ export async function instantiateArtifact(
               callbackFactory(resultScope, authority),
             );
             completed = true;
-            return result;
+            outcome = { value: result };
+            break;
           }
           if (status !== 1) {
             throw new Error(`invalid Wasm suspension status ${status}`);
@@ -390,13 +390,13 @@ export async function instantiateArtifact(
           let signature: BlotAbiFunction;
           let perform: (
             inputs: readonly RuntimeValue[],
-          ) => Promise<RuntimeValue>;
+          ) => RuntimeValue | PromiseLike<RuntimeValue>;
           if (imported !== undefined) {
             if (!imported.contract.suspends) {
               throw new Error("Wasm requested a nonsuspending operation");
             }
             signature = imported.function;
-            perform = async (inputs) =>
+            perform = (inputs) =>
               operations[ordinal](
                 { ...execution, operation: imported },
                 ...inputs,
@@ -439,35 +439,35 @@ export async function instantiateArtifact(
           invoke(execution, "blot:resume", frame);
         }
       } catch (error) {
-        failure = { cause: error };
-        throw error;
-      } finally {
-        const cleanup: unknown[] = [];
-        try {
-          if (frame !== undefined) {
-            if (!completed) invoke(execution, "blot:cancel", frame);
-            invoke(execution, "blot:release", frame);
-          }
-        } catch (error) {
-          cleanup.push(error);
-        }
-        try {
-          invoke(execution, "cabi_leave");
-        } catch (error) {
-          cleanup.push(error);
-        }
-        signal.removeEventListener("abort", cancelScope);
-        scope.signal.removeEventListener("abort", cancelCall);
-        try {
-          await scope.close();
-        } catch (error) {
-          cleanup.push(error);
-        }
-        if (cleanup.length > 0) {
-          if (failure !== undefined) cleanup.unshift(failure.cause);
-          throw new AggregateError(cleanup, "guest call cleanup failed");
-        }
+        outcome = { cause: error };
       }
+      const cleanup: unknown[] = [];
+      try {
+        if (frame !== undefined) {
+          if (!completed) invoke(execution, "blot:cancel", frame);
+          invoke(execution, "blot:release", frame);
+        }
+      } catch (error) {
+        cleanup.push(error);
+      }
+      try {
+        invoke(execution, "cabi_leave");
+      } catch (error) {
+        cleanup.push(error);
+      }
+      signal.removeEventListener("abort", cancelScope);
+      scope.signal.removeEventListener("abort", cancelCall);
+      try {
+        await scope.close();
+      } catch (error) {
+        cleanup.push(error);
+      }
+      if (cleanup.length > 0) {
+        if ("cause" in outcome) cleanup.unshift(outcome.cause);
+        throw new AggregateError(cleanup, "guest call cleanup failed");
+      }
+      if ("cause" in outcome) throw outcome.cause;
+      return outcome.value;
     };
     // Install lifetime bookkeeping before a synchronous failure or completion.
     const promise = Promise.resolve().then(execute).finally(() => {

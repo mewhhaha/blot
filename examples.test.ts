@@ -204,6 +204,10 @@ const REJECTIONS: Record<
   },
   "borrow_moved": { code: "BLOT_BORROW_MOVED", stage: "check" },
   "borrow_stored": { code: "BLOT_BORROW_STORED", stage: "check" },
+  "borrow_across_suspension": {
+    code: "BLOT_BORROW_ACROSS_SUSPENSION",
+    stage: "check",
+  },
   "affine_resumed_twice": {
     code: "BLOT_LINEAR_CONSUMED_TWICE",
     stage: "check",

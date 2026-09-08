@@ -2019,7 +2019,7 @@ fn comptime_argument(value: &Value) -> Option<ComptimeArgument> {
         )),
         Value::RegionType(_)
         | Value::ScratchType(_)
-        | Value::ResourceType { payload: _, .. }
+        | Value::ResourceType { .. }
         | Value::Scratch { .. }
         | Value::DeferredScratch { .. }
         | Value::Region { .. }
@@ -6225,7 +6225,7 @@ pub(crate) fn record_signature_substitutions(
             | Value::Arrow { .. }
             | Value::RegionType(_)
             | Value::ScratchType(_)
-            | Value::ResourceType { payload: _, .. }
+            | Value::ResourceType { .. }
             | Value::TypeVariable(_) => Some(value.clone()),
             Value::Shape(fields) => Some(Value::Shape(
                 fields

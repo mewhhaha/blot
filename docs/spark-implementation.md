@@ -12,6 +12,12 @@ current-I/O context, detached task, public mutex, or shared object graph.
 
 ## 1. Portable suspension and ownership
 
+The follow-up to PR #118 adds lexical borrow exclusion for direct and transitive
+suspension, including unannotated callbacks with open effect rows. A separate
+Rust suspension plan now supplies the framed call graph and segment boundaries
+to development partitioning and emission. `pnpm test:suspension` runs the
+focused ownership, cancellation, allocation, callback, and development checks.
+
 - [x] Source `Effect.suspends` descriptor and checked suspension contracts.
 - [x] Rust-emitted resumable frames, including calls, recursion, and handlers.
       Loop state, nested calls, source-handler agreement, independent
@@ -57,21 +63,21 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
       blocked senders and receivers through actual Wasm calls. Affine arrays
       cross the channel and attempted source reuse is rejected. Resource
       messages retain the existing lease ownership checks.
-- [x] HTTP, clock, and event adapters with explicit subscription policy.
-      Real Wasm tests cover local HTTP responses, origin refusal, selected clocks,
+- [x] HTTP, clock, and event adapters with explicit subscription policy. Real
+      Wasm tests cover local HTTP responses, origin refusal, selected clocks,
       timer cancellation, latest delivery, FIFO delivery, overflow failure, and
       subscription cancellation with late events ignored.
 - [x] Cancel and drain affected scopes before hot reload; preserve unaffected
       scopes and services, reject stale completions, and retain old artifacts
-      for their cleanup.
-      The hosted development runtime now drains affected calls, runs cleanup
-      against the old provider map, retains the unchanged consumer instance,
-      rejects late results, and activates the new provider. Its real Wasm test
-      passes. Worker callbacks pin precompiled dependency bundles; nineteen revisions reuse
-      one worker and bound its program cache. Scoped suspending links preserve
-      caller resources, concurrent-call cancellation, provider cleanup, and
-      cooperative CPU checkpoints across worker units. Callback values themselves
-      still cannot cross a link; compiled callbacks remain in their owning unit.
+      for their cleanup. The hosted development runtime now drains affected
+      calls, runs cleanup against the old provider map, retains the unchanged
+      consumer instance, rejects late results, and activates the new provider.
+      Its real Wasm test passes. Worker callbacks pin precompiled dependency
+      bundles; nineteen revisions reuse one worker and bound its program cache.
+      Scoped suspending links preserve caller resources, concurrent-call
+      cancellation, provider cleanup, and cooperative CPU checkpoints across
+      worker units. Callback values themselves still cannot cross a link;
+      compiled callbacks remain in their owning unit.
 - [x] Browser example with async events and task-owned state.
       `pnpm example:spark-browser` serves the event actor, explicit I/O, and
       cleanup controls. Its HTTP/Wasm contract test passes. Interactive browser
@@ -80,16 +86,16 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
 ## 3. Parallel and speculative work
 
 - [x] `Spark.parallel` with precompiled worker entries and reusable worker
-      pools.
-      Node integration passes worker/module reuse, cancellation/drain, purity
-      rejection, and fresh private heaps after a trap. Submission transfers a
-      `WebAssembly.Module` once per worker and invokes its checked callback
-      entries with canonical captures. The Web Worker transport test passes in Deno;
-      there is no connected interactive browser in the current session.
+      pools. Node integration passes worker/module reuse, cancellation/drain,
+      purity rejection, and fresh private heaps after a trap. Submission
+      transfers a `WebAssembly.Module` once per worker and invokes its checked
+      callback entries with canonical captures. The Web Worker transport test
+      passes in Deno; there is no connected interactive browser in the current
+      session.
 - [x] `Spark.speculate` for pure work with affine deferred demand, buffered
-      failures, at-most-once execution, and cancellation of unused work.
-      Three Node worker tests cover skipped work, deferred promotion, buffered
-      traps before/after demand, and required progress beside unused CPU work.
+      failures, at-most-once execution, and cancellation of unused work. Three
+      Node worker tests cover skipped work, deferred promotion, buffered traps
+      before/after demand, and required progress beside unused CPU work.
 - [x] `Spark.map_parallel`, cooperative checkpoints, and progress guarantees.
       Source mapping preserves order and skips empty input. Pure CPU jobs yield
       and cancel. Speculation reserves required worker capacity. A scalar fold
@@ -102,8 +108,8 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
       queued and admitted cancellation, trap invalidation before cleanup, and
       pure/speculative refusal. The same shared example passes Web Workers in
       Deno. The i32 storage API validates source Int values at its boundary.
-- [x] Browser/Node worker tests and rerunnable iteration-time measurements.
-      The HTTP example test prints initial-build, provider-edit, and resource-edit
+- [x] Browser/Node worker tests and rerunnable iteration-time measurements. The
+      HTTP example test prints initial-build, provider-edit, and resource-edit
       timings. Node workers exercise development reload and bounded program
       eviction; the Web Worker transport is tested in Deno. Interactive browser
       verification remains unavailable.
@@ -115,17 +121,17 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
       agreement for typed const, rec, affine let, direct sequencing, and forced
       nullary sequencing. The Baba general profile is accepted without parser
       resolutions.
-- [x] `continue` through ordinary loop control desugaring. Nested loops,
-      guard exits, preserved accumulators, invalid targets, frontend parity,
-      and dynamic Wasm calls pass.
-- [x] Data-last collection APIs and effectful owned iterator traversal.
-      Existing `blot:pipeline` adapters cover borrowed arrays; `Iter.fold_with`
-      and `Iter.each` sequence effects over owned iterator state.
+- [x] `continue` through ordinary loop control desugaring. Nested loops, guard
+      exits, preserved accumulators, invalid targets, frontend parity, and
+      dynamic Wasm calls pass.
+- [x] Data-last collection APIs and effectful owned iterator traversal. Existing
+      `blot:pipeline` adapters cover borrowed arrays; `Iter.fold_with` and
+      `Iter.each` sequence effects over owned iterator state.
 - [x] Result/Option composition and lazy defaults. Callable type constructors
       carry source namespaces; both pure and suspending callbacks pass. Deferred
       defaults skip trap-producing expressions and are demanded at most once.
-- [x] Baba numeric separators, exponent floats, and hexadecimal integers.
-      The version-3 general parser profile remains accepted without resolutions.
+- [x] Baba numeric separators, exponent floats, and hexadecimal integers. The
+      version-3 general parser profile remains accepted without resolutions.
 - [x] Native editor holes with checked context and refusal to emit unresolved
       holes. `_` in expressions reports Rust-inferred expected and local types;
       filling the hole clears its diagnostic and permits emission.
@@ -135,21 +141,15 @@ observable regression tests. Final acceptance includes compiler, parser profile,
 Node, examples, conformance, package checks, and the game integration probes
 with zero unsupported results. Pure synchronous exports retain direct execution.
 
-Current verification: the native compiler suite passes all 479 tests and the
-Node suite passes all 222 tests, including the concurrent Unit-tail-recursion
-fix. Both native Web Worker tests and both HTTP example tests pass. The parser
-profile accepts all 69 islands in version-3 general mode; frontend parity and
-all 285 syntax checks pass. The accepted corpus compiles all 215 programs without
-refusals, and all 21 evaluator/Wasm conformance observations agree. Package
-checks pass all six cases. The game passes all 40 compiler probes with zero
-unsupported results and its full verification passes all 29 browser scenarios.
+The follow-up verifies all 480 native compiler tests, 225 Node tests, the two
+native Web Worker tests, all 215 accepted examples without refusals, 21
+evaluator/Wasm conformance cases, and six package checks. `pnpm test:suspension`
+contains 24 focused checks, including direct/transitive/open-row borrow refusal,
+late cancellation, and allocation retention until the last caller leaves. The
+regression runner now enforces deadlines from its parent process and its four
+harness checks pass. All 77 regression files pass, including the
+synchronous-timeout fixture.
 
-The wider regression run exercised 76 files. Its formatter and syntax failures
-were corrected by formatting the new example and recording the new island
-count; the focused reruns pass all 36 formatter and 285 syntax tests. The
-existing `scripts/node_regression_tests.test.ts` synchronous-timeout harness
-fails with `spawnSync ETIMEDOUT` and was excluded from that wider run. This
-implementation does not claim that the aggregate `pnpm test` command passes.
 `pnpm test:web-workers` runs the native Web Worker transport in Deno; the Node
 compatibility runner intentionally excludes that platform-specific file.
 
@@ -158,11 +158,9 @@ formula edit, and 0.15 ms for a text-resource edit. These are local observations
 from the rerunnable HTTP test, not latency guarantees. Resource edits invoke no
 compiler and worker submissions reuse precompiled modules.
 
-The final workspace compiler artifact is
-`7a94dd2da9c060a3ade642f62be54cb2d1896f191a8cf63249ec71c41cd92a34`
-(6,450,369 bytes, host ABI 7, guest ABI 3). The concurrent Unit-tail-recursion
-work supplied that last rebuild; the Spark, shared-memory, worker, and HTTP
-paths were checked again against it.
+The compiler artifact for this follow-up is
+`03cc6d2c1135de60789b4f2e7aa31175379aea2740dea685b03df19e934784a2` (6,461,463
+bytes, host ABI 7, checked-module certificate 19, guest ABI 3).
 
 Resumable frames reuse canonical request/result slots and tail frames. The
 shared bump arena still retains variable-length payload allocations and non-tail

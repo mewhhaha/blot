@@ -73,6 +73,7 @@ test("clock sleep uses the selected service and cancellation clears a pending ti
       now: () => 123n,
       sleep: async (duration) => {
         durations.push(duration);
+        await Promise.resolve();
       },
     });
     const clock = io.clock(root);

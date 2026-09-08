@@ -31,7 +31,7 @@ test("precompiled affine callbacks preserve captures and latent effects with eva
     };
     const tick: HostOperation = async (_context, value) => {
       assert.equal(typeof value, "bigint");
-      return BigInt(String(value)) * 2n;
+      return await Promise.resolve(BigInt(String(value)) * 2n);
     };
     const hosted = await instantiateArtifact(
       artifact,
