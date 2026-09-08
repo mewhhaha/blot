@@ -26,13 +26,14 @@ The normal compiler distribution supports development projects. The separate
 `compiler:build-development-profile` task adds compiler profiling counters; it
 is not needed to run this example. Source edits still incur checking; unchanged
 closed scalar call graphs can reuse specialization, and unchanged unit artifacts
-and browser instances are retained. Ordinary static resources bypass compilation.
+and browser instances are retained. Ordinary static resources bypass
+compilation.
 
 ## Caching across restarts
 
 The HTTP example and `blot dev` persist graph memos in
-`.blot/cache/development/`. Deleting that directory is safe. The library defaults
-to memory caching; opt into persistence with named options:
+`.blot/cache/development/`. Deleting that directory is safe. The library
+defaults to memory caching; opt into persistence with named options:
 
 ```ts
 const project = await DevelopmentProject.create("./blot.json", {
@@ -48,10 +49,10 @@ which `project.isCachePath(path)` is true.
 The current cache covers closed scalar functions, their helpers, generic
 instances, and recursive calls without runtime captures or effects. It validates
 cached graphs in Rust and still checks source after restart. Changed imports,
-includes, static captures, call demands, or representation prefixes force misses;
-an unchanged function signature alone is insufficient. Other functions compile
-normally. Restart still emits initial Wasm units and gives each browser a
-complete initial build.
+includes, static captures, call demands, or representation prefixes force
+misses; an unchanged function signature alone is insufficient. Other functions
+compile normally. Restart still emits initial Wasm units and gives each browser
+a complete initial build.
 
 `build.work` separates specialized bodies, reused bodies, and emitted units.
 `build.cache` reports disk loads, rejected entries, writes, and actual warnings.

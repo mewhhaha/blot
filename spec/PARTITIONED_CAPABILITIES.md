@@ -433,12 +433,12 @@ Read sharing remains immutable persistence or lexical borrowing. Concurrent
 shared mutation requires another algebra and synchronization semantics.
 
 The `blot:shared` library uses a separate host resource protocol, specified in
-`LANGUAGE.md` and `RUNTIME.md`. Its `Shared.Partition` and `Shared.Rejoin` values
-are opaque ABI leases over shared numeric buffers, with runtime identity and
-generation checks. They are not this document's proof-erased Slice capabilities
-or registration evidence for a new compiler ownership family. Only exclusive
-disjoint partitions and sequentially consistent atomic counters cross workers;
-no Store or guest object graph is shared.
+`LANGUAGE.md` and `RUNTIME.md`. Its `Shared.Partition` and `Shared.Rejoin`
+values are opaque ABI leases over shared numeric buffers, with runtime identity
+and generation checks. They are not this document's proof-erased Slice
+capabilities or registration evidence for a new compiler ownership family. Only
+exclusive disjoint partitions and sequentially consistent atomic counters cross
+workers; no Store or guest object graph is shared.
 
 ## 11. Registration requirements
 

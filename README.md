@@ -12,11 +12,11 @@ incrementality, and cost model. The
 compilation, runtime activation, and the rebuild latency gate. Run
 `pnpm example:hot-reload` for a
 [small browser example](case-studies/hot-reload/README.md) that replaces changed
-Wasm units while keeping the page running. Run `pnpm example:spark-browser`
-for an [event actor with explicit I/O](case-studies/spark-browser/README.md),
+Wasm units while keeping the page running. Run `pnpm example:spark-browser` for
+an [event actor with explicit I/O](case-studies/spark-browser/README.md),
 reusable workers, cancellation, and cleanup during reload. The source libraries
-`blot:spark`, `blot:channel`, `blot:io`, `blot:events`, and `blot:shared` provide
-structured concurrency and selected host services; the
+`blot:spark`, `blot:channel`, `blot:io`, `blot:events`, and `blot:shared`
+provide structured concurrency and selected host services; the
 [shared numeric example](examples/lib/shared.blot) gives workers disjoint
 partitions and an atomic progress counter. The
 [algorithm memory guide](docs/algorithm-memory.md) records when a consuming

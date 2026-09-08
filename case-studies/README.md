@@ -41,8 +41,9 @@ Run `pnpm example:hot-reload` for a [small HTTP example](hot-reload/README.md)
 with two Blot units executing in the browser. Formula edits replace only the
 provider; a text-resource edit invokes no compiler. It needs no WebGPU adapter.
 
-Run `pnpm example:spark-browser` for the [event actor example](spark-browser/README.md)
-with explicit I/O, subscriptions, cancellation, and source cleanup during reload.
+Run `pnpm example:spark-browser` for the
+[event actor example](spark-browser/README.md) with explicit I/O, subscriptions,
+cancellation, and source cleanup during reload.
 
 ## grep
 

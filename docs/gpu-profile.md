@@ -36,20 +36,21 @@ Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 and edge arrays directly. Declaring all 69 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
-`continue` and numeric separators, hexadecimal integers, and exponent floats
-add twelve lexer states, one island, six island states, five transitions,
-18,984 dense-transition bytes, and 13,582 packed bytes. Scratch summaries rise
-from 23 to 24 and parallel long-region islands from six to seven. Candidate
-multiplicity and contraction rounds stay fixed; the version-3 general profile
-is accepted without parser resolutions.
+`continue` and numeric separators, hexadecimal integers, and exponent floats add
+twelve lexer states, one island, six island states, five transitions, 18,984
+dense-transition bytes, and 13,582 packed bytes. Scratch summaries rise from 23
+to 24 and parallel long-region islands from six to seven. Candidate multiplicity
+and contraction rounds stay fixed; the version-3 general profile is accepted
+without parser resolutions.
 
 Inline `let`, `const`, and `use` annotations add four island states, seven
 island transitions, 5,952 dense-transition bytes, and 4,717 packed bytes to the
 checked-in plan. No parser resolutions are needed. Lexer states, island count,
-candidate multiplicity, contraction rounds, and parallel admission are unchanged.
-The table also corrects stale baseline counters: the preceding checked-in plan
-had 113 lexer states, 68 islands, 409 states, 423 transitions, 608,592 dense
-bytes, 476,218 packed bytes, 23 scratch summaries, and no root-loop proof.
+candidate multiplicity, contraction rounds, and parallel admission are
+unchanged. The table also corrects stale baseline counters: the preceding
+checked-in plan had 113 lexer states, 68 islands, 409 states, 423 transitions,
+608,592 dense bytes, 476,218 packed bytes, 23 scratch summaries, and no
+root-loop proof.
 
 Comma-separated case subjects and arm patterns add two island states, four
 island transitions, 3,024 dense-transition bytes, and 2,434 packed bytes. They

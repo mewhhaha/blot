@@ -73,10 +73,10 @@ artifact permits host resource reclamation but no further guest cleanup calls.
 A development worker program owns the captured revision's complete transitive
 bundle of precompiled modules. Bundle identity includes the provider modules,
 even when the entry module is unchanged. The canonical development-link bridge
-is shared by the ordinary host and workers. Program eviction occurs between
-jobs and drains all bundle instances; a trap invalidates the complete bundle.
-Bounded reuse cannot change at-most-once admission or select a newer provider
-for work that captured an earlier bundle.
+is shared by the ordinary host and workers. Program eviction occurs between jobs
+and drains all bundle instances; a trap invalidates the complete bundle. Bounded
+reuse cannot change at-most-once admission or select a newer provider for work
+that captured an earlier bundle.
 
 An undemanded speculative callback may be skipped, cancelled, or evaluated once.
 Its failure does not fail its scope until demand. Demand promotes that same
@@ -86,9 +86,9 @@ admission reserves capacity for required work and prioritizes it over queued
 speculation. Deferred demand is ordinary affine source staging around `join`.
 
 A resumable frame reserves canonical request and result slots sized for its
-largest suspending import. Sequential requests reuse those slots only after
-the previous request has completed or cancelled. Slots belong to the frame,
-so concurrently suspended calls cannot overwrite one another. Nested variable
+largest suspending import. Sequential requests reuse those slots only after the
+previous request has completed or cancelled. Slots belong to the frame, so
+concurrently suspended calls cannot overwrite one another. Nested variable
 length payloads retain their arena lifetime; slot reuse does not authorize a
 heap rewind while another call is live.
 
@@ -604,8 +604,8 @@ selected Spark scope. Each partition is a node with allocation identity,
 interval, generation, and one of idle, split, running, or joined states. A split
 records its exact two children and a one-shot witness. Join requires those
 children to be idle, consumes the witness, retires the children, and increments
-the parent's lease generation. Nested joins preserve node identity for the
-outer witness. Aliases cannot recover retired authority.
+the parent's lease generation. Nested joins preserve node identity for the outer
+witness. Aliases cannot recover retired authority.
 
 Worker admission validates all resource leaves against the checked callback
 argument type before claiming any partition. A loan contains copied canonical

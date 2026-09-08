@@ -406,77 +406,78 @@ After source and ownership checking, development specialization may reuse a
 completed scalar call graph at a configured root boundary. The graph includes
 ordinary helpers, closed generic instances, and recursive calls. It carries no
 checked source interface and cannot install one. Admission requires scalar
-parameters/results, an empty effect row, no runtime captures, and plain ownership.
-Captured effects, module closures, live state, Regions, Scratch, and continuations
-decline memoization. Captured source bodies reject effect creation, dynamic
-imports, handlers, and continuation primitives. Unused source methods may contain
-local storage primitives; the completed graph must contain only scalar operations
-and completion must not change the effect generation or operator attachment stamp.
-Other valid programs specialize normally.
+parameters/results, an empty effect row, no runtime captures, and plain
+ownership. Captured effects, module closures, live state, Regions, Scratch, and
+continuations decline memoization. Captured source bodies reject effect
+creation, dynamic imports, handlers, and continuation primitives. Unused source
+methods may contain local storage primitives; the completed graph must contain
+only scalar operations and completion must not change the effect generation or
+operator attachment stamp. Other valid programs specialize normally.
 
-The exact key retains the source signature, checked argument and result evidence,
-free values and their signatures,
-captured closure graphs, static float bits, type substitutions, and operator
-attachments. Type-variable numbers are consistently renamed within the key.
-Captured closures contribute SHA-256 identities of their full portable AST,
-synthetic-node annotations, import configuration, included bytes, and transitive
-source graph. Each module's local digest is memoized for its immutable revision;
-keys reference fixed-size digests instead of embedding the prelude repeatedly.
-The complete evidence uses a tagged MessagePack encoding hashed with SHA-256;
-shared immutable scope paths are encoded once per key and contribute their
-digest plus source dependencies. Resident pointer identity only avoids repeated
-encoding and never enters the portable digest.
-The checked operator registry's evidence is shared within one semantic request,
-and an effect-generation or attachment-stamp change discards it. Every request
-clears this memo before checking or invalidation. Its canonical type-variable map
-seeds each call's encoding, preserving aliases between registry and call evidence.
-The pinned `sha2` dependency supplies this compiler-owned digest without a host
-semantic callback or an independent parser. Occurrence addresses retain the
-expression/declaration and compiler steps plus each scope owner's exact local
-AST and configuration. Only this non-generative cache normalizes a revision nonce
-to that address; `ModuleRevision` has no portable serialization. Each scope is
-limited to 32 levels and 256 sites/steps; excessive provenance declines reuse.
-Configured reload roots, caller source span, and closed argument/result
-representations also participate. Runtime dependencies currently retain source
-dependencies; an unchanged interface alone cannot authorize consumer reuse.
+The exact key retains the source signature, checked argument and result
+evidence, free values and their signatures, captured closure graphs, static
+float bits, type substitutions, and operator attachments. Type-variable numbers
+are consistently renamed within the key. Captured closures contribute SHA-256
+identities of their full portable AST, synthetic-node annotations, import
+configuration, included bytes, and transitive source graph. Each module's local
+digest is memoized for its immutable revision; keys reference fixed-size digests
+instead of embedding the prelude repeatedly. The complete evidence uses a tagged
+MessagePack encoding hashed with SHA-256; shared immutable scope paths are
+encoded once per key and contribute their digest plus source dependencies.
+Resident pointer identity only avoids repeated encoding and never enters the
+portable digest. The checked operator registry's evidence is shared within one
+semantic request, and an effect-generation or attachment-stamp change discards
+it. Every request clears this memo before checking or invalidation. Its
+canonical type-variable map seeds each call's encoding, preserving aliases
+between registry and call evidence. The pinned `sha2` dependency supplies this
+compiler-owned digest without a host semantic callback or an independent parser.
+Occurrence addresses retain the expression/declaration and compiler steps plus
+each scope owner's exact local AST and configuration. Only this non-generative
+cache normalizes a revision nonce to that address; `ModuleRevision` has no
+portable serialization. Each scope is limited to 32 levels and 256 sites/steps;
+excessive provenance declines reuse. Configured reload roots, caller source
+span, and closed argument/result representations also participate. Runtime
+dependencies currently retain source dependencies; an unchanged interface alone
+cannot authorize consumer reuse.
 
 Version 1 retains exact type, type-name, and signature arena prefixes and the
-root's freshly established signature. Reuse requires the same function allocation
-position and matching prefixes. Referenced earlier functions must match their
-complete encoded bodies. Changed demands, allocation order, or representations
-miss instead of relocating an unproved reference. Restoration appends completed
-functions and representations, without restoring checking facts, active frames,
-capabilities, ownership authority, or project/browser baselines. Call operations
-retain the caller's source file; definitions retain their own origins.
+root's freshly established signature. Reuse requires the same function
+allocation position and matching prefixes. Referenced earlier functions must
+match their complete encoded bodies. Changed demands, allocation order, or
+representations miss instead of relocating an unproved reference. Restoration
+appends completed functions and representations, without restoring checking
+facts, active frames, capabilities, ownership authority, or project/browser
+baselines. Call operations retain the caller's source file; definitions retain
+their own origins.
 
-Rust owns the MessagePack format. Decoding validates its schema, arena references,
-scalar operation vocabulary and operand types, closed call signatures, unique SSA
-definitions, dominance, branch arguments, entry parameters, and returns. Runtime
-words decode through a finite compiler vocabulary. Current source and closure
-inputs must still match at use. This is a local compiler-output cache, never a
-package/certificate import path: a checksum detects corruption and does not grant
-source-interface authority.
+Rust owns the MessagePack format. Decoding validates its schema, arena
+references, scalar operation vocabulary and operand types, closed call
+signatures, unique SSA definitions, dominance, branch arguments, entry
+parameters, and returns. Runtime words decode through a finite compiler
+vocabulary. Current source and closure inputs must still match at use. This is a
+local compiler-output cache, never a package/certificate import path: a checksum
+detects corruption and does not grant source-interface authority.
 
 The resident graph cache uses a 64 MiB encoded-size budget and access-order
-eviction; object/container overhead is additional. Pending persistence references
-share entries and disappear on eviction. Libraries default to memory caching;
-`blot dev` and the HTTP example default to `.blot/cache/development/`. The disk
-namespace commits compiler bytes, the prelude snapshot, host ABI, cache schema,
-and target policy. Source must pass the current frontend before lookup, and its
-complete portable AST with origins enters the key; parser acceptance is never
-restored. SHA-256-named entries are verified before Rust admission, atomically
-renamed into place, and pruned oldest-first at 512 MiB across namespaces. Restart
-loads newest entries up to the resident byte budget. Temporary files are ignored.
-Corrupt/incompatible entries are reported misses; filesystem failures are reported
-while compilation continues with memory caching. Cache paths are Git-ignored and
-excluded from source watches.
+eviction; object/container overhead is additional. Pending persistence
+references share entries and disappear on eviction. Libraries default to memory
+caching; `blot dev` and the HTTP example default to `.blot/cache/development/`.
+The disk namespace commits compiler bytes, the prelude snapshot, host ABI, cache
+schema, and target policy. Source must pass the current frontend before lookup,
+and its complete portable AST with origins enters the key; parser acceptance is
+never restored. SHA-256-named entries are verified before Rust admission,
+atomically renamed into place, and pruned oldest-first at 512 MiB across
+namespaces. Restart loads newest entries up to the resident byte budget.
+Temporary files are ignored. Corrupt/incompatible entries are reported misses;
+filesystem failures are reported while compilation continues with memory
+caching. Cache paths are Git-ignored and excluded from source watches.
 
-`DevelopmentProject.create(path, { compiler, cache })` selects `disabled`, `memory`,
-or `disk` graph memoization. Disabling it leaves existing source and artifact
-invalidation intact. A fresh project returns every unit and a fresh browser
-instantiates every unit. Emission remains resident-only: restart may skip scalar
-body specialization and still emits its initial Wasm units. Cache writes never
-commit a project or runtime revision.
+`DevelopmentProject.create(path, { compiler, cache })` selects `disabled`,
+`memory`, or `disk` graph memoization. Disabling it leaves existing source and
+artifact invalidation intact. A fresh project returns every unit and a fresh
+browser instantiates every unit. Emission remains resident-only: restart may
+skip scalar body specialization and still emits its initial Wasm units. Cache
+writes never commit a project or runtime revision.
 
 ### 8.2 Development artifact transactions
 

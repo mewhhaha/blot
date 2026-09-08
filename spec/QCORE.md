@@ -83,7 +83,7 @@ rerunning inference. Each `FlatTypeNode` maps to one dedicated structural value:
 | `Function`                         | `StructuralFunction`                         |
 | `Record`, `RecordUpdate`           | `StructuralRecord`, `StructuralRecordUpdate` |
 | `Array`, `Region`, `Scratch`       | matching structural container                |
-| `Resource`                       | family name and invariant payload type       |
+| `Resource`                         | family name and invariant payload type       |
 | `Variant`                          | `StructuralVariant`                          |
 | `Effects`, `OpenEffects`           | `StructuralEffects`, `StructuralOpenEffects` |
 | `Union`, `Opaque`, `Top`, `Bottom` | matching structural value                    |

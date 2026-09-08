@@ -8,22 +8,21 @@ shows their cost. Every performance result must preserve the contracts in
 [`COMPILER.md`](COMPILER.md).
 
 Development preparation reports request-local work independently of artifact
-retention: residual call bodies actually specialized or restored from graph memos,
-grouped by source module, and units actually emitted. Export wrappers and calls
-eliminated entirely at compile time are outside the residual-body counters. A
-closed-program hit resets all counters to zero. These observations confer no
-semantic cache authority.
-The active-call-graph benchmark records initial activation and 20 edits per
-configured provider count, with every helper reachable, Int/F32 applications,
-and runtime recursion. Cache-disabled, resident-memory, and disk-backed runs use
-the same source paths in separate processes; a fourth process measures disk
-restart at the final saved revision. Every warm edit must transfer only its
-provider. The report retains startup, build and committed timings, memory, cache
-observations, and compiler work under the same before/after provenance checks as
-the catalog benchmark, without replacing that benchmark's latency or memory
-gates. Disk persistence is inside the build clock. Restart still checks source
-and emits all initial units; restored graph counts alone do not establish a
-latency improvement.
+retention: residual call bodies actually specialized or restored from graph
+memos, grouped by source module, and units actually emitted. Export wrappers and
+calls eliminated entirely at compile time are outside the residual-body
+counters. A closed-program hit resets all counters to zero. These observations
+confer no semantic cache authority. The active-call-graph benchmark records
+initial activation and 20 edits per configured provider count, with every helper
+reachable, Int/F32 applications, and runtime recursion. Cache-disabled,
+resident-memory, and disk-backed runs use the same source paths in separate
+processes; a fourth process measures disk restart at the final saved revision.
+Every warm edit must transfer only its provider. The report retains startup,
+build and committed timings, memory, cache observations, and compiler work under
+the same before/after provenance checks as the catalog benchmark, without
+replacing that benchmark's latency or memory gates. Disk persistence is inside
+the build clock. Restart still checks source and emits all initial units;
+restored graph counts alone do not establish a latency improvement.
 
 For source graph `G`, define cold compilation time as
 

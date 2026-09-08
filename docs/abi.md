@@ -43,32 +43,32 @@ An export with an indirect result also exports
 `cabi_post_blot:<source-name>(result_pointer)`. The caller must invoke it once,
 after it has finished reading that result.
 
-Host effects import operations from `blot:host/<capability>` under the manifest's
-`name`. `sourceName` records the source operation name; `operation` identifies
-one concrete specialization. A monomorphic operation uses its source name for
-all three. Additional specializations receive distinct import names. They use
-the same value layouts and flattening rules as exports.
-An import's checked `contract.suspends` distinguishes synchronous calls from
-requests issued by the suspension protocol below. A suspending operation must
-never be invoked through its direct import stub.
+Host effects import operations from `blot:host/<capability>` under the
+manifest's `name`. `sourceName` records the source operation name; `operation`
+identifies one concrete specialization. A monomorphic operation uses its source
+name for all three. Additional specializations receive distinct import names.
+They use the same value layouts and flattening rules as exports. An import's
+checked `contract.suspends` distinguishes synchronous calls from requests issued
+by the suspension protocol below. A suspending operation must never be invoked
+through its direct import stub.
 
 ## Portable suspension
 
-An export has `execution: "direct"`, `"resumable"`, or `"comptime"`. A
-resumable export retains its canonical flat parameters but returns an `i32`
-context pointer instead of its source result. Starting it allocates a frame;
-it does not run the computation. Source results keep their canonical memory
-layout, including scalars and Unit.
+An export has `execution: "direct"`, `"resumable"`, or `"comptime"`. A resumable
+export retains its canonical flat parameters but returns an `i32` context
+pointer instead of its source result. Starting it allocates a frame; it does not
+run the computation. Source results keep their canonical memory layout,
+including scalars and Unit.
 
 The context occupies 24 bytes, aligned to 16. Its memory32 words are: a private
-frame reference at offset 0, status at 4, manifest import ordinal at 8, canonical
-argument block pointer at 12, pending canonical result pointer at 16, and final
-canonical result pointer at 20. The caller must not inspect or modify the frame
-reference. Status is 0 (runnable), 1 (waiting), 2 (completed), 3 (cancelled),
-4 (yielded), or 5 (released). Requests contain no backend-private value encoding.
-An argument block lays out parameters in declaration order, aligning each to
-its canonical alignment. The result destination is compiler allocated; the host
-may use `cabi_realloc` for its nested buffers.
+frame reference at offset 0, status at 4, manifest import ordinal at 8,
+canonical argument block pointer at 12, pending canonical result pointer at 16,
+and final canonical result pointer at 20. The caller must not inspect or modify
+the frame reference. Status is 0 (runnable), 1 (waiting), 2 (completed), 3
+(cancelled), 4 (yielded), or 5 (released). Requests contain no backend-private
+value encoding. An argument block lays out parameters in declaration order,
+aligning each to its canonical alignment. The result destination is compiler
+allocated; the host may use `cabi_realloc` for its nested buffers.
 
 Development requests share this frame layout. Ordinals below `imports.length`
 select host operations; remaining ordinals index `links`. Each link declares
@@ -80,8 +80,8 @@ affected work and its cleanup drain.
 
 - `blot:poll(context, maximum_blocks) -> status` accepts runnable or yielded
   contexts and executes at most that many frame segments. Zero immediately
-  yields. It runs nested calls through a trampoline without keeping a Wasm
-  stack alive across host suspension.
+  yields. It runs nested calls through a trampoline without keeping a Wasm stack
+  alive across host suspension.
 - On status 1 the host copies arguments, executes the declared operation, and
   writes its valid canonical result at offset 16's destination. It then calls
   `blot:resume(context)` to make the waiting frame runnable.
@@ -93,45 +93,47 @@ affected work and its cleanup drain.
   their allocation lifetime, and must be called exactly once. Released context
   pointers and pending completions cannot be reused.
 
-Callers bracket argument allocation, execution, result copying, and release
-with balanced `cabi_enter`/`cabi_leave`. Allocations remain live while any context
-or caller bracket remains open; leaving the last one reclaims that allocation
+Callers bracket argument allocation, execution, result copying, and release with
+balanced `cabi_enter`/`cabi_leave`. Allocations remain live while any context or
+caller bracket remains open; leaving the last one reclaims that allocation
 region. Multiple suspended invocations may coexist. Pure synchronous calls
 retain their existing direct adapters and result post-return operations.
 
 Compiled source closures use `callback` descriptors with `entry`, a logical
 `function` signature, and a canonical `environment` record. Only the environment
-occupies memory or flat lanes; an entry is fixed by the checked descriptor, never
-chosen by a guest-supplied code pointer. The manifest's `callbacks` list records
-each synthetic `blot:callback:<id>` start adapter and its complete signature:
-one logical source argument followed by capture parameters in environment order.
-Callback starts always return suspension contexts, including pure callbacks.
-Their direct callees also have framed versions so polling remains bounded;
-ordinary pure exports retain direct adapters. Tail calls reuse a frame sized for
-all tail-reachable callees while preserving its parent continuation.
+occupies memory or flat lanes; an entry is fixed by the checked descriptor,
+never chosen by a guest-supplied code pointer. The manifest's `callbacks` list
+records each synthetic `blot:callback:<id>` start adapter and its complete
+signature: one logical source argument followed by capture parameters in
+environment order. Callback starts always return suspension contexts, including
+pure callbacks. Their direct callees also have framed versions so polling
+remains bounded; ordinary pure exports retain direct adapters. Tail calls reuse
+a frame sized for all tail-reachable callees while preserving its parent
+continuation.
 
-A host can reuse a precompiled `WebAssembly.Module` after validating its embedded
-manifest against the supplied sidecar. Worker submission transfers that module
-once per worker, then sends a checked callback entry and canonical captures.
-Every worker instance has its own private linear memory. The private-value
-executor refuses resource and callback captures rather than copying opaque
-identities into another runtime. It instantiates a fresh private heap after a
-trap and never retries the failed job.
+A host can reuse a precompiled `WebAssembly.Module` after validating its
+embedded manifest against the supplied sidecar. Worker submission transfers that
+module once per worker, then sends a checked callback entry and canonical
+captures. Every worker instance has its own private linear memory. The
+private-value executor refuses resource and callback captures rather than
+copying opaque identities into another runtime. It instantiates a fresh private
+heap after a trap and never retries the failed job.
 
 The host copies captures before returning from the requesting operation and
 publishes a scope-owned one-shot handle. It must not call a consumed or revoked
-handle, return a callback to guest code, or move a callback beyond the artifact's
-scope. Moving a handle revalidates all captured resource leases in its destination
-scope. This boundary does not serialize compiler values, source text, or a guest
-private heap. Callback starts accept at most 16 flattened parameters.
+handle, return a callback to guest code, or move a callback beyond the
+artifact's scope. Moving a handle revalidates all captured resource leases in
+its destination scope. This boundary does not serialize compiler values, source
+text, or a guest private heap. Callback starts accept at most 16 flattened
+parameters.
 
 The host adapter supplies an `AbortSignal` to each operation, observes caller
 cancellation before polling and after host completion, and drains outstanding
-host operations before releasing their context. An operation must cooperate
-with its signal for prompt cancellation. `Spark.scope` supplies structured job
-lifetimes through ordinary host effects. Registered source cleanup callbacks
-run after children and acquisitions drain, in reverse registration order with
-host disposers. Cleanup receives a masked child scope that can use still-live
+host operations before releasing their context. An operation must cooperate with
+its signal for prompt cancellation. `Spark.scope` supplies structured job
+lifetimes through ordinary host effects. Registered source cleanup callbacks run
+after children and acquisitions drain, in reverse registration order with host
+disposers. Cleanup receives a masked child scope that can use still-live
 ancestor leases. Closing an artifact retains its callback entries until cleanup
 finishes. A Wasm trap invalidates the artifact and skips guest finalizers while
 host resource disposal continues. Speculation and worker execution require
@@ -177,15 +179,15 @@ Variant payload slots join `i32` and `f32` as `i32`; other mismatched core types
 join as `i64`. Missing payload slots are zero.
 
 A resource has manifest shape
-`{ "kind": "resource", "name": "Family", "payload": { "kind": "unit" } }`,
-size 8 and alignment 8. Its positive token belongs to the explicit host runtime
+`{ "kind": "resource", "name": "Family", "payload": { "kind": "unit" } }`, size
+8 and alignment 8. Its positive token belongs to the explicit host runtime
 registry; it is neither an address nor an external handle supplied by source.
 The payload is a type parameter with no stored bytes. The host validates the
-declared family and payload type, runtime, live ownership scope, and
-ancestor relationship at every boundary. Tokens are never reused, and a
-completion carrying a revoked token is rejected. A conforming caller cannot
-fabricate or substitute resource tokens. The JavaScript adapter exposes frozen
-opaque objects instead of token integers.
+declared family and payload type, runtime, live ownership scope, and ancestor
+relationship at every boundary. Tokens are never reused, and a completion
+carrying a revoked token is rejected. A conforming caller cannot fabricate or
+substitute resource tokens. The JavaScript adapter exposes frozen opaque objects
+instead of token integers.
 
 A seal is nominal inside Blot but transparent at the caller byte boundary. Its
 manifest type records the public name and carrier, so conforming tooling and the
@@ -246,13 +248,12 @@ enclosing synchronous export call completes.
 
 This memory ownership is distinct from an operation's source ownership contract.
 Every host import declares `contract.input`, `contract.result`, and a Boolean
-`contract.suspends`. Each ownership summary
-summary is `unrestricted`, `affine`, or `linear`, or an exact recursive
-record/variant summary whose leaves use those modes. A consuming input transfers
-the corresponding Blot authority to the host; an affine or linear result
-transfers a fresh obligation to the module. The host must obey this logical
-protocol even when the carrier is a scalar or points into memory that remains
-borrowed only for the call.
+`contract.suspends`. Each ownership summary summary is `unrestricted`, `affine`,
+or `linear`, or an exact recursive record/variant summary whose leaves use those
+modes. A consuming input transfers the corresponding Blot authority to the host;
+an affine or linear result transfers a fresh obligation to the module. The host
+must obey this logical protocol even when the carrier is a scalar or points into
+memory that remains borrowed only for the call.
 
 `cabi_realloc` accepts alignments 1, 2, 4, 8, and 16. A zero new size releases a
 nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
@@ -360,12 +361,12 @@ compiler scheduling only and never executes a declared host effect.
 
 The host adapter admits canonical scalar and aggregate values and at most 16
 flat parameters. It admits affine canonical transfers and refuses split units
-and linear host transfers without a supported registered cleanup protocol.
-The direct path permits only one outstanding indirect result; resumable calls
-have separate result destinations. For every boundary the compiler
-does accept, all ABI-required range, representation, UTF-8, discriminant,
-boolean, pointer, extent, and ownership checks applicable to that signature must
-be present. Accepting an unchecked boundary is an invariant failure.
+and linear host transfers without a supported registered cleanup protocol. The
+direct path permits only one outstanding indirect result; resumable calls have
+separate result destinations. For every boundary the compiler does accept, all
+ABI-required range, representation, UTF-8, discriminant, boolean, pointer,
+extent, and ownership checks applicable to that signature must be present.
+Accepting an unchecked boundary is an invariant failure.
 
 ## JavaScript example
 
