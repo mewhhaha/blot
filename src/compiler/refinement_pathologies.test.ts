@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -28,7 +29,7 @@ for (const item of catalog.accepted) {
       const { instance } = await WebAssembly.instantiate(
         Uint8Array.from(artifact.wasm),
       );
-      const run = instance.exports["blot:default"];
+      const run = scalarExport(instance, "blot:default");
       assert.equal(typeof run, "function");
       assert.equal((run as () => unknown)(), BigInt(item.value));
     } finally {

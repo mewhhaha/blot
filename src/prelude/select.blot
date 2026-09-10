@@ -1,0 +1,27 @@
+open import "blot:prelude"
+const Channel = import "blot:channel"
+const Events = import "blot:events"
+const Io = import "blot:io"
+
+const Arm = fn message => #Channel (Channel.Receiver message) | #Events (Events.Subscription message) | #After (Io.Clock.Capability, Int)
+const Outcome = fn message => #Message (Option message) | #Timeout
+const Selection = fn message => { .index = Int; .outcome = Outcome message; }
+const SelectRuntime = @effect.host {
+  .wait = {
+    .signature = @forall (fn message => [Arm message] -> Selection message);
+    .input = #Affine;
+    .result = #Affine;
+    .suspends = True;
+  };
+}
+
+return {
+  .Arm = Arm;
+  .Outcome = Outcome;
+  .Selection = Selection;
+  .Effect = SelectRuntime;
+  .channel = fn receiver => #Channel receiver;
+  .events = fn subscription => #Events subscription;
+  .after = fn clock => fn milliseconds => #After (clock, milliseconds);
+  .wait = SelectRuntime.wait;
+  }

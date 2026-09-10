@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ async function agrees(
     const { instance } = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm),
     );
-    const run = instance.exports["blot:default"];
+    const run = scalarExport(instance, "blot:default");
     assert.equal(typeof run, "function");
     if (typeof run !== "function") throw new Error("missing runtime export");
     for (const [input, expected] of cases) {

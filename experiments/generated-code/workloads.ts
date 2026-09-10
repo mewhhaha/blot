@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 export interface Workload {
   readonly name: string;
   readonly programPath: string;
@@ -177,7 +178,7 @@ export async function instantiateWorkload(
       input: () => state.input,
     },
   });
-  const exported = instance.exports[workload.exportName];
+  const exported = scalarExport(instance, workload.exportName);
   if (!(exported instanceof Function)) {
     throw new Error(
       `benchmark artifact omitted the "${workload.exportName}" export`,

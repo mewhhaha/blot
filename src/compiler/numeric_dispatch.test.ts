@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ for (
       const { instance } = await WebAssembly.instantiate(
         Uint8Array.from(artifact.wasm).buffer,
       );
-      const negate = instance.exports[`blot:${name}`];
+      const negate = scalarExport(instance, `blot:${name}`);
       assert.equal(typeof negate, "function");
       if (typeof negate !== "function") {
         throw new Error(`missing ${name} export`);
@@ -53,7 +54,7 @@ test("Int comparisons do not specialize later float comparisons", async () => {
         ["less_f64", 2.5, 7.5],
       ] as const
     ) {
-      const less = instance.exports[`blot:${name}`];
+      const less = scalarExport(instance, `blot:${name}`);
       if (typeof less !== "function") throw new Error(`missing ${name} export`);
       assert.equal(less(lower, upper), 1);
       assert.equal(less(upper, lower), 0);
@@ -72,7 +73,7 @@ test("F32 remainder preserves the dividend sign at runtime", async () => {
     const { instance } = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm).buffer,
     );
-    const remainder = instance.exports["blot:remainder"];
+    const remainder = scalarExport(instance, "blot:remainder");
     assert.equal(typeof remainder, "function");
     if (typeof remainder !== "function") {
       throw new Error("missing remainder export");
@@ -101,7 +102,7 @@ test("chained F32 arithmetic retains the type of intermediate results", async ()
     const { instance } = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm).buffer,
     );
-    const run = instance.exports["blot:run"];
+    const run = scalarExport(instance, "blot:run");
     if (typeof run !== "function") throw new Error("missing run export");
     assert.equal(run(1.5, 2.5), 1.5);
   } finally {
@@ -146,7 +147,7 @@ for (
       const { instance } = await WebAssembly.instantiate(
         Uint8Array.from(artifact.wasm).buffer,
       );
-      const traverse = instance.exports["blot:traverse"];
+      const traverse = scalarExport(instance, "blot:traverse");
       assert.equal(typeof traverse, "function");
       if (typeof traverse !== "function") {
         throw new Error("missing traverse export");

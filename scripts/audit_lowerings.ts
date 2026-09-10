@@ -1,8 +1,10 @@
 import { Compiler } from "../src/compiler/session.ts";
 import type {
+  BlotRuntimeEdge,
   BlotRuntimeFunction,
+  BlotRuntimeInstruction,
   BlotRuntimeModule,
-  BlotRuntimeOperation,
+  BlotRuntimeTransition,
 } from "../src/runtime/hir.ts";
 
 const sources = [
@@ -16,6 +18,9 @@ const sources = [
   "case-studies/engine/game_loop.blot",
 ] as const;
 
+// ABI 4 whole-module budgets include allocation and canonical conversion code.
+// The ABI 3/4 comparison and explicit control-flow metric change are recorded
+// in docs/continuation-migration.md; operations still include calls.
 const budgets: Record<
   (typeof sources)[number],
   {
@@ -28,58 +33,60 @@ const budgets: Record<
   "examples/collect_principal_type.blot": {
     operations: 8,
     largestControlFlowGraph: 4,
-    wasmBytes: 2_500,
-    wasmLocalDeclarations: 8,
+    wasmBytes: 7_800,
+    wasmLocalDeclarations: 34,
   },
   "examples/lib/text_processing_eval.blot": {
     operations: 16,
     largestControlFlowGraph: 4,
-    wasmBytes: 4_500,
-    wasmLocalDeclarations: 20,
+    wasmBytes: 12_000,
+    wasmLocalDeclarations: 90,
   },
   "examples/polymorphic_collections.blot": {
     operations: 32,
     largestControlFlowGraph: 4,
-    wasmBytes: 9_000,
-    wasmLocalDeclarations: 24,
+    wasmBytes: 16_800,
+    wasmLocalDeclarations: 82,
   },
   "examples/runtime_memory_lowerings.blot": {
     operations: 500,
     largestControlFlowGraph: 24,
-    wasmBytes: 22_000,
-    wasmLocalDeclarations: 140,
+    wasmBytes: 45_600,
+    wasmLocalDeclarations: 345,
   },
   "experiments/generated-code/programs/star_dijkstra.blot": {
     operations: 550,
     largestControlFlowGraph: 36,
-    wasmBytes: 14_000,
-    wasmLocalDeclarations: 230,
+    wasmBytes: 35_200,
+    wasmLocalDeclarations: 440,
   },
   "examples/lib/owned_radix_sorts.blot": {
     operations: 900,
-    largestControlFlowGraph: 16,
-    wasmBytes: 24_000,
-    wasmLocalDeclarations: 330,
+    largestControlFlowGraph: 24,
+    wasmBytes: 50_700,
+    wasmLocalDeclarations: 580,
   },
   "examples/lib/owned_merge_sort.blot": {
     operations: 220,
-    largestControlFlowGraph: 16,
-    wasmBytes: 8_000,
-    wasmLocalDeclarations: 64,
+    largestControlFlowGraph: 24,
+    wasmBytes: 19_000,
+    wasmLocalDeclarations: 128,
   },
   "case-studies/engine/game_loop.blot": {
-    operations: 2_300,
-    largestControlFlowGraph: 88,
-    wasmBytes: 62_000,
-    wasmLocalDeclarations: 340,
+    operations: 8_600,
+    largestControlFlowGraph: 210,
+    wasmBytes: 227_000,
+    wasmLocalDeclarations: 550,
   },
 };
 
 interface LoweringReport {
   readonly source: string;
   readonly functions: number;
-  readonly blocks: number;
+  readonly continuations: number;
   readonly operations: number;
+  readonly instructions: number;
+  readonly calls: number;
   readonly storeLiterals: number;
   readonly staticStores: number;
   readonly staticStoreElements: number;
@@ -174,21 +181,32 @@ function summarize(
   wasm: Uint8Array,
 ): LoweringReport {
   const operations = runtime.functions.flatMap((runtimeFunction) =>
-    runtimeFunction.blocks.flatMap((block) => block.operations)
+    runtimeFunction.continuations.flatMap((continuation) =>
+      continuation.instructions
+    )
   );
-  const storeLiterals = operations.filter((operation) =>
-    operation.kind === "store.literal"
+  const calls = runtime.functions.reduce(
+    (count, function_) =>
+      count + function_.continuations.filter(
+        (continuation) => continuation.transition.kind === "call",
+      ).length,
+    0,
+  );
+  const storeLiterals = operations.filter((instruction) =>
+    instruction.operation.kind === "store.literal"
   );
   const storeGrowth = operations.filter(isStoreGrowth);
   const wasmShape = inspectWasmShape(wasm);
   return {
     source,
     functions: runtime.functions.length,
-    blocks: runtime.functions.reduce(
-      (count, runtimeFunction) => count + runtimeFunction.blocks.length,
+    continuations: runtime.functions.reduce(
+      (count, runtimeFunction) => count + runtimeFunction.continuations.length,
       0,
     ),
-    operations: operations.length,
+    operations: operations.length + calls,
+    instructions: operations.length,
+    calls,
     storeLiterals: storeLiterals.length,
     staticStores: runtime.staticStores.length,
     staticStoreElements: runtime.staticStores.reduce(
@@ -196,18 +214,22 @@ function summarize(
       0,
     ),
     dynamicLiteralElements: storeLiterals.reduce(
-      (count, operation) => count + operation.operands.length,
+      (count, instruction) => count + instruction.operands.length,
       0,
     ),
     ownedStoreGrowth:
-      storeGrowth.filter((operation) => operation.update === "owned-reuse")
+      storeGrowth.filter((instruction) =>
+        instruction.operation.update === "owned-reuse"
+      )
         .length,
     persistentStoreGrowth:
-      storeGrowth.filter((operation) => operation.update === "persistent")
+      storeGrowth.filter((instruction) =>
+        instruction.operation.update === "persistent"
+      )
         .length,
     largestControlFlowGraph: runtime.functions.reduce(
       (largest, runtimeFunction) =>
-        Math.max(largest, runtimeFunction.blocks.length),
+        Math.max(largest, runtimeFunction.continuations.length),
       0,
     ),
     wasmBytes: wasm.byteLength,
@@ -292,12 +314,12 @@ function inspectStaticStores(
   failures: string[],
 ): void {
   for (const runtimeFunction of runtime.functions) {
-    for (const operation of functionOperations(runtimeFunction)) {
-      if (operation.kind !== "store.literal") continue;
-      if (operation.staticStore === undefined) continue;
-      if (operation.operands.length === 0) continue;
+    for (const instruction of functionOperations(runtimeFunction)) {
+      if (instruction.operation.kind !== "store.literal") continue;
+      if (instruction.operation.staticStore === undefined) continue;
+      if (instruction.operands.length === 0) continue;
       failures.push(
-        `${operation.span.file}:${operation.span.start}: pooled Store literal retains ${operation.operands.length} runtime producers`,
+        `${instruction.definition.span.file}:${instruction.definition.span.start}: pooled Store literal retains ${instruction.operands.length} runtime producers`,
       );
     }
   }
@@ -309,41 +331,41 @@ function inspectDeadOperations(
 ): void {
   for (const runtimeFunction of runtime.functions) {
     const used = new Set<number>();
-    for (const block of runtimeFunction.blocks) {
-      for (const operation of block.operations) {
-        operation.operands.forEach((operand) => used.add(operand));
+    for (const continuation of runtimeFunction.continuations) {
+      for (const instruction of continuation.instructions) {
+        instruction.operands.forEach((operand) => used.add(operand));
       }
-      const terminator = block.terminator;
-      if (terminator.kind === "return") used.add(terminator.value);
-      if (terminator.kind === "branch") {
-        terminator.arguments.forEach((argument) => used.add(argument));
+      continuation.captures.forEach((capture) => used.add(capture.value));
+      const transition = continuation.transition;
+      if (transition.kind === "return") used.add(transition.value);
+      if (transition.kind === "branch") used.add(transition.condition);
+      if (transition.kind === "switch") used.add(transition.selector);
+      if (transition.kind === "call") {
+        transition.arguments.forEach((argument) => used.add(argument));
       }
-      if (terminator.kind === "conditional") {
-        used.add(terminator.condition);
-        terminator.consequentArguments.forEach((argument) =>
-          used.add(argument)
-        );
-        terminator.alternateArguments.forEach((argument) => used.add(argument));
+      for (const edge of successorEdges(transition)) {
+        for (const argument of edge.arguments) {
+          if (argument.kind === "value") used.add(argument.value);
+        }
       }
-      if (terminator.kind === "switch") used.add(terminator.selector);
     }
-    for (const operation of functionOperations(runtimeFunction)) {
-      if (used.has(operation.result)) continue;
-      if (!isDiscardableOperation(operation)) continue;
+    for (const instruction of functionOperations(runtimeFunction)) {
+      if (used.has(instruction.definition.value)) continue;
+      if (!isDiscardableOperation(instruction)) continue;
       failures.push(
-        `${operation.span.file}:${operation.span.start}: unused total ${operation.kind} remains in ${runtimeFunction.name}`,
+        `${instruction.definition.span.file}:${instruction.definition.span.start}: unused total ${instruction.operation.kind} remains in ${runtimeFunction.name}`,
       );
     }
   }
 }
 
-function isDiscardableOperation(operation: BlotRuntimeOperation): boolean {
-  if (operation.kind === "scalar") {
-    return operation.operator !== "divide" &&
-      operation.operator !== "remainder";
+function isDiscardableOperation(instruction: BlotRuntimeInstruction): boolean {
+  if (instruction.operation.kind === "scalar") {
+    return instruction.operation.operator !== "divide" &&
+      instruction.operation.operator !== "remainder";
   }
-  if (operation.kind === "convert") {
-    return operation.conversion !== "float-64-to-signed-integer-64";
+  if (instruction.operation.kind === "convert") {
+    return instruction.operation.conversion !== "float-64-to-signed-integer-64";
   }
   return [
     "constant",
@@ -361,7 +383,7 @@ function isDiscardableOperation(operation: BlotRuntimeOperation): boolean {
     "resource.move",
     "resource.borrow",
     "resource.freeze",
-  ].includes(operation.kind);
+  ].includes(instruction.operation.kind);
 }
 
 function inspectAdministrativeOperations(
@@ -369,94 +391,94 @@ function inspectAdministrativeOperations(
   failures: string[],
 ): void {
   for (const runtimeFunction of runtime.functions) {
-    const blocks = new Map(
-      runtimeFunction.blocks.map((block) => [block.id, block] as const),
+    const continuations = new Map(
+      runtimeFunction.continuations.map((continuation) =>
+        [continuation.id, continuation] as const
+      ),
     );
     const liveValues = new Set<number>();
-    const edges: Array<{
-      readonly target: number;
-      readonly arguments: readonly number[];
-    }> = [];
-    const definitions = new Map<number, BlotRuntimeOperation>();
-    for (const block of runtimeFunction.blocks) {
-      for (const operation of block.operations) {
-        definitions.set(operation.result, operation);
-        operation.operands.forEach((operand) => liveValues.add(operand));
+    const edges: BlotRuntimeEdge[] = [];
+    const definitions = new Map<number, BlotRuntimeInstruction>();
+    for (const continuation of runtimeFunction.continuations) {
+      for (const instruction of continuation.instructions) {
+        definitions.set(instruction.definition.value, instruction);
+        instruction.operands.forEach((operand) => liveValues.add(operand));
       }
-      const terminator = block.terminator;
-      if (terminator.kind === "branch") {
-        edges.push({
-          target: terminator.target,
-          arguments: terminator.arguments,
+      continuation.captures.forEach((capture) => liveValues.add(capture.value));
+      const transition = continuation.transition;
+      edges.push(...successorEdges(transition));
+      if (transition.kind === "branch") liveValues.add(transition.condition);
+      if (transition.kind === "switch") liveValues.add(transition.selector);
+      if (transition.kind === "return") liveValues.add(transition.value);
+      if (transition.kind === "call") {
+        transition.arguments.forEach((argument) => liveValues.add(argument));
+        const successor = continuations.get(transition.next.target);
+        if (successor === undefined) {
+          throw new Error("call has no successor continuation");
+        }
+        transition.next.arguments.forEach((argument, index) => {
+          if (argument.kind === "result") {
+            liveValues.add(successor.parameters[index].value);
+          }
         });
       }
-      if (terminator.kind === "conditional") {
-        liveValues.add(terminator.condition);
-        edges.push({
-          target: terminator.consequent,
-          arguments: terminator.consequentArguments,
-        });
-        edges.push({
-          target: terminator.alternate,
-          arguments: terminator.alternateArguments,
-        });
-      }
-      if (terminator.kind === "switch") liveValues.add(terminator.selector);
-      if (terminator.kind === "return") liveValues.add(terminator.value);
     }
     let changed = true;
     while (changed) {
       changed = false;
       for (const edge of edges) {
-        const target = blocks.get(edge.target);
+        const target = continuations.get(edge.target);
         if (target === undefined) {
           failures.push(
-            `${runtime.source}: ${runtimeFunction.name} targets absent block ${edge.target}`,
+            `${runtime.source}: ${runtimeFunction.name} targets absent continuation ${edge.target}`,
           );
           continue;
         }
         if (target.parameters.length !== edge.arguments.length) continue;
         target.parameters.forEach((parameter, index) => {
           const argument = edge.arguments[index];
-          if (argument === undefined || !liveValues.has(parameter.value)) {
+          if (
+            argument === undefined || argument.kind !== "value" ||
+            !liveValues.has(parameter.value)
+          ) {
             return;
           }
-          if (liveValues.has(argument)) return;
-          liveValues.add(argument);
+          if (liveValues.has(argument.value)) return;
+          liveValues.add(argument.value);
           changed = true;
         });
       }
     }
-    for (const block of runtimeFunction.blocks) {
-      if (block.id === runtimeFunction.entryBlock) continue;
-      for (const parameter of block.parameters) {
+    for (const continuation of runtimeFunction.continuations) {
+      if (continuation.id === runtimeFunction.entry) continue;
+      for (const parameter of continuation.parameters) {
         if (liveValues.has(parameter.value)) continue;
         failures.push(
-          `${parameter.span.file}:${parameter.span.start}: unused block parameter ${parameter.value} remains in ${runtimeFunction.name}`,
+          `${parameter.span.file}:${parameter.span.start}: unused continuation parameter ${parameter.value} remains in ${runtimeFunction.name}`,
         );
       }
     }
-    for (const operation of definitions.values()) {
-      const operand = operation.operands[0];
+    for (const instruction of definitions.values()) {
+      const operand = instruction.operands[0];
       if (operand === undefined) continue;
       const source = definitions.get(operand);
       if (
         source !== undefined &&
-        ((operation.kind === "indirect.load" &&
-          source.kind === "indirect.make") ||
-          (operation.kind === "indirect.make" &&
-            source.kind === "indirect.load"))
+        ((instruction.operation.kind === "indirect.load" &&
+          source.operation.kind === "indirect.make") ||
+          (instruction.operation.kind === "indirect.make" &&
+            source.operation.kind === "indirect.load"))
       ) {
         failures.push(
-          `${operation.span.file}:${operation.span.start}: inverse ${source.kind}/${operation.kind} roundtrip remains in ${runtimeFunction.name}`,
+          `${instruction.definition.span.file}:${instruction.definition.span.start}: inverse ${source.operation.kind}/${instruction.operation.kind} roundtrip remains in ${runtimeFunction.name}`,
         );
       }
       if (
-        operation.kind === "product.project" &&
-        source?.kind === "product.make"
+        instruction.operation.kind === "product.project" &&
+        source?.operation.kind === "product.make"
       ) {
         failures.push(
-          `${operation.span.file}:${operation.span.start}: product projection of a fresh product remains in ${runtimeFunction.name}`,
+          `${instruction.definition.span.file}:${instruction.definition.span.start}: product projection of a fresh product remains in ${runtimeFunction.name}`,
         );
       }
     }
@@ -483,31 +505,31 @@ function inspectLoopGrowth(
       .map((runtimeFunction) => runtimeFunction.id),
   );
   for (const runtimeFunction of runtime.functions) {
-    const cyclicBlocks = blocksInCycles(runtimeFunction);
-    for (const block of runtimeFunction.blocks) {
-      for (const operation of block.operations) {
-        const persistentStoreGrowth = isStoreGrowth(operation) &&
-          operation.update === "persistent";
-        const repeatedTextAppend = operation.kind === "text.append";
+    const cyclicContinuations = continuationsInCycles(runtimeFunction);
+    for (const continuation of runtimeFunction.continuations) {
+      for (const instruction of continuation.instructions) {
+        const persistentStoreGrowth = isStoreGrowth(instruction) &&
+          instruction.operation.update === "persistent";
+        const repeatedTextAppend = instruction.operation.kind === "text.append";
         if (!persistentStoreGrowth && !repeatedTextAppend) {
           continue;
         }
         if (
           !recursiveFunctions.has(runtimeFunction.id) &&
-          !cyclicBlocks.has(block.id)
+          !cyclicContinuations.has(continuation.id)
         ) {
           continue;
         }
         if (repeatedTextAppend) {
           failures.push(
-            `${operation.span.file}:${operation.span.start}: cyclic ${runtimeFunction.name} repeatedly copies a Text prefix`,
+            `${instruction.definition.span.file}:${instruction.definition.span.start}: cyclic ${runtimeFunction.name} repeatedly copies a Text prefix`,
           );
           continue;
         }
         failures.push(
-          `${operation.span.file}:${operation.span.start}: cyclic ${runtimeFunction.name} block ${block.id} uses persistent ${operation.kind} (recursive function: ${
+          `${instruction.definition.span.file}:${instruction.definition.span.start}: cyclic ${runtimeFunction.name} continuation ${continuation.id} uses persistent ${instruction.operation.kind} (recursive function: ${
             recursiveFunctions.has(runtimeFunction.id)
-          }, cyclic block: ${cyclicBlocks.has(block.id)})`,
+          }, cyclic continuation: ${cyclicContinuations.has(continuation.id)})`,
         );
       }
     }
@@ -521,54 +543,62 @@ function inspectLoopGrowth(
       if (functionId === undefined) break;
       const runtimeFunction = functions.get(functionId);
       if (runtimeFunction === undefined) continue;
-      for (const operation of functionOperations(runtimeFunction)) {
-        if (operation.kind !== "call.direct") continue;
-        if (operation.function === target) return true;
-        if (!functions.has(operation.function)) {
+      for (const continuation of runtimeFunction.continuations) {
+        const transition = continuation.transition;
+        if (
+          transition.kind !== "call" || transition.target.kind !== "function"
+        ) continue;
+        const callee = transition.target.function;
+        if (callee === target) return true;
+        if (!functions.has(callee)) {
           failures.push(
-            `${runtime.source}: ${runtimeFunction.name} calls absent function ${operation.function}`,
+            `${runtime.source}: ${runtimeFunction.name} calls absent function ${callee}`,
           );
           continue;
         }
-        if (visited.has(operation.function)) continue;
-        visited.add(operation.function);
-        pending.push(operation.function);
+        if (visited.has(callee)) continue;
+        visited.add(callee);
+        pending.push(callee);
       }
     }
     return false;
   }
 }
 
-function blocksInCycles(runtimeFunction: BlotRuntimeFunction): Set<number> {
+function successorEdges(
+  transition: BlotRuntimeTransition,
+): readonly BlotRuntimeEdge[] {
+  switch (transition.kind) {
+    case "jump":
+      return [transition.edge];
+    case "branch":
+      return [transition.consequent, transition.alternate];
+    case "switch":
+      return [...transition.cases.map(([, edge]) => edge), transition.fallback];
+    case "call":
+      return [transition.next];
+    case "return":
+    case "trap":
+      return [];
+  }
+}
+
+function continuationsInCycles(
+  runtimeFunction: BlotRuntimeFunction,
+): Set<number> {
   const successors = new Map<number, readonly number[]>();
-  for (const block of runtimeFunction.blocks) {
-    const terminator = block.terminator;
-    if (terminator.kind === "branch") {
-      successors.set(block.id, [terminator.target]);
-      continue;
-    }
-    if (terminator.kind === "conditional") {
-      successors.set(block.id, [
-        terminator.consequent,
-        terminator.alternate,
-      ]);
-      continue;
-    }
-    if (terminator.kind === "switch") {
-      successors.set(block.id, [
-        ...terminator.cases.map((arm) => arm.target),
-        terminator.fallback,
-      ]);
-      continue;
-    }
-    successors.set(block.id, []);
+  for (const continuation of runtimeFunction.continuations) {
+    successors.set(
+      continuation.id,
+      successorEdges(continuation.transition).map((edge) => edge.target),
+    );
   }
   const cyclic = new Set<number>();
-  for (const block of runtimeFunction.blocks) {
-    const initial = successors.get(block.id);
+  for (const continuation of runtimeFunction.continuations) {
+    const initial = successors.get(continuation.id);
     if (initial === undefined) {
       throw new Error(
-        `${runtimeFunction.name}: block ${block.id} has no successor facts`,
+        `${runtimeFunction.name}: continuation ${continuation.id} has no successor facts`,
       );
     }
     const pending = [...initial];
@@ -576,8 +606,8 @@ function blocksInCycles(runtimeFunction: BlotRuntimeFunction): Set<number> {
     while (pending.length > 0) {
       const candidate = pending.pop();
       if (candidate === undefined) break;
-      if (candidate === block.id) {
-        cyclic.add(block.id);
+      if (candidate === continuation.id) {
+        cyclic.add(continuation.id);
         break;
       }
       if (visited.has(candidate)) continue;
@@ -585,7 +615,7 @@ function blocksInCycles(runtimeFunction: BlotRuntimeFunction): Set<number> {
       const next = successors.get(candidate);
       if (next === undefined) {
         throw new Error(
-          `${runtimeFunction.name}: block ${candidate} has no successor facts`,
+          `${runtimeFunction.name}: continuation ${candidate} has no successor facts`,
         );
       }
       pending.push(...next);
@@ -596,17 +626,21 @@ function blocksInCycles(runtimeFunction: BlotRuntimeFunction): Set<number> {
 
 function functionOperations(
   runtimeFunction: BlotRuntimeFunction,
-): readonly BlotRuntimeOperation[] {
-  return runtimeFunction.blocks.flatMap((block) => block.operations);
+): readonly BlotRuntimeInstruction[] {
+  return runtimeFunction.continuations.flatMap((continuation) =>
+    continuation.instructions
+  );
 }
 
 function isStoreGrowth(
-  operation: BlotRuntimeOperation,
-): operation is BlotRuntimeOperation & {
-  readonly kind: "store.grow";
-  readonly update: "persistent" | "owned-reuse";
+  instruction: BlotRuntimeInstruction,
+): instruction is BlotRuntimeInstruction & {
+  readonly operation: {
+    readonly kind: "store.grow";
+    readonly update: "persistent" | "owned-reuse";
+  };
 } {
-  return operation.kind === "store.grow";
+  return instruction.operation.kind === "store.grow";
 }
 
 function inspectWasmShape(wasm: Uint8Array): WasmShape {

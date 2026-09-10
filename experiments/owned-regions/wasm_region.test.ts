@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fromFileUrl, join } from "@std/path";
 import { BlotError } from "../../src/diagnostic.ts";
@@ -8,17 +9,17 @@ import {
   createRuntimeImports,
 } from "@mewhhaha/gpupaper/runtime";
 import type {
+  BlotRuntimeInstruction,
   BlotRuntimeModule,
-  BlotRuntimeOperation,
 } from "../../src/runtime/hir.ts";
 
 const quicksortPath = fromFileUrl(
   new URL("./owned_slice_quicksort.blot", import.meta.url),
 );
 
-function allOperations(module: BlotRuntimeModule): BlotRuntimeOperation[] {
+function allOperations(module: BlotRuntimeModule): BlotRuntimeInstruction[] {
   return module.functions.flatMap((fn) =>
-    fn.blocks.flatMap((block) => [...block.operations])
+    fn.continuations.flatMap((continuation) => [...continuation.instructions])
   );
 }
 
@@ -61,7 +62,7 @@ async function instantiateDefault(
     ...imports,
     [coreRuntimeImportModule]: runtimeImports,
   });
-  const run = instance.exports["blot:default"];
+  const run = scalarExport(instance, "blot:default");
   if (typeof run !== "function") {
     throw new Error("compiled module omitted the default export");
   }
@@ -73,66 +74,77 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
     const hir = await compiler.prepare(quicksortPath);
     const operations = allOperations(hir);
     assert(
-      operations.every((operation) =>
-        !operation.kind.includes("quicksort") &&
-        !operation.kind.includes("partition")
+      operations.every((instruction) =>
+        !instruction.operation.kind.includes("quicksort") &&
+        !instruction.operation.kind.includes("partition")
       ),
       "generic quicksort must lower through ordinary Runtime-HIR operations",
     );
-    const storeWrites = operations.filter((operation) =>
-      operation.kind === "store.write"
+    const storeWrites = operations.filter((instruction) =>
+      instruction.operation.kind === "store.write"
     );
     assert(
       storeWrites.length > 0,
       "quicksort emitted no destructive Store writes",
     );
     assert(
-      storeWrites.every((operation) =>
-        operation.kind === "store.write" && operation.update === "owned-reuse"
+      storeWrites.every((instruction) =>
+        instruction.operation.kind === "store.write" &&
+        instruction.operation.update === "owned-reuse"
       ),
       "quicksort mutation must not copy a Store after Slice acquisition",
     );
-    const elementStore = storeWrites[0].type;
+    const elementStore = storeWrites[0].definition.type;
+    const elementLiterals = operations.filter((instruction) =>
+      instruction.operation.kind === "store.literal" &&
+      instruction.definition.type === elementStore
+    );
     assertEquals(
-      operations.filter((operation) =>
-        operation.kind === "store.empty" && operation.type === elementStore
-      ).length,
+      elementLiterals.length,
       1,
       "the element Store must be acquired once",
     );
     assertEquals(
-      operations.filter((operation) =>
-        operation.kind === "store.grow" && operation.type === elementStore
-      ).length,
+      elementLiterals[0].operands.length,
       9,
-      "only the nine source elements may grow the element Store",
+      "the literal must contain the nine source elements",
     );
     assertEquals(
-      operations.filter((operation) => operation.kind === "store.new").length,
+      operations.filter((instruction) =>
+        instruction.operation.kind === "store.grow" &&
+        instruction.definition.type === elementStore
+      ).length,
+      0,
+      "the closed source literal must not grow the element Store",
+    );
+    assertEquals(
+      operations.filter((instruction) =>
+        instruction.operation.kind === "store.new"
+      )
+        .length,
       0,
     );
     const recursive = hir.functions.find((function_) =>
-      function_.blocks.some((block) =>
-        block.operations.some((operation) =>
-          operation.kind === "call.direct" &&
-          operation.function === function_.id
-        )
+      function_.continuations.some((continuation) =>
+        continuation.transition.kind === "call" &&
+        continuation.transition.target.kind === "function" &&
+        continuation.transition.target.function === function_.id
       )
     );
     assert(recursive !== undefined, "quicksort lost its recursive function");
     assertEquals(
-      recursive.blocks.flatMap((block) => block.operations).filter(
-        (operation) =>
-          operation.kind === "call.direct" &&
-          operation.function === recursive.id,
+      recursive.continuations.filter((continuation) =>
+        continuation.transition.kind === "call" &&
+        continuation.transition.target.kind === "function" &&
+        continuation.transition.target.function === recursive.id
       ).length,
       2,
       "only the smaller-side calls should remain recursive calls",
     );
     assertEquals(
-      recursive.blocks.filter((block) =>
-        block.terminator.kind === "branch" &&
-        block.terminator.target === recursive.entryBlock
+      recursive.continuations.filter((continuation) =>
+        continuation.transition.kind === "jump" &&
+        continuation.transition.edge.target === recursive.entry
       ).length,
       2,
       "both larger-side tail calls should become loop back-edges",
@@ -141,7 +153,7 @@ Deno.test("owned Slice quicksort executes through Rust Core Wasm without recursi
     const artifact = await compiler.compile(quicksortPath);
     const run = await instantiateDefault(artifact.wasm, {
       "blot:host/Source": {
-        value(input: bigint) {
+        value(_scope: number, input: bigint) {
           assertEquals(input, 0n);
           return 9n;
         },
@@ -202,7 +214,7 @@ return first * 10 + last
     const artifact = await compiler.compile(path);
     for (const offset of [2n, -1n, 99n]) {
       const run = await instantiateDefault(artifact.wasm, {
-        "blot:host/Source": { offset: (_: bigint) => offset },
+        "blot:host/Source": { offset: (_scope: number, _: bigint) => offset },
       });
       assertEquals(run(), 46n);
     }
@@ -240,7 +252,7 @@ else:
     await withSource(source, async (compiler, path) => {
       const hir = await compiler.prepare(path);
       const operationKinds = new Set(
-        allOperations(hir).map((operation) => operation.kind),
+        allOperations(hir).map((instruction) => instruction.operation.kind),
       );
       assert(operationKinds.has("store.length"));
       assert(operationKinds.has("store.read"));
@@ -249,8 +261,8 @@ else:
       for (const [index, expected] of [[1n, case_.success], [-1n, 3n]]) {
         const run = await instantiateDefault(artifact.wasm, {
           "blot:host/Source": {
-            value: (_: bigint) => 9n,
-            index: (_: bigint) => index,
+            value: (_scope: number, _: bigint) => 9n,
+            index: (_scope: number, _: bigint) => index,
           },
         });
         assertEquals(run(), expected);
@@ -275,18 +287,17 @@ return add_depth 3
   await withSource(source, async (compiler, path) => {
     const hir = await compiler.prepare(path);
     const recursive = hir.functions.find((function_) =>
-      function_.blocks.some((block) =>
-        block.operations.some((operation) =>
-          operation.kind === "call.direct" &&
-          operation.function === function_.id
-        )
+      function_.continuations.some((continuation) =>
+        continuation.transition.kind === "call" &&
+        continuation.transition.target.kind === "function" &&
+        continuation.transition.target.function === function_.id
       )
     );
     assert(recursive !== undefined, "add_depth lost its recursive call");
     assertEquals(hir.signatures[recursive.signature].parameters.length, 2);
     const artifact = await compiler.compile(path);
     const run = await instantiateDefault(artifact.wasm, {
-      "blot:host/Source": { value: (_: bigint) => 9n },
+      "blot:host/Source": { value: (_scope: number, _: bigint) => 9n },
     });
     assertEquals(run(), 12n);
   });
@@ -310,8 +321,9 @@ return case Array.get (frozen, 0) of
   const persistentWrites = async (owned: boolean): Promise<number> =>
     await withSource(source(owned), async (compiler, path) => {
       const hir = await compiler.prepare(path);
-      return allOperations(hir).filter((operation) =>
-        operation.kind === "store.write" && operation.update === "persistent"
+      return allOperations(hir).filter((instruction) =>
+        instruction.operation.kind === "store.write" &&
+        instruction.operation.update === "persistent"
       ).length;
     });
 

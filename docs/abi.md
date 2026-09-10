@@ -3,7 +3,7 @@
 ## Status
 
 This document is the normative byte-level and caller-ownership contract for Blot
-Core Wasm ABI 3. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
+Core Wasm ABI 4. [`spec/RUNTIME.md`](../spec/RUNTIME.md) owns the semantic
 source-to-caller representation relation and public-type admissibility. The
 section **Runtime target status** below records current implementation coverage;
 it cannot weaken an ABI rule for an artifact the compiler accepts.
@@ -16,7 +16,7 @@ the current ABI version and public capability inventory.
 Runtime HIR's private Store, sum, or closure layouts. Generated adapters lift
 caller values into that private representation and lower results back out.
 
-The current contract is Blot Core Wasm ABI 3.0. A compatible compiler may add
+The current contract is Blot Core Wasm ABI 4.0. A compatible compiler may add
 manifest fields or exports that do not change an existing declaration. Changing
 a function signature, layout, ownership rule, import name, or value meaning
 requires a new ABI major.
@@ -30,18 +30,26 @@ contract.
 Every artifact exports:
 
 - `memory`, a memory32 linear memory;
-- `cabi_realloc(old_pointer, old_size, alignment, new_size) -> pointer`;
-- `cabi_enter()` and `cabi_leave()` to bracket caller allocations and their use;
+- `cabi_realloc(scope, old_pointer, old_size, alignment, new_size) -> pointer`;
+- `cabi_enter() -> scope` and `cabi_leave(scope)` to own each invocation's
+  allocations;
 - immutable globals `blot:abi-major` and `blot:abi-minor`; and
 - one function named `blot:<source-name>` per runtime module export.
+
+Every exported source function and synchronous imported operation takes the
+invocation's `i32` scope token before its canonical source parameters. This
+administrative parameter is absent from the manifest's logical `function` type
+and does not count toward its 16 source-parameter lane limit. A token is valid
+only in the instance that issued it. Each invocation, including a callback or a
+development-provider call, enters a separate scope before lowering arguments.
 
 A module whose result is a record exports one function per runtime field, under
 that field's name. A module whose result is anything else has one export whose
 source name is `default`, so the function is `blot:default`.
 
 An export with an indirect result also exports
-`cabi_post_blot:<source-name>(result_pointer)`. The caller must invoke it once,
-after it has finished reading that result.
+`cabi_post_blot:<source-name>(scope, result_pointer)`. The caller must invoke it
+once, after it has finished reading that result.
 
 Host effects import operations from `blot:host/<capability>` under the
 manifest's `name`. `sourceName` records the source operation name; `operation`
@@ -60,15 +68,16 @@ pointer instead of its source result. Starting it allocates a frame; it does not
 run the computation. Source results keep their canonical memory layout,
 including scalars and Unit.
 
-The context occupies 24 bytes, aligned to 16. Its memory32 words are: a private
+The context occupies 32 bytes, aligned to 16. Its memory32 words are: a private
 frame reference at offset 0, status at 4, manifest import ordinal at 8,
 canonical argument block pointer at 12, pending canonical result pointer at 16,
-and final canonical result pointer at 20. The caller must not inspect or modify
-the frame reference. Status is 0 (runnable), 1 (waiting), 2 (completed), 3
-(cancelled), 4 (yielded), or 5 (released). Requests contain no backend-private
-value encoding. An argument block lays out parameters in declaration order,
-aligning each to its canonical alignment. The result destination is compiler
-allocated; the host may use `cabi_realloc` for its nested buffers.
+and final canonical result pointer at 20. Offset 24 contains the private scope
+identity. The caller must not inspect or modify private context words. Status is
+0 (runnable), 1 (waiting), 2 (completed), 3 (cancelled), 4 (yielded), or 5
+(released). Requests contain no backend-private value encoding. An argument
+block lays out parameters in declaration order, aligning each to its canonical
+alignment. The result destination is compiler allocated; the host may use
+`cabi_realloc` for its nested buffers.
 
 Development requests share this frame layout. Ordinals below `imports.length`
 select host operations; remaining ordinals index `links`. Each link declares
@@ -78,26 +87,29 @@ never through its direct import stub. Linked calls inherit the caller's explicit
 scope, cancellation, and execution authority; an artifact is retained until
 affected work and its cleanup drain.
 
-- `blot:poll(context, maximum_blocks) -> status` accepts runnable or yielded
-  contexts and executes at most that many frame segments. Zero immediately
-  yields. It runs nested calls through a trampoline without keeping a Wasm stack
-  alive across host suspension.
+- `blot:poll(scope, context, maximum_blocks) -> status` accepts runnable or
+  yielded contexts and executes at most that many frame segments. Zero
+  immediately yields. It runs nested calls through a trampoline without keeping
+  a Wasm stack alive across host suspension.
 - On status 1 the host copies arguments, executes the declared operation, and
   writes its valid canonical result at offset 16's destination. It then calls
-  `blot:resume(context)` to make the waiting frame runnable.
+  `blot:resume(scope, context)` to make the waiting frame runnable.
 - On status 2 the host copies the final value from offset 20's destination.
-- `blot:cancel(context)` invalidates unfinished frame execution. This initial
-  protocol supports compiler-managed memory reclamation; it does not imply
-  arbitrary guest finalizers or owned external-resource cleanup.
-- `blot:release(context)` accepts only completed or cancelled contexts, ends
-  their allocation lifetime, and must be called exactly once. Released context
-  pointers and pending completions cannot be reused.
+- `blot:cancel(scope, context)` invalidates unfinished frame execution. This
+  initial protocol supports compiler-managed memory reclamation; it does not
+  imply arbitrary guest finalizers or owned external-resource cleanup.
+- `blot:release(scope, context)` accepts only completed or cancelled contexts,
+  ends their allocation lifetime, and must be called exactly once. Released
+  context pointers and pending completions cannot be reused.
 
-Callers bracket argument allocation, execution, result copying, and release with
-balanced `cabi_enter`/`cabi_leave`. Allocations remain live while any context or
-caller bracket remains open; leaving the last one reclaims that allocation
-region. Multiple suspended invocations may coexist. Pure synchronous calls
-retain their existing direct adapters and result post-return operations.
+Callers retain the token through argument allocation, execution, result copying,
+and context release, then call `cabi_leave(scope)` exactly once. Context release
+and scope exit are separate operations. A control operation checks both the
+token and the invocation's context. Stale tokens, a sibling's token, duplicate
+release, and resuming a cancelled or completed context trap. Releasing one
+invocation never keeps its allocations alive merely because a sibling is still
+suspended. All admitted host work must drain before context release and scope
+exit.
 
 Compiled source closures use `callback` descriptors with `entry`, a logical
 `function` signature, and a canonical `environment` record. Only the environment
@@ -146,7 +158,7 @@ representation; valid UTF-8 preserves textual substring boundaries.
 
 ## Core signatures
 
-ABI 3 uses the memory32, UTF-8 subset of the WebAssembly Component Model
+ABI 4 uses the memory32, UTF-8 subset of the WebAssembly Component Model
 Canonical ABI for values. Direct signatures use these rules:
 
 - at most 16 flat parameters;
@@ -229,22 +241,22 @@ Nested strings, arrays, records, and variants recursively use these rules.
 
 ## Ownership
 
-Parameters are borrowed for the duration of a call. The callee never releases
-caller-owned parameter memory.
+Canonical parameter buffers belong to the invocation scope. Entry validates and
+copies them into private values, then releases their canonical temporary roots.
+A caller must not use those buffers after entry. Private values and canonical
+buffers never share representation or ownership, including nested arrays and
+interior Text slices.
 
-Results are owned by the caller until post-return:
+Indirect results remain readable until `cabi_post_*(scope, result_pointer)`,
+called exactly once after copying the result. Post-return releases all canonical
+temporary roots for that result. Direct scalar results need no post-return. The
+caller leaves the scope after post-return. Each scope permits at most one
+outstanding call or result; independent calls use independent scopes.
 
-1. call the export;
-2. read or copy the result;
-3. call its declared `cabi_post_*` export exactly once.
-
-Post-return recursively releases nested text and array buffers and then the
-indirect result record. Direct scalar results need no post-return.
-
-Hosts returning an indirect imported result write into the result pointer
-provided by the module. They allocate nested buffers with the module's
-`cabi_realloc`. The module consumes and releases those buffers before the
-enclosing synchronous export call completes.
+Hosts returning imported results write into the compiler-provided canonical
+result destination and allocate nested buffers with `cabi_realloc` using the
+operation's token. After validating and copying the response, the compiler
+releases its canonical temporary roots before executing the successor.
 
 This memory ownership is distinct from an operation's source ownership contract.
 Every host import declares `contract.input`, `contract.result`, and a Boolean
@@ -256,8 +268,9 @@ must obey this logical protocol even when the carrier is a scalar or points into
 memory that remains borrowed only for the call.
 
 `cabi_realloc` accepts alignments 1, 2, 4, 8, and 16. A zero new size releases a
-nonzero old pointer and returns zero. Invalid alignment, size, pointer, UTF-8,
-boolean, variant discriminant, or array length traps.
+nonzero old pointer and returns zero. An old allocation must belong to the
+selected scope and be uniquely owned. Invalid or stale scope, alignment, size,
+pointer, UTF-8, boolean, variant discriminant, or array length traps.
 
 Every artifact the compiler accepts must perform the required validation for its
 admitted public types before constructing a Blot value. If the production target
@@ -292,12 +305,12 @@ the provider unit, its compiler-generated `blot:dev:*` export, the corresponding
 are private to one successful development build and are not a stable package or
 production ABI. Production artifacts omit `links`.
 
-Development units retain ABI 3's one-memory module contract, so linked units do
+Development units retain ABI 4's one-memory module contract, so linked units do
 not import or share memories. A development host copies parameters and results
-recursively through canonical layouts, calls an indirect result's post-return
-export after copying, and never exposes one unit's pointers to another. The
-source ownership contract remains distinct from these temporary canonical
-copies.
+recursively through canonical layouts, enters a distinct provider scope, calls
+an indirect result's post-return export after copying, and never exposes one
+unit's pointers to another. The source ownership contract remains distinct from
+these temporary canonical copies.
 
 The sidecar and custom-section bytes are identical, including the final newline.
 The canonical type tree contains record field names, variant case names, and
@@ -306,7 +319,7 @@ than dependent on private constructor numbers.
 
 ## Runtime target status
 
-This section is operational status, not a relaxation of ABI 3.
+This section is operational status, not a relaxation of ABI 4.
 
 Ordinary semantic analysis also runs public-layout preflight without emitting a
 Wasm binary. Its `targetPreflight` fact records whether the inferred boundary is
@@ -324,23 +337,22 @@ host imports, closed composite results, and the canonical dynamic `Text`
 calculus used by the terminal case study. A `Text` host result uses an indirect
 result header, is range- and UTF-8-validated before observation, and may flow
 through comparison, concatenation, control, and later `Text -> Unit` host calls.
-Generated unit-payload control sums remain internal. Direct-result calls restore
-their allocation checkpoint before returning. Closed composite calls permit one
-outstanding result: the matching `cabi_post_*` restores the call's allocation
-checkpoint in constant time. Reentry, a wrong root pointer, a post-return for
-another export, and double post-return trap.
+Generated control sums remain internal. The owned continuation graph determines
+last-use releases and reference transfers on each chosen edge. Private heap
+allocations have explicit owners; nested initialized elements retain child
+owners, and Text slices retain their backing owner. A free-list allocator reuses
+released blocks. Non-tail child frames are freed on completion; tail calls reuse
+frame capacity. An invocation's allocation scope force-reclaims remaining blocks
+after traps or cancellation and drained host work. Wasm memory retains its high
+water capacity, while reusable live allocations follow the computation's live
+state. `blot:live-bytes`, `blot:live-allocations`, and `blot:live-scopes` expose
+current allocator measurements; byte counts exclude private headers and scopes.
 
-Runtime HIR schema 6 retains private `indirect` roots for positive recursive
-algebraic values. Their targets live in the current export call's scratch arena
-and recursive edges are memory32 pointers. ABI 3 defines no caller encoding for
-such a root: it is admitted only as an internal value whose eventual public
-observation has a supported non-recursive type. Public-layout construction
-rejects any signature that exposes it.
-
-Schema 6 also retains private Scratch values as a memory32 pointer, initialized
-length, and capacity. Scratch has no ABI 3 caller encoding and is rejected in
-public signatures and initialized public aggregates; only a finished Array may
-cross the boundary.
+Runtime HIR's private `indirect` roots represent positive recursive algebraic
+values. They retain their initialized targets. ABI 4 defines no caller encoding
+for such a root; only an eventual supported non-recursive observation may cross
+an adapter. Scratch is also private: pointer, initialized length, capacity, and
+owner. Only a finished Array may cross the boundary.
 
 Schema 6 retains residual float-vector shuffle operations. Their immediate lane
 selectors are represented by four dominating private `integer-32` constants;
@@ -378,7 +390,7 @@ const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
 let memory;
 const instance = await WebAssembly.instantiate(module, {
   "blot:host/Console": {
-    write(pointer, length) {
+    write(scope, pointer, length) {
       const bytes = new Uint8Array(memory.buffer, pointer, length);
       console.log(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     },
@@ -386,5 +398,10 @@ const instance = await WebAssembly.instantiate(module, {
 });
 memory = instance.exports.memory;
 
-instance.exports["blot:default"]();
+const scope = instance.exports.cabi_enter();
+try {
+  instance.exports["blot:default"](scope);
+} finally {
+  instance.exports.cabi_leave(scope);
+}
 ```

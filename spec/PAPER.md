@@ -646,7 +646,7 @@ Malformed UTF-8, booleans, discriminants, pointers, alignments, lengths, and
 ownership state trap before an invalid source value is constructed.
 
 `RUNTIME.md` owns the semantic representation relation and admissible type
-boundary. `docs/abi.md` owns exact ABI 3 bytes and caller ownership. A seal's
+boundary. `docs/abi.md` owns exact ABI 4 bytes and caller ownership. A seal's
 public name is present in the manifest and conformance relation, not dynamically
 inside equal raw carrier bytes. Nominal ABI safety therefore assumes a caller
 that obeys the declared manifest.

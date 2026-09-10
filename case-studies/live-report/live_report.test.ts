@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -69,7 +70,7 @@ async function runtimeScore(
   const { instance } = await WebAssembly.instantiate(
     Uint8Array.from(artifact.wasm),
   );
-  const score = instance.exports["blot:score"];
+  const score = scalarExport(instance, "blot:score");
   assert.equal(typeof score, "function");
   if (typeof score !== "function") throw new Error("score export is missing");
   return score(quantity);

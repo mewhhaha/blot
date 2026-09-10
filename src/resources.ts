@@ -4,6 +4,7 @@ const resourceBrand: unique symbol = Symbol("Blot resource");
 const registerResource = Symbol("register resource");
 const trackAcquisition = Symbol("track acquisition");
 const requireResource = Symbol("require resource");
+const releaseResource = Symbol("release resource");
 const cleanupScope = Symbol("masked cleanup scope");
 
 export interface HostResource {
@@ -29,6 +30,12 @@ interface Registry {
   readonly tokens: Map<bigint, Lease>;
 }
 
+interface Cleanup {
+  previous: Cleanup | undefined;
+  next: Cleanup | undefined;
+  readonly finalize: () => Promise<void>;
+}
+
 let nextResourceId = 1n;
 
 export interface ResourceFamily<T> {
@@ -39,6 +46,7 @@ export interface ResourceFamily<T> {
     dispose?: (value: T) => void | Promise<void>,
   ): HostResource;
   get(handle: unknown): T;
+  release(handle: unknown): Promise<void>;
   acquire(
     scope: HostScope,
     create: (signal: AbortSignal) => Promise<T>,
@@ -52,8 +60,9 @@ export class HostScope {
   readonly #registry: Registry;
   readonly #parent: HostScope | undefined;
   readonly #children = new Set<HostScope>();
-  readonly #leases: Lease[] = [];
-  readonly #cleanup: (() => Promise<void>)[] = [];
+  readonly #leases = new Map<Lease, Cleanup>();
+  #lastCleanup: Cleanup | undefined;
+  readonly #releases = new Set<Promise<void>>();
   readonly #pending = new Set<Promise<unknown>>();
   readonly #closers = new Set<() => Promise<void>>();
   readonly #controller = new AbortController();
@@ -93,9 +102,9 @@ export class HostScope {
   }
 
   get hasLifetimes(): boolean {
-    return this.#children.size > 0 || this.#leases.length > 0 ||
+    return this.#children.size > 0 || this.#leases.size > 0 ||
       this.#pending.size > 0 || this.#closers.size > 0 ||
-      this.#cleanup.length > 0;
+      this.#lastCleanup !== undefined || this.#releases.size > 0;
   }
 
   get isCleanup(): boolean {
@@ -117,7 +126,8 @@ export class HostScope {
 
   onExit(finalize: (scope: HostScope) => Promise<void>): void {
     this.assertOpen();
-    this.#cleanup.push(async () => {
+    const cleanup = this.#appendCleanup(async () => {
+      this.#removeCleanup(cleanup);
       if (!this.#guestFinalizers) return;
       const masked = new HostScope(this, cleanupScope);
       let failure: { readonly cause: unknown } | undefined;
@@ -221,17 +231,36 @@ export class HostScope {
     };
     this.#registry.handles.set(handle, lease);
     this.#registry.tokens.set(lease.id, lease);
-    this.#leases.push(lease);
-    this.#cleanup.push(async () => {
-      if (lease.state.kind !== "live") {
-        throw new Error("scope contains an already released resource");
-      }
-      const dispose = lease.state.dispose;
-      lease.state = { kind: "released" };
-      this.#registry.tokens.delete(lease.id);
-      await dispose();
-    });
+    this.#leases.set(
+      lease,
+      this.#appendCleanup(() => this[releaseResource](lease)),
+    );
     return handle;
+  }
+
+  [releaseResource](lease: Lease): Promise<void> {
+    const cleanup = this.#leases.get(lease);
+    if (lease.state.kind !== "live" || cleanup === undefined) {
+      throw new Error("resource lease is absent from its owning scope");
+    }
+    const dispose = lease.state.dispose;
+    lease.state = { kind: "released" };
+    this.#registry.handles.delete(lease.handle);
+    this.#registry.tokens.delete(lease.id);
+    this.#leases.delete(lease);
+    this.#removeCleanup(cleanup);
+    // Publish disposal before invoking host code that may reenter close/release.
+    const completion = Promise.withResolvers<void>();
+    const pending = completion.promise.finally(() => {
+      if (this.#phase === "open") this.#releases.delete(pending);
+    });
+    this.#releases.add(pending);
+    try {
+      completion.resolve(dispose());
+    } catch (error) {
+      completion.reject(error);
+    }
+    return pending;
   }
 
   [trackAcquisition]<T>(promise: Promise<T>): Promise<T> {
@@ -276,7 +305,7 @@ export class HostScope {
     return lease.handle;
   }
 
-  [requireResource](handle: unknown, family: object): HostResource {
+  [requireResource](handle: unknown, family: object): Lease {
     if (typeof handle !== "object" || handle === null) {
       throw new TypeError("expected an opaque host resource");
     }
@@ -290,7 +319,7 @@ export class HostScope {
         "resource has the wrong family, belongs to another runtime, or is revoked",
       );
     }
-    return lease.handle;
+    return lease;
   }
 
   close(
@@ -310,6 +339,19 @@ export class HostScope {
           if (error !== cancellation) failures.push(error);
         }
       };
+      const drainReleases = async () => {
+        while (this.#releases.size > 0) {
+          await Promise.all([...this.#releases].map(async (pending) => {
+            try {
+              await pending;
+            } catch (error) {
+              failures.push(error);
+            } finally {
+              this.#releases.delete(pending);
+            }
+          }));
+        }
+      };
       await Promise.all([...this.#closers].map((close) => capture(close)));
       await Promise.all(
         [...this.#children].map((child) =>
@@ -319,16 +361,19 @@ export class HostScope {
       await Promise.all(
         [...this.#pending].map((pending) => capture(() => pending)),
       );
+      await drainReleases();
       this.#phase = "finalizing";
-      for (const finalize of this.#cleanup.reverse()) {
+      while (this.#lastCleanup !== undefined) {
+        const finalizing = this.#lastCleanup.finalize();
         try {
-          await finalize();
+          await finalizing;
         } catch (error) {
           failures.push(error);
+        } finally {
+          this.#releases.delete(finalizing);
         }
+        await drainReleases();
       }
-      this.#leases.length = 0;
-      this.#cleanup.length = 0;
       this.#closers.clear();
       this.#phase = "closed";
       if (this.#parent !== undefined) this.#parent.#children.delete(this);
@@ -338,6 +383,21 @@ export class HostScope {
     });
     this.cancel(cancellation);
     return this.#closing;
+  }
+
+  #appendCleanup(finalize: () => Promise<void>): Cleanup {
+    const cleanup = { previous: this.#lastCleanup, next: undefined, finalize };
+    if (this.#lastCleanup !== undefined) this.#lastCleanup.next = cleanup;
+    this.#lastCleanup = cleanup;
+    return cleanup;
+  }
+
+  #removeCleanup(cleanup: Cleanup): void {
+    if (cleanup.previous !== undefined) cleanup.previous.next = cleanup.next;
+    if (cleanup.next === undefined) this.#lastCleanup = cleanup.previous;
+    else cleanup.next.previous = cleanup.previous;
+    cleanup.previous = undefined;
+    cleanup.next = undefined;
   }
 
   #checkLease(lease: Lease): void {
@@ -371,23 +431,25 @@ class RegisteredResourceFamily<T> implements ResourceFamily<T> {
     dispose: (value: T) => void | Promise<void> = () => {},
   ): HostResource {
     const handle = scope[registerResource](this, value, async (owned) => {
-      try {
-        await dispose(owned);
-      } finally {
-        this.#values.delete(handle);
-      }
+      this.#values.delete(handle);
+      await dispose(owned);
     });
     this.#values.set(handle, { value });
     return handle;
   }
 
   get(handle: unknown): T {
-    const resource = this.root[requireResource](handle, this);
-    const stored = this.#values.get(resource);
+    const lease = this.root[requireResource](handle, this);
+    const stored = this.#values.get(lease.handle);
     if (stored === undefined) {
       throw new Error("registered resource lost its host value");
     }
     return stored.value;
+  }
+
+  async release(handle: unknown): Promise<void> {
+    const lease = this.root[requireResource](handle, this);
+    await lease.owner[releaseResource](lease);
   }
 
   acquire(

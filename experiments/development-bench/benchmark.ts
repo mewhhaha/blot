@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { DevelopmentProject } from "../../src/development.ts";
 import { DevelopmentRuntime } from "../../src/development_runtime.ts";
 import {
@@ -237,7 +238,7 @@ function parseOptions(arguments_: readonly string[]): BenchmarkOptions {
 }
 
 function run(instance: WebAssembly.Instance): bigint {
-  const exported = instance.exports["blot:default"];
+  const exported = scalarExport(instance, "blot:default");
   if (typeof exported !== "function") {
     throw new Error("development entry unit omitted blot:default");
   }

@@ -1,15 +1,20 @@
 import {
+  type CallbackType,
   type CompiledDevelopmentProgram,
   createHostCallback,
   type HostCallbackFactory,
+  isHostCallback,
+  takeDevelopmentCallback,
 } from "./callbacks.ts";
 import { AbiCodec } from "./abi_codec.ts";
 import {
   decodeManifest,
+  type GuestScopeToken,
   readDirect,
   readMemory,
   requiredFunction,
   requiredMemory,
+  requireGuestScopeToken,
   type RuntimeValue,
 } from "./abi_values.ts";
 import {
@@ -28,6 +33,7 @@ export interface ExecutionContext {
   readonly signal: AbortSignal;
   readonly scope: HostScope;
   readonly authority: HostScope;
+  readonly development?: CompiledDevelopmentProgram;
 }
 export interface HostCallContext extends ExecutionContext {
   readonly operation: BlotAbiManifest["imports"][number];
@@ -49,6 +55,11 @@ export interface HostedModule {
     arguments_?: readonly RuntimeValue[],
     options?: { readonly signal?: AbortSignal },
   ): Promise<HostResult>;
+  invokeLinked(
+    name: string,
+    arguments_: readonly (number | bigint)[],
+    context: ExecutionContext,
+  ): unknown;
   callLinked(
     name: string,
     arguments_: readonly RuntimeValue[],
@@ -63,7 +74,7 @@ export interface HostedModule {
   destroy(): void;
 }
 
-/** Instantiate ABI 3 with explicit host operations and portable Wasm suspension. */
+/** Instantiate ABI 4 with explicit allocation scopes and portable Wasm suspension. */
 export async function instantiateArtifact(
   artifact: Pick<CompilerArtifact, "wasm" | "manifestBytes"> | {
     readonly module: WebAssembly.Module;
@@ -73,7 +84,15 @@ export async function instantiateArtifact(
   options: {
     readonly scope?: HostScope;
     readonly links?: WebAssembly.Imports;
-    readonly development?: () => CompiledDevelopmentProgram;
+    readonly development?: (previous?: CompiledDevelopmentProgram) => {
+      readonly program: CompiledDevelopmentProgram;
+      readonly release: () => Promise<void>;
+    };
+    readonly invokeLink?: (
+      link: NonNullable<BlotAbiManifest["links"]>[number],
+      arguments_: readonly (number | bigint)[],
+      context: ExecutionContext,
+    ) => number | bigint | undefined;
     readonly callLink?: (
       link: NonNullable<BlotAbiManifest["links"]>[number],
       arguments_: readonly RuntimeValue[],
@@ -85,13 +104,6 @@ export async function instantiateArtifact(
   const invokeDevelopmentLink = options.callLink;
   const bytes = Uint8Array.from(artifact.manifestBytes);
   const manifest = decodeManifest(bytes);
-  if (
-    manifest.abi.major !== 3 || manifest.abi.minor !== 0 ||
-    manifest.abi.memory !== "memory32" ||
-    manifest.abi.stringEncoding !== "utf-8"
-  ) {
-    throw new TypeError("host requires Blot Core Wasm ABI 3.0");
-  }
   if (
     manifest.links !== undefined && manifest.links.length > 0 &&
     options.links === undefined
@@ -148,13 +160,19 @@ export async function instantiateArtifact(
       if (activeContext === undefined) {
         throw new Error("host operation has no active execution context");
       }
+      const allocationScope = requireGuestScopeToken(raw[0]);
       const marshaller = new AbiCodec(
-        codec.memory,
-        codec.allocate,
+        memory,
+        (size, alignment) =>
+          Number(realloc(allocationScope, 0, 0, alignment, size)) >>> 0,
         activeContext.scope,
-        callbackFactory(activeContext.scope, activeContext.authority),
+        callbackFactory(
+          activeContext.scope,
+          activeContext.authority,
+          activeContext.development,
+        ),
       );
-      let position = 0;
+      let position = 1;
       const arguments_ = imported.function.parameters.map((type) => {
         const width = flattenedAbiType(type).length;
         const value = marshaller.lift(
@@ -246,7 +264,13 @@ export async function instantiateArtifact(
         namespace = Object.create(null) as WebAssembly.ModuleImports;
         imports[link.module] = namespace;
       }
-      namespace[name] = callable;
+      namespace[name] = (...arguments_: (number | bigint)[]) => {
+        if (options.invokeLink === undefined) return callable(...arguments_);
+        if (activeContext === undefined) {
+          throw new Error("development link has no guest execution context");
+        }
+        return options.invokeLink(link, arguments_, activeContext);
+      };
     }
   }
   const actualImports = WebAssembly.Module.imports(module);
@@ -265,11 +289,6 @@ export async function instantiateArtifact(
   const memory = requiredMemory(instance, manifest);
   const realloc = requiredFunction(instance, manifest.abi.reallocExport);
   const moduleScope = new HostScope(options.scope);
-  const codec = new AbiCodec(
-    memory,
-    (size, alignment) => Number(realloc(0, 0, alignment, size)) >>> 0,
-    moduleScope,
-  );
   let destroyed = false;
   let trapped = false;
   let closing = false;
@@ -323,8 +342,12 @@ export async function instantiateArtifact(
     arguments_: readonly RuntimeValue[],
     parent: HostScope,
     resultScope: HostScope,
-    options: { readonly signal?: AbortSignal; readonly authority?: HostScope } =
-      {},
+    options: {
+      readonly signal?: AbortSignal;
+      readonly authority?: HostScope;
+      readonly development?: CompiledDevelopmentProgram;
+      readonly linked?: true;
+    } = {},
   ): Promise<HostResult> => {
     if (destroyed || trapped || (closing && !parent.isCleanup)) {
       throw new Error("hosted module is destroyed or closing");
@@ -345,25 +368,55 @@ export async function instantiateArtifact(
       scope.signal.addEventListener("abort", cancelCall, { once: true });
       let authority = moduleScope;
       if (options.authority !== undefined) authority = options.authority;
-      const execution = { signal, scope, authority };
-      const marshaller = new AbiCodec(
-        memory,
-        codec.allocate,
+      const execution = {
+        signal,
         scope,
-        callbackFactory(scope, authority),
-      );
+        authority,
+        development: options.development,
+      };
+      const transfers: (() => Promise<void>)[] = [];
+      const transferCallback = (
+        type: CallbackType,
+        value: RuntimeValue,
+      ): RuntimeValue => {
+        if (!isHostCallback(value)) {
+          throw new TypeError("development link requires a compiled callback");
+        }
+        const transfer = takeDevelopmentCallback(value, type, scope);
+        transfers.push(transfer.release);
+        return transfer.environment;
+      };
       let outcome: { readonly value: HostResult } | { readonly cause: unknown };
-      invoke(execution, "cabi_enter");
+      let allocationScope: GuestScopeToken | undefined;
       let frame: number | undefined;
       let completed = false;
       try {
-        const lowered = arguments_.flatMap((value, index) =>
-          marshaller.lower(exported.function.parameters[index], value)
+        const token = requireGuestScopeToken(invoke(execution, "cabi_enter"));
+        allocationScope = token;
+        const marshaller = new AbiCodec(
+          memory,
+          (size, alignment) =>
+            Number(realloc(token, 0, 0, alignment, size)) >>> 0,
+          scope,
+          callbackFactory(scope, authority, execution.development),
         );
-        frame = Number(invoke(execution, exported.name, ...lowered)) >>> 0;
+        const linkMarshaller = new AbiCodec(
+          memory,
+          marshaller.allocate,
+          scope,
+          marshaller.callbacks,
+          transferCallback,
+        );
+        let argumentMarshaller = marshaller;
+        if (options.linked) argumentMarshaller = linkMarshaller;
+        const lowered = arguments_.flatMap((value, index) =>
+          argumentMarshaller.lower(exported.function.parameters[index], value)
+        );
+        frame = Number(invoke(execution, exported.name, token, ...lowered)) >>>
+          0;
         for (;;) {
           signal.throwIfAborted();
-          const status = invoke(execution, "blot:poll", frame, 1024);
+          const status = invoke(execution, "blot:poll", token, frame, 1024);
           if (status === 4) {
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
             continue;
@@ -376,7 +429,7 @@ export async function instantiateArtifact(
               view.getUint32(frame + 20, true),
               undefined,
               resultScope,
-              callbackFactory(resultScope, authority),
+              callbackFactory(resultScope, authority, execution.development),
             );
             completed = true;
             outcome = { value: result };
@@ -435,23 +488,36 @@ export async function instantiateArtifact(
             frame + 16,
             true,
           );
-          marshaller.write(signature.result, result, destination);
-          invoke(execution, "blot:resume", frame);
+          let resultMarshaller = marshaller;
+          if (imported === undefined) resultMarshaller = linkMarshaller;
+          resultMarshaller.write(signature.result, result, destination);
+          invoke(execution, "blot:resume", token, frame);
         }
       } catch (error) {
         outcome = { cause: error };
       }
       const cleanup: unknown[] = [];
+      for (const release of transfers) {
+        try {
+          await release();
+        } catch (error) {
+          cleanup.push(error);
+        }
+      }
       try {
-        if (frame !== undefined) {
-          if (!completed) invoke(execution, "blot:cancel", frame);
-          invoke(execution, "blot:release", frame);
+        if (allocationScope !== undefined && frame !== undefined) {
+          if (!completed) {
+            invoke(execution, "blot:cancel", allocationScope, frame);
+          }
+          invoke(execution, "blot:release", allocationScope, frame);
         }
       } catch (error) {
         cleanup.push(error);
       }
       try {
-        invoke(execution, "cabi_leave");
+        if (allocationScope !== undefined) {
+          invoke(execution, "cabi_leave", allocationScope);
+        }
       } catch (error) {
         cleanup.push(error);
       }
@@ -482,6 +548,7 @@ export async function instantiateArtifact(
   const callbackFactory = (
     scope: HostScope,
     authority: HostScope = moduleScope,
+    development?: CompiledDevelopmentProgram,
   ): HostCallbackFactory =>
   (type, environment) => {
     const entry = manifest.callbacks.find((entry) => entry.name === type.entry);
@@ -501,6 +568,7 @@ export async function instantiateArtifact(
       }
       return value;
     });
+    const snapshot = options.development?.(development);
     return createHostCallback(
       scope,
       (destination) => {
@@ -515,6 +583,7 @@ export async function instantiateArtifact(
         start(entry, [argument, ...captures], owner, owner, {
           signal,
           authority,
+          development: snapshot?.program,
         }),
       {
         module,
@@ -522,13 +591,25 @@ export async function instantiateArtifact(
         entry: entry.name,
         environmentType: type.environment,
         captures,
-        development: options.development?.(),
+        development: snapshot?.program,
       },
+      { type, dispose: snapshot?.release },
     );
   };
 
   const hosted: HostedModule = {
     instance,
+    invokeLinked(name, arguments_, context) {
+      if (
+        options.scope === undefined || !context.scope.isWithin(options.scope) ||
+        !context.scope.isWithin(context.authority)
+      ) {
+        throw new TypeError(
+          "development call requires a scope under the shared host lifetime",
+        );
+      }
+      return invoke(context, name, ...arguments_);
+    },
     callLinked(name, arguments_, context) {
       if (
         options.scope === undefined || !context.scope.isWithin(options.scope) ||
@@ -550,7 +631,10 @@ export async function instantiateArtifact(
           "scoped development call requires a resumable export",
         );
       }
-      return start(exported, arguments_, context.scope, context.scope, context);
+      return start(exported, arguments_, context.scope, context.scope, {
+        ...context,
+        linked: true,
+      });
     },
     callCallback(name, arguments_, options = {}) {
       const entry = manifest.callbacks.find((entry) => entry.name === name);
@@ -588,12 +672,25 @@ export async function instantiateArtifact(
         scope: moduleScope,
         authority: moduleScope,
       };
-      invoke(execution, "cabi_enter");
+      const allocationScope = requireGuestScopeToken(
+        invoke(execution, "cabi_enter"),
+      );
       try {
+        const codec = new AbiCodec(
+          memory,
+          (size, alignment) =>
+            Number(realloc(allocationScope, 0, 0, alignment, size)) >>> 0,
+          moduleScope,
+        );
         const lowered = arguments_.flatMap((value, index) =>
           codec.lower(exported.function.parameters[index], value)
         );
-        const raw = invoke(execution, exported.name, ...lowered);
+        const raw = invoke(
+          execution,
+          exported.name,
+          allocationScope,
+          ...lowered,
+        );
         if (flattenedAbiType(exported.function.result).length <= 1) {
           return readDirect(exported.function.result, raw, moduleScope);
         }
@@ -609,10 +706,10 @@ export async function instantiateArtifact(
             moduleScope,
           );
         } finally {
-          invoke(execution, exported.postReturn, raw);
+          invoke(execution, exported.postReturn, allocationScope, raw);
         }
       } finally {
-        invoke(execution, "cabi_leave");
+        invoke(execution, "cabi_leave", allocationScope);
       }
     },
     callAsync(name, arguments_ = [], options = {}) {

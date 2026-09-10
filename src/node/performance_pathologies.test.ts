@@ -1,3 +1,4 @@
+import { requiredFunction } from "../abi_values.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -49,13 +50,18 @@ for (const depth of [0, 8, 16, 32]) {
       assert.equal(typeof postReturn, "function");
       assert.ok(memory instanceof WebAssembly.Memory);
       for (const input of [-7n, 0n, 41n]) {
-        const pointer = (nested as CallableFunction)(input) as number;
+        const scope = Number(requiredFunction(instance, "cabi_enter")());
         try {
-          const view: DataView = new DataView(memory.buffer);
-          assert.equal(view.getBigInt64(pointer, true), input);
-          assert.equal(view.getBigInt64(pointer + 8, true), input + 1n);
+          const pointer = (nested as CallableFunction)(scope, input) as number;
+          try {
+            const view: DataView = new DataView(memory.buffer);
+            assert.equal(view.getBigInt64(pointer, true), input);
+            assert.equal(view.getBigInt64(pointer + 8, true), input + 1n);
+          } finally {
+            (postReturn as CallableFunction)(scope, pointer);
+          }
         } finally {
-          (postReturn as CallableFunction)(pointer);
+          requiredFunction(instance, "cabi_leave")(scope);
         }
       }
     });
@@ -99,7 +105,7 @@ test("runtime search preserves first matches, scalar starts, empty queries, and 
   });
 });
 
-test("repetitive runtime search handles early and late mismatch without heap writes", async () => {
+test("repetitive runtime search handles mismatches with bounded boundary allocations", async () => {
   await withSource(textSearchSource, async (compiler, path) => {
     const artifact = await compiler.compile(path);
     const { instance } = await WebAssembly.instantiate(
@@ -117,14 +123,21 @@ test("repetitive runtime search handles early and late mismatch without heap wri
     ];
     for (const [text, query] of cases) {
       const input = runtime.input(text, query);
-      const before = new Uint8Array(runtime.memory.buffer).slice();
-      const sizeBefore = runtime.memory.buffer.byteLength;
-      for (const start of [0, 1, 7, Array.from(text).length]) {
+      const starts = [0, 1, 7, Array.from(text).length];
+      for (const start of starts) {
         assert.equal(input.find(start), expectedFind(text, query, start));
       }
       assert.equal(input.contains(), BigInt(Number(text.includes(query))));
-      assert.equal(runtime.memory.buffer.byteLength, sizeBefore);
-      assert.deepEqual(new Uint8Array(runtime.memory.buffer), before);
+      const sizeBefore = runtime.memory.buffer.byteLength;
+      for (let repeat = 0; repeat < 16; repeat += 1) {
+        for (const start of starts) {
+          assert.equal(input.find(start), expectedFind(text, query, start));
+        }
+        assert.equal(input.contains(), BigInt(Number(text.includes(query))));
+        assert.equal(runtime.memory.buffer.byteLength, sizeBefore);
+        assert.equal(requiredFunction(instance, "blot:live-allocations")(), 0);
+        assert.equal(requiredFunction(instance, "blot:live-bytes")(), 0);
+      }
     }
   });
 });

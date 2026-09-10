@@ -1651,7 +1651,7 @@ fn operator_type_with_members(value: Value) -> Value {
                 Value::Primitive {
                     name: "@type.resolve_member".to_owned(),
                     arity: 3,
-                    applied: vec![Value::Text((*name).to_owned())],
+                    applied: vec![Value::Text((*name).into())],
                 }
             };
             ((*name).to_owned(), member)
@@ -1787,6 +1787,8 @@ pub enum Phase {
 }
 
 const COMPTIME_CALL_RESULT_LIMIT: usize = 65_536;
+const COMPTIME_ARGUMENT_NODE_LIMIT: usize = 256;
+const COMPTIME_ARGUMENT_BYTE_LIMIT: usize = 4_096;
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 enum ComptimeArgument {
@@ -1797,7 +1799,7 @@ enum ComptimeArgument {
     VectorMask([bool; 4]),
     IntegerVector { bits: u8, lanes: Vec<i32> },
     IntegerVectorMask { bits: u8, lanes: Vec<bool> },
-    Text(String),
+    Text(Rc<str>),
     Unit,
     Shape(Vec<(String, ComptimeArgument)>),
     Array(Vec<ComptimeArgument>),
@@ -1978,72 +1980,120 @@ impl Runtime {
 }
 
 fn comptime_argument(value: &Value) -> Option<ComptimeArgument> {
-    match value {
-        Value::Int(value) => Some(ComptimeArgument::Int(value.clone())),
-        Value::Float(value) => Some(ComptimeArgument::Float(value.to_bits())),
-        Value::Float32(value) => Some(ComptimeArgument::Float32(value.to_bits())),
-        Value::Vector(values) => Some(ComptimeArgument::Vector(values.map(f32::to_bits))),
-        Value::VectorMask(values) => Some(ComptimeArgument::VectorMask(*values)),
-        Value::IntegerVector { bits, lanes } => Some(ComptimeArgument::IntegerVector {
-            bits: *bits,
-            lanes: lanes.clone(),
-        }),
-        Value::IntegerVectorMask { bits, lanes } => Some(ComptimeArgument::IntegerVectorMask {
-            bits: *bits,
-            lanes: lanes.clone(),
-        }),
-        Value::Text(value) => Some(ComptimeArgument::Text(value.clone())),
-        Value::Unit => Some(ComptimeArgument::Unit),
-        Value::Shape(fields) => Some(ComptimeArgument::Shape(
-            fields
-                .iter()
-                .map(|(name, value)| Some((name.clone(), comptime_argument(value)?)))
-                .collect::<Option<Vec<_>>>()?,
-        )),
-        Value::Array(values) => Some(ComptimeArgument::Array(
-            values
-                .iter()
-                .map(comptime_argument)
-                .collect::<Option<Vec<_>>>()?,
-        )),
-        Value::Tag { name, payload } => Some(ComptimeArgument::Tag(
-            name.clone(),
-            match payload.as_deref() {
-                Some(payload) => Some(Box::new(comptime_argument(payload)?)),
-                None => None,
-            },
-        )),
-        Value::Sealed { name, inner } => Some(ComptimeArgument::Sealed(
-            name.clone(),
-            Box::new(comptime_argument(inner)?),
-        )),
-        Value::RegionType(_)
-        | Value::ScratchType(_)
-        | Value::ResourceType { .. }
-        | Value::Scratch { .. }
-        | Value::DeferredScratch { .. }
-        | Value::Region { .. }
-        | Value::RegionRejoin { .. }
-        | Value::EmptyArray { .. }
-        | Value::Closure { .. }
-        | Value::Deferred { .. }
-        | Value::ClosureChoice { .. }
-        | Value::ModuleClosure { .. }
-        | Value::IndexedStep { .. }
-        | Value::Primitive { .. }
-        | Value::Range { .. }
-        | Value::Union(_)
-        | Value::Unbounded
-        | Value::Arrow { .. }
-        | Value::TypeVariable(_)
-        | Value::Forall { .. }
-        | Value::Effect { .. }
-        | Value::Operation { .. }
-        | Value::Extended { .. }
-        | Value::OpaqueType(_)
-        | Value::Runtime(_)
-        | Value::Continuation { .. } => None,
+    fn visit(
+        value: &Value,
+        remaining_nodes: &mut usize,
+        remaining_bytes: &mut usize,
+    ) -> Option<ComptimeArgument> {
+        *remaining_nodes = remaining_nodes.checked_sub(1)?;
+        match value {
+            Value::Int(value) => {
+                let bytes = usize::try_from(value.bits().div_ceil(8)).ok()?;
+                *remaining_bytes = remaining_bytes.checked_sub(bytes)?;
+                Some(ComptimeArgument::Int(value.clone()))
+            }
+            Value::Float(value) => Some(ComptimeArgument::Float(value.to_bits())),
+            Value::Float32(value) => Some(ComptimeArgument::Float32(value.to_bits())),
+            Value::Vector(values) => Some(ComptimeArgument::Vector(values.map(f32::to_bits))),
+            Value::VectorMask(values) => Some(ComptimeArgument::VectorMask(*values)),
+            Value::IntegerVector { bits, lanes } => {
+                *remaining_bytes = remaining_bytes.checked_sub(lanes.len().checked_mul(4)?)?;
+                Some(ComptimeArgument::IntegerVector {
+                    bits: *bits,
+                    lanes: lanes.clone(),
+                })
+            }
+            Value::IntegerVectorMask { bits, lanes } => {
+                *remaining_bytes = remaining_bytes.checked_sub(lanes.len())?;
+                Some(ComptimeArgument::IntegerVectorMask {
+                    bits: *bits,
+                    lanes: lanes.clone(),
+                })
+            }
+            Value::Text(value) => {
+                *remaining_bytes = remaining_bytes.checked_sub(value.len())?;
+                Some(ComptimeArgument::Text(value.clone()))
+            }
+            Value::Unit => Some(ComptimeArgument::Unit),
+            Value::Shape(fields) => {
+                if fields.len() > *remaining_nodes {
+                    return None;
+                }
+                Some(ComptimeArgument::Shape(
+                    fields
+                        .iter()
+                        .map(|(name, value)| {
+                            *remaining_bytes = remaining_bytes.checked_sub(name.len())?;
+                            Some((
+                                name.clone(),
+                                visit(value, remaining_nodes, remaining_bytes)?,
+                            ))
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                ))
+            }
+            Value::Array(values) => {
+                if values.len() > *remaining_nodes {
+                    return None;
+                }
+                Some(ComptimeArgument::Array(
+                    values
+                        .iter()
+                        .map(|value| visit(value, remaining_nodes, remaining_bytes))
+                        .collect::<Option<Vec<_>>>()?,
+                ))
+            }
+            Value::Tag { name, payload } => {
+                *remaining_bytes = remaining_bytes.checked_sub(name.len())?;
+                Some(ComptimeArgument::Tag(
+                    name.clone(),
+                    match payload.as_deref() {
+                        Some(payload) => {
+                            Some(Box::new(visit(payload, remaining_nodes, remaining_bytes)?))
+                        }
+                        None => None,
+                    },
+                ))
+            }
+            Value::Sealed { name, inner } => {
+                *remaining_bytes = remaining_bytes.checked_sub(name.len())?;
+                Some(ComptimeArgument::Sealed(
+                    name.clone(),
+                    Box::new(visit(inner, remaining_nodes, remaining_bytes)?),
+                ))
+            }
+            Value::RegionType(_)
+            | Value::ScratchType(_)
+            | Value::ResourceType { .. }
+            | Value::Scratch { .. }
+            | Value::DeferredScratch { .. }
+            | Value::Region { .. }
+            | Value::RegionRejoin { .. }
+            | Value::EmptyArray { .. }
+            | Value::Closure { .. }
+            | Value::Deferred { .. }
+            | Value::ClosureChoice { .. }
+            | Value::ModuleClosure { .. }
+            | Value::IndexedStep { .. }
+            | Value::Primitive { .. }
+            | Value::Range { .. }
+            | Value::Union(_)
+            | Value::Unbounded
+            | Value::Arrow { .. }
+            | Value::TypeVariable(_)
+            | Value::Forall { .. }
+            | Value::Effect { .. }
+            | Value::Operation { .. }
+            | Value::Extended { .. }
+            | Value::OpaqueType(_)
+            | Value::Runtime(_)
+            | Value::Continuation { .. } => None,
+        }
     }
+
+    let mut remaining_nodes = COMPTIME_ARGUMENT_NODE_LIMIT;
+    let mut remaining_bytes = COMPTIME_ARGUMENT_BYTE_LIMIT;
+    visit(value, &mut remaining_nodes, &mut remaining_bytes)
 }
 
 fn memoizable_comptime_signature(signature: Option<&Value>) -> bool {
@@ -2492,7 +2542,7 @@ pub fn evaluate_expression(
                 Computation::value(Value::Float(*value))
             }
         }
-        Expression::Text { value, .. } => Computation::value(Value::Text(value.clone())),
+        Expression::Text { value, .. } => Computation::value(Value::Text(value.as_str().into())),
         Expression::Unit { .. } => Computation::value(Value::Unit),
         Expression::Tag { name, .. } => Computation::value(Value::Tag {
             name: name.clone(),
@@ -3793,7 +3843,7 @@ fn evaluate_shape(
                 )
                 .and_then(move |value| {
                     let mut fields = progress.fields;
-                    fields.insert(name, value);
+                    fields.insert(name.to_string(), value);
                     evaluate_shape(
                         name_context,
                         name_module,
@@ -4974,27 +5024,31 @@ fn apply_with_expected(
                     span,
                 ));
             };
-            let declared_result = match operations.get(&name).map(signature_body) {
-                Some(Value::Arrow {
-                    domain, codomain, ..
-                }) => {
-                    let substitutions = child_env(None);
-                    let argument_type = runtime
-                        .residual
-                        .as_ref()
-                        .and_then(|trace| trace.borrow().conservative_value_type(&argument));
-                    record_signature_substitutions(
-                        &substitutions,
-                        domain,
-                        argument_type.as_ref().unwrap_or(&argument),
-                    );
-                    if let Some(expected) = &expected_result {
-                        record_signature_substitutions(&substitutions, codomain, expected);
+            let (declared_argument, declared_result) =
+                match operations.get(&name).map(signature_body) {
+                    Some(Value::Arrow {
+                        domain, codomain, ..
+                    }) => {
+                        let substitutions = child_env(None);
+                        let argument_type = runtime
+                            .residual
+                            .as_ref()
+                            .and_then(|trace| trace.borrow().conservative_value_type(&argument));
+                        record_signature_substitutions(
+                            &substitutions,
+                            domain,
+                            argument_type.as_ref().unwrap_or(&argument),
+                        );
+                        if let Some(expected) = &expected_result {
+                            record_signature_substitutions(&substitutions, codomain, expected);
+                        }
+                        (
+                            Some(substitute_signature(domain, &substitutions)),
+                            substitute_signature(codomain, &substitutions),
+                        )
                     }
-                    substitute_signature(codomain, &substitutions)
-                }
-                _ => Value::Unbounded,
-            };
+                    _ => (None, Value::Unbounded),
+                };
             let result_type =
                 if matches!(declared_result, Value::Unbounded | Value::TypeVariable(_)) {
                     expected_result
@@ -5017,7 +5071,7 @@ fn apply_with_expected(
                 effect_name,
                 operation: name,
                 argument,
-                argument_type: expected_argument,
+                argument_type: declared_argument.or(expected_argument),
                 result_type,
                 operation_ownership,
                 span,
@@ -5268,7 +5322,7 @@ fn run_special_or_primitive(
             .modules
             .borrow()
             .get(runtime.module.as_str())
-            .and_then(|loaded| loaded.includes.get(specifier))
+            .and_then(|loaded| loaded.includes.get(specifier.as_ref()))
             .cloned();
         let Some(included) = included else {
             return Computation::error(Diagnostic::new(
@@ -5279,8 +5333,8 @@ fn run_special_or_primitive(
         };
         let source = Value::Shape(OrderedFields::from([
             ("specifier".to_owned(), Value::Text(specifier.clone())),
-            ("path".to_owned(), Value::Text(included.path)),
-            ("text".to_owned(), Value::Text(included.text)),
+            ("path".to_owned(), Value::Text(included.path.into())),
+            ("text".to_owned(), Value::Text(included.text.into())),
         ]));
         let application = application.compiler(CompilerApplication::IncludeParser);
         return apply(
@@ -5681,7 +5735,7 @@ pub(crate) fn match_pattern(
         Pattern::Text {
             value: expected, ..
         } => {
-            matches!(value, Value::Text(found) if found == expected)
+            matches!(value, Value::Text(found) if found.as_ref() == expected)
         }
         Pattern::Unit { .. } => matches!(value, Value::Unit),
         Pattern::Constructor { name, payload, .. } => {
@@ -6237,6 +6291,13 @@ pub(crate) fn record_signature_substitutions(
                 vec![value_signature(elements.first()?)?].into(),
             )),
             Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()].into())),
+            Value::Union(members) => Some(Value::Union(
+                members
+                    .iter()
+                    .map(value_signature)
+                    .collect::<Option<Vec<_>>>()?
+                    .into(),
+            )),
             Value::Tag { name, payload } => Some(Value::Tag {
                 name: name.clone(),
                 payload: payload.as_deref().and_then(value_signature).map(Box::new),
@@ -6264,9 +6325,33 @@ pub(crate) fn record_signature_substitutions(
                     }
                 }
             }
-            (Value::Array(expected), Value::Array(actual)) => {
-                if let (Some(expected), Some(actual)) = (expected.first(), actual.first()) {
+            (Value::Union(expected), actual) => {
+                for expected in expected {
                     record_types(environment, expected, actual);
+                }
+            }
+            (expected @ Value::Tag { .. }, Value::Union(actual)) => {
+                for actual in actual {
+                    record_types(environment, expected, actual);
+                }
+            }
+            (
+                Value::Tag {
+                    name: expected_name,
+                    payload: Some(expected),
+                },
+                Value::Tag {
+                    name: actual_name,
+                    payload: Some(actual),
+                },
+            ) if expected_name == actual_name => {
+                record_types(environment, expected, actual);
+            }
+            (Value::Array(expected), Value::Array(actual)) => {
+                if let Some(expected) = expected.first() {
+                    for actual in actual {
+                        record_types(environment, expected, actual);
+                    }
                 }
             }
             (Value::Array(expected), Value::EmptyArray { element }) => {
@@ -6313,9 +6398,33 @@ pub(crate) fn record_signature_substitutions(
                 }
             }
         }
-        (Value::Array(expected), Value::Array(actual)) => {
-            if let (Some(expected), Some(actual)) = (expected.first(), actual.first()) {
+        (Value::Union(expected), actual) => {
+            for expected in expected {
                 record_signature_substitutions(environment, expected, actual);
+            }
+        }
+        (expected @ Value::Tag { .. }, Value::Union(actual)) => {
+            for actual in actual {
+                record_signature_substitutions(environment, expected, actual);
+            }
+        }
+        (
+            Value::Tag {
+                name: expected_name,
+                payload: Some(expected),
+            },
+            Value::Tag {
+                name: actual_name,
+                payload: Some(actual),
+            },
+        ) if expected_name == actual_name => {
+            record_signature_substitutions(environment, expected, actual);
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            if let Some(expected) = expected.first() {
+                for actual in actual {
+                    record_signature_substitutions(environment, expected, actual);
+                }
             }
         }
         (Value::Array(expected), Value::EmptyArray { element }) => {
@@ -6342,7 +6451,7 @@ pub(crate) fn record_signature_substitutions(
             }
         }
         (expected @ Value::Arrow { .. }, actual @ Value::Arrow { .. })
-            if !contains_type_variables(actual) =>
+            if !crate::value::contains_free_type_variables(actual) =>
         {
             record_types(environment, expected, actual);
         }
@@ -6577,8 +6686,92 @@ impl BigIntExt {
 }
 
 #[cfg(test)]
+#[path = "select_type_tests.rs"]
+mod select_type_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_text_memo_keys_compare_contents_across_allocations() {
+        let left = Rc::<str>::from("α🐱\u{feff}\0");
+        let right = Rc::<str>::from("α🐱\u{feff}\0");
+        assert!(!Rc::ptr_eq(&left, &right));
+        let left = comptime_argument(&Value::Text(left)).expect("small Text is cacheable");
+        let right = comptime_argument(&Value::Text(right)).expect("small Text is cacheable");
+        assert!(left == right);
+        let mut left_hash = std::collections::hash_map::DefaultHasher::new();
+        let mut right_hash = std::collections::hash_map::DefaultHasher::new();
+        left.hash(&mut left_hash);
+        right.hash(&mut right_hash);
+        assert_eq!(left_hash.finish(), right_hash.finish());
+    }
+
+    #[test]
+    fn shared_text_memo_budget_counts_aggregate_bytes() {
+        let half = Value::Text("x".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT / 2).into());
+        let exact = Value::Array(vec![half.clone(), half.clone()].into());
+        assert!(comptime_argument(&exact).is_some());
+        let over = Value::Array(vec![half.clone(), half.clone(), Value::Text("x".into())].into());
+        assert!(comptime_argument(&over).is_none());
+        let named = Value::Tag {
+            name: "x".to_owned(),
+            payload: Some(Box::new(exact)),
+        };
+        assert!(comptime_argument(&named).is_none());
+        let large = Value::Text("x".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT + 1).into());
+        assert!(comptime_argument(&large).is_none());
+        let large_integer =
+            Value::Int(num_bigint::BigInt::from(1) << (COMPTIME_ARGUMENT_BYTE_LIMIT * 8));
+        assert!(comptime_argument(&large_integer).is_none());
+    }
+
+    #[test]
+    fn shared_text_memo_budget_bounds_collection_width_and_depth() {
+        let exact = Value::Array(vec![Value::Unit; COMPTIME_ARGUMENT_NODE_LIMIT - 1].into());
+        assert!(comptime_argument(&exact).is_some());
+        let over = Value::Array(vec![Value::Unit; COMPTIME_ARGUMENT_NODE_LIMIT].into());
+        assert!(comptime_argument(&over).is_none());
+        let mut nested = Value::Unit;
+        for _ in 1..COMPTIME_ARGUMENT_NODE_LIMIT {
+            nested = Value::Tag {
+                name: "Some".to_owned(),
+                payload: Some(Box::new(nested)),
+            };
+        }
+        assert!(comptime_argument(&nested).is_some());
+        let over = Value::Tag {
+            name: "Some".to_owned(),
+            payload: Some(Box::new(nested)),
+        };
+        assert!(comptime_argument(&over).is_none());
+    }
+
+    #[test]
+    fn shared_text_large_uncached_arguments_still_evaluate() {
+        let text = "β🐱\u{feff}".repeat(COMPTIME_ARGUMENT_BYTE_LIMIT);
+        let program = format!(
+            "let count :: @type.text -> @type.int\n\
+             let count = fn text => @text.len text\n\
+             let text = \"{text}\"\n\
+             return (count text, count text)\n"
+        );
+        let mut session = crate::session::CompilerSession::default();
+        session
+            .add_source(
+                "large-text.blot".to_owned(),
+                program.encode_utf16().collect(),
+            )
+            .expect("large Text source should load");
+        session
+            .configure_module("large-text.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("large Text source should configure");
+        let evaluated = session.evaluate_module("large-text.blot");
+        assert_eq!(evaluated["ok"], true, "{evaluated}");
+        let scalars = COMPTIME_ARGUMENT_BYTE_LIMIT * 3;
+        assert_eq!(evaluated["display"], format!("({scalars}, {scalars})"));
+    }
 
     #[test]
     fn deep_computation_continuations_run_on_a_small_stack() {
@@ -7113,7 +7306,7 @@ mod operator_projection_regression_tests {
             Value::Unit,
             Value::Int(1.into()),
             Value::Float(1.0),
-            Value::Text("text".to_owned()),
+            Value::Text("text".into()),
             Value::Tag {
                 name: "True".to_owned(),
                 payload: None,
@@ -7172,7 +7365,7 @@ mod operator_projection_regression_tests {
             value,
             Value::Primitive { name, arity: 3, applied }
                 if name == "@type.resolve_member"
-                    && matches!(applied.as_slice(), [Value::Text(member)] if member == "add")
+                    && matches!(applied.as_slice(), [Value::Text(member)] if member.as_ref() == "add")
         ));
     }
 }

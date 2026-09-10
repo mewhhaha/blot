@@ -1,0 +1,15 @@
+open import "blot:prelude"
+
+let cursor :: Text.Cursor
+let cursor = Text.cursor "α🐱"
+
+let head = fn cursor => case Text.next cursor of
+  #Some (scalar, _) => scalar
+  #None => ""
+
+return [
+  [head cursor, head cursor],
+  collect (Text.scalars "aé🐱"),
+  [Text.trim " \tα🐱 β\r\n "],
+  collect (Text.scalars "")
+]

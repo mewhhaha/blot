@@ -1,0 +1,29 @@
+open import "blot:prelude"
+
+let count :: Text -> Int
+let count = fn text => do:
+  let count = 0
+  for scalar in Text.scalars text:
+    count := count + Text.length scalar
+
+  return count
+
+let trim :: Text -> Text
+let trim = Text.trim
+
+let step :: (Text, Int) -> (#None | #Some (Text, Int))
+let step = fn (text, byte) => @text.next_byte text byte
+
+let cursor :: Text -> Text.Cursor
+let cursor = Text.cursor
+
+let next :: Text.Cursor -> (#None | #Some (Text, Text.Cursor))
+let next = Text.next
+
+return {
+  .count = count;
+  .trim = trim;
+  .step = step;
+  .cursor = cursor;
+  .next = next;
+  }

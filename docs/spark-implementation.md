@@ -12,21 +12,22 @@ current-I/O context, detached task, public mutex, or shared object graph.
 
 ## 1. Portable suspension and ownership
 
-The follow-up to PR #118 adds lexical borrow exclusion for direct and transitive
-suspension, including unannotated callbacks with open effect rows. A separate
-Rust suspension plan now supplies the framed call graph and segment boundaries
-to development partitioning and emission. `pnpm test:suspension` runs the
-focused ownership, cancellation, allocation, callback, and development checks.
+Lexical last-use borrow analysis excludes live borrows from direct and
+transitive suspension, including unannotated callbacks with open effect rows.
+The owned continuation graph supplies call transitions, exact live captures, and
+framing flags to development partitioning and emission. `pnpm test:suspension`
+runs the focused ownership, cancellation, allocation, callback, and development
+checks.
 
 - [x] Source `Effect.suspends` descriptor and checked suspension contracts.
 - [x] Rust-emitted resumable frames, including calls, recursion, and handlers.
       Loop state, nested calls, source-handler agreement, independent
       outstanding calls, and UTF-8 memory growth pass
       `src/node/suspension.test.ts`.
-- [x] ABI 3 start/resume/cancel and canonical aggregate host values. Records,
-      arrays, and variants pass the real Wasm suspension path. Owned affine
-      values cross this path. Linear host transfers remain refused until their
-      registered ownership protocol is supported.
+- [x] ABI 4 invocation scopes, start/resume/cancel, and canonical host values.
+      Records, arrays, and variants pass the real Wasm suspension path. Owned
+      affine values cross this path. Linear host transfers remain refused until
+      their registered ownership protocol is supported.
 - [x] Explicit runtime capabilities with identity and generation validation.
       `Resource.of`, opaque host leases, ancestor scope checks, and never-reused
       token identities pass `src/node/resources.test.ts`. `Resource.of_type`
@@ -56,7 +57,8 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
 - [x] Source `Spark.scope`, `child_scope`, `spawn`, `join`, `cancel`, and
       `yield`. Real Wasm tests cover at-most-once admission, concurrent work,
       cancellation/drain, sibling failure, child scopes, explicit cancellation,
-      yield, and implicit joins on scope return.
+      yield, and implicit joins on scope return. Join and cancel consume a job;
+      completed jobs retire after admitted work drains.
 - [x] Bounded channels, rendezvous, ownership transfer, and close/cancel
       wakeups. FIFO delivery passes at capacities 0, 1, 2, and 16. Close rejects
       new sends, drains buffered messages, and is idempotent. Tests cancel both
@@ -97,7 +99,8 @@ distinct checked payload types, with evaluator/source-handler/Wasm agreement in
       Node worker tests cover skipped work, deferred promotion, buffered traps
       before/after demand, and required progress beside unused CPU work.
 - [x] `Spark.map_parallel`, cooperative checkpoints, and progress guarantees.
-      Source mapping preserves order and skips empty input. Pure CPU jobs yield
+      Source mapping takes a positive explicit concurrency bound, preserves
+      order, keeps live jobs bounded, and skips empty input. Pure CPU jobs yield
       and cancel. Speculation reserves required worker capacity. A scalar fold
       completes 100,000 suspensions with constant Wasm memory after warm-up.
 - [x] Explicit shared numeric partitions and atomics; isolated private heaps,
@@ -141,8 +144,16 @@ observable regression tests. Final acceptance includes compiler, parser profile,
 Node, examples, conformance, package checks, and the game integration probes
 with zero unsupported results. Pure synchronous exports retain direct execution.
 
-The follow-up verifies all 480 native compiler tests, 225 Node tests, the two
-native Web Worker tests, all 215 accepted examples without refusals, 21
+Current frames and payloads use explicit invocation scopes and reclaim dead
+managed allocations without waiting for unrelated invocations. Select atomically
+commits one channel, event, or explicitly granted clock arm and drains losing
+timers. Callback development links retain their originating dependency revision.
+The normative contracts and current acceptance checks are linked above.
+
+## Historical verification before the continuation and ABI 4 migration
+
+The PR #118 follow-up verified all 480 native compiler tests, 225 Node tests,
+the two native Web Worker tests, all 215 accepted examples without refusals, 21
 evaluator/Wasm conformance cases, and six package checks. `pnpm test:suspension`
 contains 24 focused checks, including direct/transitive/open-row borrow refusal,
 late cancellation, and allocation retention until the last caller leaves. The
@@ -158,14 +169,15 @@ formula edit, and 0.15 ms for a text-resource edit. These are local observations
 from the rerunnable HTTP test, not latency guarantees. Resource edits invoke no
 compiler and worker submissions reuse precompiled modules.
 
-The compiler artifact for this follow-up is
+The compiler artifact for that historical follow-up was
 `03cc6d2c1135de60789b4f2e7aa31175379aea2740dea685b03df19e934784a2` (6,461,463
 bytes, host ABI 7, checked-module certificate 19, guest ABI 3).
 
-Resumable frames reuse canonical request/result slots and tail frames. The
-shared bump arena still retains variable-length payload allocations and non-tail
-frames while another invocation remains live; general long-lived actors need
-further lifetime work. Linear host transfers and callback values crossing
-development-unit links remain refused as documented above. Interactive browser
-verification of the new event-actor page was unavailable; its HTTP/Wasm path and
-the native Web Worker transport are tested separately.
+At that revision, resumable frames reused canonical request/result slots and
+tail frames. The shared bump arena retained variable-length payload allocations
+and non-tail frames while another invocation remained live. Callback values
+crossing development-unit links were also refused. The continuation and ABI 4
+migration removes those two limitations; linear host transfers remain separately
+restricted. Interactive browser verification of the new event-actor page was
+unavailable; its HTTP/Wasm path and the native Web Worker transport are tested
+separately.

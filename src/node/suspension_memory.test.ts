@@ -7,7 +7,7 @@ import {
   requiredMemory,
 } from "../abi_values.ts";
 
-test("concurrent frames retain their arena until the last caller leaves", async () => {
+test("a completed sibling scope retires while another frame keeps its pending result", async () => {
   const compiler = await Compiler.create();
   try {
     const path = "/tmp/blot-suspension-arena.blot";
@@ -38,31 +38,32 @@ return { .run = run; }
       entry.sourceName === "run"
     );
     assert(exported !== undefined && exported.name !== null);
-    invoke("cabi_enter");
-    const checkpoint = invoke("cabi_realloc", 0, 0, 16, 16);
-    const first = invoke(exported.name, 10n);
-    const second = invoke(exported.name, 20n);
-    assert.equal(invoke("blot:poll", first, 1024), 1);
-    assert.equal(invoke("blot:poll", second, 1024), 1);
+    const firstScope = invoke("cabi_enter");
+    const first = invoke(exported.name, firstScope, 10n);
+    const secondScope = invoke("cabi_enter");
+    const second = invoke(exported.name, secondScope, 20n);
+    assert.equal(invoke("blot:poll", firstScope, first, 1024), 1);
+    assert.equal(invoke("blot:poll", secondScope, second, 1024), 1);
     const pendingResult = new DataView(memory.buffer).getUint32(
       first + 16,
       true,
     );
-    invoke("blot:cancel", second);
-    invoke("blot:release", second);
-    const retained = invoke("cabi_realloc", 0, 0, 16, 16);
-    assert.ok(retained > first && retained > second);
+    const before = invoke("blot:live-bytes");
+    invoke("blot:cancel", secondScope, second);
+    invoke("blot:release", secondScope, second);
+    invoke("cabi_leave", secondScope);
+    assert.equal(invoke("blot:live-scopes"), 1);
+    assert.ok(invoke("blot:live-bytes") < before);
     new DataView(memory.buffer).setBigInt64(pendingResult, 42n, true);
-    invoke("blot:resume", first);
-    assert.equal(invoke("blot:poll", first, 1024), 2);
+    invoke("blot:resume", firstScope, first);
+    assert.equal(invoke("blot:poll", firstScope, first, 1024), 2);
     const view = new DataView(memory.buffer);
     assert.equal(view.getBigInt64(view.getUint32(first + 20, true), true), 42n);
-    invoke("blot:release", first);
-    assert.ok(invoke("cabi_realloc", 0, 0, 16, 16) > retained);
-    invoke("cabi_leave");
-    invoke("cabi_enter");
-    assert.equal(invoke("cabi_realloc", 0, 0, 16, 16), checkpoint);
-    invoke("cabi_leave");
+    invoke("blot:release", firstScope, first);
+    invoke("cabi_leave", firstScope);
+    assert.equal(invoke("blot:live-scopes"), 0);
+    assert.equal(invoke("blot:live-allocations"), 0);
+    assert.equal(invoke("blot:live-bytes"), 0);
   } finally {
     compiler.destroy();
   }
@@ -103,8 +104,10 @@ return { .run = run; }
       entry.sourceName === "run"
     );
     assert(exported !== undefined && exported.name !== null);
-    requiredFunction(instance, "cabi_enter")();
-    const context = Number(requiredFunction(instance, exported.name)(100000n));
+    const scope = Number(requiredFunction(instance, "cabi_enter")());
+    const context = Number(
+      requiredFunction(instance, exported.name)(scope, 100000n),
+    );
     let requests = 0;
     let warmBytes = 0;
     let warmRequests = 0;
@@ -112,7 +115,11 @@ return { .run = run; }
     const requestPointers = new Set<number>();
     const resultPointers = new Set<number>();
     for (;;) {
-      const status = requiredFunction(instance, "blot:poll")(context, 1024);
+      const status = requiredFunction(instance, "blot:poll")(
+        scope,
+        context,
+        1024,
+      );
       if (status === 4) continue;
       const view = new DataView(memory.buffer);
       if (status === 2) {
@@ -134,14 +141,14 @@ return { .run = run; }
         warmRequests = requestPointers.size;
         warmResults = resultPointers.size;
       }
-      requiredFunction(instance, "blot:resume")(context);
+      requiredFunction(instance, "blot:resume")(scope, context);
     }
     assert.equal(requests, 100000);
     assert.equal(requestPointers.size, warmRequests);
     assert.equal(resultPointers.size, warmResults);
     assert.equal(memory.buffer.byteLength, warmBytes);
-    requiredFunction(instance, "blot:release")(context);
-    requiredFunction(instance, "cabi_leave")();
+    requiredFunction(instance, "blot:release")(scope, context);
+    requiredFunction(instance, "cabi_leave")(scope);
   } finally {
     compiler.destroy();
   }

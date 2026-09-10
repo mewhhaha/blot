@@ -1,28 +1,41 @@
 open import "blot:prelude"
 const Spark = import "blot:spark"
 const Events = import "blot:events"
+const Channel = import "blot:channel"
+const Select = import "blot:select"
 const Io = import "blot:io"
 const formula = import "./formula.blot"
 
 const View = Resource.of "Demo.View"
-const Ui =
-  @effect.host {
-    .show = (View, Int, Int) -> Unit;
-    .message = (View, Text) -> Unit;
-    .stopped = View -> Unit;
-  }
+const Ui = @effect.host {
+  .show = (View, Int, Int) -> Unit;
+  .activity = (View, Text) -> Unit;
+  .message = (View, Text) -> Unit;
+  .stopped = View -> Unit;
+}
 
-let run ::
-  {
-    .executor = Spark.Executor;
-    .changes = Events.Source Int;
-    .clock = Io.Clock.Capability;
-    .http = Io.Http.Capability;
-    .view = View;
-  } -> Unit ~ { Spark.Effect, Events.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+const debounce :: (Events.Subscription Int, Io.Clock.Capability, Int) -> Option Int ~ { Select.Effect }
+const debounce = fn (subscription, clock, initial) => do:
+  let rec wait :: Int -> Option Int ~ { Select.Effect }
+  let rec wait = fn latest => do:
+    use selected <- Select.wait [Select.events subscription, Select.after clock 150]
+    return case selected.outcome of
+      #Timeout => #Some latest
+      #Message event => case event of
+        #None => #None
+        #Some quantity => wait quantity
+
+  return wait initial
+
+let run :: {
+  .executor = Spark.Executor;
+  .changes = Events.Source Int;
+  .clock = Io.Clock.Capability;
+  .http = Io.Http.Capability;
+  .view = View;
+} -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
 let run = fn io => do:
-  let body ::
-    Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
+  let body :: Spark.Scope -> Unit ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Io.Http.Effect, Ui }
   let body = fn scope => do:
     let ?cleanup :: Unit -> Unit ~ { Ui } = fn () => Ui.stopped io.view
     use () <- Spark.on_exit scope (?cleanup)
@@ -31,20 +44,53 @@ let run = fn io => do:
       #Ok response => Ui.message (io.view, response.body)
       #Error reason => Ui.message (io.view, reason)
     use subscription <- Events.subscribe scope io.changes #Latest
+    use initial <- Events.next subscription
+    if let #Some first = initial else:
+      return ()
+
+    let pending = first
     let received = 0
     for _ in ever:
-      use event <- Events.next subscription
-      if let #Some quantity = event else:
+      use () <- Ui.activity (io.view, "Debouncing")
+      use settled <- debounce (subscription, io.clock, pending)
+      if let #Some quantity = settled else:
         break
 
-      use () <- Io.Clock.sleep io.clock 10
-      let calculate :: Spark.Scope -> Int ~ { Spark.Effect } = fn computation => do:
-        let ?work :: Unit -> Int = fn () => formula.score quantity
-        use job <- Spark.parallel computation (?work)
-        return Spark.join job
-      use score <- Spark.child_scope scope calculate
+      let calculate :: Spark.Scope -> Select.Selection Int ~ { Spark.Effect, Channel.Effect, Select.Effect, Io.Clock.Effect, Ui }
+      let calculate = fn computation => do:
+        use completed :: Channel.Ends Int <- Channel.bounded computation 1
+        let ?produce :: Unit -> Unit ~ { Spark.Effect, Channel.Effect, Io.Clock.Effect } = fn () => do:
+          use () <- Io.Clock.sleep io.clock 300
+          let ?work :: Unit -> Int = fn () => formula.score quantity
+          use job <- Spark.parallel computation (?work)
+          use score <- Spark.join job
+          use accepted <- Channel.send completed.sender (?score)
+          return ()
+        use producer <- Spark.spawn computation (?produce)
+        use () <- Ui.activity (io.view, "Calculating")
+        use selected <- Select.wait [Select.events subscription, Select.channel completed.receiver]
+        use () <- Spark.cancel producer
+        return ?selected
+      use selected :: Select.Selection Int <- Spark.child_scope scope calculate
+      if let #Message event = selected.outcome else:
+        break
+
+      if let #Some value = event else:
+        break
+
+      if selected.index == 0:
+        pending := value
+        use () <- Ui.activity (io.view, "Superseded")
+        continue
+
       received := received + 1
-      use () <- Ui.show (io.view, score, received)
+      use () <- Ui.show (io.view, value, received)
+      use () <- Ui.activity (io.view, "Waiting for input")
+      use next <- Events.next subscription
+      if let #Some quantity = next else:
+        break
+
+      pending := quantity
 
     return ()
   return Spark.scope io.executor body

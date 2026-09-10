@@ -133,6 +133,82 @@ pub(super) fn collect_type_variables(value: &Value, variables: &mut BTreeSet<u32
     }
 }
 
+pub(crate) fn contains_free_type_variables(value: &Value) -> bool {
+    let mut scopes = vec![None];
+    let mut pending = vec![(value, 0)];
+    let mut seen = HashSet::new();
+    while let Some((value, scope)) = pending.pop() {
+        if !seen.insert((value as *const Value, scope)) {
+            continue;
+        }
+        let is_bound = |variable| {
+            let mut current = scope;
+            while let Some((parent, bound)) = scopes[current] {
+                if variable == bound {
+                    return true;
+                }
+                current = parent;
+            }
+            false
+        };
+        match value {
+            Value::TypeVariable(variable) if !is_bound(*variable) => return true,
+            Value::Forall { variable, body } => {
+                let child = scopes.len();
+                scopes.push(Some((scope, *variable)));
+                pending.push((body, child));
+            }
+            Value::Shape(fields) => {
+                pending.extend(fields.iter().map(|(_, value)| (value, scope)));
+            }
+            Value::Array(members) => {
+                pending.extend(members.iter().map(|value| (value, scope)));
+            }
+            Value::Union(members) => {
+                pending.extend(members.iter().map(|value| (value, scope)));
+            }
+            Value::RegionType(element)
+            | Value::ScratchType(element)
+            | Value::ResourceType {
+                payload: element, ..
+            }
+            | Value::EmptyArray { element }
+            | Value::DeferredScratch { capacity: element }
+            | Value::Sealed { inner: element, .. } => pending.push((element, scope)),
+            Value::Tag {
+                payload: Some(payload),
+                ..
+            } => pending.push((payload, scope)),
+            Value::Range { low, high, .. } => {
+                pending.extend([(low.as_ref(), scope), (high.as_ref(), scope)]);
+            }
+            Value::Arrow {
+                domain,
+                codomain,
+                effects,
+                effect_tail,
+                ..
+            } => {
+                if effect_tail.is_some_and(|tail| !is_bound(tail)) {
+                    return true;
+                }
+                pending.extend([(domain.as_ref(), scope), (codomain.as_ref(), scope)]);
+                pending.extend(effects.iter().map(|value| (value, scope)));
+            }
+            Value::Effect { operations, .. } => {
+                pending.extend(operations.iter().map(|(_, value)| (value, scope)));
+            }
+            Value::Operation { effect, .. } => pending.push((effect, scope)),
+            Value::Extended { inner, members } => {
+                pending.push((inner, scope));
+                pending.extend(members.iter().map(|(_, value)| (value, scope)));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 thread_local! {
     static REUSE_VISITS: Cell<usize> = const { Cell::new(0) };
@@ -209,5 +285,34 @@ mod tests {
         let mut variables = BTreeSet::from([1]);
         collect_type_variables(&value, &mut variables);
         assert_eq!(variables, BTreeSet::from([1, 2, 5, 9, 11]));
+    }
+
+    #[test]
+    fn free_variables_respect_binders_and_shared_occurrences() {
+        let shared = diamond(Value::TypeVariable(7), 24);
+        let closed = Value::Forall {
+            variable: 7,
+            body: Box::new(shared.clone()),
+        };
+        assert!(!contains_free_type_variables(&closed));
+        assert!(contains_free_type_variables(&Value::Array(
+            vec![closed, shared].into(),
+        )));
+    }
+
+    #[test]
+    fn free_effect_row_tails_remain_open_inside_polymorphic_signatures() {
+        let signature = |tail| Value::Forall {
+            variable: 7,
+            body: Box::new(Value::Arrow {
+                deferred: false,
+                domain: Box::new(Value::TypeVariable(7)),
+                codomain: Box::new(Value::Unit),
+                effects: Vec::new(),
+                effect_tail: Some(tail),
+            }),
+        };
+        assert!(!contains_free_type_variables(&signature(7)));
+        assert!(contains_free_type_variables(&signature(8)));
     }
 }

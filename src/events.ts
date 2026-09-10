@@ -4,6 +4,12 @@ import type { CompilerArtifact } from "./compiler.ts";
 import type { HostCapabilities, HostOperation } from "./host.ts";
 import type { HostResource, HostScope, ResourceFamily } from "./resources.ts";
 import type { SparkRuntime } from "./spark.ts";
+import { Queue } from "./queue.ts";
+import {
+  receiveFrom,
+  type ReceiveSource,
+  type ReceiveWaiter,
+} from "./receiving.ts";
 
 export interface EventSink {
   emit(message: RuntimeValue): void;
@@ -17,12 +23,9 @@ type EventPolicy = { readonly kind: "latest" } | {
   readonly capacity: number;
 };
 
-class Subscription implements EventSink {
-  readonly #messages: RuntimeValue[] = [];
-  readonly #waiting = new Map<
-    symbol,
-    { resolve(value: RuntimeValue): void; reject(cause: unknown): void }
-  >();
+class Subscription implements EventSink, ReceiveSource {
+  readonly #messages = new Queue<RuntimeValue>();
+  readonly #waiting = new Queue<ReceiveWaiter>();
   readonly #policy: EventPolicy;
   #state: { kind: "open" } | { kind: "closed" } | {
     kind: "failed";
@@ -42,18 +45,23 @@ class Subscription implements EventSink {
 
   emit(message: RuntimeValue): void {
     if (this.#state.kind !== "open") return;
-    const waiting = this.#waiting.values().next();
-    if (!waiting.done) {
-      waiting.value.resolve({
-        kind: "variant",
-        name: "Some",
-        payload: message,
-      });
-      return;
+    for (
+      let waiting = this.#waiting.shift();
+      waiting !== undefined;
+      waiting = this.#waiting.shift()
+    ) {
+      if (
+        waiting.accept(() => ({
+          kind: "variant",
+          name: "Some",
+          payload: message,
+        }))
+      ) return;
     }
     if (this.#policy.kind === "latest") {
-      this.#messages.splice(0, this.#messages.length, message);
-    } else if (this.#messages.length < this.#policy.capacity) {
+      this.#messages.clear();
+      this.#messages.push(message);
+    } else if (this.#messages.size < this.#policy.capacity) {
       this.#messages.push(message);
     } else {
       this.fail(
@@ -64,48 +72,37 @@ class Subscription implements EventSink {
     }
   }
 
-  next(signal: AbortSignal): Promise<RuntimeValue> {
-    signal.throwIfAborted();
-    if (this.#state.kind === "failed") return Promise.reject(this.#state.cause);
-    if (this.#messages.length > 0) {
-      return Promise.resolve({
-        kind: "variant",
-        name: "Some",
-        payload: this.#messages.shift()!,
+  register(waiter: ReceiveWaiter): () => void {
+    if (this.#state.kind === "failed") {
+      waiter.reject(this.#state.cause);
+      return () => {};
+    }
+    if (this.#messages.size > 0) {
+      waiter.accept(() => {
+        const message = this.#messages.shift();
+        if (message === undefined) {
+          throw new Error("subscription lost its ready message");
+        }
+        return { kind: "variant", name: "Some", payload: message };
       });
+      return () => {};
     }
     if (this.#state.kind === "closed") {
-      return Promise.resolve({ kind: "variant", name: "None" });
+      waiter.accept(() => ({ kind: "variant", name: "None" }));
+      return () => {};
     }
-    return new Promise<RuntimeValue>((resolve, reject) => {
-      const id = Symbol("event receiver");
-      const remove = () => {
-        this.#waiting.delete(id);
-        signal.removeEventListener("abort", abort);
-      };
-      const abort = () => {
-        remove();
-        reject(signal.reason);
-      };
-      this.#waiting.set(id, {
-        resolve(value) {
-          remove();
-          resolve(value);
-        },
-        reject(cause) {
-          remove();
-          reject(cause);
-        },
-      });
-      signal.addEventListener("abort", abort, { once: true });
-    });
+    return this.#waiting.push(waiter);
   }
 
   close(): void {
     if (this.#state.kind !== "open") return;
     this.#state = { kind: "closed" };
-    for (const waiting of this.#waiting.values()) {
-      waiting.resolve({ kind: "variant", name: "None" });
+    for (
+      let waiting = this.#waiting.shift();
+      waiting !== undefined;
+      waiting = this.#waiting.shift()
+    ) {
+      waiting.accept(() => ({ kind: "variant", name: "None" }));
     }
     this.#unsubscribe();
   }
@@ -113,14 +110,18 @@ class Subscription implements EventSink {
   fail(cause: unknown): void {
     if (this.#state.kind !== "open") return;
     this.#state = { kind: "failed", cause };
-    this.#messages.length = 0;
-    for (const waiting of this.#waiting.values()) waiting.reject(cause);
+    this.#messages.clear();
+    for (
+      let waiting = this.#waiting.shift();
+      waiting !== undefined;
+      waiting = this.#waiting.shift()
+    ) waiting.reject(cause);
     this.#unsubscribe();
   }
 
   dispose(): void {
     this.close();
-    this.#messages.length = 0;
+    this.#messages.clear();
   }
 
   #unsubscribe(): void {
@@ -169,8 +170,13 @@ export class EventRuntime {
       [
         "next",
         (context, handle) =>
-          this.#subscription(context.operation.function.parameters[0], handle)
-            .next(context.signal),
+          receiveFrom(
+            this.#subscription(
+              context.operation.function.parameters[0],
+              handle,
+            ),
+            context.signal,
+          ),
       ],
       ["close", (context, handle) => {
         this.#subscription(context.operation.function.parameters[0], handle)
@@ -186,6 +192,10 @@ export class EventRuntime {
     subscribe: Subscribe,
   ): HostResource {
     return this.#sourceFamily(payload).grant(scope, subscribe);
+  }
+
+  receiveSource(type: BlotAbiType, handle: RuntimeValue): ReceiveSource {
+    return this.#subscription(type, handle);
   }
 
   capabilitiesFor(

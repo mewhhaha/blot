@@ -8,6 +8,7 @@ const result = spawnSync(process.execPath, [
   "--test-isolation=none",
   "--test-timeout=30000",
   "src/node/suspension.test.ts",
+  "src/node/borrow_liveness.test.ts",
   "src/node/suspension_memory.test.ts",
   "src/node/callbacks.test.ts",
   "src/node/resources.test.ts",

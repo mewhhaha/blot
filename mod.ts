@@ -14,6 +14,7 @@ export * from "./src/channel.ts";
 export * from "./src/shared.ts";
 export * from "./src/io.ts";
 export * from "./src/events.ts";
+export * from "./src/select.ts";
 export * from "./src/worker_executor.ts";
 export * from "./src/web_worker_executor.ts";
 export { type HostCallback, isHostCallback } from "./src/callbacks.ts";

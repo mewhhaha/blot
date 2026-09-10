@@ -170,12 +170,22 @@
       <header><span class="brand">blot / development</span><span id="status" role="status">Connecting…</span></header>
       <h1 id="message">Live events, editable code.</h1>
       <p
-        class="intro">A Blot actor receives input events, keeps its own counter, and awaits a clock. Reloading the formula drains the actor and runs its cleanup before starting the next one.</p>
+        class="intro">Keep typing while work is running. Blot waits for a quiet input, runs the formula in a worker, and cancels obsolete calculations. Editing the formula drains the old actor before restarting it.</p>
       <section class="calculator" aria-label="Live formula">
         <div><label for="quantity">Quantity</label><input id="quantity" type="number" value="21" min="-1000000" max="1000000" step="1" required></div>
         <div><span class="label">Result</span><output id="result" for="quantity" aria-live="polite">…</output></div>
       </section>
-      <p><button id="toggle" type="button">Stop actor</button> · Events received: <b id="received">0</b> · Cleanups finished: <b id="stopped">0</b></p>
+      <p><button id="toggle" type="button">Stop actor</button> · Results published: <b id="received">0</b> · Cleanups finished: <b id="stopped">0</b></p>
+      <p role="status">Actor: <strong id="activity">Starting…</strong></p>
+      <section class="metrics" aria-label="Background work">
+        <div><span>Active Sparks</span><strong id="active-jobs">0</strong></div>
+        <div><span>Retained job handles</span><strong id="retained-jobs">0</strong></div>
+        <div><span>Worker jobs completed</span><strong id="worker-jobs">0</strong></div>
+      </section>
+      <details>
+        <summary>Activity history · latest 40 entries</summary>
+        <ol id="history"></ol>
+      </details>
       <section class="metrics" aria-label="Reload timing">
         <div><span>Server update</span><strong id="build-time">—</strong></div>
         <div><span>Fetch + activation</span><strong id="activation-time">—</strong></div>
@@ -187,8 +197,10 @@
       <p
         class="units">Last source build: <span><b id="specialized">0</b> functions compiled</span><span><b id="reused">0</b> reused</span><span><b id="restored">0</b> graphs restored from disk</span></p>
       <pre id="cache-warning" role="status" hidden></pre>
-      <h2>Try three edits</h2>
+      <h2>Try it</h2>
       <ol>
+        <li>Type quickly, then change the quantity while the actor says “Calculating”. Only the latest result is published. A 150 ms debounce and a simulated 300 ms service delay make cancellation visible.</li>
+        <li>Stop during work, then restart. Active Sparks and retained handles return to zero after cleanup.</li>
         <li>In <code>formula.blot</code>, change <code>quantity * 2</code> to <code>quantity * 3</code>. Only the formula unit is replaced.</li>
         <li>Edit <code>message.txt</code>. This heading updates without a compiler build.</li>
         <li>Make a syntax error, then fix it. The last working formula stays active until the repair is ready.</li>

@@ -31,6 +31,21 @@ export type RuntimeValue =
     readonly value: RuntimeValue;
   };
 
+declare const guestScopeToken: unique symbol;
+export type GuestScopeToken = number & { readonly [guestScopeToken]: true };
+
+export function requireGuestScopeToken(value: unknown): GuestScopeToken {
+  if (
+    typeof value !== "number" || !Number.isInteger(value) ||
+    value < -2147483648 || value > 4294967295 || (value >>> 0) === 0
+  ) {
+    throw new TypeError(
+      "guest allocation scope must be a nonzero memory32 token",
+    );
+  }
+  return (value >>> 0) as GuestScopeToken;
+}
+
 export function decodeManifest(bytes: Uint8Array): BlotAbiManifest {
   const decoded: unknown = JSON.parse(new TextDecoder().decode(bytes));
   if (
@@ -41,6 +56,14 @@ export function decodeManifest(bytes: Uint8Array): BlotAbiManifest {
   ) {
     throw new TypeError("compiled artifact has an invalid Blot ABI manifest");
   }
+  if (
+    !("abi" in decoded) || typeof decoded.abi !== "object" ||
+    decoded.abi === null ||
+    !("major" in decoded.abi) || decoded.abi.major !== 4 ||
+    !("minor" in decoded.abi) || decoded.abi.minor !== 0 ||
+    !("memory" in decoded.abi) || decoded.abi.memory !== "memory32" ||
+    !("stringEncoding" in decoded.abi) || decoded.abi.stringEncoding !== "utf-8"
+  ) throw new TypeError("host requires Blot Core Wasm ABI 4.0");
   return decoded as BlotAbiManifest;
 }
 

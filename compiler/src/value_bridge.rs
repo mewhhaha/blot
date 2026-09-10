@@ -40,8 +40,8 @@ impl<'a> Bridge<'a> {
             Value::Float32(_) => Some(float32_type()),
             Value::Text(value) => Some(Type::Range {
                 domain: Domain::Text,
-                low: Some(Scalar::Text(value.clone())),
-                high: Some(Scalar::Text(value.clone())),
+                low: Some(Scalar::Text(value.to_string())),
+                high: Some(Scalar::Text(value.to_string())),
             }),
             Value::Unit => Some(Type::Unit),
             Value::Shape(fields) => {

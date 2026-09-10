@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { assertEquals } from "@std/assert";
 import { DevelopmentProject } from "../../src/development.ts";
 import { DevelopmentRuntime } from "../../src/development_runtime.ts";
@@ -23,8 +24,8 @@ Deno.test("active development workload executes generics and recursion across ed
           await project.markChanged(workload.editedProviderPath);
         }
         const build = await project.activate(runtime);
-        const integerRun = runtime.entryInstance.exports["blot:run"];
-        const floatRun = runtime.entryInstance.exports["blot:float_run"];
+        const integerRun = scalarExport(runtime.entryInstance, "blot:run");
+        const floatRun = scalarExport(runtime.entryInstance, "blot:float_run");
         if (
           typeof integerRun !== "function" || typeof floatRun !== "function"
         ) {
@@ -52,6 +53,7 @@ Deno.test("active development workload executes generics and recursion across ed
       assertEquals(unchanged.work, {
         emittedUnits: 0,
         specializedFunctions: {},
+        graphCache: {},
         reusedFunctions: {},
       });
     } finally {

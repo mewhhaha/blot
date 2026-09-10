@@ -352,20 +352,20 @@ among unrelated live nodes. Projection occurs only when a rebinding removes the
 last visible alias, and benchmarks report both retained fact count and wall
 time.
 
-For a Runtime-HIR function with `H` blocks and `D` executed block transitions,
+For a Runtime-HIR function with `H` continuations and `D` executed transitions,
 the fallback dispatcher emits `O(H)` branch targets and executes one indexed
 `br_table` per transition, for `O(D)` dispatch operations rather than `O(D H)`
-block-identity comparisons. A non-reconvergent acyclic function emits its direct
-structured path with no dispatcher, and a reducible entry cycle executes one
-structured path per iteration. Unfolding shared acyclic joins can increase
-emitted `Q`, so eligibility budgets duplicate visits while unique linear blocks
-do not consume that budget; excess duplication preserves the dispatcher. HIR
-removal of known boolean and sum round-trips reduces both the expansion and the
-executed administrative steps without changing source work. For closed sums this
-removal applies to the canonical integer switch over the constructor tag, not a
-reconstructed chain of equality conditionals.
+continuation-identity comparisons. A non-reconvergent acyclic function emits its
+direct structured path with no dispatcher, and a reducible entry cycle executes
+one structured path per iteration. Unfolding shared acyclic joins can increase
+emitted `Q`, so eligibility budgets duplicate visits while unique linear
+continuations do not consume that budget; excess duplication preserves the
+dispatcher. HIR removal of known boolean and sum round-trips reduces both the
+expansion and the executed administrative steps without changing source work.
+For closed sums this removal applies to the canonical integer switch over the
+constructor tag, not a reconstructed chain of equality conditionals.
 
-Runtime-HIR normalization propagates operation uses, aliases, block liveness,
+Runtime-HIR normalization propagates value uses, aliases, continuation liveness,
 and affected control-flow folds through dependency worklists. Exact type,
 signature, and function-body interning adds work proportional to their closed
 structural size plus call-graph partition refinement and publishes only
@@ -553,3 +553,46 @@ search instructions with bounded byte loads. Integration tests also compile
 nested public records and execute actual generated Wasm on repetitive, periodic,
 empty, overlapping, and multibyte inputs. Wall-clock samples are supporting
 measurements, not CI correctness thresholds.
+
+`@text.next_byte` performs constant byte work per valid cursor step: the Wasm
+helper loads one UTF-8 lead byte and has no loop, call, allocation, or memory
+write. Invalid positions trap and the exact end returns absence. `Text.scalars`
+therefore traverses `n` input bytes in `O(n)` work. `Text.trim` traverses once,
+tracks the scalar bounds of the non-whitespace interval, and takes at most one
+final scalar slice; its total byte work is also `O(n)`. Its whitespace set is
+unchanged. These bounds include scanning and Text copying, but exclude work
+performed by a user-supplied iterator consumer.
+
+The evaluator shares immutable Text storage across cursor copies and admits memo
+keys only within the fixed node and payload-byte budget in
+[`STAGING.md`](STAGING.md). Per-step memo-key work is bounded independently of
+source size, and large source texts are neither copied nor hashed for
+memoization. Deterministic checks inspect the emitted cursor helper's bounded
+instruction set; runtime tests exercise large ASCII and multibyte traversals,
+trimming, and malformed offsets.
+
+Channel buffers, blocked sends and receives, event buffers and waiters, and
+worker priority queues use removable FIFO links. Enqueue, dequeue, and removal
+of a known registration each take `O(1)` work. Worker dispatch and promotion do
+not scan or sort all pending jobs; queued promotion appends to the required
+FIFO. Selection over `n` arms takes `O(n)` admission and loser-unregistration
+work, with one committed take. Closing a queue takes work proportional to the
+values and waiters it releases; external host work and timer drain duration are
+outside these queue-operation bounds.
+
+ABI 4 boundary measurements include entering and leaving one invocation scope
+and copying managed canonical parameters into private values. A repeated Text
+search benchmark includes those copies on every call. Its post-warmup checks
+require reusable page capacity and zero live allocations after each invocation;
+the leaf search emitter is checked separately for linear work and absence of
+allocation or memory writes. Reference-free flat parameters and scalar results
+use validated local adapters without canonical scratch allocations.
+
+The lowering audit counts an instruction or a call transition as one operation,
+so moving calls from blocks into continuations cannot hide source work. Its
+control-flow-size metric counts continuations, including explicit call
+successors. Whole-module byte and local-declaration budgets include the ABI
+allocator, canonical adapters, and reference functions. Rebaselining these
+representation budgets requires a recorded old/new artifact comparison; it does
+not change unchanged-module semantic-work gates or steady-state allocation
+bounds.

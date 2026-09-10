@@ -16,7 +16,7 @@ export function indirectResultFixture(
   const manifestBytes = new TextEncoder().encode(JSON.stringify({
     format: "blot-core-wasm",
     abi: {
-      major: 3,
+      major: 4,
       minor: 0,
       memory: "memory32",
       stringEncoding: "utf-8",
@@ -41,24 +41,26 @@ export function indirectResultFixture(
   const wasm = wasmFixture({
     manifest: manifestBytes,
     types: [
+      { parameters: ["i32"], results: ["i32"] },
+      { parameters: ["i32", "i32"], results: [] },
+      { parameters: ["i32", "i32", "i32", "i32", "i32"], results: ["i32"] },
       { parameters: [], results: ["i32"] },
       { parameters: ["i32"], results: [] },
-      { parameters: ["i32", "i32", "i32", "i32"], results: ["i32"] },
-      { parameters: [], results: [] },
     ],
     functions: [
       { type: 0, instructions: [0x41, 0] },
       { type: 1, instructions: [] },
       // No allocation occurs in this fixture; unexpected allocation traps.
       { type: 2, instructions: [0x00] },
-      { type: 3, instructions: [] },
+      { type: 3, instructions: [0x41, 1] },
+      { type: 4, instructions: [] },
     ],
     exports: {
       result: 0,
       post_result: 1,
       cabi_realloc: 2,
       cabi_enter: 3,
-      cabi_leave: 3,
+      cabi_leave: 4,
     },
     data,
   });

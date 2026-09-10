@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -63,7 +64,7 @@ return run
         const { instance } = await WebAssembly.instantiate(
           Uint8Array.from(cold.wasm),
         );
-        const run = instance.exports["blot:default"];
+        const run = scalarExport(instance, "blot:default");
         if (typeof run !== "function") {
           throw new Error("missing runtime export");
         }

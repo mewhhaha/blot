@@ -3,7 +3,7 @@ import type { CompilerArtifact } from "./compiler.ts";
 import type { HostCapabilities, HostOperation } from "./host.ts";
 import type { HostResource, HostScope, ResourceFamily } from "./resources.ts";
 
-interface ClockService {
+export interface ClockService {
   readonly now: () => bigint;
   readonly sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
@@ -111,6 +111,10 @@ export class IoRuntime {
         return fetch(url, { signal, redirect: "error" });
       },
     });
+  }
+
+  clockService(handle: RuntimeValue): ClockService {
+    return this.#clocks.get(handle);
   }
 
   capabilitiesFor(

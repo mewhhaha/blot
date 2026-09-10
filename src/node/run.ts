@@ -1,17 +1,7 @@
-import {
-  type BlotAbiManifest,
-  flattenedAbiType,
-} from "../compiler/backend/runtime/abi.ts";
+import { instantiateArtifact } from "../host.ts";
+import type { BlotAbiManifest } from "../compiler/backend/runtime/abi.ts";
 import type { CompilerArtifact } from "../compiler/session.ts";
-import {
-  decodeManifest,
-  formatValue,
-  readDirect,
-  readMemory,
-  requiredFunction,
-  requiredMemory,
-  type RuntimeValue,
-} from "../abi_values.ts";
+import { decodeManifest, formatValue } from "../abi_values.ts";
 
 export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
   const manifest = decodeManifest(artifact.manifestBytes);
@@ -32,35 +22,12 @@ export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
       `run requires a zero-parameter export; ${exported.sourceName} takes ${exported.function.parameters.length}`,
     );
   }
-  const instantiated = await WebAssembly.instantiate(
-    Uint8Array.from(artifact.wasm),
-  );
-  const callable = requiredFunction(instantiated.instance, exported.name);
-  const resultType = exported.function.result;
-  const flattened = flattenedAbiType(resultType);
-  const postReturn = exported.postReturn;
-  const raw = callable();
-  let value: RuntimeValue;
-  if (flattened.length <= 1) value = readDirect(resultType, raw);
-  else {
-    if (postReturn === null) {
-      throw new TypeError(`${exported.name} omitted its indirect post-return`);
-    }
-    if (typeof raw !== "number") {
-      throw new TypeError(`${exported.name} did not return a result pointer`);
-    }
-    const memory = requiredMemory(instantiated.instance, manifest);
-    try {
-      value = readMemory(
-        resultType,
-        new DataView(memory.buffer),
-        raw,
-      );
-    } finally {
-      requiredFunction(instantiated.instance, postReturn)(raw);
-    }
+  const hosted = await instantiateArtifact(artifact);
+  try {
+    return formatValue(await hosted.callAsync(exported.sourceName));
+  } finally {
+    await hosted.close();
   }
-  return formatValue(value);
 }
 
 function selectExport(manifest: BlotAbiManifest) {

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
 use serde::Serialize;
 use wasm_encoder::{
@@ -12,63 +12,57 @@ use wasm_encoder::{
 };
 use wasmparser::{BinaryReader, FunctionBody, Operator};
 
+mod allocation;
 mod boundary_validation;
+mod canonical;
+mod lifetimes;
+mod managed;
 mod suspension;
+mod text_cursor;
 mod text_search;
 
 use crate::hir::{
-    RuntimeBlock, RuntimeExport, RuntimeFunction, RuntimeModule, RuntimeOperation,
-    RuntimeOperationContract, RuntimeTerminator, RuntimeType, WireConstant,
+    RuntimeExport, RuntimeModule, RuntimeOperationContract, RuntimeType, WireConstant,
 };
 
+use crate::continuation::{
+    Argument, CallTarget, Continuation as RuntimeContinuation, ContinuationId, Edge,
+    Function as RuntimeFunction, FunctionId, Instruction as RuntimeInstruction, SignatureId,
+    Transition as RuntimeTransition, ValueId,
+};
+
+#[cfg(test)]
+use crate::continuation::{Definition as RuntimeParameter, TypeId};
+
 const HEAP_GLOBAL: u32 = 0;
-const ACTIVE_EXPORT_GLOBAL: u32 = 3;
-const RESULT_POINTER_GLOBAL: u32 = 4;
-const HEAP_CHECKPOINT_GLOBAL: u32 = 5;
 const MAX_STRUCTURED_DUPLICATED_BLOCKS: usize = 128;
 
 #[derive(Clone, Copy)]
-struct DynamicHelpers {
+struct DynamicHelpers<'a> {
+    allocator: allocation::Functions,
+    allocation_globals: allocation::Globals,
+    managed: &'a managed::ManagedValues,
+    canonical: &'a canonical::CanonicalAdapters,
     realloc: u32,
     heap_start: u32,
     text_compare: Option<u32>,
     text_scalar_count: Option<u32>,
+    text_next_byte: Option<u32>,
     text_scalar_offset: Option<u32>,
     text_find_from: Option<u32>,
-    utf8_validator: Option<u32>,
-    canonical_validator: Option<u32>,
+    canonical_validator: u32,
     i64_to_text: Option<u32>,
 }
 
 struct StaticData {
-    text_offsets: HashMap<(usize, usize), u32>,
-    store_offsets: HashMap<(usize, usize), (u32, u32)>,
+    text_offsets: HashMap<(FunctionId, ValueId), u32>,
+    store_offsets: HashMap<(FunctionId, ValueId), (u32, u32)>,
 }
 
 #[derive(Clone, Copy)]
 struct Dispatcher {
     local: u32,
     depth: u32,
-}
-
-#[derive(Clone, Copy)]
-struct CanonicalResult<'a> {
-    type_: &'a AbiType,
-    runtime_type: usize,
-    pointer: u32,
-    realloc: u32,
-}
-
-#[derive(Clone, Copy)]
-struct CanonicalDestination {
-    pointer: u32,
-    offset: u32,
-}
-
-#[derive(Clone, Copy)]
-enum StructuredResult<'a> {
-    Internal,
-    Canonical(CanonicalResult<'a>),
 }
 
 #[derive(Clone, Copy)]
@@ -86,16 +80,16 @@ struct DynamicExport<'a> {
 }
 
 struct ValueLocalAllocation {
-    value_locals: HashMap<usize, Vec<u32>>,
-    value_types: HashMap<usize, usize>,
+    value_locals: HashMap<ValueId, Vec<u32>>,
+    value_types: HashMap<ValueId, usize>,
     local_types: Vec<ValType>,
 }
 
 #[derive(Clone, Copy)]
 struct FunctionEmissionFacts<'a> {
     runtime_layouts: &'a RuntimeTypeLayouts,
-    value_locals: &'a HashMap<usize, Vec<u32>>,
-    value_types: &'a HashMap<usize, usize>,
+    value_locals: &'a HashMap<ValueId, Vec<u32>>,
+    value_types: &'a HashMap<ValueId, usize>,
 }
 
 struct RuntimeTypeLayouts {
@@ -151,9 +145,9 @@ impl RuntimeTypeLayouts {
                 RuntimeType::Float32 => Ok(vec![ValType::F32]),
                 RuntimeType::Float64 => Ok(vec![ValType::F64]),
                 RuntimeType::Text | RuntimeType::Store { .. } => {
-                    Ok(vec![ValType::I32, ValType::I32])
+                    Ok(vec![ValType::I32, ValType::I32, ValType::I32])
                 }
-                RuntimeType::Scratch { .. } => Ok(vec![ValType::I32, ValType::I32, ValType::I32]),
+                RuntimeType::Scratch { .. } => Ok(vec![ValType::I32; 4]),
                 RuntimeType::Indirect { .. } => Ok(vec![ValType::I32]),
                 RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => Ok(vec![ValType::V128]),
                 RuntimeType::Product { fields, .. } => {
@@ -440,18 +434,7 @@ struct AbiCallback {
 }
 
 pub fn close(runtime: RuntimeModule) -> Result<ClosedProgram, String> {
-    for root in &runtime.resumable_roots {
-        if !runtime
-            .functions
-            .iter()
-            .any(|function| function.id == *root)
-        {
-            return Err(format!(
-                "{}: resumable root {root} has no checked function",
-                runtime.source
-            ));
-        }
-    }
+    runtime.graph.validate(runtime.tables())?;
     let runtime_layouts = RuntimeTypeLayouts::new(&runtime)?;
     let manifest = build_manifest(&runtime, &runtime_layouts)?;
     if manifest
@@ -519,8 +502,12 @@ fn build_manifest(
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
 ) -> Result<AbiManifest, String> {
-    let plan = crate::suspension::SuspensionPlan::new(module);
-    let suspending = &plan.suspending;
+    let suspending = module
+        .functions
+        .iter()
+        .filter(|function| function.suspends)
+        .map(|function| function.id)
+        .collect::<HashSet<_>>();
     let mut exports = Vec::new();
     for exported in &module.exports {
         match exported {
@@ -574,7 +561,7 @@ fn build_manifest(
                         },
                     )?,
                 };
-                let post_return = if suspending.contains(function_id) {
+                let post_return = if suspending.contains(&FunctionId(*function_id)) {
                     Some("blot:release".to_owned())
                 } else if flattened_type(&function.result).len() > 1 {
                     Some(format!("cabi_post_{wasm_name}"))
@@ -591,7 +578,7 @@ fn build_manifest(
                     post_return,
                     effects,
                     ownership: Some(ownership),
-                    execution: if suspending.contains(function_id) {
+                    execution: if suspending.contains(&FunctionId(*function_id)) {
                         "resumable"
                     } else {
                         "direct"
@@ -727,7 +714,7 @@ fn build_manifest(
     Ok(AbiManifest {
         format: "blot-core-wasm",
         abi: AbiPolicy {
-            major: 3,
+            major: 4,
             minor: 0,
             core_specification: "3.0",
             required_features,
@@ -747,90 +734,39 @@ fn build_manifest(
     })
 }
 
-fn exported_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
-    module
-        .exports
-        .iter()
-        .filter_map(|exported| match exported {
-            RuntimeExport::Runtime { function, .. } => Some(*function),
-            RuntimeExport::Comptime { .. } => None,
-        })
-        .collect()
-}
-
-fn internally_emitted_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<usize> {
-    let exported = exported_runtime_function_ids(module);
-    let directly_called = module
-        .functions
-        .iter()
-        .flat_map(|function| &function.blocks)
-        .flat_map(|block| &block.operations)
-        .filter(|operation| operation.kind == "call.direct")
-        .filter_map(|operation| operation.function)
-        .collect::<BTreeSet<_>>();
+fn internally_emitted_runtime_function_ids(module: &RuntimeModule) -> BTreeSet<FunctionId> {
     module
         .functions
         .iter()
-        .filter(|function| {
-            !exported.contains(&function.id) || directly_called.contains(&function.id)
-        })
+        .filter(|function| !function.suspends)
         .map(|function| function.id)
         .collect()
 }
 
-fn direct_tail_call<'a>(
-    function: &'a RuntimeFunction,
-    block: &'a RuntimeBlock,
-) -> Option<&'a RuntimeOperation> {
-    let operation = block.operations.last()?;
-    if operation.kind != "call.direct" {
-        return None;
-    }
-    forwards_to_return(
-        function,
-        &block.terminator,
-        operation.result,
-        &mut HashSet::new(),
-    )
-    .then_some(operation)
+struct DirectTailCall<'a> {
+    target: FunctionId,
+    arguments: &'a [ValueId],
 }
 
-fn forwards_to_return(
+fn direct_tail_call<'a>(
     function: &RuntimeFunction,
-    terminator: &RuntimeTerminator,
-    value: usize,
-    visited: &mut HashSet<usize>,
-) -> bool {
-    match terminator {
-        RuntimeTerminator::Return {
-            value: returned, ..
-        } => *returned == value,
-        RuntimeTerminator::Branch {
-            target, arguments, ..
-        } => {
-            if !visited.insert(*target) {
-                return false;
-            }
-            let Some(block) = function.blocks.get(*target) else {
-                return false;
-            };
-            if block.id != *target || !block.operations.is_empty() {
-                return false;
-            }
-            block
-                .parameters
-                .iter()
-                .zip(arguments)
-                .filter(|(_, argument)| **argument == value)
-                .any(|(parameter, _)| {
-                    let mut path = visited.clone();
-                    forwards_to_return(function, &block.terminator, parameter.value, &mut path)
-                })
-        }
-        RuntimeTerminator::Conditional { .. }
-        | RuntimeTerminator::Switch { .. }
-        | RuntimeTerminator::Trap { .. } => false,
-    }
+    continuation: &'a RuntimeContinuation,
+) -> Option<DirectTailCall<'a>> {
+    let RuntimeTransition::Call {
+        target: CallTarget::Function { function: target },
+        arguments,
+        next,
+        ..
+    } = &continuation.transition
+    else {
+        return None;
+    };
+    function
+        .returns_call_result(next)
+        .then_some(DirectTailCall {
+            target: *target,
+            arguments,
+        })
 }
 
 fn runtime_type_uses_simd(
@@ -860,19 +796,19 @@ fn required_wasm_features(
     features.insert("bulk-memory");
 
     let helper_uses_multi_value = module.functions.iter().any(|function| {
-        function.blocks.iter().any(|block| {
+        function.continuations.iter().any(|block| {
             block
-                .operations
+                .instructions
                 .iter()
-                .any(|operation| operation.kind == "text.from-i64")
+                .any(|operation| operation.operation.kind == "text.from-i64")
         })
     });
     let mut uses_multi_value = helper_uses_multi_value;
     for function in &internal_functions {
-        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+        let signature = module.signatures.get(function.signature.0).ok_or_else(|| {
             format!(
                 "{}: runtime function {} references unknown signature {}",
-                module.source, function.id, function.signature
+                module.source, function.id, function.signature.0
             )
         })?;
         uses_multi_value |= runtime_layouts.flattened(module, signature.result)?.len() > 1;
@@ -883,10 +819,10 @@ fn required_wasm_features(
 
     let mut uses_simd = false;
     for function in &module.functions {
-        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+        let signature = module.signatures.get(function.signature.0).ok_or_else(|| {
             format!(
                 "{}: runtime function {} references unknown signature {}",
-                module.source, function.id, function.signature
+                module.source, function.id, function.signature.0
             )
         })?;
         for type_id in signature
@@ -897,12 +833,16 @@ fn required_wasm_features(
         {
             uses_simd |= runtime_type_uses_simd(module, runtime_layouts, type_id)?;
         }
-        for block in &function.blocks {
+        for block in &function.continuations {
             for parameter in &block.parameters {
-                uses_simd |= runtime_type_uses_simd(module, runtime_layouts, parameter.type_id)?;
+                uses_simd |= runtime_type_uses_simd(module, runtime_layouts, parameter.type_id.0)?;
             }
-            for operation in &block.operations {
-                uses_simd |= runtime_type_uses_simd(module, runtime_layouts, operation.type_id)?;
+            for operation in &block.instructions {
+                uses_simd |= runtime_type_uses_simd(
+                    module,
+                    runtime_layouts,
+                    operation.definition.type_id.0,
+                )?;
             }
         }
     }
@@ -911,9 +851,9 @@ fn required_wasm_features(
     }
 
     let uses_tail_calls = internal_functions.iter().any(|function| {
-        function.blocks.iter().any(|block| {
+        function.continuations.iter().any(|block| {
             direct_tail_call(function, block)
-                .and_then(|operation| operation.function)
+                .map(|call| call.target)
                 .is_some_and(|target| internal_ids.contains(&target))
         })
     });
@@ -960,6 +900,7 @@ fn runtime_layout_type(
         .ok_or_else(|| format!("{}: ABI references unknown type {type_id}", module.source))?;
     let scalar = match type_ {
         RuntimeType::Unit => Some(AbiType::Unit),
+        RuntimeType::Integer32 if scope == LayoutScope::Internal => Some(AbiType::InternalPointer),
         RuntimeType::Integer32 => {
             return Err(format!(
                 "{}: internal integer-32 type {type_id} cannot cross the Blot ABI",
@@ -979,6 +920,15 @@ fn runtime_layout_type(
         RuntimeType::Float32 => Some(AbiType::Float32),
         RuntimeType::Float64 => Some(AbiType::Float64),
         RuntimeType::Boolean => Some(AbiType::Boolean),
+        RuntimeType::Text if scope == LayoutScope::Internal => Some(AbiType::Record {
+            fields: ["0", "1", "2"]
+                .into_iter()
+                .map(|name| AbiField {
+                    name: name.to_owned(),
+                    type_: AbiType::InternalPointer,
+                })
+                .collect(),
+        }),
         RuntimeType::Text => Some(AbiType::Text),
         _ => None,
     };
@@ -1012,6 +962,15 @@ fn runtime_layout_type(
                 )?),
             }
         }
+        RuntimeType::Store { .. } if scope == LayoutScope::Internal => AbiType::Record {
+            fields: ["0", "1", "2"]
+                .into_iter()
+                .map(|name| AbiField {
+                    name: name.to_owned(),
+                    type_: AbiType::InternalPointer,
+                })
+                .collect(),
+        },
         RuntimeType::Store { element_type } => AbiType::Array {
             element: Box::new(runtime_layout_type(
                 module,
@@ -1021,7 +980,7 @@ fn runtime_layout_type(
             )?),
         },
         RuntimeType::Scratch { .. } if scope == LayoutScope::Internal => AbiType::Record {
-            fields: ["0", "1", "2"]
+            fields: ["0", "1", "2", "3"]
                 .into_iter()
                 .map(|name| AbiField {
                     name: name.to_owned(),
@@ -1031,26 +990,30 @@ fn runtime_layout_type(
         },
         RuntimeType::Scratch { .. } => {
             return Err(format!(
-                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 3",
+                "{}: live Scratch type {type_id} cannot cross Blot Core Wasm ABI 4",
                 module.source
             ));
         }
         RuntimeType::Indirect { .. } if scope == LayoutScope::Internal => AbiType::InternalPointer,
         RuntimeType::Indirect { .. } => {
             return Err(format!(
-                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 3",
+                "{}: recursive type {type_id} cannot cross Blot Core Wasm ABI 4",
                 module.source
             ));
         }
-        RuntimeType::Product { name, .. } if name.starts_with("$region:") => {
+        RuntimeType::Product { name, .. }
+            if name.starts_with("$region:") && scope == LayoutScope::Public =>
+        {
             return Err(format!(
-                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 3",
+                "{}: live Region type {type_id} cannot cross Blot Core Wasm ABI 4",
                 module.source
             ));
         }
         RuntimeType::Product { fields, .. } => {
             let mut fields = fields.clone();
-            fields.sort_by(|left, right| left.name.cmp(&right.name));
+            if scope == LayoutScope::Public {
+                fields.sort_by(|left, right| left.name.cmp(&right.name));
+            }
             AbiType::Record {
                 fields: fields
                     .into_iter()
@@ -1239,14 +1202,14 @@ fn pool_static_data(
 
 fn closed_store_literal_bytes(
     module: &RuntimeModule,
-    function: usize,
-    operation: &RuntimeOperation,
-    definitions: &HashMap<usize, &RuntimeOperation>,
-    text_offsets: &HashMap<(usize, usize), u32>,
+    function: FunctionId,
+    operation: &RuntimeInstruction,
+    definitions: &HashMap<ValueId, &RuntimeInstruction>,
+    text_offsets: &HashMap<(FunctionId, ValueId), u32>,
 ) -> Result<Option<(u32, Vec<u8>, u32)>, String> {
     let RuntimeType::Store { element_type } = module
         .types
-        .get(operation.type_id)
+        .get(operation.definition.type_id.0)
         .ok_or_else(|| format!("{}: store.literal has no Store type", module.source))?
     else {
         return Err(format!(
@@ -1257,7 +1220,7 @@ fn closed_store_literal_bytes(
     let element_type = *element_type;
     let element_memory_type = internal_memory_type(module, element_type)?;
     let element_layout = memory_layout(&element_memory_type);
-    let length = if let Some(store_id) = operation.static_store {
+    let length = if let Some(store_id) = operation.operation.static_store {
         let store = module.static_stores.get(store_id).ok_or_else(|| {
             format!(
                 "{}: store.literal references unknown static Store {store_id}",
@@ -1279,7 +1242,7 @@ fn closed_store_literal_bytes(
         .and_then(|stride| stride.checked_mul(length))
         .ok_or_else(|| format!("{}: Store literal exceeds memory32", module.source))?;
     let mut bytes = vec![0; byte_length];
-    if let Some(store_id) = operation.static_store {
+    if let Some(store_id) = operation.operation.static_store {
         let store = &module.static_stores[store_id];
         for (index, value) in store.values.iter().enumerate() {
             let offset = index * element_layout.size as usize;
@@ -1308,29 +1271,29 @@ fn closed_store_literal_bytes(
 
 struct StaticOperationWriter<'a> {
     module: &'a RuntimeModule,
-    function: usize,
-    definitions: &'a HashMap<usize, &'a RuntimeOperation>,
-    text_offsets: &'a HashMap<(usize, usize), u32>,
+    function: FunctionId,
+    definitions: &'a HashMap<ValueId, &'a RuntimeInstruction>,
+    text_offsets: &'a HashMap<(FunctionId, ValueId), u32>,
 }
 
 impl StaticOperationWriter<'_> {
     fn write(
         &self,
         expected_type: usize,
-        value: usize,
+        value: ValueId,
         destination: &mut [u8],
         offset: usize,
     ) -> Result<bool, String> {
         let Some(operation) = self.definitions.get(&value) else {
             return Ok(false);
         };
-        if operation.type_id != expected_type {
+        if operation.definition.type_id.0 != expected_type {
             return Err(format!(
                 "{}: static value {} has type {}, expected {}",
-                self.module.source, value, operation.type_id, expected_type
+                self.module.source, value, operation.definition.type_id.0, expected_type
             ));
         }
-        if let Some(constant) = &operation.value {
+        if let Some(constant) = &operation.operation.value {
             if matches!(constant, WireConstant::Text(_)) {
                 let Some(pointer) = self.text_offsets.get(&(self.function, value)) else {
                     return Err(format!(
@@ -1355,7 +1318,7 @@ impl StaticOperationWriter<'_> {
                 offset,
             );
         }
-        match operation.kind {
+        match operation.operation.kind {
             "product.make" => {
                 let RuntimeType::Product { fields, .. } = &self.module.types[expected_type] else {
                     return Err(format!(
@@ -1410,7 +1373,7 @@ impl StaticOperationWriter<'_> {
                         self.module.source, expected_type
                     ));
                 };
-                let case = operation.case.ok_or_else(|| {
+                let case = operation.operation.case.ok_or_else(|| {
                     format!("{}: static sum.make omitted its case", self.module.source)
                 })?;
                 let runtime_case = cases.get(case).ok_or_else(|| {
@@ -1454,17 +1417,17 @@ impl StaticOperationWriter<'_> {
                 let operand = operation.operands.first().ok_or_else(|| {
                     format!(
                         "{}: {} omitted its operand",
-                        self.module.source, operation.kind
+                        self.module.source, operation.operation.kind
                     )
                 })?;
                 let operand_type = self
                     .definitions
                     .get(operand)
-                    .map(|operation| operation.type_id)
+                    .map(|operation| operation.definition.type_id.0)
                     .ok_or_else(|| {
                         format!(
                             "{}: {} operand {} is absent",
-                            self.module.source, operation.kind, operand
+                            self.module.source, operation.operation.kind, operand
                         )
                     })?;
                 self.write(operand_type, *operand, destination, offset)
@@ -1533,9 +1496,9 @@ fn emit_dynamic_module(
     let mut pooled_data = HashMap::new();
     let mut data_segments = Vec::new();
     for function in &module.functions {
-        for block in &function.blocks {
-            for operation in &block.operations {
-                if let Some(WireConstant::Text(value)) = &operation.value {
+        for block in &function.continuations {
+            for operation in &block.instructions {
+                if let Some(WireConstant::Text(value)) = &operation.operation.value {
                     let offset = pool_static_data(
                         module,
                         &mut static_end,
@@ -1546,21 +1509,21 @@ fn emit_dynamic_module(
                     )?;
                     static_data
                         .text_offsets
-                        .insert((function.id, operation.result), offset);
+                        .insert((function.id, operation.definition.value), offset);
                 }
             }
         }
     }
     for function in &module.functions {
         let definitions = function
-            .blocks
+            .continuations
             .iter()
-            .flat_map(|block| block.operations.iter())
-            .map(|operation| (operation.result, operation))
+            .flat_map(|block| block.instructions.iter())
+            .map(|operation| (operation.definition.value, operation))
             .collect::<HashMap<_, _>>();
-        for block in &function.blocks {
-            for operation in &block.operations {
-                if operation.kind != "store.literal" {
+        for block in &function.continuations {
+            for operation in &block.instructions {
+                if operation.operation.kind != "store.literal" {
                     continue;
                 }
                 let Some((alignment, bytes, length)) = closed_store_literal_bytes(
@@ -1583,7 +1546,7 @@ fn emit_dynamic_module(
                 )?;
                 static_data
                     .store_offsets
-                    .insert((function.id, operation.result), (offset, length));
+                    .insert((function.id, operation.definition.value), (offset, length));
             }
         }
     }
@@ -1598,6 +1561,7 @@ fn emit_dynamic_module(
             .iter()
             .flat_map(flattened_type)
             .collect::<Vec<_>>();
+        parameters.insert(0, ValType::I32);
         let flattened_results = flattened_type(&imported.function.result);
         let results = if flattened_results.len() <= 1 {
             flattened_results
@@ -1619,6 +1583,7 @@ fn emit_dynamic_module(
             .iter()
             .flat_map(flattened_type)
             .collect::<Vec<_>>();
+        parameters.insert(0, ValType::I32);
         let flattened_results = flattened_type(&link.function.result);
         let results = if flattened_results.len() <= 1 {
             flattened_results
@@ -1638,26 +1603,58 @@ fn emit_dynamic_module(
     let mut code = CodeSection::new();
     let mut branch_hints = BranchHints::new();
     let imported_function_count = (manifest.imports.len() + manifest.links.len()) as u32;
-    let realloc_type = types.intern(
-        vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
-        vec![ValType::I32],
-    );
-    let realloc_index = imported_function_count;
-    functions.function(realloc_type);
-    append_code_function(
+    let mut globals = GlobalSection::new();
+    add_i32_global(&mut globals, heap_start as i32, true);
+    add_i32_global(&mut globals, 4, false);
+    add_i32_global(&mut globals, 0, false);
+    let allocation_globals = allocation::Globals::append(&mut globals, HEAP_GLOBAL);
+    let allocator =
+        allocation::Functions::declare(&mut types, &mut functions, imported_function_count);
+    let managed = managed::ManagedValues::declare(
+        module,
+        runtime_layouts,
+        &mut types,
+        &mut functions,
+        imported_function_count,
+    )?;
+    let canonical = canonical::CanonicalAdapters::declare(
+        module,
+        runtime_layouts,
+        &mut types,
+        &mut functions,
+        imported_function_count,
+    )?;
+    allocator.emit(
         &mut code,
         &mut branch_hints,
-        realloc_index,
-        realloc_function(heap_start),
+        allocation_globals,
+        heap_start,
+        managed.drop_children,
     )?;
+    managed.emit(
+        module,
+        runtime_layouts,
+        allocator,
+        &mut code,
+        &mut branch_hints,
+    )?;
+    canonical.emit(
+        module,
+        runtime_layouts,
+        allocator,
+        allocation_globals,
+        &mut code,
+        &mut branch_hints,
+    )?;
+    let realloc_index = allocator.alloc;
 
     let has_operation = |kind: &str| {
         module.functions.iter().any(|function| {
-            function.blocks.iter().any(|block| {
+            function.continuations.iter().any(|block| {
                 block
-                    .operations
+                    .instructions
                     .iter()
-                    .any(|operation| operation.kind == kind)
+                    .any(|operation| operation.operation.kind == kind)
             })
         })
     };
@@ -1684,6 +1681,18 @@ fn emit_dynamic_module(
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         code.function(&text_scalar_count_function());
+        Some(function_index)
+    } else {
+        None
+    };
+    let text_next_byte_index = if has_operation("text.next-byte") {
+        let type_index = types.intern(
+            vec![ValType::I32, ValType::I32, ValType::I64],
+            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I64],
+        );
+        let function_index = imported_function_count + functions.len();
+        functions.function(type_index);
+        code.function(&text_cursor::next_byte_function());
         Some(function_index)
     } else {
         None
@@ -1722,7 +1731,7 @@ fn emit_dynamic_module(
     } else {
         None
     };
-    let utf8_validator_index = if has_operation("host.call") || has_operation("call.external") {
+    let utf8_validator_index = {
         let type_index = types.intern(vec![ValType::I32, ValType::I32], Vec::new());
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
@@ -1732,12 +1741,13 @@ fn emit_dynamic_module(
             function_index,
             utf8_validator_function(),
         )?;
-        Some(function_index)
-    } else {
-        None
+        function_index
     };
     let i64_to_text_index = if has_operation("text.from-i64") {
-        let type_index = types.intern(vec![ValType::I64], vec![ValType::I32, ValType::I32]);
+        let type_index = types.intern(
+            vec![ValType::I64],
+            vec![ValType::I32, ValType::I32, ValType::I32],
+        );
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
         append_code_function(
@@ -1750,7 +1760,7 @@ fn emit_dynamic_module(
     } else {
         None
     };
-    let canonical_validator_index = if let Some(utf8) = utf8_validator_index {
+    let canonical_validator_index = {
         let type_index = types.intern(vec![ValType::I32, ValType::I32], Vec::new());
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
@@ -1758,40 +1768,43 @@ fn emit_dynamic_module(
             &mut code,
             &mut branch_hints,
             function_index,
-            boundary_validation::function(module, function_index, utf8)?,
+            boundary_validation::function(module, function_index, utf8_validator_index)?,
         )?;
-        Some(function_index)
-    } else {
-        None
+        function_index
     };
     let dynamic_helpers = DynamicHelpers {
+        allocator,
+        allocation_globals,
+        managed: &managed,
+        canonical: &canonical,
         realloc: realloc_index,
         heap_start,
         text_compare: text_compare_index,
         text_scalar_count: text_scalar_count_index,
+        text_next_byte: text_next_byte_index,
         text_scalar_offset: text_scalar_offset_index,
         text_find_from: text_find_from_index,
-        utf8_validator: utf8_validator_index,
         canonical_validator: canonical_validator_index,
         i64_to_text: i64_to_text_index,
     };
 
-    let plan = crate::suspension::SuspensionPlan::new(module);
-    let suspending = &plan.suspending;
-    let internally_emitted = internally_emitted_runtime_function_ids(module);
+    let suspending = module
+        .functions
+        .iter()
+        .filter(|function| function.suspends)
+        .map(|function| function.id)
+        .collect::<HashSet<_>>();
     let mut runtime_function_indices = HashMap::new();
     let internal_functions = module
         .functions
         .iter()
-        .filter(|function| {
-            internally_emitted.contains(&function.id) && !suspending.contains(&function.id)
-        })
+        .filter(|function| !function.suspends)
         .collect::<Vec<_>>();
     for function in &internal_functions {
-        let signature = module.signatures.get(function.signature).ok_or_else(|| {
+        let signature = module.signatures.get(function.signature.0).ok_or_else(|| {
             format!(
                 "{}: runtime function {} references unknown signature {}",
-                module.source, function.id, function.signature
+                module.source, function.id, function.signature.0
             )
         })?;
         let mut parameters = Vec::new();
@@ -1836,7 +1849,6 @@ fn emit_dynamic_module(
         dynamic_helpers,
         &static_data,
         &runtime_function_indices,
-        &plan,
         &mut types,
         &mut functions,
         &mut code,
@@ -1875,7 +1887,7 @@ fn emit_dynamic_module(
             .as_ref()
             .ok_or_else(|| format!("manifest export {wasm_name} has no function"))?;
         let result = &public_function.result;
-        if suspending.contains(function) {
+        if suspending.contains(&FunctionId(*function)) {
             continue;
         }
         let flattened_result = flattened_type(result);
@@ -1884,10 +1896,8 @@ fn emit_dynamic_module(
         } else {
             vec![ValType::I32]
         };
-        let wasm_parameters = public_function
-            .parameters
-            .iter()
-            .flat_map(flattened_type)
+        let wasm_parameters = std::iter::once(ValType::I32)
+            .chain(public_function.parameters.iter().flat_map(flattened_type))
             .collect();
         let type_index = types.intern(wasm_parameters, wasm_results);
         let function_index = imported_function_count + functions.len();
@@ -1917,14 +1927,14 @@ fn emit_dynamic_module(
         )?;
         function_exports.push((wasm_name.clone(), function_index));
         if let Some(post_return) = &manifest_export.post_return {
-            let post_type = types.intern(vec![ValType::I32], Vec::new());
+            let post_type = types.intern(vec![ValType::I32, ValType::I32], Vec::new());
             let post_index = imported_function_count + functions.len();
             functions.function(post_type);
             append_code_function(
                 &mut code,
                 &mut branch_hints,
                 post_index,
-                post_return_function(export_ordinal as u32 + 1),
+                post_return_function(export_ordinal as u32 + 1, dynamic_helpers),
             )?;
             function_exports.push((post_return.clone(), post_index));
         }
@@ -1939,19 +1949,19 @@ fn emit_dynamic_module(
         shared: false,
         page_size_log2: None,
     });
-    let mut globals = GlobalSection::new();
-    add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 3, false);
-    add_i32_global(&mut globals, 0, false);
-    add_i32_global(&mut globals, 0, true);
-    add_i32_global(&mut globals, 0, true);
-    add_i32_global(&mut globals, heap_start as i32, true);
-    add_i32_global(&mut globals, 0, true);
-    add_i32_global(&mut globals, heap_start as i32, true);
 
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
-    exports.export("cabi_realloc", ExportKind::Func, realloc_index);
+    exports.export("cabi_realloc", ExportKind::Func, allocator.realloc);
+    exports.export("cabi_enter", ExportKind::Func, allocator.enter);
+    exports.export("cabi_leave", ExportKind::Func, allocator.leave);
+    exports.export("blot:live-bytes", ExportKind::Func, allocator.live_bytes);
+    exports.export(
+        "blot:live-allocations",
+        ExportKind::Func,
+        allocator.live_allocations,
+    );
+    exports.export("blot:live-scopes", ExportKind::Func, allocator.live_scopes);
     exports.export("blot:abi-major", ExportKind::Global, 1);
     exports.export("blot:abi-minor", ExportKind::Global, 2);
     for (name, function) in function_exports {
@@ -1990,131 +2000,75 @@ fn allocate_value_locals(
     runtime_layouts: &RuntimeTypeLayouts,
     function: &RuntimeFunction,
     parameter_count: u32,
-    mut value_locals: HashMap<usize, Vec<u32>>,
+    mut value_locals: HashMap<ValueId, Vec<u32>>,
 ) -> Result<ValueLocalAllocation, String> {
     let mut definitions = BTreeMap::new();
     let mut value_types = HashMap::new();
-    for block in &function.blocks {
+    for block in &function.continuations {
         for parameter in &block.parameters {
-            value_types.insert(parameter.value, parameter.type_id);
+            value_types.insert(parameter.value, parameter.type_id.0);
             if !value_locals.contains_key(&parameter.value) {
-                definitions.insert(parameter.value, parameter.type_id);
+                definitions.insert(parameter.value, parameter.type_id.0);
             }
         }
-        for operation in &block.operations {
-            value_types.insert(operation.result, operation.type_id);
-            definitions.insert(operation.result, operation.type_id);
+        for operation in &block.instructions {
+            value_types.insert(operation.definition.value, operation.definition.type_id.0);
+            definitions.insert(operation.definition.value, operation.definition.type_id.0);
         }
     }
 
-    let mut block_definitions = HashMap::new();
-    let mut block_uses = HashMap::new();
-    for block in &function.blocks {
-        let mut defined = block
-            .parameters
-            .iter()
-            .map(|parameter| parameter.value)
-            .collect::<HashSet<_>>();
-        let mut used = HashSet::new();
-        for operation in &block.operations {
-            for operand in &operation.operands {
-                if !defined.contains(operand) {
-                    used.insert(*operand);
-                }
-            }
-            defined.insert(operation.result);
-        }
-        for operand in terminator_operands(&block.terminator) {
-            if !defined.contains(&operand) {
-                used.insert(operand);
-            }
-        }
-        block_definitions.insert(block.id, defined);
-        block_uses.insert(block.id, used);
-    }
-
-    let mut live_in = function
-        .blocks
+    let live_in = function
+        .continuations
         .iter()
-        .map(|block| (block.id, HashSet::new()))
-        .collect::<HashMap<_, _>>();
-    let mut live_out = live_in.clone();
-    let mut predecessors = HashMap::<usize, Vec<usize>>::new();
-    for block in &function.blocks {
-        for target in terminator_targets(&block.terminator) {
-            if !live_in.contains_key(&target) {
-                return Err(format!(
-                    "{}: function {} targets unknown block {target}",
-                    module.source, function.name
-                ));
-            }
-            predecessors.entry(target).or_default().push(block.id);
-        }
-    }
-    let blocks = function
-        .blocks
-        .iter()
-        .map(|block| (block.id, block))
-        .collect::<HashMap<_, _>>();
-    let mut pending = function
-        .blocks
-        .iter()
-        .rev()
-        .map(|block| block.id)
-        .collect::<VecDeque<_>>();
-    let mut queued = function
-        .blocks
-        .iter()
-        .map(|block| block.id)
-        .collect::<HashSet<_>>();
-    while let Some(block_id) = pending.pop_front() {
-        queued.remove(&block_id);
-        let block = blocks[&block_id];
-        let mut next_live_out = HashSet::new();
-        for target in terminator_targets(&block.terminator) {
-            next_live_out.extend(&live_in[&target]);
-        }
-        let mut next_live_in = block_uses.get(&block.id).cloned().unwrap_or_default();
-        let defined = block_definitions.get(&block.id).ok_or_else(|| {
-            format!(
-                "{}: function {} omitted liveness facts for block {}",
-                module.source, function.name, block.id
+        .map(|continuation| {
+            (
+                continuation.id,
+                continuation
+                    .parameters
+                    .iter()
+                    .chain(&continuation.captures)
+                    .map(|definition| definition.value)
+                    .collect::<HashSet<_>>(),
             )
-        })?;
-        next_live_in.extend(
-            next_live_out
-                .iter()
-                .filter(|value| !defined.contains(value)),
-        );
-        live_out.insert(block.id, next_live_out);
-        if live_in.get(&block.id) != Some(&next_live_in) {
-            live_in.insert(block.id, next_live_in);
-            for predecessor in predecessors.get(&block.id).into_iter().flatten() {
-                if queued.insert(*predecessor) {
-                    pending.push_back(*predecessor);
-                }
+        })
+        .collect::<HashMap<_, _>>();
+    let live_out = function
+        .continuations
+        .iter()
+        .map(|continuation| {
+            let mut values = terminator_operands(&continuation.transition)
+                .into_iter()
+                .collect::<HashSet<_>>();
+            for edge in continuation.transition.edges() {
+                values.extend(
+                    function.continuations[edge.target.0]
+                        .captures
+                        .iter()
+                        .map(|capture| capture.value),
+                );
             }
-        }
-    }
+            (continuation.id, values)
+        })
+        .collect::<HashMap<_, _>>();
 
     let mut block_positions = HashMap::new();
     let mut value_ranges = HashMap::new();
     let mut next_position = 0_usize;
-    for block in &function.blocks {
+    for block in &function.continuations {
         let block_start = next_position;
         for parameter in &block.parameters {
             if definitions.contains_key(&parameter.value) {
                 value_ranges.insert(parameter.value, (block_start, block_start));
             }
         }
-        for operation in &block.operations {
+        for operation in &block.instructions {
             next_position += 1;
-            value_ranges.insert(operation.result, (next_position, next_position));
+            value_ranges.insert(operation.definition.value, (next_position, next_position));
         }
         next_position += 1;
         block_positions.insert(block.id, (block_start, next_position));
     }
-    for block in &function.blocks {
+    for block in &function.continuations {
         let (block_start, block_end) =
             block_positions.get(&block.id).copied().ok_or_else(|| {
                 format!(
@@ -2144,7 +2098,7 @@ fn allocate_value_locals(
                 range.1 = range.1.max(block_end);
             }
         }
-        for (index, operation) in block.operations.iter().enumerate() {
+        for (index, operation) in block.instructions.iter().enumerate() {
             let position = block_start + index + 1;
             for operand in &operation.operands {
                 if let Some(range) = value_ranges.get_mut(operand) {
@@ -2153,7 +2107,23 @@ fn allocate_value_locals(
                 }
             }
         }
-        for operand in terminator_operands(&block.terminator) {
+        // A call writes its result before the successor's parallel edge copy.
+        // Keep that destination distinct from every value still needed by the edge.
+        if let RuntimeTransition::Call { next, .. } = &block.transition {
+            for (argument, parameter) in next
+                .arguments
+                .iter()
+                .zip(&function.continuations[next.target.0].parameters)
+            {
+                if matches!(argument, Argument::Result) {
+                    let range = value_ranges
+                        .get_mut(&parameter.value)
+                        .expect("call result parameter has an allocated live range");
+                    range.0 = range.0.min(block_end);
+                }
+            }
+        }
+        for operand in terminator_operands(&block.transition) {
             if let Some(range) = value_ranges.get_mut(&operand) {
                 range.0 = range.0.min(block_end);
                 range.1 = range.1.max(block_end);
@@ -2161,7 +2131,7 @@ fn allocate_value_locals(
         }
     }
 
-    let mut layout_groups = Vec::<(Vec<ValType>, Vec<usize>)>::new();
+    let mut layout_groups = Vec::<(Vec<ValType>, Vec<ValueId>)>::new();
     let mut layout_group_indices: HashMap<Vec<ValType>, usize> = HashMap::new();
     for (value, type_id) in definitions {
         let layout = runtime_layouts.flattened(module, type_id)?.to_vec();
@@ -2241,22 +2211,15 @@ fn allocate_value_locals(
     })
 }
 
-fn terminator_operands(terminator: &RuntimeTerminator) -> Vec<usize> {
-    match terminator {
-        RuntimeTerminator::Branch { arguments, .. } => arguments.clone(),
-        RuntimeTerminator::Conditional {
-            condition,
-            consequent_arguments,
-            alternate_arguments,
-            ..
-        } => std::iter::once(*condition)
-            .chain(consequent_arguments.iter().copied())
-            .chain(alternate_arguments.iter().copied())
-            .collect(),
-        RuntimeTerminator::Switch { selector, .. } => vec![*selector],
-        RuntimeTerminator::Return { value, .. } => vec![*value],
-        RuntimeTerminator::Trap { .. } => Vec::new(),
+fn terminator_operands(transition: &RuntimeTransition) -> Vec<ValueId> {
+    let mut values = transition.uses();
+    for edge in transition.edges() {
+        values.extend(edge.arguments.iter().filter_map(|argument| match argument {
+            Argument::Value(value) => Some(*value),
+            Argument::Result => None,
+        }));
     }
+    values
 }
 
 fn compact_local_declarations(local_types: &[ValType]) -> Vec<(u32, ValType)> {
@@ -2280,22 +2243,22 @@ fn dynamic_internal_function(
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
-    runtime_function_indices: &HashMap<usize, u32>,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
 ) -> Result<Function, String> {
-    let signature = module.signatures.get(function.signature).ok_or_else(|| {
+    let signature = module.signatures.get(function.signature.0).ok_or_else(|| {
         format!(
             "{}: runtime function {} references unknown signature {}",
-            module.source, function.id, function.signature
+            module.source, function.id, function.signature.0
         )
     })?;
     let entry = function
-        .blocks
+        .continuations
         .iter()
-        .find(|block| block.id == function.entry_block)
+        .find(|block| block.id == function.entry)
         .ok_or_else(|| {
             format!(
                 "{}: runtime function {} has no entry block {}",
-                module.source, function.id, function.entry_block
+                module.source, function.id, function.entry
             )
         })?;
     if entry.parameters.len() != signature.parameters.len() {
@@ -2311,7 +2274,7 @@ fn dynamic_internal_function(
     let mut value_locals = HashMap::new();
     let mut parameter_count = 0_u32;
     for (parameter, type_id) in entry.parameters.iter().zip(&signature.parameters) {
-        if parameter.type_id != *type_id {
+        if parameter.type_id.0 != *type_id {
             return Err(format!(
                 "{}: runtime function {} entry parameter type does not match its signature",
                 module.source, function.id
@@ -2349,15 +2312,7 @@ fn dynamic_internal_function(
     local_types.push(ValType::I32);
     let scratch_index = parameter_count + local_types.len() as u32;
     local_types.push(ValType::I32);
-    let iteration_checkpoint = if control_flow == Some(StructuredControlFlow::EntryLoop)
-        && iteration_region_eligible(function)
-    {
-        let checkpoint = parameter_count + local_types.len() as u32;
-        local_types.push(ValType::I32);
-        Some(checkpoint)
-    } else {
-        None
-    };
+
     let facts = FunctionEmissionFacts {
         runtime_layouts,
         value_locals: &value_locals,
@@ -2368,15 +2323,12 @@ fn dynamic_internal_function(
     let mut instructions = wasm_function.instructions();
     match control_flow {
         Some(StructuredControlFlow::EntryLoop) => {
-            if let Some(checkpoint) = iteration_checkpoint {
-                instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
-            }
             instructions.loop_(BlockType::Empty);
             emit_structured_block(
                 &mut instructions,
                 module,
                 function,
-                function.entry_block,
+                function.entry,
                 manifest,
                 helpers,
                 static_data,
@@ -2385,8 +2337,6 @@ fn dynamic_internal_function(
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
-                iteration_checkpoint,
-                StructuredResult::Internal,
                 0,
             )?;
             instructions.unreachable().end().unreachable().end();
@@ -2396,7 +2346,7 @@ fn dynamic_internal_function(
                 &mut instructions,
                 module,
                 function,
-                function.entry_block,
+                function.entry,
                 manifest,
                 helpers,
                 static_data,
@@ -2405,8 +2355,6 @@ fn dynamic_internal_function(
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
-                None,
-                StructuredResult::Internal,
                 0,
             )?;
             instructions.unreachable().end();
@@ -2414,39 +2362,58 @@ fn dynamic_internal_function(
         None => {
             let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
             instructions
-                .i32_const(function.entry_block as i32)
+                .i32_const(function.entry.0 as i32)
                 .local_set(dispatcher)
                 .block(BlockType::Empty)
                 .loop_(BlockType::Empty);
-            for _ in &function.blocks {
+            for _ in &function.continuations {
                 instructions.block(BlockType::Empty);
             }
             instructions.local_get(dispatcher).br_table(
-                (0..function.blocks.len() as u32).rev(),
-                function.blocks.len() as u32 + 1,
+                (0..function.continuations.len() as u32).rev(),
+                function.continuations.len() as u32 + 1,
             );
-            for block in function.blocks.iter().rev() {
+            for block in function.continuations.iter().rev() {
                 instructions.end();
+                let lifetimes = lifetimes::ContinuationLifetimes::new(function, block);
+                release_roots(
+                    &mut instructions,
+                    module,
+                    &lifetimes.entry_drops,
+                    facts,
+                    helpers,
+                )?;
                 let tail_call = direct_tail_call(function, block);
-                let operation_count =
-                    block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
-                for operation in &block.operations[..operation_count] {
-                    emit_dynamic_operation(
+                for (index, operation) in block.instructions.iter().enumerate() {
+                    emit_instruction(
                         &mut instructions,
                         module,
                         function,
                         operation,
-                        manifest,
                         helpers,
                         static_data,
                         facts,
                         scratch_pointer,
                         scratch_length,
                         scratch_index,
-                        runtime_function_indices,
+                    )?;
+                    release_roots(
+                        &mut instructions,
+                        module,
+                        &lifetimes.instruction_drops[index],
+                        facts,
+                        helpers,
                     )?;
                 }
                 if let Some(operation) = tail_call {
+                    transfer_roots(
+                        &mut instructions,
+                        module,
+                        &lifetimes.transition_roots,
+                        operation.arguments.iter().copied(),
+                        facts,
+                        helpers,
+                    )?;
                     emit_direct_tail_call(
                         &mut instructions,
                         module,
@@ -2456,16 +2423,31 @@ fn dynamic_internal_function(
                         runtime_function_indices,
                     )?;
                 } else {
-                    emit_internal_terminator(
+                    emit_transition_call(
                         &mut instructions,
                         module,
                         function,
-                        &block.terminator,
+                        &block.transition,
+                        manifest,
+                        helpers,
+                        facts,
+                        scratch_pointer,
+                        scratch_length,
+                        runtime_function_indices,
+                        &lifetimes.transition_roots,
+                    )?;
+                    emit_dispatch_transition(
+                        &mut instructions,
+                        module,
+                        function,
+                        &block.transition,
                         facts,
                         Dispatcher {
                             local: dispatcher,
-                            depth: block.id as u32,
+                            depth: block.id.0 as u32,
                         },
+                        &lifetimes.transition_roots,
+                        helpers,
                     )?;
                 }
             }
@@ -2479,269 +2461,337 @@ fn dynamic_export_function(
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
     exported: DynamicExport<'_>,
-    manifest: &AbiManifest,
+    _manifest: &AbiManifest,
     helpers: DynamicHelpers,
-    static_data: &StaticData,
-    runtime_function_indices: &HashMap<usize, u32>,
+    _static_data: &StaticData,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
 ) -> Result<Function, String> {
-    let DynamicExport {
-        function,
-        public: public_export,
-    } = exported;
-    let entry = function
-        .blocks
+    let DynamicExport { function, public } = exported;
+    let parameter_count = 1 + public
+        .parameter_types
         .iter()
-        .find(|block| block.id == function.entry_block)
-        .ok_or_else(|| {
-            format!(
-                "{}: exported runtime function {} has no entry block {}",
-                module.source, function.id, function.entry_block
-            )
-        })?;
-    if entry.parameters.len() != public_export.parameter_runtime_types.len()
-        || entry.parameters.len() != public_export.parameter_types.len()
-    {
-        return Err(format!(
-            "{}: exported runtime function {} does not match its public parameters",
-            module.source, function.id
-        ));
+        .map(|type_| flattened_type(type_).len() as u32)
+        .sum::<u32>();
+    let pointer = parameter_count;
+    let mut local_types = vec![ValType::I32];
+    let mut arguments = Vec::new();
+    for type_id in public.parameter_runtime_types {
+        let lanes = runtime_layouts.flattened(module, *type_id)?;
+        let first = parameter_count + local_types.len() as u32;
+        arguments.push((first..first + lanes.len() as u32).collect::<Vec<_>>());
+        local_types.extend_from_slice(lanes);
     }
-    let mut value_locals = HashMap::new();
-    let mut parameter_count = 0_u32;
-    for ((parameter, runtime_type), public_type) in entry
-        .parameters
-        .iter()
-        .zip(public_export.parameter_runtime_types)
-        .zip(public_export.parameter_types)
-    {
-        if parameter.type_id != *runtime_type {
-            return Err(format!(
-                "{}: exported runtime function {} entry parameter type does not match its signature",
-                module.source, function.id
-            ));
-        }
-        let runtime_flattened = runtime_layouts.flattened(module, *runtime_type)?;
-        let public_flattened = flattened_type(public_type);
-        if runtime_flattened != public_flattened {
-            return Err(format!(
-                "{}: exported runtime function {} parameter has incompatible public and runtime layouts",
-                module.source, function.id
-            ));
-        }
-        value_locals.insert(
-            parameter.value,
-            (parameter_count..parameter_count + runtime_flattened.len() as u32).collect(),
-        );
-        parameter_count += runtime_flattened.len() as u32;
-    }
-    let allocation = allocate_value_locals(
-        module,
-        runtime_layouts,
-        function,
-        parameter_count,
-        value_locals,
-    )?;
-    let value_locals = allocation.value_locals;
-    let value_types = allocation.value_types;
-    let mut local_types = allocation.local_types;
-    let control_flow = structured_control_flow(function);
-    let dispatcher = if control_flow.is_some() {
-        None
-    } else {
-        let dispatcher = parameter_count + local_types.len() as u32;
-        local_types.push(ValType::I32);
-        Some(dispatcher)
-    };
-    let scratch_pointer = parameter_count + local_types.len() as u32;
-    local_types.push(ValType::I32);
-    let scratch_length = parameter_count + local_types.len() as u32;
-    local_types.push(ValType::I32);
-    let scratch_index = parameter_count + local_types.len() as u32;
-    local_types.push(ValType::I32);
-    let iteration_checkpoint = if control_flow == Some(StructuredControlFlow::EntryLoop)
-        && iteration_region_eligible(function)
-    {
-        let checkpoint = parameter_count + local_types.len() as u32;
-        local_types.push(ValType::I32);
-        Some(checkpoint)
-    } else {
-        None
-    };
-    // Preserve the incoming canonical lanes while translating field and tag
-    // order into the private runtime representation. In-place retagging can
-    // otherwise overwrite a tag needed by a later branch or product field.
-    let translate_arguments = public_export
+    let result_lanes = runtime_layouts.flattened(module, public.result_runtime_type)?;
+    let first = parameter_count + local_types.len() as u32;
+    let result = (first..first + result_lanes.len() as u32).collect::<Vec<_>>();
+    local_types.extend_from_slice(result_lanes);
+    let public_lanes = flattened_type(public.result_type);
+    let mut body = Function::new(compact_local_declarations(&local_types));
+    let mut ins = body.instructions();
+    ins.local_get(0).call(helpers.allocator.select);
+    begin_call(&mut ins, public.call_id, helpers);
+    let mut first = 1;
+    for ((type_id, public_type), private) in public
         .parameter_runtime_types
         .iter()
-        .any(|type_| public_flat_needs_translation(module, *type_));
-    let canonical_arguments = if translate_arguments {
-        let saved = (0..parameter_count)
-            .map(|index| parameter_count + local_types.len() as u32 + index)
-            .collect::<Vec<_>>();
-        for public_type in public_export.parameter_types {
-            local_types.extend(flattened_type(public_type));
-        }
-        saved
-    } else {
-        Vec::new()
-    };
-    let facts = FunctionEmissionFacts {
-        runtime_layouts,
-        value_locals: &value_locals,
-        value_types: &value_types,
-    };
-    let mut wasm_function = Function::new(compact_local_declarations(&local_types));
-    let mut instructions = wasm_function.instructions();
-    for (index, saved) in canonical_arguments.iter().enumerate() {
-        instructions.local_get(index as u32).local_set(*saved);
-    }
-    let mut offset = 0;
-    for ((parameter, runtime_type), public_type) in entry
-        .parameters
-        .iter()
-        .zip(public_export.parameter_runtime_types)
-        .zip(public_export.parameter_types)
+        .zip(public.parameter_types)
+        .zip(&arguments)
     {
-        if !translate_arguments {
-            break;
+        let width = flattened_type(public_type).len() as u32;
+        let incoming = (first..first + width).collect::<Vec<_>>();
+        first += width;
+        if !helpers.managed.values[type_id].owns_memory {
+            emit_lower_flat_value(
+                &mut ins,
+                module,
+                runtime_layouts,
+                *type_id,
+                public_type,
+                &incoming,
+                private,
+            )?;
+            continue;
         }
-        let destination = locals_for(module, &value_locals, parameter.value)?;
-        let width = destination.len();
-        emit_translate_public_flat_value(
-            &mut instructions,
+        let layout = memory_layout(public_type);
+        ins.i32_const(0)
+            .i32_const(0)
+            .i32_const(layout.alignment as i32)
+            .i32_const(layout.size.max(1) as i32)
+            .call(helpers.allocator.alloc)
+            .local_set(pointer);
+        let mut flat = 0;
+        emit_store_canonical_result(&mut ins, public_type, &incoming, &mut flat, pointer, 0)?;
+        ins.local_get(pointer)
+            .i32_const(*type_id as i32)
+            .call(helpers.canonical_validator);
+        ins.local_get(pointer)
+            .call(helpers.canonical.types[type_id].lower);
+        for local in private.iter().rev() {
+            ins.local_set(*local);
+        }
+        ins.local_get(pointer).call(helpers.allocator.release);
+    }
+    ins.local_get(0).call(helpers.allocator.clear_temporaries);
+    for argument in &arguments {
+        emit_local_values(&mut ins, argument);
+    }
+    ins.call(runtime_function_indices[&function.id]);
+    for local in result.iter().rev() {
+        ins.local_set(*local);
+    }
+    if public_lanes.len() <= 1 && !helpers.managed.values[&public.result_runtime_type].owns_memory {
+        finish_call(&mut ins, helpers);
+        emit_direct_canonical_value(
+            &mut ins,
             module,
             runtime_layouts,
-            *runtime_type,
-            public_type,
-            &canonical_arguments[offset..offset + width],
-            destination,
-            false,
+            public.result_runtime_type,
+            public.result_type,
+            &result,
         )?;
-        offset += width;
+    } else {
+        let layout = memory_layout(public.result_type);
+        ins.local_get(0)
+            .i32_const(0)
+            .i32_const(0)
+            .i32_const(layout.alignment as i32)
+            .i32_const(layout.size.max(1) as i32)
+            .call(helpers.allocator.realloc)
+            .local_set(pointer);
+        ins.local_get(pointer);
+        emit_local_values(&mut ins, &result);
+        ins.call(helpers.canonical.types[&public.result_runtime_type].upper);
+        emit_local_values(&mut ins, &result);
+        ins.call(helpers.managed.values[&public.result_runtime_type].release);
+        ins.global_get(helpers.allocation_globals.current_scope)
+            .local_get(pointer)
+            .i32_store(allocation_mem(allocation::SCOPE_RESULT));
+        ins.local_get(pointer);
     }
-    begin_call(&mut instructions, public_export.call_id);
-    let canonical_result = CanonicalResult {
-        type_: public_export.result_type,
-        runtime_type: public_export.result_runtime_type,
-        pointer: scratch_pointer,
-        realloc: helpers.realloc,
-    };
-    let result = StructuredResult::Canonical(canonical_result);
-    match control_flow {
-        Some(StructuredControlFlow::EntryLoop) => {
-            if let Some(checkpoint) = iteration_checkpoint {
-                instructions.global_get(HEAP_GLOBAL).local_set(checkpoint);
-            }
-            instructions.loop_(BlockType::Empty);
-            emit_structured_block(
-                &mut instructions,
-                module,
-                function,
-                function.entry_block,
-                manifest,
-                helpers,
-                static_data,
-                facts,
-                scratch_pointer,
-                scratch_length,
-                scratch_index,
-                runtime_function_indices,
-                iteration_checkpoint,
-                result,
-                0,
-            )?;
-            instructions.unreachable().end().unreachable().end();
-        }
-        Some(StructuredControlFlow::Acyclic) => {
-            emit_structured_block(
-                &mut instructions,
-                module,
-                function,
-                function.entry_block,
-                manifest,
-                helpers,
-                static_data,
-                facts,
-                scratch_pointer,
-                scratch_length,
-                scratch_index,
-                runtime_function_indices,
-                None,
-                result,
-                0,
-            )?;
-            instructions.unreachable().end();
-        }
-        None => {
-            let dispatcher = dispatcher.expect("dispatcher loop omitted its state local");
-            instructions
-                .i32_const(function.entry_block as i32)
-                .local_set(dispatcher)
-                .block(BlockType::Empty)
-                .loop_(BlockType::Empty);
-            for _ in &function.blocks {
-                instructions.block(BlockType::Empty);
-            }
-            instructions.local_get(dispatcher).br_table(
-                (0..function.blocks.len() as u32).rev(),
-                function.blocks.len() as u32 + 1,
-            );
-            for block in function.blocks.iter().rev() {
-                instructions.end();
-                for operation in &block.operations {
-                    emit_dynamic_operation(
-                        &mut instructions,
-                        module,
-                        function,
-                        operation,
-                        manifest,
-                        helpers,
-                        static_data,
-                        facts,
-                        scratch_pointer,
-                        scratch_length,
-                        scratch_index,
-                        runtime_function_indices,
-                    )?;
-                }
-                emit_dynamic_terminator(
-                    &mut instructions,
-                    module,
-                    function,
-                    &block.terminator,
-                    facts,
-                    Dispatcher {
-                        local: dispatcher,
-                        depth: block.id as u32,
-                    },
-                    canonical_result,
-                )?;
-            }
-            instructions.end().end().unreachable().end();
-        }
-    }
-    Ok(wasm_function)
+    ins.end();
+    Ok(body)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_dynamic_operation(
+fn emit_call(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    target: &CallTarget,
+    signature: SignatureId,
+    arguments: &[ValueId],
+    result: &[u32],
+    manifest: &AbiManifest,
+    helpers: DynamicHelpers,
+    facts: FunctionEmissionFacts<'_>,
+    scratch_pointer: u32,
+    scratch_length: u32,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
+) -> Result<(), String> {
+    if let CallTarget::Function { function } = target {
+        let index = runtime_function_indices.get(function).ok_or_else(|| {
+            format!(
+                "{}: direct call references unavailable function {function}",
+                module.source
+            )
+        })?;
+        for argument in arguments {
+            emit_local_values(
+                instructions,
+                locals_for(module, facts.value_locals, *argument)?,
+            );
+        }
+        instructions.call(*index);
+        for local in result.iter().rev() {
+            instructions.local_set(*local);
+        }
+        return Ok(());
+    }
+    let (index, imported) = match target {
+        CallTarget::Host {
+            capability,
+            operation,
+        } => {
+            let (index, imported) = manifest
+                .imports
+                .iter()
+                .enumerate()
+                .find(|(_, imported)| {
+                    &imported.capability == capability && &imported.operation == operation
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "{}: manifest omitted {capability}.{operation}",
+                        module.source
+                    )
+                })?;
+            (index, &imported.function)
+        }
+        CallTarget::Link { unit, name } => {
+            let (index, link) = manifest
+                .links
+                .iter()
+                .enumerate()
+                .find(|(_, link)| &link.unit == unit && &link.name == name)
+                .ok_or_else(|| format!("{}: manifest omitted {unit}.{name}", module.source))?;
+            (manifest.imports.len() + index, &link.function)
+        }
+        CallTarget::Function { .. } => unreachable!(),
+    };
+    let signature = &module.signatures[signature.0];
+    let result_layout = memory_layout(&imported.result);
+    instructions
+        .i32_const(0)
+        .i32_const(0)
+        .i32_const(result_layout.alignment as i32)
+        .i32_const(result_layout.size.max(1) as i32)
+        .call(helpers.allocator.alloc)
+        .local_tee(scratch_pointer)
+        .call(helpers.allocator.temporary);
+    let direct = flattened_type(&imported.result).len() <= 1;
+    instructions
+        .global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_TOKEN));
+    if direct {
+        instructions.local_get(scratch_pointer);
+    }
+    instructions
+        .global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_TOKEN));
+    for (argument, type_id) in arguments.iter().zip(&signature.parameters) {
+        let public = canonical_type(module, *type_id, &mut Vec::new())?;
+        let layout = memory_layout(&public);
+        instructions
+            .i32_const(0)
+            .i32_const(0)
+            .i32_const(layout.alignment as i32)
+            .i32_const(layout.size.max(1) as i32)
+            .call(helpers.allocator.alloc)
+            .local_tee(scratch_length)
+            .call(helpers.allocator.temporary)
+            .local_get(scratch_length);
+        emit_local_values(
+            instructions,
+            locals_for(module, facts.value_locals, *argument)?,
+        );
+        instructions
+            .call(helpers.canonical.types[type_id].upper)
+            .local_get(scratch_length)
+            .call(helpers.canonical.types[type_id].read);
+    }
+    if !direct {
+        instructions.local_get(scratch_pointer);
+    }
+    instructions.call(index as u32);
+    if direct {
+        instructions.call(helpers.canonical.types[&signature.result].write);
+    }
+    instructions.call(helpers.allocator.select);
+    instructions
+        .local_get(scratch_pointer)
+        .i32_const(signature.result as i32)
+        .call(helpers.canonical_validator)
+        .local_get(scratch_pointer)
+        .call(helpers.canonical.types[&signature.result].lower);
+    for local in result.iter().rev() {
+        instructions.local_set(*local);
+    }
+    instructions
+        .global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_TOKEN))
+        .call(helpers.allocator.clear_temporaries);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_transition_call(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    operation: &RuntimeOperation,
+    transition: &RuntimeTransition,
     manifest: &AbiManifest,
+    helpers: DynamicHelpers,
+    facts: FunctionEmissionFacts<'_>,
+    scratch_pointer: u32,
+    scratch_length: u32,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
+    roots: &BTreeSet<ValueId>,
+) -> Result<(), String> {
+    let RuntimeTransition::Call {
+        target,
+        signature,
+        arguments,
+        next,
+        ..
+    } = transition
+    else {
+        return Ok(());
+    };
+    let index = next
+        .arguments
+        .iter()
+        .position(|argument| matches!(argument, Argument::Result))
+        .expect("checked call has a result parameter");
+    let parameter = &function.continuations[next.target.0].parameters[index];
+    let result = locals_for(module, facts.value_locals, parameter.value)?;
+    let destinations = edge_destinations(function, next);
+    if matches!(target, CallTarget::Function { .. }) {
+        transfer_roots(
+            instructions,
+            module,
+            roots,
+            destinations
+                .iter()
+                .copied()
+                .chain(arguments.iter().copied()),
+            facts,
+            helpers,
+        )?;
+    }
+    emit_call(
+        instructions,
+        module,
+        target,
+        *signature,
+        arguments,
+        result,
+        manifest,
+        helpers,
+        facts,
+        scratch_pointer,
+        scratch_length,
+        runtime_function_indices,
+    )?;
+    if !matches!(target, CallTarget::Function { .. }) {
+        transfer_roots(
+            instructions,
+            module,
+            roots,
+            destinations.into_iter(),
+            facts,
+            helpers,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_instruction(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
+    operation: &RuntimeInstruction,
     helpers: DynamicHelpers,
     static_data: &StaticData,
     facts: FunctionEmissionFacts<'_>,
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
-    runtime_function_indices: &HashMap<usize, u32>,
 ) -> Result<(), String> {
     let value_locals = facts.value_locals;
-    let result = locals_for(module, value_locals, operation.result)?;
-    match operation.kind {
+    let result = locals_for(module, value_locals, operation.definition.value)?;
+    match operation.operation.kind {
         "constant" => match operation
+            .operation
             .value
             .as_ref()
             .ok_or_else(|| format!("{}: residual constant omitted its value", module.source))?
@@ -2764,7 +2814,7 @@ fn emit_dynamic_operation(
             WireConstant::Text(value) => {
                 let offset = static_data
                     .text_offsets
-                    .get(&(function.id, operation.result))
+                    .get(&(function.id, operation.definition.value))
                     .ok_or_else(|| {
                         format!("{}: residual text has no data offset", module.source)
                     })?;
@@ -2772,7 +2822,9 @@ fn emit_dynamic_operation(
                     .i32_const(*offset as i32)
                     .local_set(result[0])
                     .i32_const(value.len() as i32)
-                    .local_set(result[1]);
+                    .local_set(result[1])
+                    .i32_const(0)
+                    .local_set(result[2]);
             }
             WireConstant::Float32(value) => {
                 instructions
@@ -2785,115 +2837,14 @@ fn emit_dynamic_operation(
                     .local_set(result[0]);
             }
         },
-        "host.call" | "call.external" => {
-            let utf8_validator = helpers.utf8_validator.ok_or_else(|| {
-                format!(
-                    "{}: {} omitted the UTF-8 validator",
-                    module.source, operation.kind
-                )
-            })?;
-            let capability = operation.capability.as_deref().ok_or_else(|| {
-                format!(
-                    "{}: {} omitted its capability",
-                    module.source, operation.kind
-                )
-            })?;
-            let name = operation.operation.as_deref().ok_or_else(|| {
-                format!(
-                    "{}: {} omitted its operation",
-                    module.source, operation.kind
-                )
-            })?;
-            let (import_index, imported) = if operation.kind == "host.call" {
-                let (index, imported) = manifest
-                    .imports
-                    .iter()
-                    .enumerate()
-                    .find(|(_, imported)| {
-                        imported.capability == capability && imported.operation == name
-                    })
-                    .ok_or_else(|| {
-                        format!("{}: manifest omitted {capability}.{name}", module.source)
-                    })?;
-                (index, &imported.function)
-            } else {
-                let (index, link) = manifest
-                    .links
-                    .iter()
-                    .enumerate()
-                    .find(|(_, link)| link.unit == capability && link.name == name)
-                    .ok_or_else(|| {
-                        format!(
-                            "{}: development manifest omitted {capability}.{name}",
-                            module.source
-                        )
-                    })?;
-                (manifest.imports.len() + index, &link.function)
-            };
-            for operand in &operation.operands {
-                emit_local_values(instructions, locals_for(module, value_locals, *operand)?);
-            }
-            let flattened_result = flattened_type(&imported.result);
-            if flattened_result.len() <= 1 {
-                instructions.call(import_index as u32);
-                if let Some(local) = result.first() {
-                    instructions.local_set(*local);
-                }
-            } else {
-                instructions
-                    .i32_const(0)
-                    .i32_const(0)
-                    .i32_const(4)
-                    .i32_const(memory_layout(&imported.result).size as i32)
-                    .call(helpers.realloc)
-                    .local_tee(scratch_pointer)
-                    .call(import_index as u32);
-                emit_load_canonical_result(
-                    instructions,
-                    &imported.result,
-                    result,
-                    scratch_pointer,
-                    0,
-                )?;
-                if operation.kind == "host.call" {
-                    let mut flat_index = 0;
-                    emit_validate_canonical_texts(
-                        instructions,
-                        &imported.result,
-                        result,
-                        &mut flat_index,
-                        scratch_length,
-                        utf8_validator,
-                    )?;
-                }
-            }
-        }
-        "call.direct" => {
-            let target = operation
-                .function
-                .ok_or_else(|| format!("{}: call.direct omitted its function", module.source))?;
-            let function_index = runtime_function_indices.get(&target).ok_or_else(|| {
-                format!(
-                    "{}: call.direct references unavailable function {target}",
-                    module.source
-                )
-            })?;
-            for operand in &operation.operands {
-                emit_local_values(instructions, locals_for(module, value_locals, *operand)?);
-            }
-            instructions.call(*function_index);
-            for local in result.iter().rev() {
-                instructions.local_set(*local);
-            }
-        }
         "text.compare" => {
             let text_compare = helpers.text_compare.ok_or_else(|| {
                 format!("{}: text.compare omitted its runtime helper", module.source)
             })?;
             let left = locals_for(module, value_locals, operation.operands[0])?;
             let right = locals_for(module, value_locals, operation.operands[1])?;
-            emit_local_values(instructions, left);
-            emit_local_values(instructions, right);
+            emit_local_values(instructions, &left[..2]);
+            emit_local_values(instructions, &right[..2]);
             instructions.call(text_compare).local_set(result[0]);
         }
         "text.contains" => {
@@ -2905,8 +2856,8 @@ fn emit_dynamic_operation(
             })?;
             let text = locals_for(module, value_locals, operation.operands[0])?;
             let query = locals_for(module, value_locals, operation.operands[1])?;
-            emit_local_values(instructions, text);
-            emit_local_values(instructions, query);
+            emit_local_values(instructions, &text[..2]);
+            emit_local_values(instructions, &query[..2]);
             instructions
                 .i32_const(0)
                 .call(text_search)
@@ -2919,7 +2870,7 @@ fn emit_dynamic_operation(
                 format!("{}: text.length omitted its runtime helper", module.source)
             })?;
             let text = locals_for(module, value_locals, operation.operands[0])?;
-            emit_local_values(instructions, text);
+            emit_local_values(instructions, &text[..2]);
             instructions.call(scalar_count).local_set(result[0]);
         }
         "text.scalar-at" => {
@@ -2948,7 +2899,33 @@ fn emit_dynamic_operation(
                 .call(scalar_offset)
                 .local_get(scratch_pointer)
                 .i32_sub()
-                .local_set(result[1]);
+                .local_set(result[1])
+                .local_get(text[2])
+                .local_set(result[2]);
+        }
+        "text.next-byte" => {
+            let next_byte = helpers.text_next_byte.ok_or_else(|| {
+                format!(
+                    "{}: text.next-byte omitted its runtime helper",
+                    module.source
+                )
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let byte = locals_for(module, value_locals, operation.operands[1])?;
+            emit_local_values(instructions, &text[..2]);
+            emit_local_values(instructions, byte);
+            instructions.call(next_byte);
+            for local in [result[4], result[2], result[1], result[0]] {
+                instructions.local_set(local);
+            }
+            instructions
+                .i32_const(0)
+                .local_set(result[3])
+                .local_get(result[0])
+                .if_(BlockType::Empty)
+                .local_get(text[2])
+                .local_set(result[3])
+                .end();
         }
         "text.slice" => {
             let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
@@ -2972,7 +2949,9 @@ fn emit_dynamic_operation(
                 .call(scalar_offset)
                 .local_get(scratch_pointer)
                 .i32_sub()
-                .local_set(result[1]);
+                .local_set(result[1])
+                .local_get(text[2])
+                .local_set(result[2]);
         }
         "text.find-from" => {
             let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
@@ -3067,7 +3046,10 @@ fn emit_dynamic_operation(
                 ));
             };
             if !matches!(module.types.get(*element_type), Some(RuntimeType::Text))
-                || !matches!(module.types.get(operation.type_id), Some(RuntimeType::Text))
+                || !matches!(
+                    module.types.get(operation.definition.type_id.0),
+                    Some(RuntimeType::Text)
+                )
             {
                 return Err(format!(
                     "{}: text.join requires Store Text -> Text",
@@ -3075,7 +3057,7 @@ fn emit_dynamic_operation(
                 ));
             }
             let store = locals_for(module, value_locals, operation.operands[0])?;
-            let text_layout = memory_layout(&AbiType::Text);
+            let text_layout = memory_layout(&internal_memory_type(module, *element_type)?);
             let pointer_load = wasm_encoder::MemArg {
                 offset: 0,
                 align: 2,
@@ -3180,6 +3162,7 @@ fn emit_dynamic_operation(
             instructions
                 .local_get(value[0])
                 .call(i64_to_text)
+                .local_set(result[2])
                 .local_set(result[1])
                 .local_set(result[0]);
         }
@@ -3194,7 +3177,7 @@ fn emit_dynamic_operation(
                     left[0],
                     right[0],
                     result[0],
-                    operation.operator,
+                    operation.operation.operator,
                     &module.source,
                 )?;
             } else if matches!(module.types[operand_type], RuntimeType::Float32) {
@@ -3203,7 +3186,7 @@ fn emit_dynamic_operation(
                     left[0],
                     right[0],
                     result[0],
-                    operation.operator,
+                    operation.operation.operator,
                     true,
                     &module.source,
                 )?;
@@ -3213,13 +3196,13 @@ fn emit_dynamic_operation(
                     left[0],
                     right[0],
                     result[0],
-                    operation.operator,
+                    operation.operation.operator,
                     false,
                     &module.source,
                 )?;
             } else {
                 instructions.local_get(left[0]).local_get(right[0]);
-                emit_i32_operator(instructions, operation.operator, &module.source)?;
+                emit_i32_operator(instructions, operation.operation.operator, &module.source)?;
                 instructions.local_set(result[0]);
             }
         }
@@ -3228,7 +3211,7 @@ fn emit_dynamic_operation(
             let operand_type =
                 runtime_value_type(function, facts.value_types, operation.operands[0])?;
             instructions.local_get(operand[0]);
-            match (&module.types[operand_type], operation.operator) {
+            match (&module.types[operand_type], operation.operation.operator) {
                 (RuntimeType::Float32, Some("negate")) => {
                     instructions.f32_neg();
                 }
@@ -3251,7 +3234,7 @@ fn emit_dynamic_operation(
         "convert" => {
             let operand = locals_for(module, value_locals, operation.operands[0])?;
             instructions.local_get(operand[0]);
-            match operation.conversion {
+            match operation.operation.conversion {
                 Some("signed-integer-64-to-signed-integer-32") => {
                     instructions.i32_wrap_i64();
                 }
@@ -3293,7 +3276,9 @@ fn emit_dynamic_operation(
             )?;
         }
         "product.make" => {
-            let expected = facts.runtime_layouts.flattened(module, operation.type_id)?;
+            let expected = facts
+                .runtime_layouts
+                .flattened(module, operation.definition.type_id.0)?;
             let mut actual = Vec::new();
             for operand in &operation.operands {
                 actual.extend_from_slice(facts.runtime_layouts.flattened(
@@ -3304,7 +3289,7 @@ fn emit_dynamic_operation(
             if actual != expected {
                 return Err(format!(
                     "{}: function {} product.make result {} changes its Wasm field layout",
-                    module.source, function.id, operation.result
+                    module.source, function.id, operation.definition.value
                 ));
             }
             let mut destination = 0;
@@ -3325,6 +3310,7 @@ fn emit_dynamic_operation(
                 ));
             };
             let field = operation
+                .operation
                 .field
                 .ok_or_else(|| format!("{}: product.project omitted its field", module.source))?;
             if field >= fields.len() {
@@ -3348,6 +3334,7 @@ fn emit_dynamic_operation(
             instructions
                 .i32_const(
                     operation
+                        .operation
                         .case
                         .ok_or_else(|| format!("{}: sum.make omitted its case", module.source))?
                         as i32,
@@ -3355,7 +3342,9 @@ fn emit_dynamic_operation(
                 .local_set(result[0]);
             let payload = locals_for(module, value_locals, operation.operands[0])?;
             assign_locals(instructions, &result[1..1 + payload.len()], payload)?;
-            let flattened = facts.runtime_layouts.flattened(module, operation.type_id)?;
+            let flattened = facts
+                .runtime_layouts
+                .flattened(module, operation.definition.type_id.0)?;
             for (local, type_) in result[1 + payload.len()..]
                 .iter()
                 .zip(flattened[1 + payload.len()..].iter())
@@ -3374,7 +3363,7 @@ fn emit_dynamic_operation(
         "indirect.make" => {
             let RuntimeType::Indirect { target_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: indirect.make has no result type", module.source))?
             else {
                 return Err(format!(
@@ -3392,6 +3381,14 @@ fn emit_dynamic_operation(
                 .i32_const(layout.size as i32)
                 .call(helpers.realloc)
                 .local_set(result[0]);
+            emit_local_values(instructions, value);
+            instructions.call(helpers.managed.values[target_type].retain);
+            instructions
+                .local_get(result[0])
+                .i32_const(allocation::INDIRECT as i32)
+                .i32_const(*target_type as i32)
+                .i32_const(1)
+                .call(helpers.allocator.set_layout);
             let mut flat_index = 0;
             emit_store_canonical_result(
                 instructions,
@@ -3422,7 +3419,7 @@ fn emit_dynamic_operation(
                     module.source
                 ));
             };
-            if *target_type != operation.type_id {
+            if *target_type != operation.definition.type_id.0 {
                 return Err(format!(
                     "{}: indirect.load target type differs from its result",
                     module.source
@@ -3435,18 +3432,20 @@ fn emit_dynamic_operation(
         "store.literal" => {
             if let Some((offset, length)) = static_data
                 .store_offsets
-                .get(&(function.id, operation.result))
+                .get(&(function.id, operation.definition.value))
             {
                 instructions
                     .i32_const(*offset as i32)
                     .local_set(result[0])
                     .i32_const(*length as i32)
-                    .local_set(result[1]);
+                    .local_set(result[1])
+                    .i32_const(0)
+                    .local_set(result[2]);
                 return Ok(());
             }
             let RuntimeType::Store { element_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: store.literal has no Store type", module.source))?
             else {
                 return Err(format!(
@@ -3479,17 +3478,16 @@ fn emit_dynamic_operation(
                     .i32_mul()
                     .i32_add()
                     .local_set(scratch_pointer);
-                emit_store_public_result(
+                emit_local_values(instructions, value);
+                instructions.call(helpers.managed.values[&element_type_id].retain);
+                let mut consumed = 0;
+                emit_store_canonical_result(
                     instructions,
-                    module,
-                    facts.runtime_layouts,
-                    element_type_id,
                     &element_type,
                     value,
-                    CanonicalDestination {
-                        pointer: scratch_pointer,
-                        offset: 0,
-                    },
+                    &mut consumed,
+                    scratch_pointer,
+                    0,
                 )?;
             }
         }
@@ -3564,6 +3562,7 @@ fn emit_dynamic_operation(
                 ));
             };
             let field = operation
+                .operation
                 .field
                 .ok_or_else(|| format!("{}: store.read.field omitted its field", module.source))?;
             let runtime_field = fields.get(field).ok_or_else(|| {
@@ -3573,10 +3572,10 @@ fn emit_dynamic_operation(
                     fields.len()
                 )
             })?;
-            if runtime_field.type_id != operation.type_id {
+            if runtime_field.type_id != operation.definition.type_id.0 {
                 return Err(format!(
                     "{}: store.read.field result type {} does not match field type {}",
-                    module.source, operation.type_id, runtime_field.type_id
+                    module.source, operation.definition.type_id.0, runtime_field.type_id
                 ));
             }
             let element_memory_type = internal_memory_type(module, *element_type)?;
@@ -3626,7 +3625,7 @@ fn emit_dynamic_operation(
         "store.new" => {
             let RuntimeType::Store { element_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: store.new has no Store type", module.source))?
             else {
                 return Err(format!(
@@ -3681,17 +3680,16 @@ fn emit_dynamic_operation(
                 .i32_mul()
                 .i32_add()
                 .local_set(scratch_pointer);
-            emit_store_public_result(
+            emit_local_values(instructions, initial);
+            instructions.call(helpers.managed.values[&element_type_id].retain);
+            let mut consumed = 0;
+            emit_store_canonical_result(
                 instructions,
-                module,
-                facts.runtime_layouts,
-                element_type_id,
                 &element_type,
                 initial,
-                CanonicalDestination {
-                    pointer: scratch_pointer,
-                    offset: 0,
-                },
+                &mut consumed,
+                scratch_pointer,
+                0,
             )?;
             instructions
                 .local_get(scratch_index)
@@ -3705,7 +3703,7 @@ fn emit_dynamic_operation(
         "store.write" => {
             let RuntimeType::Store { element_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: store.write has no Store type", module.source))?
             else {
                 return Err(format!(
@@ -3719,7 +3717,7 @@ fn emit_dynamic_operation(
             let element_type_id = *element_type;
             let element_type = internal_memory_type(module, element_type_id)?;
             let element_layout = memory_layout(&element_type);
-            if operation.update == Some("persistent") {
+            if operation.operation.update == Some("persistent") {
                 instructions
                     .i32_const(0)
                     .i32_const(0)
@@ -3739,10 +3737,6 @@ fn emit_dynamic_operation(
             } else {
                 instructions
                     .local_get(store[0])
-                    .i32_const(helpers.heap_start as i32)
-                    .i32_lt_u()
-                    .if_(BlockType::Empty)
-                    .local_get(store[0])
                     .local_get(store[1])
                     .i32_const(element_layout.size as i32)
                     .i32_mul()
@@ -3753,10 +3747,13 @@ fn emit_dynamic_operation(
                     .call(helpers.realloc)
                     .local_set(result[0])
                     .local_get(store[1])
-                    .local_set(result[1])
-                    .else_();
-                assign_locals(instructions, result, store)?;
-                instructions.end();
+                    .local_set(result[1]);
+            }
+            if operation.operation.update == Some("persistent") {
+                instructions
+                    .local_get(result[0])
+                    .local_get(store[1])
+                    .call(helpers.managed.values[&element_type_id].retain_range);
             }
             instructions
                 .local_get(index[0])
@@ -3779,23 +3776,25 @@ fn emit_dynamic_operation(
                 .i32_mul()
                 .i32_add()
                 .local_set(scratch_pointer);
-            emit_store_public_result(
+            emit_local_values(instructions, value);
+            instructions.call(helpers.managed.values[&element_type_id].retain);
+            instructions
+                .local_get(scratch_pointer)
+                .call(helpers.managed.values[&element_type_id].release_stored);
+            let mut consumed = 0;
+            emit_store_canonical_result(
                 instructions,
-                module,
-                facts.runtime_layouts,
-                element_type_id,
                 &element_type,
                 value,
-                CanonicalDestination {
-                    pointer: scratch_pointer,
-                    offset: 0,
-                },
+                &mut consumed,
+                scratch_pointer,
+                0,
             )?;
         }
         "store.grow" => {
             let RuntimeType::Store { element_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: store.grow has no Store type", module.source))?
             else {
                 return Err(format!(
@@ -3818,7 +3817,7 @@ fn emit_dynamic_operation(
                 .if_(BlockType::Empty)
                 .unreachable()
                 .end();
-            if operation.update == Some("owned-reuse") {
+            if operation.operation.update == Some("owned-reuse") {
                 instructions
                     .local_get(store[0])
                     .local_get(store[1])
@@ -3834,14 +3833,17 @@ fn emit_dynamic_operation(
                 .i32_mul()
                 .call(helpers.realloc)
                 .local_set(result[0]);
-            if operation.update == Some("persistent") {
+            if operation.operation.update == Some("persistent") {
                 instructions
                     .local_get(result[0])
                     .local_get(store[0])
                     .local_get(store[1])
                     .i32_const(element_layout.size as i32)
                     .i32_mul()
-                    .memory_copy(0, 0);
+                    .memory_copy(0, 0)
+                    .local_get(result[0])
+                    .local_get(store[1])
+                    .call(helpers.managed.values[&element_type_id].retain_range);
             }
             instructions
                 .local_get(result[0])
@@ -3850,22 +3852,23 @@ fn emit_dynamic_operation(
                 .i32_mul()
                 .i32_add()
                 .local_set(scratch_pointer);
-            emit_store_public_result(
+            emit_local_values(instructions, value);
+            instructions.call(helpers.managed.values[&element_type_id].retain);
+            let mut consumed = 0;
+            emit_store_canonical_result(
                 instructions,
-                module,
-                facts.runtime_layouts,
-                element_type_id,
                 &element_type,
                 value,
-                CanonicalDestination {
-                    pointer: scratch_pointer,
-                    offset: 0,
-                },
+                &mut consumed,
+                scratch_pointer,
+                0,
             )?;
         }
         "scratch.with-capacity" => {
-            let RuntimeType::Scratch { element_type } =
-                module.types.get(operation.type_id).ok_or_else(|| {
+            let RuntimeType::Scratch { element_type } = module
+                .types
+                .get(operation.definition.type_id.0)
+                .ok_or_else(|| {
                     format!(
                         "{}: scratch.with-capacity has no Scratch type",
                         module.source
@@ -3914,7 +3917,7 @@ fn emit_dynamic_operation(
         "scratch.push" => {
             let RuntimeType::Scratch { element_type } = module
                 .types
-                .get(operation.type_id)
+                .get(operation.definition.type_id.0)
                 .ok_or_else(|| format!("{}: scratch.push has no Scratch type", module.source))?
             else {
                 return Err(format!(
@@ -3991,17 +3994,16 @@ fn emit_dynamic_operation(
                 .i32_mul()
                 .i32_add()
                 .local_set(scratch_pointer);
-            emit_store_public_result(
+            emit_local_values(instructions, value);
+            instructions.call(helpers.managed.values[&element_type_id].retain);
+            let mut consumed = 0;
+            emit_store_canonical_result(
                 instructions,
-                module,
-                facts.runtime_layouts,
-                element_type_id,
                 &element_type,
                 value,
-                CanonicalDestination {
-                    pointer: scratch_pointer,
-                    offset: 0,
-                },
+                &mut consumed,
+                scratch_pointer,
+                0,
             )?;
         }
         "scratch.finish" => {
@@ -4014,9 +4016,26 @@ fn emit_dynamic_operation(
         }
         "scratch.recycle" => {
             let store = locals_for(module, value_locals, operation.operands[0])?;
+            let RuntimeType::Scratch { element_type } =
+                module.types[operation.definition.type_id.0]
+            else {
+                unreachable!("checked Scratch recycle result")
+            };
+            let layout = memory_layout(&internal_memory_type(module, element_type)?);
             instructions
                 .local_get(store[0])
+                .local_get(store[1])
+                .i32_const(layout.size as i32)
+                .i32_mul()
+                .i32_const(layout.alignment as i32)
+                .local_get(store[1])
+                .i32_const(layout.size as i32)
+                .i32_mul()
+                .call(helpers.realloc)
                 .local_set(result[0])
+                .local_get(result[0])
+                .local_get(store[1])
+                .call(helpers.managed.values[&element_type].release_range)
                 .i32_const(0)
                 .local_set(result[1])
                 .local_get(store[1])
@@ -4034,6 +4053,52 @@ fn emit_dynamic_operation(
             ));
         }
     }
+    if matches!(operation.operation.kind, "text.append" | "text.join") {
+        instructions.local_get(result[0]).local_set(result[2]);
+    }
+    if let RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } =
+        module.types[operation.definition.type_id.0]
+    {
+        let owner = *result.last().expect("managed sequence has an owner lane");
+        instructions
+            .i32_const(0)
+            .local_set(owner)
+            .local_get(result[0])
+            .i32_const(helpers.heap_start as i32)
+            .i32_ge_u()
+            .if_(BlockType::Empty)
+            .local_get(result[0])
+            .local_set(owner)
+            .end();
+        if matches!(operation.operation.kind, "scratch.push" | "scratch.recycle")
+            || (operation.operation.kind == "store.grow"
+                && operation.operation.update == Some("owned-reuse"))
+        {
+            // A resize moves the backing allocation and its child references. The
+            // consumed SSA root must not release the retired allocation header.
+            let previous = locals_for(module, value_locals, operation.operands[0])?;
+            let previous_owner = *previous.last().expect("resized sequence has an owner");
+            instructions
+                .local_get(previous_owner)
+                .local_get(owner)
+                .i32_ne()
+                .if_(BlockType::Empty)
+                .i32_const(0)
+                .local_set(previous_owner)
+                .end();
+        }
+        instructions
+            .local_get(owner)
+            .i32_const(allocation::ELEMENTS as i32)
+            .i32_const(element_type as i32)
+            .local_get(result[1])
+            .call(helpers.allocator.set_layout);
+    }
+    let reference = helpers.managed.values[&operation.definition.type_id.0];
+    if reference.owns_memory {
+        emit_local_values(instructions, result);
+        instructions.call(reference.claim);
+    }
     Ok(())
 }
 
@@ -4050,7 +4115,7 @@ fn structured_control_flow(function: &RuntimeFunction) -> Option<StructuredContr
     let mut has_back_edge = false;
     structured_loop_expansion(
         function,
-        function.entry_block,
+        function.entry,
         &mut active,
         &mut visited,
         &mut expanded_blocks,
@@ -4063,62 +4128,11 @@ fn structured_control_flow(function: &RuntimeFunction) -> Option<StructuredContr
     }
 }
 
-fn iteration_region_eligible(function: &RuntimeFunction) -> bool {
-    let Some(entry) = function.blocks.get(function.entry_block) else {
-        return false;
-    };
-    let mut found_back_edge = false;
-    for block in &function.blocks {
-        let branches = match &block.terminator {
-            RuntimeTerminator::Branch {
-                target, arguments, ..
-            } if *target == function.entry_block => vec![arguments.as_slice()],
-            RuntimeTerminator::Conditional {
-                consequent,
-                consequent_arguments,
-                alternate,
-                alternate_arguments,
-                ..
-            } => {
-                let mut branches = Vec::new();
-                if *consequent == function.entry_block {
-                    branches.push(consequent_arguments.as_slice());
-                }
-                if *alternate == function.entry_block {
-                    branches.push(alternate_arguments.as_slice());
-                }
-                branches
-            }
-            RuntimeTerminator::Switch { .. }
-            | RuntimeTerminator::Return { .. }
-            | RuntimeTerminator::Trap { .. }
-            | RuntimeTerminator::Branch { .. } => Vec::new(),
-        };
-        for arguments in branches {
-            found_back_edge = true;
-            if arguments.len() != entry.parameters.len() {
-                return false;
-            }
-            if entry
-                .parameters
-                .iter()
-                .zip(arguments)
-                .any(|(parameter, argument)| {
-                    parameter.ownership == "owned" && parameter.value != *argument
-                })
-            {
-                return false;
-            }
-        }
-    }
-    found_back_edge
-}
-
 fn structured_loop_expansion(
     function: &RuntimeFunction,
-    block_id: usize,
-    active: &mut HashSet<usize>,
-    visited: &mut HashSet<usize>,
+    block_id: ContinuationId,
+    active: &mut HashSet<ContinuationId>,
+    visited: &mut HashSet<ContinuationId>,
     expanded_blocks: &mut usize,
     has_back_edge: &mut bool,
 ) -> Option<()> {
@@ -4130,12 +4144,12 @@ fn structured_loop_expansion(
     if expanded_blocks.saturating_sub(visited.len()) > MAX_STRUCTURED_DUPLICATED_BLOCKS {
         return None;
     }
-    let block = function.blocks.get(block_id)?;
+    let block = function.continuations.get(block_id.0)?;
     if block.id != block_id {
         return None;
     }
-    for target in terminator_targets(&block.terminator) {
-        if target == function.entry_block {
+    for target in terminator_targets(&block.transition) {
+        if target == function.entry {
             *has_back_edge = true;
             continue;
         }
@@ -4152,23 +4166,8 @@ fn structured_loop_expansion(
     Some(())
 }
 
-fn terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
-    match terminator {
-        RuntimeTerminator::Branch { target, .. } => vec![*target],
-        RuntimeTerminator::Conditional {
-            consequent,
-            alternate,
-            ..
-        } => vec![*consequent, *alternate],
-        RuntimeTerminator::Switch {
-            cases, fallback, ..
-        } => cases
-            .iter()
-            .map(|case| case.target)
-            .chain(std::iter::once(*fallback))
-            .collect(),
-        RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
-    }
+fn terminator_targets(transition: &RuntimeTransition) -> Vec<ContinuationId> {
+    transition.edges().iter().map(|edge| edge.target).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4176,7 +4175,7 @@ fn emit_structured_block(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    block_id: usize,
+    block_id: ContinuationId,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
@@ -4184,13 +4183,12 @@ fn emit_structured_block(
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
-    runtime_function_indices: &HashMap<usize, u32>,
-    iteration_checkpoint: Option<u32>,
-    result: StructuredResult<'_>,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
+
     loop_depth: u32,
 ) -> Result<(), String> {
     let value_locals = facts.value_locals;
-    let block = function.blocks.get(block_id).ok_or_else(|| {
+    let block = function.continuations.get(block_id.0).ok_or_else(|| {
         format!(
             "{}: structured control flow references unknown block {block_id}",
             module.source
@@ -4202,29 +4200,39 @@ fn emit_structured_block(
             module.source, block.id
         ));
     }
-    let tail_call = if matches!(result, StructuredResult::Internal) {
-        direct_tail_call(function, block)
-    } else {
-        None
-    };
-    let operation_count = block.operations.len() - if tail_call.is_some() { 1 } else { 0 };
-    for operation in &block.operations[..operation_count] {
-        emit_dynamic_operation(
+    let lifetimes = lifetimes::ContinuationLifetimes::new(function, block);
+    release_roots(instructions, module, &lifetimes.entry_drops, facts, helpers)?;
+    let tail_call = direct_tail_call(function, block);
+    for (index, operation) in block.instructions.iter().enumerate() {
+        emit_instruction(
             instructions,
             module,
             function,
             operation,
-            manifest,
             helpers,
             static_data,
             facts,
             scratch_pointer,
             scratch_length,
             scratch_index,
-            runtime_function_indices,
+        )?;
+        release_roots(
+            instructions,
+            module,
+            &lifetimes.instruction_drops[index],
+            facts,
+            helpers,
         )?;
     }
     if let Some(operation) = tail_call {
+        transfer_roots(
+            instructions,
+            module,
+            &lifetimes.transition_roots,
+            operation.arguments.iter().copied(),
+            facts,
+            helpers,
+        )?;
         emit_direct_tail_call(
             instructions,
             module,
@@ -4235,33 +4243,47 @@ fn emit_structured_block(
         )?;
         return Ok(());
     }
-    match &block.terminator {
-        RuntimeTerminator::Branch {
-            target, arguments, ..
-        } => emit_structured_target(
-            instructions,
-            module,
-            function,
-            *target,
-            arguments,
-            manifest,
-            helpers,
-            static_data,
-            facts,
-            scratch_pointer,
-            scratch_length,
-            scratch_index,
-            runtime_function_indices,
-            iteration_checkpoint,
-            result,
-            loop_depth,
-        )?,
-        RuntimeTerminator::Conditional {
+    emit_transition_call(
+        instructions,
+        module,
+        function,
+        &block.transition,
+        manifest,
+        helpers,
+        facts,
+        scratch_pointer,
+        scratch_length,
+        runtime_function_indices,
+        &lifetimes.transition_roots,
+    )?;
+    let edge_roots = if matches!(block.transition, RuntimeTransition::Call { .. }) {
+        None
+    } else {
+        Some(&lifetimes.transition_roots)
+    };
+    match &block.transition {
+        RuntimeTransition::Jump { edge } | RuntimeTransition::Call { next: edge, .. } => {
+            emit_structured_target(
+                instructions,
+                module,
+                function,
+                edge,
+                manifest,
+                helpers,
+                static_data,
+                facts,
+                scratch_pointer,
+                scratch_length,
+                scratch_index,
+                runtime_function_indices,
+                edge_roots,
+                loop_depth,
+            )?
+        }
+        RuntimeTransition::Branch {
             condition,
             consequent,
-            consequent_arguments,
             alternate,
-            alternate_arguments,
             ..
         } => {
             let condition = locals_for(module, value_locals, *condition)?;
@@ -4270,8 +4292,7 @@ fn emit_structured_block(
                 instructions,
                 module,
                 function,
-                *consequent,
-                consequent_arguments,
+                consequent,
                 manifest,
                 helpers,
                 static_data,
@@ -4280,8 +4301,7 @@ fn emit_structured_block(
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
-                iteration_checkpoint,
-                result,
+                edge_roots,
                 loop_depth + 1,
             )?;
             instructions.else_();
@@ -4289,8 +4309,7 @@ fn emit_structured_block(
                 instructions,
                 module,
                 function,
-                *alternate,
-                alternate_arguments,
+                alternate,
                 manifest,
                 helpers,
                 static_data,
@@ -4299,13 +4318,12 @@ fn emit_structured_block(
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
-                iteration_checkpoint,
-                result,
+                edge_roots,
                 loop_depth + 1,
             )?;
             instructions.end();
         }
-        RuntimeTerminator::Switch {
+        RuntimeTransition::Switch {
             selector,
             cases,
             fallback,
@@ -4313,9 +4331,9 @@ fn emit_structured_block(
         } => {
             let selector = locals_for(module, value_locals, *selector)?[0];
             for (index, case_) in cases.iter().enumerate() {
-                let expected = switch_case_integer(&case_.value)?;
+                let expected = switch_case_integer(&case_.0)?;
                 instructions.local_get(selector);
-                match case_.value {
+                match case_.0 {
                     WireConstant::SignedInteger32(_) => {
                         instructions.i32_const(expected as i32).i32_eq();
                     }
@@ -4329,8 +4347,7 @@ fn emit_structured_block(
                     instructions,
                     module,
                     function,
-                    case_.target,
-                    &[],
+                    &case_.1,
                     manifest,
                     helpers,
                     static_data,
@@ -4339,8 +4356,7 @@ fn emit_structured_block(
                     scratch_length,
                     scratch_index,
                     runtime_function_indices,
-                    iteration_checkpoint,
-                    result,
+                    edge_roots,
                     loop_depth + index as u32 + 1,
                 )?;
                 instructions.else_();
@@ -4349,8 +4365,7 @@ fn emit_structured_block(
                 instructions,
                 module,
                 function,
-                *fallback,
-                &[],
+                fallback,
                 manifest,
                 helpers,
                 static_data,
@@ -4359,18 +4374,17 @@ fn emit_structured_block(
                 scratch_length,
                 scratch_index,
                 runtime_function_indices,
-                iteration_checkpoint,
-                result,
+                edge_roots,
                 loop_depth + cases.len() as u32,
             )?;
             for _ in cases {
                 instructions.end();
             }
         }
-        RuntimeTerminator::Return { value, .. } => {
-            emit_structured_return(instructions, module, facts, *value, result)?;
+        RuntimeTransition::Return { value, .. } => {
+            emit_structured_return(instructions, module, facts, *value)?;
         }
-        RuntimeTerminator::Trap { .. } => {
+        RuntimeTransition::Trap { .. } => {
             instructions.unreachable();
         }
     }
@@ -4382,8 +4396,7 @@ fn emit_structured_target(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    target: usize,
-    arguments: &[usize],
+    edge: &Edge,
     manifest: &AbiManifest,
     helpers: DynamicHelpers,
     static_data: &StaticData,
@@ -4391,16 +4404,21 @@ fn emit_structured_target(
     scratch_pointer: u32,
     scratch_length: u32,
     scratch_index: u32,
-    runtime_function_indices: &HashMap<usize, u32>,
-    iteration_checkpoint: Option<u32>,
-    result: StructuredResult<'_>,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
+
+    edge_roots: Option<&BTreeSet<ValueId>>,
     loop_depth: u32,
 ) -> Result<(), String> {
-    assign_block_arguments(instructions, module, function, target, arguments, facts)?;
-    if target == function.entry_block {
-        if let Some(checkpoint) = iteration_checkpoint {
-            instructions.local_get(checkpoint).global_set(HEAP_GLOBAL);
-        }
+    assign_block_arguments(
+        instructions,
+        module,
+        function,
+        edge,
+        facts,
+        edge_roots,
+        helpers,
+    )?;
+    if edge.target == function.entry {
         instructions.br(loop_depth);
         return Ok(());
     }
@@ -4408,7 +4426,7 @@ fn emit_structured_target(
         instructions,
         module,
         function,
-        target,
+        edge.target,
         manifest,
         helpers,
         static_data,
@@ -4417,8 +4435,6 @@ fn emit_structured_target(
         scratch_length,
         scratch_index,
         runtime_function_indices,
-        iteration_checkpoint,
-        result,
         loop_depth,
     )
 }
@@ -4427,18 +4443,10 @@ fn emit_structured_return(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     facts: FunctionEmissionFacts<'_>,
-    value: usize,
-    result: StructuredResult<'_>,
+    value: ValueId,
 ) -> Result<(), String> {
     let value_locals = facts.value_locals;
-    match result {
-        StructuredResult::Internal => {
-            emit_local_values(instructions, locals_for(module, value_locals, value)?);
-        }
-        StructuredResult::Canonical(canonical) => {
-            emit_canonical_return(instructions, module, facts, value, canonical)?;
-        }
-    }
+    emit_local_values(instructions, locals_for(module, value_locals, value)?);
     instructions.return_();
     Ok(())
 }
@@ -4447,14 +4455,12 @@ fn emit_direct_tail_call(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    operation: &RuntimeOperation,
+    call: DirectTailCall<'_>,
     facts: FunctionEmissionFacts<'_>,
-    runtime_function_indices: &HashMap<usize, u32>,
+    runtime_function_indices: &HashMap<FunctionId, u32>,
 ) -> Result<(), String> {
     let value_locals = facts.value_locals;
-    let target = operation
-        .function
-        .ok_or_else(|| format!("{}: call.direct omitted its function", module.source))?;
+    let target = call.target;
     let function_index = runtime_function_indices.get(&target).ok_or_else(|| {
         format!(
             "{}: tail call references unavailable function {target}",
@@ -4471,15 +4477,15 @@ fn emit_direct_tail_call(
                 module.source
             )
         })?;
-    let caller_signature = module.signatures.get(function.signature).ok_or_else(|| {
+    let caller_signature = module.signatures.get(function.signature.0).ok_or_else(|| {
         format!(
             "{}: runtime function {} references unknown signature {}",
-            module.source, function.id, function.signature
+            module.source, function.id, function.signature.0
         )
     })?;
     let target_signature = module
         .signatures
-        .get(target_function.signature)
+        .get(target_function.signature.0)
         .ok_or_else(|| {
             format!(
                 "{}: tail-call target {target} references unknown signature {}",
@@ -4489,25 +4495,24 @@ fn emit_direct_tail_call(
     let caller_results = facts
         .runtime_layouts
         .flattened(module, caller_signature.result)?;
-    let operation_results = facts.runtime_layouts.flattened(module, operation.type_id)?;
     let target_results = facts
         .runtime_layouts
         .flattened(module, target_signature.result)?;
-    if caller_results != operation_results || caller_results != target_results {
+    if caller_results != target_results {
         return Err(format!(
             "{}: tail call from function {} changes its Wasm result layout",
             module.source, function.id
         ));
     }
-    if operation.operands.len() != target_signature.parameters.len() {
+    if call.arguments.len() != target_signature.parameters.len() {
         return Err(format!(
             "{}: tail call to function {target} supplies {} arguments for {} parameters",
             module.source,
-            operation.operands.len(),
+            call.arguments.len(),
             target_signature.parameters.len()
         ));
     }
-    for (operand, parameter_type) in operation.operands.iter().zip(&target_signature.parameters) {
+    for (operand, parameter_type) in call.arguments.iter().zip(&target_signature.parameters) {
         let operand_type = runtime_value_type(function, facts.value_types, *operand)?;
         if facts.runtime_layouts.flattened(module, operand_type)?
             != facts.runtime_layouts.flattened(module, *parameter_type)?
@@ -4523,181 +4528,120 @@ fn emit_direct_tail_call(
     Ok(())
 }
 
-fn emit_internal_terminator(
+#[allow(clippy::too_many_arguments)]
+fn emit_dispatch_transition(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    terminator: &RuntimeTerminator,
+    transition: &RuntimeTransition,
     facts: FunctionEmissionFacts<'_>,
     dispatcher: Dispatcher,
+    roots: &BTreeSet<ValueId>,
+    helpers: DynamicHelpers,
 ) -> Result<(), String> {
-    let value_locals = facts.value_locals;
-    match terminator {
-        RuntimeTerminator::Branch {
-            target, arguments, ..
-        } => {
-            assign_block_arguments(instructions, module, function, *target, arguments, facts)?;
+    let edge_roots = if matches!(transition, RuntimeTransition::Call { .. }) {
+        None
+    } else {
+        Some(roots)
+    };
+    match transition {
+        RuntimeTransition::Jump { edge } | RuntimeTransition::Call { next: edge, .. } => {
+            assign_block_arguments(
+                instructions,
+                module,
+                function,
+                edge,
+                facts,
+                edge_roots,
+                helpers,
+            )?;
             instructions
-                .i32_const(*target as i32)
+                .i32_const(edge.target.0 as i32)
                 .local_set(dispatcher.local)
                 .br(dispatcher.depth);
         }
-        RuntimeTerminator::Conditional {
+        RuntimeTransition::Branch {
             condition,
             consequent,
-            consequent_arguments,
             alternate,
-            alternate_arguments,
-            ..
         } => {
-            let condition = locals_for(module, value_locals, *condition)?;
+            let condition = locals_for(module, facts.value_locals, *condition)?;
             instructions.local_get(condition[0]).if_(BlockType::Empty);
             assign_block_arguments(
                 instructions,
                 module,
                 function,
-                *consequent,
-                consequent_arguments,
+                consequent,
                 facts,
+                edge_roots,
+                helpers,
             )?;
             instructions
-                .i32_const(*consequent as i32)
+                .i32_const(consequent.target.0 as i32)
                 .local_set(dispatcher.local)
                 .else_();
             assign_block_arguments(
                 instructions,
                 module,
                 function,
-                *alternate,
-                alternate_arguments,
+                alternate,
                 facts,
+                edge_roots,
+                helpers,
             )?;
             instructions
-                .i32_const(*alternate as i32)
+                .i32_const(alternate.target.0 as i32)
                 .local_set(dispatcher.local)
                 .end()
                 .br(dispatcher.depth);
         }
-        RuntimeTerminator::Switch {
+        RuntimeTransition::Switch {
             selector,
             cases,
             fallback,
-            ..
-        } => emit_switch_dispatch(
-            instructions,
-            module,
-            *selector,
-            cases,
-            *fallback,
-            value_locals,
-            dispatcher,
-        )?,
-        RuntimeTerminator::Return { value, .. } => {
-            emit_local_values(instructions, locals_for(module, value_locals, *value)?);
-            instructions.return_();
+        } => {
+            emit_switch_dispatch(
+                instructions,
+                module,
+                function,
+                *selector,
+                cases,
+                fallback,
+                facts,
+                dispatcher,
+                roots,
+                helpers,
+            )?;
         }
-        RuntimeTerminator::Trap { .. } => {
+        RuntimeTransition::Return { value } => {
+            emit_structured_return(instructions, module, facts, *value)?
+        }
+        RuntimeTransition::Trap { .. } => {
             instructions.unreachable();
         }
     }
     Ok(())
 }
 
-fn emit_dynamic_terminator(
-    instructions: &mut InstructionSink<'_>,
-    module: &RuntimeModule,
-    function: &RuntimeFunction,
-    terminator: &RuntimeTerminator,
-    facts: FunctionEmissionFacts<'_>,
-    dispatcher: Dispatcher,
-    canonical_result: CanonicalResult<'_>,
-) -> Result<(), String> {
-    let value_locals = facts.value_locals;
-    match terminator {
-        RuntimeTerminator::Branch {
-            target, arguments, ..
-        } => {
-            assign_block_arguments(instructions, module, function, *target, arguments, facts)?;
-            instructions
-                .i32_const(*target as i32)
-                .local_set(dispatcher.local)
-                .br(dispatcher.depth);
-        }
-        RuntimeTerminator::Conditional {
-            condition,
-            consequent,
-            consequent_arguments,
-            alternate,
-            alternate_arguments,
-            ..
-        } => {
-            let condition = locals_for(module, value_locals, *condition)?;
-            instructions.local_get(condition[0]).if_(BlockType::Empty);
-            assign_block_arguments(
-                instructions,
-                module,
-                function,
-                *consequent,
-                consequent_arguments,
-                facts,
-            )?;
-            instructions
-                .i32_const(*consequent as i32)
-                .local_set(dispatcher.local)
-                .else_();
-            assign_block_arguments(
-                instructions,
-                module,
-                function,
-                *alternate,
-                alternate_arguments,
-                facts,
-            )?;
-            instructions
-                .i32_const(*alternate as i32)
-                .local_set(dispatcher.local)
-                .end()
-                .br(dispatcher.depth);
-        }
-        RuntimeTerminator::Switch {
-            selector,
-            cases,
-            fallback,
-            ..
-        } => emit_switch_dispatch(
-            instructions,
-            module,
-            *selector,
-            cases,
-            *fallback,
-            value_locals,
-            dispatcher,
-        )?,
-        RuntimeTerminator::Return { value, .. } => {
-            emit_canonical_return(instructions, module, facts, *value, canonical_result)?;
-            instructions.return_();
-        }
-        RuntimeTerminator::Trap { .. } => {
-            instructions.unreachable();
-        }
-    }
-    Ok(())
-}
-
+#[allow(clippy::too_many_arguments)]
 fn emit_switch_dispatch(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
-    selector: usize,
-    cases: &[crate::hir::RuntimeSwitchCase],
-    fallback: usize,
-    value_locals: &HashMap<usize, Vec<u32>>,
+    function: &RuntimeFunction,
+    selector: ValueId,
+    cases: &[(WireConstant, Edge)],
+    fallback: &Edge,
+    facts: FunctionEmissionFacts<'_>,
     dispatcher: Dispatcher,
+    roots: &BTreeSet<ValueId>,
+    helpers: DynamicHelpers,
 ) -> Result<(), String> {
-    let selector_local = locals_for(module, value_locals, selector)?[0];
+    let edge_roots = Some(roots);
+    let selector_local = locals_for(module, facts.value_locals, selector)?[0];
     let dense_i32 = cases
         .iter()
         .enumerate()
-        .all(|(index, case)| case.value == WireConstant::SignedInteger32(index as i32));
+        .all(|(index, (value, _))| *value == WireConstant::SignedInteger32(index as i32));
     if dense_i32 {
         for _ in 0..=cases.len() {
             instructions.block(BlockType::Empty);
@@ -4705,32 +4649,55 @@ fn emit_switch_dispatch(
         instructions
             .local_get(selector_local)
             .br_table(0..cases.len() as u32, cases.len() as u32);
-        for (index, case) in cases.iter().enumerate() {
+        for (index, (_, edge)) in cases.iter().enumerate() {
+            instructions.end();
+            assign_block_arguments(
+                instructions,
+                module,
+                function,
+                edge,
+                facts,
+                edge_roots,
+                helpers,
+            )?;
             instructions
-                .end()
-                .i32_const(case.target as i32)
+                .i32_const(edge.target.0 as i32)
                 .local_set(dispatcher.local)
                 .br((cases.len() - index) as u32 + dispatcher.depth);
         }
+        instructions.end();
+        assign_block_arguments(
+            instructions,
+            module,
+            function,
+            fallback,
+            facts,
+            edge_roots,
+            helpers,
+        )?;
         instructions
-            .end()
-            .i32_const(fallback as i32)
+            .i32_const(fallback.target.0 as i32)
             .local_set(dispatcher.local)
             .br(dispatcher.depth);
         return Ok(());
     }
     let mut ordered = cases
         .iter()
-        .map(|case| Ok((switch_case_integer(&case.value)?, case)))
+        .map(|case| Ok((switch_case_integer(&case.0)?, case)))
         .collect::<Result<Vec<_>, String>>()?;
     ordered.sort_by_key(|(value, _)| *value);
     let ordered = ordered.iter().map(|(_, case)| *case).collect::<Vec<_>>();
     emit_balanced_switch_selection(
         instructions,
+        module,
+        function,
         selector_local,
         &ordered,
         fallback,
+        facts,
         dispatcher.local,
+        roots,
+        helpers,
     )?;
     instructions.br(dispatcher.depth);
     Ok(())
@@ -4748,23 +4715,39 @@ fn switch_case_integer(value: &WireConstant) -> Result<i64, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_balanced_switch_selection(
     instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    function: &RuntimeFunction,
     selector: u32,
-    cases: &[&crate::hir::RuntimeSwitchCase],
-    fallback: usize,
+    cases: &[&(WireConstant, Edge)],
+    fallback: &Edge,
+    facts: FunctionEmissionFacts<'_>,
     dispatcher: u32,
+    roots: &BTreeSet<ValueId>,
+    helpers: DynamicHelpers,
 ) -> Result<(), String> {
+    let edge_roots = Some(roots);
     let (left, remaining) = cases.split_at(cases.len() / 2);
     let Some((case, right)) = remaining.split_first() else {
+        assign_block_arguments(
+            instructions,
+            module,
+            function,
+            fallback,
+            facts,
+            edge_roots,
+            helpers,
+        )?;
         instructions
-            .i32_const(fallback as i32)
+            .i32_const(fallback.target.0 as i32)
             .local_set(dispatcher);
         return Ok(());
     };
-    let expected = switch_case_integer(&case.value)?;
+    let expected = switch_case_integer(&case.0)?;
     instructions.local_get(selector);
-    match case.value {
+    match case.0 {
         WireConstant::SignedInteger32(_) => {
             instructions.i32_const(expected as i32).i32_eq();
         }
@@ -4773,13 +4756,22 @@ fn emit_balanced_switch_selection(
         }
         _ => unreachable!("switch_case_integer accepted a non-integer"),
     }
+    instructions.if_(BlockType::Empty);
+    assign_block_arguments(
+        instructions,
+        module,
+        function,
+        &case.1,
+        facts,
+        edge_roots,
+        helpers,
+    )?;
     instructions
-        .if_(BlockType::Empty)
-        .i32_const(case.target as i32)
+        .i32_const(case.1.target.0 as i32)
         .local_set(dispatcher)
         .else_()
         .local_get(selector);
-    match case.value {
+    match case.0 {
         WireConstant::SignedInteger32(_) => {
             instructions.i32_const(expected as i32).i32_lt_s();
         }
@@ -4789,82 +4781,139 @@ fn emit_balanced_switch_selection(
         _ => unreachable!("switch_case_integer accepted a non-integer"),
     }
     instructions.if_(BlockType::Empty);
-    emit_balanced_switch_selection(instructions, selector, left, fallback, dispatcher)?;
+    emit_balanced_switch_selection(
+        instructions,
+        module,
+        function,
+        selector,
+        left,
+        fallback,
+        facts,
+        dispatcher,
+        roots,
+        helpers,
+    )?;
     instructions.else_();
-    emit_balanced_switch_selection(instructions, selector, right, fallback, dispatcher)?;
+    emit_balanced_switch_selection(
+        instructions,
+        module,
+        function,
+        selector,
+        right,
+        fallback,
+        facts,
+        dispatcher,
+        roots,
+        helpers,
+    )?;
     instructions.end().end();
     Ok(())
 }
 
-fn emit_canonical_return(
+fn edge_destinations(function: &RuntimeFunction, edge: &Edge) -> Vec<ValueId> {
+    edge.arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            Argument::Value(value) => Some(*value),
+            Argument::Result => None,
+        })
+        .chain(
+            function.continuations[edge.target.0]
+                .captures
+                .iter()
+                .map(|definition| definition.value),
+        )
+        .collect()
+}
+
+fn release_roots(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
+    roots: &[ValueId],
     facts: FunctionEmissionFacts<'_>,
-    value: usize,
-    canonical_result: CanonicalResult<'_>,
+    helpers: DynamicHelpers,
 ) -> Result<(), String> {
-    let value_locals = facts.value_locals;
-    let result = locals_for(module, value_locals, value)?;
-    let flattened = flattened_type(canonical_result.type_);
-    if flattened.len() <= 1 {
-        if flattened == [ValType::I32]
-            && public_flat_needs_translation(module, canonical_result.runtime_type)
-        {
-            emit_translate_public_flat_value(
-                instructions,
-                module,
-                facts.runtime_layouts,
-                canonical_result.runtime_type,
-                canonical_result.type_,
-                result,
-                &[canonical_result.pointer],
-                true,
-            )?;
-            finish_call(instructions);
-            instructions.local_get(canonical_result.pointer);
-        } else {
-            finish_call(instructions);
-            emit_local_values(instructions, result);
+    for value in roots {
+        let reference = helpers.managed.values[&facts.value_types[value]];
+        if !reference.owns_memory {
+            continue;
         }
-        return Ok(());
+        emit_local_values(
+            instructions,
+            locals_for(module, facts.value_locals, *value)?,
+        );
+        instructions.call(reference.release);
     }
-    let layout = memory_layout(canonical_result.type_);
-    instructions
-        .i32_const(0)
-        .i32_const(0)
-        .i32_const(layout.alignment as i32)
-        .i32_const(layout.size as i32)
-        .call(canonical_result.realloc)
-        .local_tee(canonical_result.pointer)
-        .global_set(RESULT_POINTER_GLOBAL);
-    emit_store_public_result(
+    Ok(())
+}
+
+fn transfer_roots(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    roots: &BTreeSet<ValueId>,
+    destinations: impl Iterator<Item = ValueId>,
+    facts: FunctionEmissionFacts<'_>,
+    helpers: DynamicHelpers,
+) -> Result<(), String> {
+    let mut counts = BTreeMap::<ValueId, usize>::new();
+    for value in destinations {
+        *counts.entry(value).or_default() += 1;
+    }
+    for (value, count) in &counts {
+        assert!(
+            roots.contains(value),
+            "continuation transfer needs a live root {value}"
+        );
+        let reference = helpers.managed.values[&facts.value_types[value]];
+        if !reference.owns_memory {
+            continue;
+        }
+        for _ in 1..*count {
+            emit_local_values(
+                instructions,
+                locals_for(module, facts.value_locals, *value)?,
+            );
+            instructions.call(reference.retain);
+        }
+    }
+    release_roots(
         instructions,
         module,
-        facts.runtime_layouts,
-        canonical_result.runtime_type,
-        canonical_result.type_,
-        result,
-        CanonicalDestination {
-            pointer: canonical_result.pointer,
-            offset: 0,
-        },
-    )?;
-    instructions.local_get(canonical_result.pointer);
-    Ok(())
+        &roots
+            .iter()
+            .copied()
+            .filter(|value| !counts.contains_key(value))
+            .collect::<Vec<_>>(),
+        facts,
+        helpers,
+    )
 }
 
 fn assign_block_arguments(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    target: usize,
-    arguments: &[usize],
+    edge: &Edge,
     facts: FunctionEmissionFacts<'_>,
+    roots: Option<&BTreeSet<ValueId>>,
+    helpers: DynamicHelpers,
 ) -> Result<(), String> {
+    if let Some(roots) = roots {
+        transfer_roots(
+            instructions,
+            module,
+            roots,
+            edge_destinations(function, edge).into_iter(),
+            facts,
+            helpers,
+        )?;
+    }
     let value_locals = facts.value_locals;
+    let target = edge.target;
+    let arguments = &edge.arguments;
     let block = function
-        .blocks
-        .get(target)
+        .continuations
+        .get(target.0)
         .ok_or_else(|| format!("{}: branch targets unknown block {target}", module.source))?;
     if block.parameters.len() != arguments.len() {
         return Err(format!(
@@ -4876,11 +4925,16 @@ fn assign_block_arguments(
     }
     let mut assignments = Vec::new();
     for (parameter, argument) in block.parameters.iter().zip(arguments) {
+        let Argument::Value(argument) = argument else {
+            continue;
+        };
         let destination = locals_for(module, value_locals, parameter.value)?;
         let source = locals_for(module, value_locals, *argument)?;
         let argument_type = runtime_value_type(function, facts.value_types, *argument)?;
         let argument_layout = facts.runtime_layouts.flattened(module, argument_type)?;
-        let parameter_layout = facts.runtime_layouts.flattened(module, parameter.type_id)?;
+        let parameter_layout = facts
+            .runtime_layouts
+            .flattened(module, parameter.type_id.0)?;
         if argument_layout != parameter_layout {
             let argument_kind = module
                 .types
@@ -4889,7 +4943,7 @@ fn assign_block_arguments(
                 .unwrap_or("unknown");
             let parameter_kind = module
                 .types
-                .get(parameter.type_id)
+                .get(parameter.type_id.0)
                 .map(runtime_kind)
                 .unwrap_or("unknown");
             return Err(format!(
@@ -4949,8 +5003,8 @@ fn emit_zero_local(
 
 fn locals_for<'a>(
     module: &RuntimeModule,
-    value_locals: &'a HashMap<usize, Vec<u32>>,
-    value: usize,
+    value_locals: &'a HashMap<ValueId, Vec<u32>>,
+    value: ValueId,
 ) -> Result<&'a [u32], String> {
     value_locals
         .get(&value)
@@ -4962,13 +5016,15 @@ fn emit_dynamic_vector_operation(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     function: &RuntimeFunction,
-    operation: &RuntimeOperation,
+    operation: &RuntimeInstruction,
     facts: FunctionEmissionFacts<'_>,
     result: u32,
 ) -> Result<(), String> {
     let value_locals = facts.value_locals;
-    let vector_type_id = match module.types.get(operation.type_id) {
-        Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. }) => operation.type_id,
+    let vector_type_id = match module.types.get(operation.definition.type_id.0) {
+        Some(RuntimeType::Vector { .. } | RuntimeType::Mask { .. }) => {
+            operation.definition.type_id.0
+        }
         _ => runtime_value_type(function, facts.value_types, operation.operands[0])?,
     };
     let (element, lanes) = match &module.types[vector_type_id] {
@@ -4989,7 +5045,7 @@ fn emit_dynamic_vector_operation(
         .map(|operand| locals_for(module, value_locals, *operand).map(|locals| locals[0]))
         .collect::<Result<Vec<_>, _>>()?;
     if element == "float-32" && lanes == 4 {
-        match operation.operator {
+        match operation.operation.operator {
             Some("make") => {
                 instructions.local_get(operands[0]).f32x4_splat();
                 for (lane, operand) in operands.iter().enumerate().skip(1) {
@@ -5003,6 +5059,7 @@ fn emit_dynamic_vector_operation(
             }
             Some("extract") => {
                 let lane = operation
+                    .operation
                     .lane
                     .ok_or_else(|| format!("{}: vector extract omitted its lane", module.source))?;
                 instructions.local_get(operands[0]).f32x4_extract_lane(lane);
@@ -5050,17 +5107,19 @@ fn emit_dynamic_vector_operation(
                     .iter()
                     .map(|selector| {
                         let defining = function
-                            .blocks
+                            .continuations
                             .iter()
-                            .flat_map(|block| &block.operations)
-                            .find(|candidate| candidate.result == *selector)
+                            .flat_map(|block| &block.instructions)
+                            .find(|candidate| candidate.definition.value == *selector)
                             .ok_or_else(|| {
                                 format!(
                                     "{}: f32x4 shuffle selector {selector} has no definition",
                                     module.source
                                 )
                             })?;
-                        let Some(WireConstant::SignedInteger32(selector)) = defining.value else {
+                        let Some(WireConstant::SignedInteger32(selector)) =
+                            defining.operation.value
+                        else {
                             return Err(format!(
                                 "{}: f32x4 shuffle selector {selector} is not constant",
                                 module.source
@@ -5133,7 +5192,7 @@ fn emit_dynamic_vector_operation(
             ));
         }
     };
-    match operation.operator {
+    match operation.operation.operator {
         Some("make") => {
             if !matches!(integer_shape, IntegerVectorShape::I32x4) {
                 return Err(format!(
@@ -5164,6 +5223,7 @@ fn emit_dynamic_vector_operation(
                 ));
             }
             let lane = operation
+                .operation
                 .lane
                 .ok_or_else(|| format!("{}: vector extract omitted its lane", module.source))?;
             instructions.local_get(operands[0]).i32x4_extract_lane(lane);
@@ -5176,6 +5236,7 @@ fn emit_dynamic_vector_operation(
                 ));
             }
             let lane = operation
+                .operation
                 .lane
                 .ok_or_else(|| format!("{}: vector replace omitted its lane", module.source))?;
             instructions
@@ -5435,8 +5496,8 @@ fn runtime_kind(type_: &RuntimeType) -> &'static str {
 
 fn runtime_value_type(
     function: &RuntimeFunction,
-    value_types: &HashMap<usize, usize>,
-    value: usize,
+    value_types: &HashMap<ValueId, usize>,
+    value: ValueId,
 ) -> Result<usize, String> {
     value_types.get(&value).copied().ok_or_else(|| {
         format!(
@@ -5864,37 +5925,97 @@ fn emit_load_canonical_result(
     }
 }
 
-fn public_flat_needs_translation(module: &RuntimeModule, runtime_type: usize) -> bool {
-    match &module.types[runtime_type] {
-        // Canonical Boolean lanes are exactly 0 or 1, including at entry.
-        RuntimeType::Boolean => true,
-        RuntimeType::Sum { cases, .. } => {
-            cases.windows(2).any(|pair| pair[0].name > pair[1].name)
-                || cases
+fn emit_direct_canonical_value(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    layouts: &RuntimeTypeLayouts,
+    type_id: usize,
+    public: &AbiType,
+    source: &[u32],
+) -> Result<(), String> {
+    match (&module.types[type_id], public) {
+        (
+            RuntimeType::Sum { cases, .. },
+            AbiType::Variant {
+                cases: public_cases,
+            },
+        ) => {
+            for (index, case_) in cases.iter().enumerate() {
+                if index + 1 < cases.len() {
+                    instructions
+                        .local_get(source[0])
+                        .i32_const(index as i32)
+                        .i32_eq()
+                        .if_(BlockType::Result(ValType::I32));
+                }
+                let tag = public_cases
                     .iter()
-                    .any(|case_| public_flat_needs_translation(module, case_.payload_type))
+                    .position(|public| public.name == case_.name)
+                    .ok_or_else(|| format!("public variant omitted case {}", case_.name))?;
+                instructions.i32_const(tag as i32);
+                if index + 1 < cases.len() {
+                    instructions.else_();
+                }
+            }
+            for _ in 1..cases.len() {
+                instructions.end();
+            }
         }
-        RuntimeType::Product { fields, .. } => {
-            fields.windows(2).any(|pair| pair[0].name > pair[1].name)
-                || fields
+        (
+            RuntimeType::Product { fields, .. },
+            AbiType::Record {
+                fields: public_fields,
+            },
+        ) => {
+            let mut offset = 0;
+            for field in fields {
+                let width = layouts.flattened(module, field.type_id)?.len();
+                let public = public_fields
                     .iter()
-                    .any(|field| public_flat_needs_translation(module, field.type_id))
+                    .find(|public| public.name == field.name)
+                    .ok_or_else(|| format!("public record omitted field {}", field.name))?;
+                emit_direct_canonical_value(
+                    instructions,
+                    module,
+                    layouts,
+                    field.type_id,
+                    &public.type_,
+                    &source[offset..offset + width],
+                )?;
+                offset += width;
+            }
         }
-        RuntimeType::Sealed {
-            representation_type,
-            ..
-        } => public_flat_needs_translation(module, *representation_type),
-        RuntimeType::Callback {
-            environment_type, ..
-        } => public_flat_needs_translation(module, *environment_type),
-        _ => false,
+        (
+            RuntimeType::Sealed {
+                representation_type,
+                ..
+            },
+            AbiType::Sealed { inner, .. },
+        )
+        | (
+            RuntimeType::Callback {
+                environment_type: representation_type,
+                ..
+            },
+            AbiType::Callback {
+                environment: inner, ..
+            },
+        ) => {
+            emit_direct_canonical_value(
+                instructions,
+                module,
+                layouts,
+                *representation_type,
+                inner,
+                source,
+            )?;
+        }
+        _ => emit_local_values(instructions, source),
     }
+    Ok(())
 }
 
-/// Translate flat public values without assuming that canonical constructor
-/// order is the private runtime order. Source and destination lanes are disjoint.
-#[allow(clippy::too_many_arguments)]
-fn emit_translate_public_flat_value(
+fn emit_lower_flat_value(
     instructions: &mut InstructionSink<'_>,
     module: &RuntimeModule,
     runtime_layouts: &RuntimeTypeLayouts,
@@ -5902,7 +6023,6 @@ fn emit_translate_public_flat_value(
     public_type: &AbiType,
     source: &[u32],
     destination: &[u32],
-    to_public: bool,
 ) -> Result<(), String> {
     let runtime_type = module
         .types
@@ -5941,18 +6061,9 @@ fn emit_translate_public_flat_value(
                 }
                 let (public_field, public_offset, public_width) =
                     matched.ok_or_else(|| format!("public record omitted field {}", field.name))?;
-                let (source_range, destination_range) = if to_public {
-                    (
-                        runtime_offset..runtime_offset + runtime_width,
-                        public_offset..public_offset + public_width,
-                    )
-                } else {
-                    (
-                        public_offset..public_offset + public_width,
-                        runtime_offset..runtime_offset + runtime_width,
-                    )
-                };
-                emit_translate_public_flat_value(
+                let source_range = public_offset..public_offset + public_width;
+                let destination_range = runtime_offset..runtime_offset + runtime_width;
+                emit_lower_flat_value(
                     instructions,
                     module,
                     runtime_layouts,
@@ -5960,7 +6071,6 @@ fn emit_translate_public_flat_value(
                     &public_field.type_,
                     &source[source_range],
                     &destination[destination_range],
-                    to_public,
                 )?;
                 runtime_offset += runtime_width;
             }
@@ -5978,11 +6088,7 @@ fn emit_translate_public_flat_value(
                 .if_(BlockType::Empty)
                 .unreachable()
                 .end();
-            let lane_types = if to_public {
-                flattened_type(public_type)
-            } else {
-                runtime_layouts.flattened(module, runtime_type_id)?.to_vec()
-            };
+            let lane_types = runtime_layouts.flattened(module, runtime_type_id)?;
             for (local, type_) in destination[1..].iter().zip(&lane_types[1..]) {
                 emit_zero_local(instructions, *type_, *local)?;
             }
@@ -5991,11 +6097,7 @@ fn emit_translate_public_flat_value(
                     .iter()
                     .position(|item| item.name == case_.name)
                     .ok_or_else(|| format!("public variant omitted case {}", case_.name))?;
-                let (from, to) = if to_public {
-                    (runtime_index, public_index)
-                } else {
-                    (public_index, runtime_index)
-                };
+                let (from, to) = (public_index, runtime_index);
                 instructions
                     .local_get(source[0])
                     .i32_const(from as i32)
@@ -6004,7 +6106,7 @@ fn emit_translate_public_flat_value(
                 instructions.i32_const(to as i32).local_set(destination[0]);
                 if let Some(payload) = &public_cases[public_index].payload {
                     let width = flattened_type(payload).len();
-                    emit_translate_public_flat_value(
+                    emit_lower_flat_value(
                         instructions,
                         module,
                         runtime_layouts,
@@ -6012,7 +6114,6 @@ fn emit_translate_public_flat_value(
                         payload,
                         &source[1..1 + width],
                         &destination[1..1 + width],
-                        to_public,
                     )?;
                 }
                 instructions.end();
@@ -6034,7 +6135,7 @@ fn emit_translate_public_flat_value(
                 environment: inner, ..
             },
         ) => {
-            emit_translate_public_flat_value(
+            emit_lower_flat_value(
                 instructions,
                 module,
                 runtime_layouts,
@@ -6042,7 +6143,6 @@ fn emit_translate_public_flat_value(
                 inner,
                 source,
                 destination,
-                to_public,
             )?;
         }
         _ => {
@@ -6056,205 +6156,6 @@ fn emit_translate_public_flat_value(
     }
     Ok(())
 }
-
-fn emit_store_public_result(
-    instructions: &mut InstructionSink<'_>,
-    module: &RuntimeModule,
-    runtime_layouts: &RuntimeTypeLayouts,
-    runtime_type_id: usize,
-    public_type: &AbiType,
-    source: &[u32],
-    destination: CanonicalDestination,
-) -> Result<(), String> {
-    let CanonicalDestination { pointer, offset } = destination;
-    let runtime_type = module.types.get(runtime_type_id).ok_or_else(|| {
-        format!(
-            "{}: public result references unknown runtime type {runtime_type_id}",
-            module.source
-        )
-    })?;
-    match (runtime_type, public_type) {
-        (
-            RuntimeType::Unit
-            | RuntimeType::SignedInteger64
-            | RuntimeType::Resource { .. }
-            | RuntimeType::Float32
-            | RuntimeType::Float64
-            | RuntimeType::Boolean
-            | RuntimeType::Text
-            | RuntimeType::Store { .. }
-            | RuntimeType::Vector { .. }
-            | RuntimeType::Mask { .. },
-            AbiType::Unit
-            | AbiType::Vector128
-            | AbiType::SignedInteger64
-            | AbiType::Resource { .. }
-            | AbiType::Float32
-            | AbiType::Float64
-            | AbiType::Boolean
-            | AbiType::Text
-            | AbiType::Array { .. },
-        ) => {
-            let mut flat_index = 0;
-            emit_store_canonical_result(
-                instructions,
-                public_type,
-                source,
-                &mut flat_index,
-                pointer,
-                offset,
-            )?;
-            if flat_index != source.len() {
-                return Err(format!(
-                    "{}: public {} consumed {flat_index} of {} runtime values",
-                    module.source,
-                    abi_kind(public_type),
-                    source.len()
-                ));
-            }
-        }
-        (
-            RuntimeType::Sealed {
-                representation_type,
-                ..
-            },
-            AbiType::Sealed { inner, .. },
-        )
-        | (
-            RuntimeType::Callback {
-                environment_type: representation_type,
-                ..
-            },
-            AbiType::Callback {
-                environment: inner, ..
-            },
-        ) => emit_store_public_result(
-            instructions,
-            module,
-            runtime_layouts,
-            *representation_type,
-            inner,
-            source,
-            destination,
-        )?,
-        (
-            RuntimeType::Product { fields, .. },
-            AbiType::Record {
-                fields: public_fields,
-            },
-        ) => {
-            let mut runtime_offsets = BTreeMap::new();
-            let mut runtime_offset = 0;
-            for field in fields {
-                let width = runtime_layouts.flattened(module, field.type_id)?.len();
-                runtime_offsets.insert(field.name.as_str(), (field.type_id, runtime_offset, width));
-                runtime_offset += width;
-            }
-            if runtime_offset != source.len() {
-                return Err(format!(
-                    "{}: runtime record has {runtime_offset} flattened values, received {}",
-                    module.source,
-                    source.len()
-                ));
-            }
-            for field in record_layout(public_fields) {
-                let (field_type_id, field_offset, field_width) =
-                    runtime_offsets.get(field.name).ok_or_else(|| {
-                        format!(
-                            "{}: runtime record omitted public field {}",
-                            module.source, field.name
-                        )
-                    })?;
-                emit_store_public_result(
-                    instructions,
-                    module,
-                    runtime_layouts,
-                    *field_type_id,
-                    field.type_,
-                    &source[*field_offset..*field_offset + *field_width],
-                    CanonicalDestination {
-                        pointer,
-                        offset: offset + field.offset,
-                    },
-                )?;
-            }
-        }
-        (
-            RuntimeType::Sum { cases, .. },
-            AbiType::Variant {
-                cases: public_cases,
-            },
-        ) => {
-            let tag = source
-                .first()
-                .ok_or_else(|| format!("{}: runtime variant omitted its tag", module.source))?;
-            let layout = variant_layout(public_cases);
-            for (runtime_case_index, runtime_case) in cases.iter().enumerate() {
-                let public_case_index = public_cases
-                    .iter()
-                    .position(|candidate| candidate.name == runtime_case.name)
-                    .ok_or_else(|| {
-                        format!(
-                            "{}: public variant omitted runtime case {}",
-                            module.source, runtime_case.name
-                        )
-                    })?;
-                instructions
-                    .local_get(*tag)
-                    .i32_const(runtime_case_index as i32)
-                    .i32_eq()
-                    .if_(BlockType::Empty)
-                    .local_get(pointer)
-                    .i32_const(public_case_index as i32);
-                let memory_argument = wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: layout.discriminant_size.trailing_zeros(),
-                    memory_index: 0,
-                };
-                match layout.discriminant_size {
-                    1 => {
-                        instructions.i32_store8(memory_argument);
-                    }
-                    2 => {
-                        instructions.i32_store16(memory_argument);
-                    }
-                    4 => {
-                        instructions.i32_store(memory_argument);
-                    }
-                    size => return Err(format!("unsupported variant discriminant size {size}")),
-                }
-                if let Some(payload) = &public_cases[public_case_index].payload {
-                    let payload_width = runtime_layouts
-                        .flattened(module, runtime_case.payload_type)?
-                        .len();
-                    emit_store_public_result(
-                        instructions,
-                        module,
-                        runtime_layouts,
-                        runtime_case.payload_type,
-                        payload,
-                        &source[1..1 + payload_width],
-                        CanonicalDestination {
-                            pointer,
-                            offset: offset + layout.payload_offset,
-                        },
-                    )?;
-                }
-                instructions.end();
-            }
-        }
-        _ => {
-            return Err(format!(
-                "{}: runtime {} cannot use public {} layout",
-                module.source,
-                runtime_kind(runtime_type),
-                abi_kind(public_type)
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn emit_store_canonical_result(
     instructions: &mut InstructionSink<'_>,
     type_: &AbiType,
@@ -6385,100 +6286,6 @@ fn emit_store_canonical_result(
         }
     }
     Ok(())
-}
-
-fn emit_validate_canonical_texts(
-    instructions: &mut InstructionSink<'_>,
-    type_: &AbiType,
-    locals: &[u32],
-    flat_index: &mut usize,
-    scratch_end: u32,
-    utf8_validator: u32,
-) -> Result<(), String> {
-    match type_ {
-        AbiType::Unit => {}
-        AbiType::SignedInteger64 | AbiType::Float32 | AbiType::Float64 | AbiType::Boolean => {
-            *flat_index += 1;
-        }
-        AbiType::Text => {
-            let pointer = locals[*flat_index];
-            let length = locals[*flat_index + 1];
-            emit_text_bounds_check(instructions, pointer, length, scratch_end);
-            instructions
-                .local_get(pointer)
-                .local_get(length)
-                .call(utf8_validator);
-            *flat_index += 2;
-        }
-        AbiType::Record { fields } => {
-            for field in record_layout(fields) {
-                emit_validate_canonical_texts(
-                    instructions,
-                    field.type_,
-                    locals,
-                    flat_index,
-                    scratch_end,
-                    utf8_validator,
-                )?;
-            }
-        }
-        AbiType::Sealed { inner, .. }
-        | AbiType::Callback {
-            environment: inner, ..
-        } => {
-            emit_validate_canonical_texts(
-                instructions,
-                inner,
-                locals,
-                flat_index,
-                scratch_end,
-                utf8_validator,
-            )?;
-        }
-        _ => {
-            return Err(format!(
-                "indirect dynamic {} host results are not validated yet",
-                abi_kind(type_)
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn emit_text_bounds_check(
-    instructions: &mut InstructionSink<'_>,
-    pointer: u32,
-    length: u32,
-    scratch_end: u32,
-) {
-    instructions
-        .local_get(length)
-        .i32_eqz()
-        .if_(BlockType::Empty)
-        .else_()
-        .local_get(pointer)
-        .i32_eqz()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(pointer)
-        .local_get(length)
-        .i32_add()
-        .local_tee(scratch_end)
-        .local_get(pointer)
-        .i32_lt_u()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(scratch_end)
-        .memory_size(0)
-        .i32_const(16)
-        .i32_shl()
-        .i32_gt_u()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .end();
 }
 
 fn text_scalar_count_function() -> Function {
@@ -6875,6 +6682,7 @@ fn i64_to_text_function(realloc: u32) -> Function {
         .i32_const(20)
         .local_get(cursor)
         .i32_sub()
+        .local_get(allocation)
         .end();
     function
 }
@@ -6930,297 +6738,57 @@ fn add_i32_global(globals: &mut GlobalSection, value: i32, mutable: bool) {
     );
 }
 
-fn realloc_function(heap_start: u32) -> Function {
-    let mut function = Function::new([(6, ValType::I32)]);
-    let mut instructions = function.instructions();
-    let new_pointer = 4;
-    let end_pointer = 5;
-    let required_pages = 6;
-    let copy_length = 7;
-    let old_capacity = 8;
-    let new_capacity = 9;
-    instructions
-        .local_get(2)
-        .i32_const(1)
-        .i32_ge_s()
-        .local_get(2)
-        .i32_const(16)
-        .i32_le_s()
-        .i32_and()
-        .local_get(2)
-        .local_get(2)
-        .i32_const(1)
-        .i32_sub()
-        .i32_and()
-        .i32_eqz()
-        .i32_and()
-        .i32_eqz()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(3)
-        .i32_eqz()
-        .if_(BlockType::Result(ValType::I32))
-        .i32_const(0)
-        .else_()
-        .i32_const(0)
-        .local_set(old_capacity)
-        .local_get(0)
-        .i32_eqz()
-        .i32_eqz()
-        .local_get(0)
-        .i32_const(heap_start as i32)
-        .i32_ge_u()
-        .i32_and()
-        .if_(BlockType::Empty)
-        .local_get(0)
-        .i32_const(4)
-        .i32_sub()
-        .i32_load(wasm_encoder::MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        })
-        .local_set(old_capacity)
-        .end()
-        .local_get(old_capacity)
-        .i32_eqz()
-        .i32_eqz()
-        .local_get(3)
-        .local_get(old_capacity)
-        .i32_le_u()
-        .i32_and()
-        .if_(BlockType::Result(ValType::I32))
-        .local_get(0)
-        .else_()
-        .local_get(3)
-        .local_set(new_capacity)
-        .local_get(old_capacity)
-        .i32_const(i32::MAX)
-        .i32_le_u()
-        .if_(BlockType::Empty)
-        .local_get(old_capacity)
-        .i32_const(2)
-        .i32_mul()
-        .local_get(new_capacity)
-        .i32_gt_u()
-        .if_(BlockType::Empty)
-        .local_get(old_capacity)
-        .i32_const(2)
-        .i32_mul()
-        .local_set(new_capacity)
-        .end()
-        .end()
-        .local_get(new_capacity)
-        .i32_const(16)
-        .i32_lt_u()
-        .if_(BlockType::Empty)
-        .i32_const(16)
-        .local_set(new_capacity)
-        .end()
-        .local_get(old_capacity)
-        .i32_eqz()
-        .i32_eqz()
-        .local_get(0)
-        .local_get(old_capacity)
-        .i32_add()
-        .global_get(HEAP_GLOBAL)
-        .i32_eq()
-        .i32_and()
-        .if_(BlockType::Result(ValType::I32))
-        .local_get(0)
-        .local_get(new_capacity)
-        .i32_add()
-        .local_tee(end_pointer)
-        .local_get(0)
-        .i32_lt_u()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(end_pointer)
-        .memory_size(0)
-        .i32_const(16)
-        .i32_shl()
-        .i32_gt_u()
-        .if_(BlockType::Empty)
-        .local_get(end_pointer)
-        .i32_const(1)
-        .i32_sub()
-        .i32_const(16)
-        .i32_shr_u()
-        .i32_const(1)
-        .i32_add()
-        .local_tee(required_pages)
-        .memory_size(0)
-        .i32_sub()
-        .memory_grow(0)
-        .i32_const(-1)
-        .i32_eq()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .end()
-        .local_get(0)
-        .i32_const(4)
-        .i32_sub()
-        .local_get(new_capacity)
-        .i32_store(wasm_encoder::MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        })
-        .local_get(end_pointer)
-        .global_set(HEAP_GLOBAL)
-        .local_get(0)
-        .else_()
-        .global_get(HEAP_GLOBAL)
-        .i32_const(4)
-        .i32_add()
-        .local_tee(new_pointer)
-        .global_get(HEAP_GLOBAL)
-        .i32_lt_u()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(new_pointer)
-        .local_get(2)
-        .i32_const(1)
-        .i32_sub()
-        .i32_add()
-        .local_get(2)
-        .i32_const(-1)
-        .i32_mul()
-        .i32_and()
-        .local_tee(new_pointer)
-        .local_get(new_capacity)
-        .i32_add()
-        .local_tee(end_pointer)
-        .local_get(new_pointer)
-        .i32_lt_u()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .local_get(end_pointer)
-        .memory_size(0)
-        .i32_const(16)
-        .i32_shl()
-        .i32_gt_u()
-        .if_(BlockType::Empty)
-        .local_get(end_pointer)
-        .i32_const(1)
-        .i32_sub()
-        .i32_const(16)
-        .i32_shr_u()
-        .i32_const(1)
-        .i32_add()
-        .local_tee(required_pages)
-        .memory_size(0)
-        .i32_sub()
-        .memory_grow(0)
-        .i32_const(-1)
-        .i32_eq()
-        .if_(BlockType::Empty)
-        .unreachable()
-        .end()
-        .end()
-        .local_get(0)
-        .if_(BlockType::Empty)
-        .local_get(1)
-        .local_get(3)
-        .i32_lt_u()
-        .if_(BlockType::Result(ValType::I32))
-        .local_get(1)
-        .else_()
-        .local_get(3)
-        .end()
-        .local_set(copy_length)
-        .local_get(new_pointer)
-        .local_get(0)
-        .local_get(copy_length)
-        .memory_copy(0, 0)
-        .end()
-        .local_get(new_pointer)
-        .i32_const(4)
-        .i32_sub()
-        .local_get(new_capacity)
-        .i32_store(wasm_encoder::MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        })
-        .local_get(end_pointer)
-        .global_set(HEAP_GLOBAL)
-        .local_get(new_pointer)
-        .end()
-        .end()
-        .end()
-        .end();
-    function
+fn allocation_mem(offset: u32) -> wasm_encoder::MemArg {
+    wasm_encoder::MemArg {
+        offset: u64::from(offset),
+        align: 2,
+        memory_index: 0,
+    }
 }
 
-fn post_return_function(call_id: u32) -> Function {
-    let mut function = Function::new(Vec::new());
-    function
-        .instructions()
-        .global_get(ACTIVE_EXPORT_GLOBAL)
+fn post_return_function(call_id: u32, helpers: DynamicHelpers) -> Function {
+    let mut body = Function::new([]);
+    let mut ins = body.instructions();
+    ins.local_get(0)
+        .call(helpers.allocator.select)
+        .global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_ACTIVE_EXPORT))
         .i32_const(call_id as i32)
-        .i32_eq()
-        .i32_eqz()
+        .i32_ne()
         .if_(BlockType::Empty)
         .unreachable()
         .end()
-        .global_get(RESULT_POINTER_GLOBAL)
-        .local_get(0)
-        .i32_eq()
-        .i32_eqz()
+        .global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_RESULT))
+        .local_get(1)
+        .i32_ne()
         .if_(BlockType::Empty)
         .unreachable()
         .end();
-    finish_call(&mut function.instructions());
-    function.instructions().end();
-    function
+    finish_call(&mut ins, helpers);
+    ins.end();
+    body
 }
 
-fn begin_call(instructions: &mut InstructionSink<'_>, call_id: u32) {
-    instructions
-        .global_get(ACTIVE_EXPORT_GLOBAL)
-        .i32_eqz()
-        .i32_eqz()
+fn begin_call(ins: &mut InstructionSink<'_>, call_id: u32, helpers: DynamicHelpers) {
+    ins.global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_ACTIVE_EXPORT))
         .if_(BlockType::Empty)
         .unreachable()
         .end()
-        .global_get(HEAP_GLOBAL)
-        .global_set(HEAP_CHECKPOINT_GLOBAL)
+        .global_get(helpers.allocation_globals.current_scope)
         .i32_const(call_id as i32)
-        .global_set(ACTIVE_EXPORT_GLOBAL);
+        .i32_store(allocation_mem(allocation::SCOPE_ACTIVE_EXPORT));
 }
 
-fn finish_call(instructions: &mut InstructionSink<'_>) {
-    instructions
-        .global_get(HEAP_CHECKPOINT_GLOBAL)
-        .global_set(HEAP_GLOBAL)
-        .i32_const(0)
-        .global_set(RESULT_POINTER_GLOBAL)
-        .i32_const(0)
-        .global_set(ACTIVE_EXPORT_GLOBAL);
-}
-
-fn abi_kind(type_: &AbiType) -> &'static str {
-    match type_ {
-        AbiType::Unit => "unit",
-        AbiType::InternalPointer => "internal-pointer",
-        AbiType::Vector128 => "vector-128",
-        AbiType::SignedInteger64 => "signed-integer-64",
-        AbiType::Resource { .. } => "resource",
-        AbiType::Float32 => "float-32",
-        AbiType::Float64 => "float-64",
-        AbiType::Boolean => "boolean",
-        AbiType::Text => "text",
-        AbiType::Array { .. } => "array",
-        AbiType::Record { .. } => "record",
-        AbiType::Variant { .. } => "variant",
-        AbiType::Sealed { .. } => "sealed",
-        AbiType::Callback { .. } => "callback",
+fn finish_call(ins: &mut InstructionSink<'_>, helpers: DynamicHelpers) {
+    ins.global_get(helpers.allocation_globals.current_scope)
+        .i32_load(allocation_mem(allocation::SCOPE_TOKEN))
+        .call(helpers.allocator.clear_temporaries);
+    for offset in [allocation::SCOPE_RESULT, allocation::SCOPE_ACTIVE_EXPORT] {
+        ins.global_get(helpers.allocation_globals.current_scope)
+            .i32_const(0)
+            .i32_store(allocation_mem(offset));
     }
 }
 
@@ -7316,11 +6884,9 @@ fn memory_layout(type_: &AbiType) -> MemoryLayout {
 fn record_layout(fields: &[AbiField]) -> Vec<LaidOutField<'_>> {
     // Borrow the types: cloning each nested suffix is quadratic even after
     // eliminating repeated recursive layout queries.
-    let mut fields = fields.iter().collect::<Vec<_>>();
-    fields.sort_by(|left, right| left.name.cmp(&right.name));
     let mut offset = 0;
     fields
-        .into_iter()
+        .iter()
         .map(|field| {
             let layout = memory_layout(&field.type_);
             offset = align_to(offset, layout.alignment);
@@ -7370,7 +6936,8 @@ fn align_to(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{RuntimeBlock, RuntimeBlockParameter, RuntimeCase, RuntimeSpan};
+    use crate::continuation::{Graph, Operation};
+    use crate::hir::{RuntimeCase, RuntimeSpan};
 
     #[test]
     fn nested_record_memory_layout_visits_each_type_once() {
@@ -7397,7 +6964,7 @@ mod tests {
     }
 
     #[test]
-    fn record_layout_borrows_nested_types_and_preserves_sorted_padding() {
+    fn record_layout_borrows_types_and_preserves_the_selected_field_order() {
         let fields = vec![
             AbiField {
                 name: "z".to_owned(),
@@ -7418,9 +6985,9 @@ mod tests {
                 .iter()
                 .map(|field| (field.name, field.offset))
                 .collect::<Vec<_>>(),
-            vec![("a", 0), ("b", 8), ("z", 16)]
+            vec![("z", 0), ("b", 8), ("a", 16)]
         );
-        assert!(std::ptr::eq(layout[0].type_, &fields[2].type_));
+        assert!(std::ptr::eq(layout[0].type_, &fields[0].type_));
         assert!(std::ptr::eq(layout[1].type_, &fields[1].type_));
         let record = AbiType::Record { fields };
         assert_eq!(
@@ -7484,10 +7051,11 @@ mod tests {
             ],
             signatures: Vec::new(),
             static_stores: Vec::new(),
-            functions: Vec::new(),
+            graph: Graph {
+                functions: Vec::new(),
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -7627,18 +7195,25 @@ mod tests {
     #[test]
     fn bounded_switch_with_a_shared_join_is_structured() {
         let function = runtime_function(vec![
-            RuntimeBlock {
-                id: 0,
+            RuntimeContinuation {
+                captures: Vec::new(),
+                span: span(),
+                id: ContinuationId(0),
                 parameters: vec![parameter(0)],
-                operations: Vec::new(),
-                terminator: RuntimeTerminator::Switch {
-                    selector: 0,
-                    cases: vec![crate::hir::RuntimeSwitchCase {
-                        value: WireConstant::SignedInteger32(0),
-                        target: 1,
-                    }],
-                    fallback: 2,
-                    span: span(),
+                instructions: Vec::new(),
+                transition: RuntimeTransition::Switch {
+                    selector: ValueId(0),
+                    cases: vec![(
+                        WireConstant::SignedInteger32(0),
+                        Edge {
+                            target: ContinuationId(1),
+                            arguments: Vec::new(),
+                        },
+                    )],
+                    fallback: Edge {
+                        target: ContinuationId(2),
+                        arguments: Vec::new(),
+                    },
                 },
             },
             branch_block(1, 3),
@@ -7667,102 +7242,6 @@ mod tests {
     }
 
     #[test]
-    fn loop_region_accepts_unchanged_owned_parameters() {
-        let mut owned = parameter(0);
-        owned.ownership = "owned";
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
-            parameters: vec![owned],
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Branch {
-                target: 0,
-                arguments: vec![0],
-                span: span(),
-            },
-        }]);
-
-        assert!(iteration_region_eligible(&function));
-    }
-
-    #[test]
-    fn loop_region_rejects_replaced_owned_parameters() {
-        let mut owned = parameter(0);
-        owned.ownership = "owned";
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
-            parameters: vec![owned],
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Branch {
-                target: 0,
-                arguments: vec![1],
-                span: span(),
-            },
-        }]);
-
-        assert!(!iteration_region_eligible(&function));
-    }
-
-    #[test]
-    fn bounded_structured_loop_restores_its_heap_region() {
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
-            parameters: vec![parameter(0)],
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Branch {
-                target: 0,
-                arguments: vec![0],
-                span: span(),
-            },
-        }]);
-        let module = RuntimeModule {
-            format: "blot-runtime-hir",
-            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
-            source: "iteration-region-test".to_owned(),
-            types: vec![RuntimeType::Unit, RuntimeType::Boolean],
-            signatures: vec![crate::hir::RuntimeSignature {
-                parameters: vec![1],
-                result: 1,
-                effects: Vec::new(),
-            }],
-            static_stores: Vec::new(),
-            functions: vec![function],
-            capabilities: Vec::new(),
-            links: Vec::new(),
-            resumable_roots: Vec::new(),
-            exports: Vec::new(),
-        };
-        let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
-        let manifest =
-            build_manifest(&module, &runtime_layouts).expect("test manifest should close");
-        let wasm = emit_dynamic_module(&module, &runtime_layouts, &manifest, b"{}")
-            .expect("iteration region should emit");
-        let body = wasmparser::Parser::new(0)
-            .parse_all(&wasm)
-            .filter_map(
-                |payload| match payload.expect("emitted Wasm should parse") {
-                    wasmparser::Payload::CodeSectionEntry(body) => Some(body),
-                    _ => None,
-                },
-            )
-            .nth(1)
-            .expect("module should contain realloc and the runtime function");
-        let restores_heap = body
-            .get_operators_reader()
-            .expect("loop operators should parse")
-            .into_iter()
-            .any(|operator| {
-                matches!(
-                    operator.expect("operator should parse"),
-                    wasmparser::Operator::GlobalSet {
-                        global_index: HEAP_GLOBAL
-                    }
-                )
-            });
-
-        assert!(restores_heap);
-    }
-
-    #[test]
     fn single_block_function_emits_without_a_dispatcher() {
         let mut entry = return_block(0);
         entry.parameters.push(parameter(0));
@@ -7782,10 +7261,11 @@ mod tests {
                 effects: Vec::new(),
             }],
             static_stores: Vec::new(),
-            functions: vec![function],
+            graph: Graph {
+                functions: vec![function],
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -7801,8 +7281,8 @@ mod tests {
                     _ => None,
                 },
             )
-            .nth(1)
-            .expect("module should contain realloc and the runtime function");
+            .last()
+            .expect("module ends with its sole internal runtime function");
         let operators = body
             .get_operators_reader()
             .expect("acyclic operators should parse")
@@ -7819,34 +7299,43 @@ mod tests {
     #[test]
     fn generic_dispatch_uses_one_indexed_branch_table() {
         let function = runtime_function(vec![
-            RuntimeBlock {
-                id: 0,
+            RuntimeContinuation {
+                captures: Vec::new(),
+                span: span(),
+                id: ContinuationId(0),
                 parameters: vec![parameter(0)],
-                operations: Vec::new(),
-                terminator: RuntimeTerminator::Branch {
-                    target: 1,
-                    arguments: vec![0],
-                    span: span(),
+                instructions: Vec::new(),
+                transition: RuntimeTransition::Jump {
+                    edge: Edge {
+                        target: ContinuationId(1),
+                        arguments: vec![Argument::Value(ValueId(0))],
+                    },
                 },
             },
-            RuntimeBlock {
-                id: 1,
+            RuntimeContinuation {
+                captures: Vec::new(),
+                span: span(),
+                id: ContinuationId(1),
                 parameters: vec![parameter(1)],
-                operations: Vec::new(),
-                terminator: RuntimeTerminator::Branch {
-                    target: 2,
-                    arguments: vec![1],
-                    span: span(),
+                instructions: Vec::new(),
+                transition: RuntimeTransition::Jump {
+                    edge: Edge {
+                        target: ContinuationId(2),
+                        arguments: vec![Argument::Value(ValueId(1))],
+                    },
                 },
             },
-            RuntimeBlock {
-                id: 2,
+            RuntimeContinuation {
+                captures: Vec::new(),
+                span: span(),
+                id: ContinuationId(2),
                 parameters: vec![parameter(2)],
-                operations: Vec::new(),
-                terminator: RuntimeTerminator::Branch {
-                    target: 1,
-                    arguments: vec![2],
-                    span: span(),
+                instructions: Vec::new(),
+                transition: RuntimeTransition::Jump {
+                    edge: Edge {
+                        target: ContinuationId(1),
+                        arguments: vec![Argument::Value(ValueId(2))],
+                    },
                 },
             },
         ]);
@@ -7861,10 +7350,11 @@ mod tests {
                 effects: Vec::new(),
             }],
             static_stores: Vec::new(),
-            functions: vec![function],
+            graph: Graph {
+                functions: vec![function],
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -7880,8 +7370,8 @@ mod tests {
                     _ => None,
                 },
             )
-            .nth(1)
-            .expect("module should contain realloc and the runtime function");
+            .last()
+            .expect("module ends with its sole internal runtime function");
         let operators = body
             .get_operators_reader()
             .expect("dispatcher operators should parse")
@@ -7930,38 +7420,49 @@ mod tests {
             ],
             signatures: Vec::new(),
             static_stores: Vec::new(),
-            functions: Vec::new(),
+            graph: Graph {
+                functions: Vec::new(),
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
         let mut left = plain_operation(1, Vec::new());
-        left.kind = "constant";
-        left.type_id = 1;
-        left.value = Some(WireConstant::Float32(1.5));
+        left.operation.kind = "constant";
+        left.definition.type_id = TypeId(1);
+        left.operation.value = Some(WireConstant::Float32(1.5));
         let mut right = plain_operation(2, Vec::new());
-        right.kind = "constant";
-        right.type_id = 2;
-        right.value = Some(WireConstant::SignedInteger64("7".to_owned()));
+        right.operation.kind = "constant";
+        right.definition.type_id = TypeId(2);
+        right.operation.value = Some(WireConstant::SignedInteger64("7".to_owned()));
         let mut pair = plain_operation(3, vec![2, 1]);
-        pair.kind = "product.make";
-        pair.type_id = 3;
+        pair.operation.kind = "product.make";
+        pair.definition.type_id = TypeId(3);
         let mut store = plain_operation(4, vec![3]);
-        store.kind = "store.literal";
-        store.type_id = 4;
-        let definitions = HashMap::from([(1, &left), (2, &right), (3, &pair), (4, &store)]);
+        store.operation.kind = "store.literal";
+        store.definition.type_id = TypeId(4);
+        let definitions = HashMap::from([
+            (ValueId(1), &left),
+            (ValueId(2), &right),
+            (ValueId(3), &pair),
+            (ValueId(4), &store),
+        ]);
 
-        let (alignment, bytes, length) =
-            closed_store_literal_bytes(&module, 0, &store, &definitions, &HashMap::new())
-                .expect("static product should serialize")
-                .expect("closed product should be pooled");
+        let (alignment, bytes, length) = closed_store_literal_bytes(
+            &module,
+            FunctionId(0),
+            &store,
+            &definitions,
+            &HashMap::new(),
+        )
+        .expect("static product should serialize")
+        .expect("closed product should be pooled");
 
         assert_eq!(alignment, 8);
         assert_eq!(length, 1);
         assert_eq!(bytes.len(), 16);
-        assert_eq!(&bytes[0..4], &1.5_f32.to_bits().to_le_bytes());
-        assert_eq!(&bytes[8..16], &7_i64.to_le_bytes());
+        assert_eq!(&bytes[0..8], &7_i64.to_le_bytes());
+        assert_eq!(&bytes[8..12], &1.5_f32.to_bits().to_le_bytes());
     }
 
     #[test]
@@ -7973,18 +7474,19 @@ mod tests {
             types: vec![RuntimeType::Unit, RuntimeType::Indirect { target_type: 0 }],
             signatures: Vec::new(),
             static_stores: Vec::new(),
-            functions: Vec::new(),
+            graph: Graph {
+                functions: Vec::new(),
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
         let Err(error) = canonical_type(&module, 1, &mut Vec::new()) else {
-            panic!("a recursive value acquired an ABI 3 layout");
+            panic!("a recursive value acquired an ABI 4 layout");
         };
 
-        assert!(error.contains("cannot cross Blot Core Wasm ABI 3"));
+        assert!(error.contains("cannot cross Blot Core Wasm ABI 4"));
     }
 
     #[test]
@@ -8000,18 +7502,19 @@ mod tests {
             ],
             signatures: Vec::new(),
             static_stores: Vec::new(),
-            functions: Vec::new(),
+            graph: Graph {
+                functions: Vec::new(),
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
         assert!(canonical_type(&module, 2, &mut Vec::new()).is_err());
         let internal = internal_memory_type(&module, 2)
             .expect("Scratch needs a private layout inside indirect carriers");
-        assert_eq!(flattened_type(&internal), vec![ValType::I32; 3]);
-        assert_eq!(memory_layout(&internal).size, 12);
+        assert_eq!(flattened_type(&internal), vec![ValType::I32; 4]);
+        assert_eq!(memory_layout(&internal).size, 16);
     }
 
     #[test]
@@ -8030,10 +7533,11 @@ mod tests {
             ],
             signatures: Vec::new(),
             static_stores: Vec::new(),
-            functions: Vec::new(),
+            graph: Graph {
+                functions: Vec::new(),
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         };
 
@@ -8090,18 +7594,17 @@ mod tests {
 
     #[test]
     fn operation_results_do_not_overwrite_their_operand_locals() {
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
+        let function = runtime_function(vec![RuntimeContinuation {
+            captures: Vec::new(),
+            span: span(),
+            id: ContinuationId(0),
             parameters: Vec::new(),
-            operations: vec![
+            instructions: vec![
                 plain_operation(1, Vec::new()),
                 plain_operation(2, vec![1]),
                 plain_operation(3, vec![2]),
             ],
-            terminator: RuntimeTerminator::Return {
-                value: 3,
-                span: span(),
-            },
+            transition: RuntimeTransition::Return { value: ValueId(3) },
         }]);
         let module = allocation_test_module(function.clone());
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -8111,25 +7614,33 @@ mod tests {
                 .expect("operation chain should allocate");
 
         assert_eq!(allocation.local_types, vec![ValType::I32; 2]);
-        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
-        assert_ne!(allocation.value_locals[&2], allocation.value_locals[&3]);
-        assert_eq!(allocation.value_locals[&1], allocation.value_locals[&3]);
+        assert_ne!(
+            allocation.value_locals[&ValueId(1)],
+            allocation.value_locals[&ValueId(2)]
+        );
+        assert_ne!(
+            allocation.value_locals[&ValueId(2)],
+            allocation.value_locals[&ValueId(3)]
+        );
+        assert_eq!(
+            allocation.value_locals[&ValueId(1)],
+            allocation.value_locals[&ValueId(3)]
+        );
     }
 
     #[test]
     fn simultaneously_live_ssa_values_keep_distinct_wasm_locals() {
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
+        let function = runtime_function(vec![RuntimeContinuation {
+            captures: Vec::new(),
+            span: span(),
+            id: ContinuationId(0),
             parameters: Vec::new(),
-            operations: vec![
+            instructions: vec![
                 plain_operation(1, Vec::new()),
                 plain_operation(2, Vec::new()),
                 plain_operation(3, vec![1, 2]),
             ],
-            terminator: RuntimeTerminator::Return {
-                value: 3,
-                span: span(),
-            },
+            transition: RuntimeTransition::Return { value: ValueId(3) },
         }]);
         let module = allocation_test_module(function.clone());
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
@@ -8139,9 +7650,18 @@ mod tests {
                 .expect("overlapping values should allocate");
 
         assert_eq!(allocation.local_types, vec![ValType::I32; 3]);
-        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&2]);
-        assert_ne!(allocation.value_locals[&1], allocation.value_locals[&3]);
-        assert_ne!(allocation.value_locals[&2], allocation.value_locals[&3]);
+        assert_ne!(
+            allocation.value_locals[&ValueId(1)],
+            allocation.value_locals[&ValueId(2)]
+        );
+        assert_ne!(
+            allocation.value_locals[&ValueId(1)],
+            allocation.value_locals[&ValueId(3)]
+        );
+        assert_ne!(
+            allocation.value_locals[&ValueId(2)],
+            allocation.value_locals[&ValueId(3)]
+        );
     }
 
     #[test]
@@ -8151,13 +7671,14 @@ mod tests {
             .map(|value| plain_operation(value, Vec::new()))
             .collect::<Vec<_>>();
         operations.push(plain_operation(WIDTH + 1, (1..=WIDTH).collect()));
-        let function = runtime_function(vec![RuntimeBlock {
-            id: 0,
+        let function = runtime_function(vec![RuntimeContinuation {
+            captures: Vec::new(),
+            span: span(),
+            id: ContinuationId(0),
             parameters: Vec::new(),
-            operations,
-            terminator: RuntimeTerminator::Return {
-                value: WIDTH + 1,
-                span: span(),
+            instructions: operations,
+            transition: RuntimeTransition::Return {
+                value: ValueId(WIDTH + 1),
             },
         }]);
         let module = allocation_test_module(function.clone());
@@ -8197,72 +7718,49 @@ mod tests {
 
     #[test]
     fn direct_call_return_is_a_tail_call_candidate() {
-        let block = RuntimeBlock {
-            id: 0,
-            parameters: Vec::new(),
-            operations: vec![direct_call_operation(7)],
-            terminator: RuntimeTerminator::Return {
-                value: 7,
-                span: span(),
-            },
-        };
-        let function = runtime_function(vec![block]);
+        let mut result = return_block(1);
+        result.parameters.push(parameter(7));
+        result.transition = RuntimeTransition::Return { value: ValueId(7) };
+        let function = runtime_function(vec![call_continuation(0, 2, 1), result]);
         assert_eq!(
-            direct_tail_call(&function, &function.blocks[0]).map(|candidate| candidate.result),
-            Some(7)
+            direct_tail_call(&function, &function.continuations[0])
+                .map(|candidate| candidate.target),
+            Some(FunctionId(2))
         );
-
         let mut not_tail = function.clone();
-        not_tail.blocks[0].terminator = RuntimeTerminator::Return {
-            value: 8,
-            span: span(),
-        };
-        assert!(direct_tail_call(&not_tail, &not_tail.blocks[0]).is_none());
+        not_tail.continuations[1].transition = RuntimeTransition::Return { value: ValueId(8) };
+        assert!(direct_tail_call(&not_tail, &not_tail.continuations[0]).is_none());
     }
 
     #[test]
     fn direct_call_forwarded_through_empty_join_is_a_tail_call_candidate() {
-        let function = runtime_function(vec![
-            RuntimeBlock {
-                id: 0,
-                parameters: Vec::new(),
-                operations: vec![direct_call_operation(7)],
-                terminator: RuntimeTerminator::Branch {
-                    target: 1,
-                    arguments: vec![7],
-                    span: span(),
-                },
+        let mut join = branch_block(1, 2);
+        join.parameters = vec![parameter(7)];
+        join.transition = RuntimeTransition::Jump {
+            edge: Edge {
+                target: ContinuationId(2),
+                arguments: vec![Argument::Value(ValueId(7))],
             },
-            RuntimeBlock {
-                id: 1,
-                parameters: vec![parameter(8)],
-                operations: Vec::new(),
-                terminator: RuntimeTerminator::Return {
-                    value: 8,
-                    span: span(),
-                },
-            },
-        ]);
-
+        };
+        let mut result = return_block(2);
+        result.parameters = vec![parameter(8)];
+        result.transition = RuntimeTransition::Return { value: ValueId(8) };
+        let function = runtime_function(vec![call_continuation(0, 2, 1), join, result]);
         assert_eq!(
-            direct_tail_call(&function, &function.blocks[0]).map(|candidate| candidate.result),
-            Some(7)
+            direct_tail_call(&function, &function.continuations[0])
+                .map(|candidate| candidate.target),
+            Some(FunctionId(2))
         );
     }
 
     #[test]
     fn directly_called_exported_tail_body_requires_tail_call_feature() {
-        let mut call = direct_call_operation(7);
-        call.function = Some(0);
-        let mut function = runtime_function(vec![RuntimeBlock {
-            id: 0,
-            parameters: vec![parameter(0)],
-            operations: vec![call],
-            terminator: RuntimeTerminator::Return {
-                value: 7,
-                span: span(),
-            },
-        }]);
+        let mut call = call_continuation(0, 0, 1);
+        call.parameters = vec![parameter(0)];
+        let mut result = return_block(1);
+        result.parameters = vec![parameter(7)];
+        result.transition = RuntimeTransition::Return { value: ValueId(7) };
+        let mut function = runtime_function(vec![call, result]);
         function.name = "exported-tail-body".to_owned();
         let mut module = allocation_test_module(function);
         module.signatures[0].parameters = vec![1];
@@ -8274,61 +7772,55 @@ mod tests {
             signature: 0,
             ownership: "plain",
         });
-
         let runtime_layouts = RuntimeTypeLayouts::new(&module).expect("layouts should close");
         let features =
             required_wasm_features(&module, &runtime_layouts).expect("features should close");
-
         assert!(features.contains(&"tail-call"));
         assert_eq!(
             internally_emitted_runtime_function_ids(&module),
-            BTreeSet::from([0])
+            BTreeSet::from([FunctionId(0)])
         );
     }
 
-    fn direct_call_operation(result: usize) -> RuntimeOperation {
-        RuntimeOperation {
-            kind: "call.direct",
-            result,
-            type_id: 1,
-            operands: vec![0],
-            ownership: "plain",
+    fn call_continuation(id: usize, target: usize, next: usize) -> RuntimeContinuation {
+        RuntimeContinuation {
+            id: ContinuationId(id),
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            instructions: Vec::new(),
             span: span(),
-            value: None,
-            update: None,
-            case: None,
-            capability: None,
-            operation: None,
-            operator: None,
-            conversion: None,
-            lane: None,
-            field: None,
-            function: Some(2),
-            signature: None,
-            static_store: None,
+            transition: RuntimeTransition::Call {
+                target: CallTarget::Function {
+                    function: FunctionId(target),
+                },
+                signature: SignatureId(0),
+                arguments: vec![ValueId(0)],
+                next: Edge {
+                    target: ContinuationId(next),
+                    arguments: vec![Argument::Result],
+                },
+                suspends: false,
+            },
         }
     }
 
-    fn plain_operation(result: usize, operands: Vec<usize>) -> RuntimeOperation {
-        RuntimeOperation {
-            kind: "scalar",
-            result,
-            type_id: 1,
-            operands,
-            ownership: "plain",
-            span: span(),
-            value: None,
-            update: None,
-            case: None,
-            capability: None,
-            operation: None,
-            operator: Some("boolean.not"),
-            conversion: None,
-            lane: None,
-            field: None,
-            function: None,
-            signature: None,
-            static_store: None,
+    fn plain_operation(result: usize, operands: Vec<usize>) -> RuntimeInstruction {
+        RuntimeInstruction {
+            definition: parameter(result),
+            operands: operands.into_iter().map(ValueId).collect(),
+            operation: Operation {
+                kind: "scalar",
+                value: None,
+                update: None,
+                case: None,
+                operator: Some("boolean.not"),
+                conversion: None,
+                lane: None,
+                field: None,
+                function: None,
+                signature: None,
+                static_store: None,
+            },
         }
     }
 
@@ -8344,71 +7836,81 @@ mod tests {
                 effects: Vec::new(),
             }],
             static_stores: Vec::new(),
-            functions: vec![function],
+            graph: Graph {
+                functions: vec![function],
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: Vec::new(),
         }
     }
 
-    fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
+    fn runtime_function(continuations: Vec<RuntimeContinuation>) -> RuntimeFunction {
         RuntimeFunction {
-            id: 0,
+            id: FunctionId(0),
             name: "structured-loop-test".to_owned(),
-            signature: 0,
+            signature: SignatureId(0),
             reuse: None,
-            entry_block: 0,
-            blocks,
+            entry: ContinuationId(0),
+            continuations,
+            suspends: false,
+            framed: false,
             span: span(),
         }
     }
 
-    fn conditional_block(id: usize, consequent: usize, alternate: usize) -> RuntimeBlock {
-        RuntimeBlock {
-            id,
+    fn conditional_block(id: usize, consequent: usize, alternate: usize) -> RuntimeContinuation {
+        RuntimeContinuation {
+            id: ContinuationId(id),
             parameters: vec![parameter(id)],
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Conditional {
-                condition: id,
-                consequent,
-                consequent_arguments: Vec::new(),
-                alternate,
-                alternate_arguments: Vec::new(),
-                span: span(),
+            captures: Vec::new(),
+            instructions: Vec::new(),
+            span: span(),
+            transition: RuntimeTransition::Branch {
+                condition: ValueId(id),
+                consequent: Edge {
+                    target: ContinuationId(consequent),
+                    arguments: Vec::new(),
+                },
+                alternate: Edge {
+                    target: ContinuationId(alternate),
+                    arguments: Vec::new(),
+                },
             },
         }
     }
 
-    fn branch_block(id: usize, target: usize) -> RuntimeBlock {
-        RuntimeBlock {
-            id,
+    fn branch_block(id: usize, target: usize) -> RuntimeContinuation {
+        RuntimeContinuation {
+            id: ContinuationId(id),
             parameters: Vec::new(),
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Branch {
-                target,
-                arguments: Vec::new(),
-                span: span(),
+            captures: Vec::new(),
+            instructions: Vec::new(),
+            span: span(),
+            transition: RuntimeTransition::Jump {
+                edge: Edge {
+                    target: ContinuationId(target),
+                    arguments: Vec::new(),
+                },
             },
         }
     }
 
-    fn return_block(id: usize) -> RuntimeBlock {
-        RuntimeBlock {
-            id,
+    fn return_block(id: usize) -> RuntimeContinuation {
+        RuntimeContinuation {
+            id: ContinuationId(id),
             parameters: Vec::new(),
-            operations: Vec::new(),
-            terminator: RuntimeTerminator::Return {
-                value: 0,
-                span: span(),
-            },
+            captures: Vec::new(),
+            instructions: Vec::new(),
+            span: span(),
+            transition: RuntimeTransition::Return { value: ValueId(0) },
         }
     }
 
-    fn parameter(value: usize) -> RuntimeBlockParameter {
-        RuntimeBlockParameter {
-            value,
-            type_id: 1,
+    fn parameter(value: usize) -> RuntimeParameter {
+        RuntimeParameter {
+            value: ValueId(value),
+            type_id: TypeId(1),
             ownership: "plain",
             span: span(),
         }

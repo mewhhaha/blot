@@ -101,11 +101,14 @@ Failure to prove a true proposition is a conservative rejection of the
 proof-required operation. It never licenses unchecked lowering.
 
 The production affine solver admits at most 512 immutable terms and 2,048
-directed difference edges in one module proof context. Once either bound is
-reached it stops retaining new facts. A later proof-required operation reports
-`BLOT_REFINEMENT_BUDGET` with remediation to split the proof into a verified
-helper or shorten the set of simultaneously live affine facts; truncated facts
-are never interpreted as proof.
+directed difference edges in one array-index proof. The immutable context
+indexes incident edges by variable identity. A query follows dependencies from
+its index and array length; the constant-zero node terminates traversal and does
+not connect unrelated literal bindings. Context construction does not truncate
+facts. Exhausting the relevant proof budget reports `BLOT_REFINEMENT_BUDGET` as
+a compiler limit, with remediation to split the relation into a verified helper.
+It does not establish that the program is invalid, and partial proofs never
+authorize access.
 
 Entailment treats an edge `right -> left` with weight `bound` as the difference
 fact `left - right <= bound`. One proof query runs shortest-path relaxation only
@@ -209,11 +212,21 @@ path but cannot duplicate it. A borrow preserves the ownership tree but cannot
 recover or move the owning parent, escape its lexical region, or cross the host
 boundary.
 
-At a possibly suspending call, ownership checking rejects every unconsumed
-borrow in the current lexical function scope. Direct operation contracts decide
-their own suspension mode; other calls consult their checked effect row. Open
-rows and effect declarations unavailable during certificate replay cannot prove
-synchronous execution. This is a lexical restriction, not last-use liveness.
+At a possibly suspending call, ownership checking rejects borrows live in the
+continuation and borrowed operands retained by the surrounding expression.
+Liveness uses lexical pattern identities and the same demanded declarations as
+evaluation. Aliases and lazy closure captures preserve dependency on their
+borrowed roots, even when the first capture use occurs after the call. Branch
+alternatives are analyzed separately; uses after a join apply to both paths.
+Recursive closure dependencies include subsequent iterations of desugared loops.
+An unused lazy declaration does not extend a borrow's lifetime.
+
+Direct operation contracts decide their own suspension mode; other calls consult
+their checked effect row. Open rows and effect declarations unavailable during
+certificate replay cannot prove synchronous execution. Borrow liveness remains
+separate from type and effect inference and neither consumes a source binding
+nor grants ownership. Compound operands may conservatively retain a source
+borrow until their enclosing expression completes.
 
 A function publishes a type-independent ownership summary describing parameter,
 callback, and result-path use. Passing a linear closure once to a function that

@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ return compare
         const { instance } = await WebAssembly.instantiate(
           Uint8Array.from(artifact.wasm),
         );
-        const compare = instance.exports[exported.name];
+        const compare = scalarExport(instance, exported.name);
         assert.equal(typeof compare, "function");
         if (typeof compare !== "function") {
           throw new Error("missing comparison export");
@@ -74,9 +75,9 @@ return compare
           assert.equal(names[tag as number], expected, `${left}, ${right}`);
         }
         if (precision === "F32") {
-          assert.equal(names[compare(16777216, 16777217)], "Equal");
+          assert.equal(names[Number(compare(16777216, 16777217))], "Equal");
         } else {
-          assert.equal(names[compare(16777216, 16777217)], "Less");
+          assert.equal(names[Number(compare(16777216, 16777217))], "Less");
         }
       },
     );
@@ -117,7 +118,7 @@ return less
         const { instance } = await WebAssembly.instantiate(
           Uint8Array.from(artifact.wasm),
         );
-        const less = instance.exports["blot:default"];
+        const less = scalarExport(instance, "blot:default");
         if (typeof less !== "function") {
           throw new Error("missing comparison export");
         }

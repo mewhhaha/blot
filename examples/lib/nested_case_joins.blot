@@ -1,0 +1,36 @@
+open import "blot:prelude"
+
+const nested :: Int -> (#Wrapped (Option Int) | #Skipped)
+const nested = fn number => case number of
+  0 => #Wrapped #None
+  1 => #Wrapped (#Some number)
+  _ => #Skipped
+
+const choose :: Int -> (#Left Int | #Right Int)
+const choose = fn number => case number < 2 of
+  #True => #Left number
+  #False => #Right number
+
+const widened :: Int -> (#Left Int | #Right Int | #Middle Int)
+const widened = fn number => case number of
+  0 => choose number
+  1 => #Middle number
+  _ => choose number
+
+const observe :: Int -> Int
+const observe = fn number => do:
+  let optional = case nested number of
+    #Wrapped optional => case optional of
+      #Some value => value + 10
+      #None => 20
+
+    #Skipped => 30
+
+  let choice = case widened number of
+    #Left value => value + 100
+    #Middle value => value + 200
+    #Right value => value + 300
+
+  return optional + choice
+
+return { .nested = nested; .widened = widened; .observe = observe; }

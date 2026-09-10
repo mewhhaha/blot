@@ -1,6 +1,7 @@
 mod artifact_limits;
 mod ast;
 mod backend;
+mod continuation;
 mod cst;
 mod development;
 mod diagnostic;
@@ -26,7 +27,6 @@ mod safety;
 mod session;
 mod source;
 mod source_identity;
-mod suspension;
 mod typecheck;
 mod value;
 mod value_capsule;

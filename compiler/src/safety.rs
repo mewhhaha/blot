@@ -35,7 +35,7 @@ enum Relation {
     Choice(BTreeMap<String, Option<Relation>>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Constraint {
     left: Node,
     right: Node,
@@ -55,8 +55,7 @@ struct Scope {
     affines: HashMap<String, Term>,
     lengths: HashMap<String, Term>,
     relations: HashMap<String, Relation>,
-    constraints: Vec<Constraint>,
-    refinement_budget_exhausted: bool,
+    constraints: Constraints,
     shadowed: HashSet<String>,
     top_level: bool,
 }
@@ -141,13 +140,13 @@ impl Analysis<'_> {
                 if let Relation::Index(length) = &relation
                     && let Some(identity) = scope.identities.get(name).copied()
                 {
-                    scope.push_constraint(Constraint {
+                    scope.constraints.push(Constraint {
                         left: Node::Zero,
                         right: Node::Variable(identity),
                         bound: BigInt::from(0),
                     });
                     match length {
-                        Term::Literal(length) => scope.push_constraint(Constraint {
+                        Term::Literal(length) => scope.constraints.push(Constraint {
                             left: Node::Variable(identity),
                             right: Node::Zero,
                             bound: length - 1,
@@ -155,7 +154,7 @@ impl Analysis<'_> {
                         Term::Variable {
                             identity: length,
                             offset,
-                        } => scope.push_constraint(Constraint {
+                        } => scope.constraints.push(Constraint {
                             left: Node::Variable(identity),
                             right: Node::Variable(*length),
                             bound: offset - 1,
@@ -263,7 +262,9 @@ impl Analysis<'_> {
                                 identity,
                                 offset: BigInt::from(0),
                             };
-                            scope.extend_constraints(constraints_equal(&subject, &affine));
+                            scope
+                                .constraints
+                                .extend(constraints_equal(&subject, &affine));
                             scope.affines.insert(name.clone(), affine);
                         }
                         if let Some(length) = length {
@@ -291,7 +292,9 @@ impl Analysis<'_> {
                             identity,
                             offset: BigInt::from(0),
                         };
-                        scope.extend_constraints(constraints_equal(&subject, &affine));
+                        scope
+                            .constraints
+                            .extend(constraints_equal(&subject, &affine));
                         scope.affines.insert(name.clone(), affine);
                     }
                     if let Some(length) = length {
@@ -303,8 +306,7 @@ impl Analysis<'_> {
                     if let Some(previous) = previous
                         && !identity_referenced(scope, previous)
                     {
-                        forget_identity(&mut scope.constraints, previous);
-                        scope.enforce_edge_budget();
+                        scope.constraints.forget(previous);
                     }
                 }
                 Declaration::Open { value, .. } => {
@@ -407,9 +409,9 @@ impl Analysis<'_> {
                     let (taken, untaken) =
                         self.comparison_constraints(branch.condition, &remaining);
                     let mut consequence = remaining.clone();
-                    consequence.extend_constraints(taken);
+                    consequence.constraints.extend(taken);
                     self.walk(branch.consequence, &mut consequence, false)?;
-                    remaining.extend_constraints(untaken);
+                    remaining.constraints.extend(untaken);
                 }
                 if let Some(fallback) = fallback {
                     self.walk(fallback, &mut remaining, false)?;
@@ -449,32 +451,21 @@ impl Analysis<'_> {
         scope: &Scope,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        if constraint_term_count(&scope.constraints) > REFINEMENT_TERM_BUDGET as usize
-            || scope.refinement_budget_exhausted
-        {
-            return Err(Diagnostic::new(
-                "BLOT_REFINEMENT_BUDGET",
-                format!(
-                    "The bounded affine refinement budget was exceeded (maximum {REFINEMENT_TERM_BUDGET} terms and {REFINEMENT_EDGE_BUDGET} edges per module). Split the proof into a verified helper or reduce the number of simultaneously live affine facts."
-                ),
-                span,
-            ));
-        }
         let Some(length) = self.array_length(array, scope) else {
             return Err(unproven(span));
         };
         let Some(index) = self.term(index, scope) else {
             return Err(unproven(span));
         };
-        if term_at_least(&index, &length, &scope.constraints) {
+        let constraints = scope.constraints.proof(&index, &length, span)?;
+        if term_at_least(&index, &length, &constraints) {
             return Err(Diagnostic::new(
                 "BLOT_OUT_OF_BOUNDS",
                 "The direct array index is at or past the array length.",
                 span,
             ));
         }
-        if term_at_least_zero(&index, &scope.constraints)
-            && term_less_than(&index, &length, &scope.constraints)
+        if term_at_least_zero(&index, &constraints) && term_less_than(&index, &length, &constraints)
         {
             return Ok(());
         }
@@ -1075,27 +1066,85 @@ impl Analysis<'_> {
     }
 }
 
-impl Scope {
-    fn push_constraint(&mut self, constraint: Constraint) {
-        if self.constraints.len() >= REFINEMENT_EDGE_BUDGET {
-            self.refinement_budget_exhausted = true;
-            return;
+#[derive(Clone, Default)]
+struct Constraints {
+    edges: Vec<Constraint>,
+    incident: HashMap<Node, Vec<usize>>,
+}
+
+impl Constraints {
+    fn push(&mut self, constraint: Constraint) {
+        let index = self.edges.len();
+        for node in [constraint.left, constraint.right] {
+            if node != Node::Zero {
+                self.incident.entry(node).or_default().push(index);
+            }
         }
-        self.constraints.push(constraint);
+        self.edges.push(constraint);
     }
 
-    fn extend_constraints(&mut self, constraints: impl IntoIterator<Item = Constraint>) {
+    fn extend(&mut self, constraints: impl IntoIterator<Item = Constraint>) {
         for constraint in constraints {
-            self.push_constraint(constraint);
+            self.push(constraint);
         }
     }
 
-    fn enforce_edge_budget(&mut self) {
-        if self.constraints.len() <= REFINEMENT_EDGE_BUDGET {
-            return;
+    fn forget(&mut self, identity: Identity) {
+        let mut edges = std::mem::take(&mut self.edges);
+        forget_identity(&mut edges, identity);
+        self.incident.clear();
+        for edge in edges {
+            self.push(edge);
         }
-        self.constraints.truncate(REFINEMENT_EDGE_BUDGET);
-        self.refinement_budget_exhausted = true;
+    }
+
+    fn proof(
+        &self,
+        index: &Term,
+        length: &Term,
+        span: Span,
+    ) -> Result<Vec<Constraint>, Diagnostic> {
+        let mut nodes = HashSet::from([Node::Zero]);
+        let mut pending = Vec::new();
+        for term in [index, length] {
+            let (node, _) = term_node(term);
+            if nodes.insert(node) {
+                pending.push(node);
+            }
+        }
+        let mut edges = HashSet::new();
+        while let Some(node) = pending.pop() {
+            for &index in self.incident.get(&node).into_iter().flatten() {
+                if !edges.insert(index) {
+                    continue;
+                }
+                let edge = &self.edges[index];
+                for next in [edge.left, edge.right] {
+                    // Zero terminates a dependency path: unrelated literal bounds
+                    // must not join every variable into the same proof graph.
+                    if nodes.insert(next) {
+                        pending.push(next);
+                    }
+                }
+                if nodes.len() > REFINEMENT_TERM_BUDGET as usize
+                    || edges.len() > REFINEMENT_EDGE_BUDGET
+                {
+                    return Err(Diagnostic::new(
+                        "BLOT_REFINEMENT_BUDGET",
+                        format!(
+                            "The array-index proof exceeded its bounded affine refinement budget (maximum {REFINEMENT_TERM_BUDGET} terms and {REFINEMENT_EDGE_BUDGET} edges per proof). Split the relevant relation into a verified helper."
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+        let mut edges = edges.into_iter().collect::<Vec<_>>();
+        edges.sort_unstable();
+        Ok(edges
+            .into_iter()
+            .map(|index| self.edges[index].clone())
+            .collect())
     }
 }
 
@@ -1240,14 +1289,6 @@ fn shortest_paths_from(
         }
     }
     distances
-}
-
-fn constraint_term_count(constraints: &[Constraint]) -> usize {
-    constraints
-        .iter()
-        .flat_map(|constraint| [constraint.left, constraint.right])
-        .collect::<HashSet<_>>()
-        .len()
 }
 
 fn identity_referenced(scope: &Scope, identity: Identity) -> bool {
@@ -1440,6 +1481,90 @@ fn unproven(span: Span) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn variable(identity: Identity) -> Term {
+        Term::Variable {
+            identity,
+            offset: 0.into(),
+        }
+    }
+
+    #[test]
+    fn proof_dependencies_do_not_expand_through_zero() {
+        let mut constraints = Constraints::default();
+        for identity in 1..5000 {
+            for edge in constraints_equal(&variable(identity), &Term::Literal(1.into())) {
+                constraints.push(edge);
+            }
+        }
+        let index = variable(1);
+        let length = Term::Literal(2.into());
+        let proof = constraints
+            .proof(&index, &length, Span { start: 1, end: 2 })
+            .unwrap();
+        assert_eq!(proof.len(), 2);
+        assert!(term_at_least_zero(&index, &proof));
+        assert!(term_less_than(&index, &length, &proof));
+        assert!(
+            constraints
+                .proof(&Term::Literal(0.into()), &length, Span { start: 1, end: 2 })
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn proof_dependencies_preserve_relations_between_distinct_roots() {
+        let mut constraints = Constraints::default();
+        for (left, right) in [(variable(1), variable(2)), (variable(2), variable(3))] {
+            for edge in constraints_less_than(&left, &right) {
+                constraints.push(edge);
+            }
+        }
+        for edge in constraints_at_least(&variable(1), &Term::Literal(0.into())) {
+            constraints.push(edge);
+        }
+        let proof = constraints
+            .proof(&variable(1), &variable(3), Span { start: 1, end: 2 })
+            .unwrap();
+        assert!(term_at_least_zero(&variable(1), &proof));
+        assert!(term_less_than(&variable(1), &variable(3), &proof));
+        assert!(!term_less_than(&variable(3), &variable(1), &proof));
+    }
+
+    #[test]
+    fn proof_dependencies_report_limits_for_relevant_terms_and_edges() {
+        for dense in [false, true] {
+            let mut constraints = Constraints::default();
+            let count = if dense {
+                REFINEMENT_EDGE_BUDGET + 1
+            } else {
+                REFINEMENT_TERM_BUDGET as usize + 1
+            };
+            for index in 1..=count {
+                let right = if dense { 2 } else { index as Identity + 1 };
+                let left = if dense { 1 } else { index as Identity };
+                constraints.push(Constraint {
+                    left: Node::Variable(left),
+                    right: Node::Variable(right),
+                    bound: 0.into(),
+                });
+            }
+            let failure = constraints
+                .proof(
+                    &variable(1),
+                    &Term::Literal(2.into()),
+                    Span { start: 3, end: 7 },
+                )
+                .unwrap_err();
+            assert_eq!(failure.code, "BLOT_REFINEMENT_BUDGET");
+            assert_eq!(
+                failure.failure_class(),
+                crate::diagnostic::FailureClass::Limit
+            );
+            assert_eq!(failure.span, Span { start: 3, end: 7 });
+        }
+    }
 
     #[test]
     fn forgetting_an_identity_preserves_live_transitive_bounds() {

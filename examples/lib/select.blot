@@ -1,0 +1,110 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Channel = import "blot:channel"
+const Events = import "blot:events"
+const Io = import "blot:io"
+const Select = import "blot:select"
+
+let buffered ::
+  Spark.Executor -> { .selected = Select.Selection Int; .remaining = Option Int; .duplicate = Option Int; } ~ { Spark.Effect, Channel.Effect, Select.Effect }
+let buffered = fn executor => do:
+  let body ::
+    Spark.Scope -> { .selected = Select.Selection Int; .remaining = Option Int; .duplicate = Option Int; } ~ { Channel.Effect, Select.Effect }
+  let body = fn scope => do:
+    use first :: Channel.Ends Int <- Channel.bounded scope 2
+    use second :: Channel.Ends Int <- Channel.bounded scope 1
+    use Channel.send first.sender (?11)
+    use Channel.send first.sender (?12)
+    use Channel.send second.sender (?22)
+    use selected <- Select.wait [
+      Select.channel first.receiver,
+      Select.channel second.receiver,
+      Select.channel first.receiver
+    ]
+    use remaining <- Channel.receive second.receiver
+    use duplicate <- Channel.receive first.receiver
+    return
+      { .selected = ?selected; .remaining = ?remaining; .duplicate = ?duplicate; }
+  return Spark.scope executor body
+
+let rendezvous ::
+  Spark.Executor -> { .selected = Select.Selection Int; .remaining = Option Int; .accepted = (Bool, Bool); } ~ { Spark.Effect, Channel.Effect, Select.Effect }
+let rendezvous = fn executor => do:
+  let body ::
+    Spark.Scope -> { .selected = Select.Selection Int; .remaining = Option Int; .accepted = (Bool, Bool); } ~ { Spark.Effect, Channel.Effect, Select.Effect }
+  let body = fn scope => do:
+    use first :: Channel.Ends Int <- Channel.bounded scope 0
+    use second :: Channel.Ends Int <- Channel.bounded scope 0
+    let produce_first :: Unit -> Bool ~ { Channel.Effect }
+    let ?produce_first = fn () => Channel.send first.sender (?11)
+    let produce_second :: Unit -> Bool ~ { Channel.Effect }
+    let ?produce_second = fn () => Channel.send second.sender (?22)
+    use producer_first <- Spark.spawn scope (?produce_first)
+    use producer_second <- Spark.spawn scope (?produce_second)
+    use Spark.yield scope
+    use selected <- Select.wait [
+      Select.channel first.receiver,
+      Select.channel second.receiver
+    ]
+    use remaining <- Channel.receive second.receiver
+    use accepted_first <- Spark.join (?producer_first)
+    use accepted_second <- Spark.join (?producer_second)
+    return
+      { .selected = ?selected; .remaining = ?remaining; .accepted = (accepted_first, accepted_second); }
+  return Spark.scope executor body
+
+let closed ::
+  Spark.Executor -> Select.Selection Int ~ { Spark.Effect, Channel.Effect, Select.Effect }
+let closed = fn executor => do:
+  let body ::
+    Spark.Scope -> Select.Selection Int ~ { Channel.Effect, Select.Effect }
+  let body = fn scope => do:
+    use channel :: Channel.Ends Int <- Channel.bounded scope 0
+    use Channel.close channel.sender
+    return Select.wait [Select.channel channel.receiver]
+  return Spark.scope executor body
+
+let events ::
+  { .executor = Spark.Executor; .changes = Events.Source Int; } -> { .selected = Select.Selection Int; .remaining = Option Int; } ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect }
+let events = fn io => do:
+  let body ::
+    Spark.Scope -> { .selected = Select.Selection Int; .remaining = Option Int; } ~ { Events.Effect, Channel.Effect, Select.Effect }
+  let body = fn scope => do:
+    use subscription <- Events.subscribe scope io.changes (#Queue 8)
+    use channel :: Channel.Ends Int <- Channel.bounded scope 1
+    use Channel.send channel.sender (?9)
+    use selected <- Select.wait [
+      Select.channel channel.receiver,
+      Select.events subscription
+    ]
+    use remaining <- Events.next subscription
+    return { .selected = ?selected; .remaining = ?remaining; }
+  return Spark.scope io.executor body
+
+let wait ::
+  { .executor = Spark.Executor; .changes = Events.Source Int; .clock = Io.Clock.Capability; } -> Select.Selection Int ~ { Spark.Effect, Events.Effect, Channel.Effect, Select.Effect }
+let wait = fn io => do:
+  let body ::
+    Spark.Scope -> Select.Selection Int ~ { Events.Effect, Channel.Effect, Select.Effect }
+  let body = fn scope => do:
+    use subscription <- Events.subscribe scope io.changes (#Queue 8)
+    use channel :: Channel.Ends Int <- Channel.bounded scope 0
+    return Select.wait [
+      Select.channel channel.receiver,
+      Select.events subscription,
+      Select.after io.clock 100
+      ]
+  return Spark.scope io.executor body
+
+let timers :: Io.Clock.Capability -> Select.Selection Int ~ { Select.Effect }
+let timers = fn clock => do:
+  let arms :: [Select.Arm Int] = [Select.after clock 10, Select.after clock 20]
+  return Select.wait arms
+
+let empty :: Unit -> Select.Selection Int ~ { Select.Effect }
+let empty = fn () => do:
+  let arms :: [Select.Arm Int] = []
+  return Select.wait arms
+
+return
+  { .buffered = buffered; .rendezvous = rendezvous; .closed = closed; .events = events; .wait = wait; .timers = timers; .empty = empty; }

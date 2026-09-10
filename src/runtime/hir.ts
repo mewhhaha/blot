@@ -79,260 +79,249 @@ export type BlotRuntimeSignature = {
   readonly effects: readonly string[];
 };
 
-type BlotRuntimeOperationBase = {
-  readonly result: number;
+export type BlotRuntimeConstant = bigint | number | boolean | string | null;
+
+export type BlotRuntimeOperation =
+  | {
+    readonly kind: "constant";
+    readonly value: bigint | number | boolean | string | null;
+  }
+  | {
+    readonly kind: "scalar";
+    readonly operator:
+      | "add"
+      | "subtract"
+      | "multiply"
+      | "divide"
+      | "remainder"
+      | "equal"
+      | "not-equal"
+      | "less-than"
+      | "less-than-or-equal"
+      | "greater-than"
+      | "greater-than-or-equal";
+  }
+  | {
+    readonly kind: "scalar.unary";
+    readonly operator: "negate" | "square-root";
+  }
+  | {
+    readonly kind: "convert";
+    readonly conversion: string;
+  }
+  | {
+    readonly kind:
+      | "text.append"
+      | "text.join"
+      | "text.length"
+      | "text.scalar-at"
+      | "text.next-byte"
+      | "text.slice"
+      | "text.find-from"
+      | "text.from-i64"
+      | "text.compare"
+      | "text.contains";
+  }
+  | {
+    readonly kind: "vector";
+    readonly operator:
+      | "make"
+      | "splat"
+      | "add"
+      | "subtract"
+      | "multiply"
+      | "divide"
+      | "extract"
+      | "replace"
+      | "equal"
+      | "not-equal"
+      | "less-than"
+      | "less-than-or-equal"
+      | "greater-than"
+      | "greater-than-or-equal"
+      | "select"
+      | "shuffle"
+      | "absolute"
+      | "negate"
+      | "square-root"
+      | "ceiling"
+      | "floor"
+      | "truncate"
+      | "nearest"
+      | "minimum"
+      | "maximum"
+      | "pseudo-minimum"
+      | "pseudo-maximum"
+      | "bit-and"
+      | "bit-or"
+      | "bit-xor"
+      | "bit-not"
+      | "shift-left"
+      | "shift-right-signed"
+      | "shift-right-unsigned"
+      | "minimum-signed"
+      | "minimum-unsigned"
+      | "maximum-signed"
+      | "maximum-unsigned"
+      | "less-than-signed"
+      | "less-than-unsigned"
+      | "greater-than-signed"
+      | "greater-than-unsigned"
+      | "less-than-or-equal-signed"
+      | "less-than-or-equal-unsigned"
+      | "greater-than-or-equal-signed"
+      | "greater-than-or-equal-unsigned"
+      | "mask-bitmask"
+      | "mask-all"
+      | "mask-any"
+      | "convert-i32-signed"
+      | "convert-i32-unsigned"
+      | "truncate-saturating-f32-signed"
+      | "truncate-saturating-f32-unsigned";
+    readonly lane?: 0 | 1 | 2 | 3;
+  }
+  | {
+    readonly kind: "product.make";
+  }
+  | {
+    readonly kind: "product.project";
+    readonly field: number;
+  }
+  | {
+    readonly kind: "sum.make";
+    readonly case: number;
+  }
+  | {
+    readonly kind: "sum.tag";
+  }
+  | {
+    readonly kind: "sum.payload";
+    readonly case: number;
+  }
+  | {
+    readonly kind: "indirect.make" | "indirect.load";
+  }
+  | {
+    readonly kind: "store.empty";
+  }
+  | {
+    readonly kind: "store.literal";
+    readonly staticStore?: number;
+  }
+  | {
+    readonly kind: "store.new";
+  }
+  | {
+    readonly kind: "store.length";
+  }
+  | {
+    readonly kind: "store.read";
+  }
+  | {
+    readonly kind: "store.read.field";
+    readonly field: number;
+  }
+  | {
+    readonly kind: "store.write" | "store.grow";
+    readonly update: "persistent" | "owned-reuse";
+  }
+  | {
+    readonly kind:
+      | "scratch.with-capacity"
+      | "scratch.push"
+      | "scratch.finish"
+      | "scratch.recycle";
+  }
+  | {
+    readonly kind: "closure.make";
+    readonly function: number;
+  }
+  | {
+    readonly kind:
+      | "seal.wrap"
+      | "callback.make"
+      | "seal.unwrap"
+      | "resource.move"
+      | "resource.borrow"
+      | "resource.freeze"
+      | "resource.drop";
+  };
+
+export type BlotRuntimeDefinition = {
+  readonly value: number;
   readonly type: number;
-  readonly operands: readonly number[];
   readonly ownership: BlotRuntimeOwnership;
   readonly span: BlotRuntimeSpan;
 };
 
-export type BlotRuntimeOperation =
-  & BlotRuntimeOperationBase
-  & (
-    | {
-      readonly kind: "constant";
-      readonly value: bigint | number | boolean | string | null;
-    }
-    | {
-      readonly kind: "scalar";
-      readonly operator:
-        | "add"
-        | "subtract"
-        | "multiply"
-        | "divide"
-        | "remainder"
-        | "equal"
-        | "not-equal"
-        | "less-than"
-        | "less-than-or-equal"
-        | "greater-than"
-        | "greater-than-or-equal";
-    }
-    | {
-      readonly kind: "scalar.unary";
-      readonly operator: "negate" | "square-root";
-    }
-    | {
-      readonly kind: "convert";
-      readonly conversion: string;
-    }
-    | {
-      readonly kind:
-        | "text.append"
-        | "text.join"
-        | "text.length"
-        | "text.scalar-at"
-        | "text.slice"
-        | "text.find-from"
-        | "text.from-i64"
-        | "text.compare"
-        | "text.contains";
-    }
-    | {
-      readonly kind: "vector";
-      readonly operator:
-        | "make"
-        | "splat"
-        | "add"
-        | "subtract"
-        | "multiply"
-        | "divide"
-        | "extract"
-        | "replace"
-        | "equal"
-        | "not-equal"
-        | "less-than"
-        | "less-than-or-equal"
-        | "greater-than"
-        | "greater-than-or-equal"
-        | "select"
-        | "shuffle"
-        | "absolute"
-        | "negate"
-        | "square-root"
-        | "ceiling"
-        | "floor"
-        | "truncate"
-        | "nearest"
-        | "minimum"
-        | "maximum"
-        | "pseudo-minimum"
-        | "pseudo-maximum"
-        | "bit-and"
-        | "bit-or"
-        | "bit-xor"
-        | "bit-not"
-        | "shift-left"
-        | "shift-right-signed"
-        | "shift-right-unsigned"
-        | "minimum-signed"
-        | "minimum-unsigned"
-        | "maximum-signed"
-        | "maximum-unsigned"
-        | "less-than-signed"
-        | "less-than-unsigned"
-        | "greater-than-signed"
-        | "greater-than-unsigned"
-        | "less-than-or-equal-signed"
-        | "less-than-or-equal-unsigned"
-        | "greater-than-or-equal-signed"
-        | "greater-than-or-equal-unsigned"
-        | "mask-bitmask"
-        | "mask-all"
-        | "mask-any"
-        | "convert-i32-signed"
-        | "convert-i32-unsigned"
-        | "truncate-saturating-f32-signed"
-        | "truncate-saturating-f32-unsigned";
-      readonly lane?: 0 | 1 | 2 | 3;
-    }
-    | {
-      readonly kind: "product.make";
-    }
-    | {
-      readonly kind: "product.project";
-      readonly field: number;
-    }
-    | {
-      readonly kind: "sum.make";
-      readonly case: number;
-    }
-    | {
-      readonly kind: "sum.tag";
-    }
-    | {
-      readonly kind: "sum.payload";
-      readonly case: number;
-    }
-    | {
-      readonly kind: "indirect.make" | "indirect.load";
-    }
-    | {
-      readonly kind: "store.empty";
-    }
-    | {
-      readonly kind: "store.literal";
-      readonly staticStore?: number;
-    }
-    | {
-      readonly kind: "store.new";
-    }
-    | {
-      readonly kind: "store.length";
-    }
-    | {
-      readonly kind: "store.read";
-    }
-    | {
-      readonly kind: "store.read.field";
-      readonly field: number;
-    }
-    | {
-      readonly kind: "store.write" | "store.grow";
-      readonly update: "persistent" | "owned-reuse";
-    }
-    | {
-      readonly kind:
-        | "scratch.with-capacity"
-        | "scratch.push"
-        | "scratch.finish"
-        | "scratch.recycle";
-    }
-    | {
-      readonly kind: "call.direct";
-      readonly function: number;
-    }
-    | {
-      readonly kind: "call.external";
-      readonly capability: string;
-      readonly operation: string;
-      readonly signature: number;
-    }
-    | {
-      readonly kind: "closure.make";
-      readonly function: number;
-    }
-    | {
-      readonly kind: "call.indirect";
-      readonly signature: number;
-    }
-    | {
-      readonly kind: "host.call";
-      readonly capability: string;
-      readonly operation: string;
-    }
-    | {
-      readonly kind:
-        | "seal.wrap"
-        | "callback.make"
-        | "seal.unwrap"
-        | "resource.move"
-        | "resource.borrow"
-        | "resource.freeze"
-        | "resource.drop";
-    }
-  );
+export type BlotRuntimeInstruction = {
+  readonly definition: BlotRuntimeDefinition;
+  readonly operands: readonly number[];
+  readonly operation: BlotRuntimeOperation;
+};
 
-export type BlotRuntimeTerminator =
+export type BlotRuntimeArgument =
+  | { readonly kind: "value"; readonly value: number }
+  | { readonly kind: "result" };
+
+export type BlotRuntimeEdge = {
+  readonly target: number;
+  readonly arguments: readonly BlotRuntimeArgument[];
+};
+
+export type BlotRuntimeCallTarget =
+  | { readonly kind: "function"; readonly function: number }
+  | {
+    readonly kind: "host";
+    readonly capability: string;
+    readonly operation: string;
+  }
+  | { readonly kind: "link"; readonly unit: string; readonly name: string };
+
+export type BlotRuntimeTransition =
+  | { readonly kind: "jump"; readonly edge: BlotRuntimeEdge }
   | {
     readonly kind: "branch";
-    readonly target: number;
-    readonly arguments: readonly number[];
-    readonly span: BlotRuntimeSpan;
-  }
-  | {
-    readonly kind: "conditional";
     readonly condition: number;
-    readonly consequent: number;
-    readonly consequentArguments: readonly number[];
-    readonly alternate: number;
-    readonly alternateArguments: readonly number[];
-    readonly likely?: "consequent" | "alternate";
-    readonly span: BlotRuntimeSpan;
+    readonly consequent: BlotRuntimeEdge;
+    readonly alternate: BlotRuntimeEdge;
   }
   | {
     readonly kind: "switch";
     readonly selector: number;
-    readonly cases: readonly {
-      readonly value:
-        | { readonly kind: "integer-32"; readonly value: number }
-        | { readonly kind: "signed-integer-64"; readonly value: string };
-      readonly target: number;
-    }[];
-    readonly fallback: number;
-    readonly span: BlotRuntimeSpan;
+    readonly cases:
+      readonly (readonly [BlotRuntimeConstant, BlotRuntimeEdge])[];
+    readonly fallback: BlotRuntimeEdge;
   }
   | {
-    readonly kind: "return";
-    readonly value: number;
-    readonly span: BlotRuntimeSpan;
+    readonly kind: "call";
+    readonly target: BlotRuntimeCallTarget;
+    readonly signature: number;
+    readonly arguments: readonly number[];
+    readonly next: BlotRuntimeEdge;
+    readonly suspends: boolean;
   }
-  | {
-    readonly kind: "trap";
-    readonly message: string;
-    readonly span: BlotRuntimeSpan;
-  };
+  | { readonly kind: "return"; readonly value: number }
+  | { readonly kind: "trap"; readonly message: string };
 
-export type BlotRuntimeBlock = {
+export type BlotRuntimeContinuation = {
   readonly id: number;
-  readonly parameters: readonly {
-    readonly value: number;
-    readonly type: number;
-    readonly ownership: BlotRuntimeOwnership;
-    readonly span: BlotRuntimeSpan;
-  }[];
-  readonly operations: readonly BlotRuntimeOperation[];
-  readonly terminator: BlotRuntimeTerminator;
+  readonly parameters: readonly BlotRuntimeDefinition[];
+  readonly captures: readonly BlotRuntimeDefinition[];
+  readonly instructions: readonly BlotRuntimeInstruction[];
+  readonly transition: BlotRuntimeTransition;
+  readonly span: BlotRuntimeSpan;
 };
 
 export type BlotRuntimeFunction = {
   readonly id: number;
   readonly name: string;
   readonly signature: number;
-  readonly reuse?: "checked";
-  readonly entryBlock: number;
-  readonly blocks: readonly BlotRuntimeBlock[];
+  readonly entry: number;
+  readonly continuations: readonly BlotRuntimeContinuation[];
+  readonly suspends: boolean;
+  readonly framed: boolean;
+  readonly reuse: "checked" | null;
   readonly span: BlotRuntimeSpan;
 };
 
@@ -403,7 +392,6 @@ export type BlotRuntimeModule = {
   readonly functions: readonly BlotRuntimeFunction[];
   readonly capabilities: readonly BlotRuntimeCapability[];
   readonly links: readonly BlotRuntimeLink[];
-  readonly resumableRoots: readonly number[];
   readonly exports: readonly BlotRuntimeExport[];
 };
 
@@ -621,8 +609,8 @@ export type ValidatedBlotRuntimeModule = BlotRuntimeModule & {
 
 type BlotRuntimeValueDefinition = {
   readonly type: number;
-  readonly block: number;
-  readonly operation: number;
+  readonly ownership: BlotRuntimeOwnership;
+  readonly instruction?: BlotRuntimeInstruction;
 };
 
 export function validateBlotRuntimeModule(
@@ -730,13 +718,6 @@ export function validateBlotRuntimeModule(
     }
   }
   const linkOperations = new Map<string, number>();
-  for (const root of module.resumableRoots) {
-    if (
-      !Number.isSafeInteger(root) || root < 0 || root >= module.functions.length
-    ) {
-      throw new TypeError(`${module.source}: invalid resumable root ${root}`);
-    }
-  }
   for (const link of module.links) {
     if (typeof link.suspends !== "boolean") {
       throw new TypeError("development link omitted its suspension contract");
@@ -772,7 +753,6 @@ export function validateBlotRuntimeModule(
       linkOperations,
     );
   });
-  validateEffectClosure(module);
   requireUniqueNames(
     module.exports.map((exported) => exported.sourceName),
     `${module.source}: source exports`,
@@ -886,9 +866,17 @@ function validateFunction(
   capabilityOperations: ReadonlyMap<string, number>,
   linkOperations: ReadonlyMap<string, number>,
 ): void {
-  if (function_.reuse !== undefined && function_.reuse !== "checked") {
+  if (function_.reuse !== null && function_.reuse !== "checked") {
     throw new TypeError(
       `${module.source}: function ${function_.name} has unknown reuse certificate ${function_.reuse}`,
+    );
+  }
+  if (
+    typeof function_.suspends !== "boolean" ||
+    typeof function_.framed !== "boolean"
+  ) {
+    throw new TypeError(
+      `${module.source}: function ${function_.name} omitted checked suspension/frame facts`,
     );
   }
   const signature = requireSignature(
@@ -896,286 +884,430 @@ function validateFunction(
     function_.signature,
     `function ${function_.name}`,
   );
-  if (function_.blocks.length === 0) {
+  const entry = function_.continuations[function_.entry];
+  if (!Number.isSafeInteger(function_.entry) || entry === undefined) {
     throw new TypeError(
-      `${module.source}: function ${function_.name} has no blocks`,
+      `${module.source}: function ${function_.name} has an absent entry continuation ${function_.entry}`,
     );
   }
   if (
-    function_.entryBlock < 0 || function_.entryBlock >= function_.blocks.length
-  ) {
-    throw new TypeError(
-      `${module.source}: function ${function_.name} entry block ${function_.entryBlock} is outside ${function_.blocks.length} blocks`,
-    );
-  }
-  const entry = function_.blocks[function_.entryBlock];
-  if (
+    entry.captures.length !== 0 ||
     entry.parameters.length !== signature.parameters.length ||
     entry.parameters.some((parameter, index) =>
       parameter.type !== signature.parameters[index]
     )
   ) {
     throw new TypeError(
-      `${module.source}: function ${function_.name} entry parameters disagree with signature ${function_.signature}`,
+      `${module.source}: function ${function_.name} entry inputs disagree with signature ${function_.signature}`,
     );
   }
-  const values = new Map<number, BlotRuntimeValueDefinition>();
-  for (const [blockIndex, block] of function_.blocks.entries()) {
-    if (block.id !== blockIndex) {
+  const definitions = new Map<number, BlotRuntimeValueDefinition>();
+  for (const [ordinal, continuation] of function_.continuations.entries()) {
+    if (continuation.id !== ordinal) {
       throw new TypeError(
-        `${module.source}: function ${function_.name} block table index ${blockIndex} contains ID ${block.id}`,
+        `${module.source}: continuation table index ${ordinal} contains ID ${continuation.id}`,
       );
     }
-    for (const parameter of block.parameters) {
-      requireType(
-        module,
-        parameter.type,
-        `block ${function_.name}:${block.id} parameter`,
-      );
+    for (const definition of continuation.parameters) {
+      defineValue(module, function_, definitions, definition);
+    }
+    for (const instruction of continuation.instructions) {
       defineValue(
         module,
         function_,
-        values,
-        parameter.value,
-        parameter.type,
-        block.id,
-        -1,
-      );
-    }
-    for (const [operationIndex, operation] of block.operations.entries()) {
-      requireType(
-        module,
-        operation.type,
-        `operation ${function_.name}:${operation.result}`,
-      );
-      defineValue(
-        module,
-        function_,
-        values,
-        operation.result,
-        operation.type,
-        block.id,
-        operationIndex,
+        definitions,
+        instruction.definition,
+        instruction,
       );
     }
   }
-  const predecessors = function_.blocks.map(() => new Set<number>());
-  for (const block of function_.blocks) {
-    recordPredecessors(module, function_, block, predecessors);
-  }
-  const dominators = calculateDominators(function_, predecessors);
-  for (const block of function_.blocks) {
-    for (const [operationIndex, operation] of block.operations.entries()) {
-      for (const operand of operation.operands) {
-        requireDominatingValue(
-          module,
-          function_,
-          values,
-          dominators,
-          operand,
-          block.id,
-          operationIndex,
-        );
-      }
-      validateOperation(
-        module,
-        function_,
-        operation,
-        capabilityOperations,
-        linkOperations,
-        values,
-      );
+  for (const continuation of function_.continuations) {
+    const available = new Map<number, BlotRuntimeValueDefinition>();
+    for (
+      const definition of [...continuation.parameters, ...continuation.captures]
+    ) {
+      const original = definitions.get(definition.value);
       if (
-        function_.reuse === "checked" &&
-        (operation.kind === "store.write" || operation.kind === "store.grow") &&
-        operation.update !== "owned-reuse"
+        original === undefined || original.type !== definition.type ||
+        original.ownership !== definition.ownership
       ) {
         throw new TypeError(
-          `${module.source}: reuse-checked function ${function_.name} contains persistent ${operation.kind}`,
+          `${module.source}: continuation ${function_.name}:${continuation.id} input ${definition.value} disagrees with its definition`,
         );
       }
-    }
-    for (const operand of terminatorValues(block.terminator)) {
-      requireDominatingValue(
-        module,
-        function_,
-        values,
-        dominators,
-        operand,
-        block.id,
-        block.operations.length,
-      );
-    }
-    validateTerminator(module, function_, block, values, signature.result);
-  }
-}
-
-function recordPredecessors(
-  module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
-  block: BlotRuntimeBlock,
-  predecessors: readonly Set<number>[],
-): void {
-  const terminator = block.terminator;
-  let targets: readonly number[] = [];
-  if (terminator.kind === "branch") targets = [terminator.target];
-  if (terminator.kind === "conditional") {
-    targets = [terminator.consequent, terminator.alternate];
-  }
-  if (terminator.kind === "switch") {
-    targets = [
-      ...terminator.cases.map((case_) => case_.target),
-      terminator.fallback,
-    ];
-  }
-  for (const target of targets) {
-    if (function_.blocks[target] === undefined) {
-      throw new TypeError(
-        `${module.source}: function ${function_.name} block ${block.id} targets absent block ${target}`,
-      );
-    }
-    predecessors[target].add(block.id);
-  }
-}
-
-function calculateDominators(
-  function_: BlotRuntimeFunction,
-  predecessors: readonly ReadonlySet<number>[],
-): readonly ReadonlySet<number>[] {
-  const allBlocks = new Set(function_.blocks.map((block) => block.id));
-  const dominators = function_.blocks.map((block) => {
-    if (block.id === function_.entryBlock) return new Set([block.id]);
-    return new Set(allBlocks);
-  });
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const block of function_.blocks) {
-      if (block.id === function_.entryBlock) continue;
-      const incoming = [...predecessors[block.id]];
-      let intersection = new Set<number>();
-      if (incoming.length > 0) {
-        intersection = new Set(dominators[incoming[0]]);
+      if (available.has(definition.value)) {
+        throw new TypeError(
+          `${module.source}: continuation ${function_.name}:${continuation.id} repeats input ${definition.value}`,
+        );
       }
-      for (const predecessor of incoming.slice(1)) {
-        for (const candidate of intersection) {
-          if (!dominators[predecessor].has(candidate)) {
-            intersection.delete(candidate);
+      available.set(definition.value, original);
+    }
+    for (const instruction of continuation.instructions) {
+      for (const operand of instruction.operands) {
+        requireValue(module, function_, available, operand);
+      }
+      validateInstruction(module, function_, instruction, available);
+      if (
+        function_.reuse === "checked" &&
+        (instruction.operation.kind === "store.write" ||
+          instruction.operation.kind === "store.grow") &&
+        instruction.operation.update !== "owned-reuse"
+      ) {
+        throw new TypeError(
+          `${module.source}: reuse-checked function ${function_.name} contains persistent ${instruction.operation.kind}`,
+        );
+      }
+      const definition = definitions.get(instruction.definition.value);
+      if (definition === undefined) {
+        throw new TypeError("instruction lost its definition");
+      }
+      available.set(instruction.definition.value, definition);
+    }
+    const transition = continuation.transition;
+    const edges: BlotRuntimeEdge[] = [];
+    let resultType: number | undefined;
+    switch (transition.kind) {
+      case "jump":
+        edges.push(transition.edge);
+        break;
+      case "branch": {
+        const condition = requireValue(
+          module,
+          function_,
+          available,
+          transition.condition,
+        );
+        if (module.types[condition.type].kind !== "boolean") {
+          throw new TypeError(
+            `${module.source}: branch ${function_.name}:${continuation.id} requires a boolean condition`,
+          );
+        }
+        edges.push(transition.consequent, transition.alternate);
+        break;
+      }
+      case "switch": {
+        const selector = requireValue(
+          module,
+          function_,
+          available,
+          transition.selector,
+        );
+        const kind = module.types[selector.type].kind;
+        if (kind !== "integer-32" && kind !== "signed-integer-64") {
+          throw new TypeError(
+            `${module.source}: switch requires an integer selector`,
+          );
+        }
+        const seen = new Set<BlotRuntimeConstant>();
+        for (const [constant, edge] of transition.cases) {
+          if (
+            (kind === "integer-32" &&
+              (typeof constant !== "number" || !Number.isInteger(constant))) ||
+            (kind === "signed-integer-64" && typeof constant !== "bigint")
+          ) {
+            throw new TypeError(
+              `${module.source}: switch case does not match its selector type`,
+            );
           }
+          if (seen.has(constant)) {
+            throw new TypeError(
+              `${module.source}: switch repeats case ${constant}`,
+            );
+          }
+          seen.add(constant);
+          edges.push(edge);
+        }
+        edges.push(transition.fallback);
+        break;
+      }
+      case "call": {
+        const called = requireSignature(
+          module,
+          transition.signature,
+          `call ${function_.name}:${continuation.id}`,
+        );
+        if (typeof transition.suspends !== "boolean") {
+          throw new TypeError(
+            `${module.source}: call omitted its checked suspension fact`,
+          );
+        }
+        if (
+          transition.arguments.length !== called.parameters.length ||
+          transition.arguments.some((argument, index) =>
+            requireValue(module, function_, available, argument).type !==
+              called.parameters[index]
+          )
+        ) {
+          throw new TypeError(
+            `${module.source}: call arguments disagree with signature ${transition.signature}`,
+          );
+        }
+        const target = transition.target;
+        let expectedSignature: number | undefined;
+        let expectedSuspension: boolean | undefined;
+        switch (target.kind) {
+          case "function": {
+            const callee = requireFunction(
+              module,
+              target.function,
+              `call ${function_.name}:${continuation.id}`,
+            );
+            expectedSignature = callee.signature;
+            expectedSuspension = callee.suspends;
+            break;
+          }
+          case "host": {
+            expectedSignature = capabilityOperations.get(
+              `${target.capability}\u0000${target.operation}`,
+            );
+            expectedSuspension = module.capabilities.find((capability) =>
+              capability.name === target.capability
+            )?.operations.find((operation) =>
+              operation.name === target.operation
+            )?.contract.suspends;
+            break;
+          }
+          case "link": {
+            expectedSignature = linkOperations.get(
+              `${target.unit}\u0000${target.name}`,
+            );
+            expectedSuspension = module.links.find((link) =>
+              link.unit === target.unit && link.name === target.name
+            )?.suspends;
+            break;
+          }
+          default:
+            throw new TypeError(
+              `${module.source}: call has an unknown target kind`,
+            );
+        }
+        if (
+          expectedSignature === undefined || expectedSuspension === undefined
+        ) {
+          throw new TypeError(`${module.source}: call target is not declared`);
+        }
+        if (
+          expectedSignature !== transition.signature ||
+          expectedSuspension !== transition.suspends
+        ) {
+          throw new TypeError(
+            `${module.source}: call disagrees with its target signature or suspension contract`,
+          );
+        }
+        resultType = called.result;
+        edges.push(transition.next);
+        break;
+      }
+      case "return":
+        if (
+          requireValue(module, function_, available, transition.value).type !==
+            signature.result
+        ) {
+          throw new TypeError(
+            `${module.source}: return disagrees with function signature`,
+          );
+        }
+        break;
+      case "trap":
+        if (typeof transition.message !== "string") {
+          throw new TypeError(`${module.source}: trap has no message`);
+        }
+        break;
+      default:
+        throw new TypeError(
+          `${module.source}: continuation has an unknown transition kind`,
+        );
+    }
+    for (const edge of edges) {
+      const successor = function_.continuations[edge.target];
+      if (!Number.isSafeInteger(edge.target) || successor === undefined) {
+        throw new TypeError(
+          `${module.source}: edge targets absent continuation ${edge.target}`,
+        );
+      }
+      if (edge.arguments.length !== successor.parameters.length) {
+        throw new TypeError(
+          `${module.source}: edge arguments disagree with continuation parameters`,
+        );
+      }
+      edge.arguments.forEach((argument, index) => {
+        let type: number;
+        if (argument.kind === "value") {
+          type =
+            requireValue(module, function_, available, argument.value).type;
+        } else if (argument.kind === "result" && resultType !== undefined) {
+          type = resultType;
+        } else {throw new TypeError(
+            `${module.source}: edge has an invalid argument or references a result outside a call`,
+          );}
+        if (type !== successor.parameters[index].type) {
+          throw new TypeError(
+            `${module.source}: edge argument ${index} disagrees with continuation parameter type`,
+          );
+        }
+      });
+      for (const capture of successor.captures) {
+        if (
+          requireValue(module, function_, available, capture.value).type !==
+            capture.type
+        ) {
+          throw new TypeError(
+            `${module.source}: edge capture disagrees with its definition`,
+          );
         }
       }
-      intersection.add(block.id);
-      if (!setsEqual(intersection, dominators[block.id])) {
-        dominators[block.id] = intersection;
-        changed = true;
-      }
     }
   }
-  return dominators;
 }
 
-function requireDominatingValue(
+function defineValue(
   module: BlotRuntimeModule,
   function_: BlotRuntimeFunction,
-  values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
-  dominators: readonly ReadonlySet<number>[],
-  value: number,
-  useBlock: number,
-  useOperation: number,
+  values: Map<number, BlotRuntimeValueDefinition>,
+  definition: BlotRuntimeDefinition,
+  instruction?: BlotRuntimeInstruction,
 ): void {
-  const definition = values.get(value);
-  if (definition === undefined) {
+  requireType(
+    module,
+    definition.type,
+    `value ${function_.name}:${definition.value}`,
+  );
+  if (!Number.isSafeInteger(definition.value) || definition.value < 0) {
     throw new TypeError(
-      `${module.source}: function ${function_.name} uses undefined value ${value}`,
+      `${module.source}: function ${function_.name} defines invalid value ID ${definition.value}`,
     );
   }
-  if (
-    definition.block === useBlock && definition.operation < useOperation
-  ) {
-    return;
+  if (!["plain", "owned", "borrowed"].includes(definition.ownership)) {
+    throw new TypeError(
+      `${module.source}: value ${definition.value} has unknown ownership`,
+    );
   }
-  if (
-    definition.block !== useBlock && dominators[useBlock].has(definition.block)
-  ) {
-    return;
+  if (values.has(definition.value)) {
+    throw new TypeError(
+      `${module.source}: function ${function_.name} defines value ${definition.value} more than once`,
+    );
   }
-  throw new TypeError(
-    `${module.source}: value ${value} does not dominate its use in ${function_.name}:${useBlock}`,
-  );
+  values.set(definition.value, {
+    type: definition.type,
+    ownership: definition.ownership,
+    instruction,
+  });
 }
 
-function terminatorValues(
-  terminator: BlotRuntimeTerminator,
-): readonly number[] {
-  if (terminator.kind === "return") return [terminator.value];
-  if (terminator.kind === "branch") return terminator.arguments;
-  if (terminator.kind === "trap") return [];
-  if (terminator.kind === "switch") return [terminator.selector];
-  return [
-    terminator.condition,
-    ...terminator.consequentArguments,
-    ...terminator.alternateArguments,
-  ];
-}
-
-function setsEqual<Value>(
-  left: ReadonlySet<Value>,
-  right: ReadonlySet<Value>,
-): boolean {
-  return left.size === right.size &&
-    [...left].every((value) => right.has(value));
-}
-
-function validateOperation(
+function requireValue(
   module: BlotRuntimeModule,
   function_: BlotRuntimeFunction,
-  operation: BlotRuntimeOperation,
-  capabilityOperations: ReadonlyMap<string, number>,
-  linkOperations: ReadonlyMap<string, number>,
+  available: ReadonlyMap<number, BlotRuntimeValueDefinition>,
+  value: number,
+): BlotRuntimeValueDefinition {
+  const definition = available.get(value);
+  if (definition === undefined) {
+    throw new TypeError(
+      `${module.source}: continuation in ${function_.name} reads unavailable value ${value}`,
+    );
+  }
+  return definition;
+}
+
+const operationKinds: Readonly<Record<BlotRuntimeOperation["kind"], true>> = {
+  "constant": true,
+  "scalar": true,
+  "scalar.unary": true,
+  "convert": true,
+  "text.append": true,
+  "text.join": true,
+  "text.length": true,
+  "text.scalar-at": true,
+  "text.next-byte": true,
+  "text.slice": true,
+  "text.find-from": true,
+  "text.from-i64": true,
+  "text.compare": true,
+  "text.contains": true,
+  "vector": true,
+  "product.make": true,
+  "product.project": true,
+  "sum.make": true,
+  "sum.tag": true,
+  "sum.payload": true,
+  "indirect.make": true,
+  "indirect.load": true,
+  "store.empty": true,
+  "store.literal": true,
+  "store.new": true,
+  "store.length": true,
+  "store.read": true,
+  "store.read.field": true,
+  "store.write": true,
+  "store.grow": true,
+  "scratch.with-capacity": true,
+  "scratch.push": true,
+  "scratch.finish": true,
+  "scratch.recycle": true,
+  "closure.make": true,
+  "seal.wrap": true,
+  "callback.make": true,
+  "seal.unwrap": true,
+  "resource.move": true,
+  "resource.borrow": true,
+  "resource.freeze": true,
+  "resource.drop": true,
+};
+
+function validateInstruction(
+  module: BlotRuntimeModule,
+  function_: BlotRuntimeFunction,
+  instruction: BlotRuntimeInstruction,
   values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
+  const operation = instruction.operation;
+  if (!Object.hasOwn(operationKinds, operation.kind)) {
+    throw new TypeError(
+      `${module.source}: unknown instruction operation ${operation.kind}`,
+    );
+  }
   if (operation.kind === "store.literal") {
-    const resultType = module.types[operation.type];
+    const resultType = module.types[instruction.definition.type];
     if (resultType.kind !== "store") {
       throw new TypeError(
-        `${module.source}: store.literal ${function_.name}:${operation.result} has non-Store result type ${operation.type}`,
+        `${module.source}: store.literal ${function_.name}:${instruction.definition.value} has non-Store result type ${instruction.definition.type}`,
       );
     }
     if (operation.staticStore !== undefined) {
-      if (operation.operands.length !== 0) {
+      if (instruction.operands.length !== 0) {
         throw new TypeError(
-          `${module.source}: static store.literal ${function_.name}:${operation.result} retains runtime operands`,
+          `${module.source}: static store.literal ${function_.name}:${instruction.definition.value} retains runtime operands`,
         );
       }
       const staticStore = module.staticStores[operation.staticStore];
       if (staticStore === undefined) {
         throw new TypeError(
-          `${module.source}: store.literal ${function_.name}:${operation.result} references absent static Store ${operation.staticStore}`,
+          `${module.source}: store.literal ${function_.name}:${instruction.definition.value} references absent static Store ${operation.staticStore}`,
         );
       }
       if (staticStore.elementType !== resultType.elementType) {
         throw new TypeError(
-          `${module.source}: store.literal ${function_.name}:${operation.result} static Store element type ${staticStore.elementType} does not match ${resultType.elementType}`,
+          `${module.source}: store.literal ${function_.name}:${instruction.definition.value} static Store element type ${staticStore.elementType} does not match ${resultType.elementType}`,
         );
       }
     }
-    for (const operand of operation.operands) {
+    for (const operand of instruction.operands) {
       const definition = values.get(operand);
       if (
         definition === undefined || definition.type !== resultType.elementType
       ) {
         throw new TypeError(
-          `${module.source}: store.literal ${function_.name}:${operation.result} operand ${operand} does not have element type ${resultType.elementType}`,
+          `${module.source}: store.literal ${function_.name}:${instruction.definition.value} operand ${operand} does not have element type ${resultType.elementType}`,
         );
       }
     }
   }
   if (operation.kind.startsWith("scratch.")) {
-    validateScratchOperation(module, function_, operation, values);
+    validateScratchOperation(module, function_, instruction, values);
   }
   if (operation.kind === "store.read.field") {
-    const source = values.get(operation.operands[0]);
-    const index = values.get(operation.operands[1]);
+    const source = values.get(instruction.operands[0]);
+    const index = values.get(instruction.operands[1]);
     let sourceType: BlotRuntimeType | undefined;
     if (source !== undefined) {
       sourceType = module.types[source.type];
@@ -1188,45 +1320,73 @@ function validateOperation(
       }
     }
     if (
-      operation.operands.length !== 2 ||
+      instruction.operands.length !== 2 ||
       index === undefined ||
       module.types[index.type].kind !== "signed-integer-64" ||
-      fieldType === undefined || fieldType !== operation.type
+      fieldType === undefined || fieldType !== instruction.definition.type
     ) {
       throw new TypeError(
-        `${module.source}: store.read.field ${function_.name}:${operation.result} requires (Store Product, Int) -> selected field`,
+        `${module.source}: store.read.field ${function_.name}:${instruction.definition.value} requires (Store Product, Int) -> selected field`,
       );
     }
   }
   if (operation.kind === "text.join") {
-    const resultType = module.types[operation.type];
-    const source = values.get(operation.operands[0]);
+    const resultType = module.types[instruction.definition.type];
+    const source = values.get(instruction.operands[0]);
     let sourceType: BlotRuntimeType | undefined;
     if (source !== undefined) {
       sourceType = module.types[source.type];
     }
     if (
-      operation.operands.length !== 1 || resultType.kind !== "text" ||
+      instruction.operands.length !== 1 || resultType.kind !== "text" ||
       sourceType?.kind !== "store" ||
       module.types[sourceType.elementType].kind !== "text"
     ) {
       throw new TypeError(
-        `${module.source}: text.join ${function_.name}:${operation.result} requires Store Text -> Text`,
+        `${module.source}: text.join ${function_.name}:${instruction.definition.value} requires Store Text -> Text`,
+      );
+    }
+  }
+  if (operation.kind === "text.next-byte") {
+    const source = values.get(instruction.operands[0]);
+    const byte = values.get(instruction.operands[1]);
+    const resultType = module.types[instruction.definition.type];
+    let noneType: BlotRuntimeType | undefined;
+    let payloadType: BlotRuntimeType | undefined;
+    if (
+      resultType.kind === "sum" && resultType.cases.length === 2 &&
+      resultType.cases[0].name === "None" && resultType.cases[1].name === "Some"
+    ) {
+      noneType = module.types[resultType.cases[0].payloadType];
+      payloadType = module.types[resultType.cases[1].payloadType];
+    }
+    if (
+      instruction.operands.length !== 2 || source === undefined ||
+      byte === undefined || module.types[source.type].kind !== "text" ||
+      module.types[byte.type].kind !== "signed-integer-64" ||
+      noneType?.kind !== "unit" || payloadType?.kind !== "product" ||
+      payloadType.fields.length !== 2 || payloadType.fields[0].name !== "0" ||
+      payloadType.fields[1].name !== "1" ||
+      module.types[payloadType.fields[0].type].kind !== "text" ||
+      module.types[payloadType.fields[1].type].kind !== "signed-integer-64"
+    ) {
+      throw new TypeError(
+        `${module.source}: text.next-byte ${function_.name}:${instruction.definition.value} requires (Text, Int) -> None | Some (Text, Int)`,
       );
     }
   }
   if (operation.kind === "vector" && operation.operator === "shuffle") {
-    if (operation.operands.length !== 6) {
+    if (instruction.operands.length !== 6) {
       throw new TypeError(
-        `${module.source}: vector shuffle ${function_.name}:${operation.result} requires two vectors and four selectors; received ${operation.operands.length} operands`,
+        `${module.source}: vector shuffle ${function_.name}:${instruction.definition.value} requires two vectors and four selectors; received ${instruction.operands.length} operands`,
       );
     }
-    const resultType = module.types[operation.type];
-    const vectorOperands = operation.operands.slice(0, 2).map((operand) => {
+    const resultType = module.types[instruction.definition.type];
+    const vectorOperands = instruction.operands.slice(0, 2).map((operand) => {
       const definition = values.get(operand);
       if (definition === undefined) {
         throw new TypeError(
-          `${module.source}: vector shuffle ${function_.name}:${operation.result} uses undefined vector ${operand}`,
+          `${module.source}: vector shuffle ${function_.name}:${instruction.definition.value} uses undefined vector ${operand}`,
         );
       }
       return module.types[definition.type];
@@ -1242,19 +1402,18 @@ function validateOperation(
       )
     ) {
       throw new TypeError(
-        `${module.source}: vector shuffle ${function_.name}:${operation.result} requires F32x4 operands and result`,
+        `${module.source}: vector shuffle ${function_.name}:${instruction.definition.value} requires F32x4 operands and result`,
       );
     }
-    for (const selector of operation.operands.slice(2)) {
+    for (const selector of instruction.operands.slice(2)) {
       const definition = values.get(selector);
       if (definition === undefined) {
         throw new TypeError(
-          `${module.source}: vector shuffle ${function_.name}:${operation.result} uses undefined selector ${selector}`,
+          `${module.source}: vector shuffle ${function_.name}:${instruction.definition.value} uses undefined selector ${selector}`,
         );
       }
       const selectorType = module.types[definition.type];
-      const definingOperation = function_.blocks[definition.block]
-        .operations[definition.operation];
+      const definingOperation = definition.instruction?.operation;
       if (
         selectorType.kind !== "integer-32" ||
         definingOperation?.kind !== "constant" ||
@@ -1264,84 +1423,48 @@ function validateOperation(
         definingOperation.value > 7
       ) {
         throw new TypeError(
-          `${module.source}: vector shuffle ${function_.name}:${operation.result} selector ${selector} must be a dominating integer-32 constant from 0 through 7`,
+          `${module.source}: vector shuffle ${function_.name}:${instruction.definition.value} selector ${selector} must be a integer-32 constant from 0 through 7`,
         );
       }
     }
   }
-  if (operation.kind === "call.direct" || operation.kind === "closure.make") {
+  if (operation.kind === "closure.make") {
     requireFunction(
       module,
       operation.function,
-      `${operation.kind} ${function_.name}:${operation.result}`,
+      `${operation.kind} ${function_.name}:${instruction.definition.value}`,
     );
-  }
-  if (operation.kind === "call.indirect") {
-    requireSignature(
-      module,
-      operation.signature,
-      `indirect call ${function_.name}:${operation.result}`,
-    );
-  }
-  if (operation.kind === "host.call") {
-    const signature = capabilityOperations.get(
-      `${operation.capability}\u0000${operation.operation}`,
-    );
-    if (signature === undefined) {
-      throw new TypeError(
-        `${module.source}: host call ${operation.capability}.${operation.operation} is not declared`,
-      );
-    }
-    const requiredEffect = operation.capability;
-    const functionEffects = module.signatures[function_.signature].effects;
-    if (!functionEffects.includes(requiredEffect)) {
-      throw new TypeError(
-        `${module.source}: function ${function_.name} calls ${operation.capability}.${operation.operation} outside capability ${requiredEffect} in its effect row`,
-      );
-    }
-  }
-  if (operation.kind === "call.external") {
-    const signature = linkOperations.get(
-      `${operation.capability}\u0000${operation.operation}`,
-    );
-    if (signature === undefined) {
-      throw new TypeError(
-        `${module.source}: external call ${operation.capability}.${operation.operation} is not declared`,
-      );
-    }
-    if (signature !== operation.signature) {
-      throw new TypeError(
-        `${module.source}: external call ${operation.capability}.${operation.operation} declares signature ${operation.signature}, expected ${signature}`,
-      );
-    }
   }
   if (
     (operation.kind === "store.write" || operation.kind === "store.grow") &&
     operation.update === "owned-reuse"
   ) {
-    if (operation.ownership !== "owned") {
+    if (instruction.definition.ownership !== "owned") {
       throw new TypeError(
-        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse with ${operation.ownership} ownership`,
+        `${module.source}: ${operation.kind} ${function_.name}:${instruction.definition.value} claims owned reuse with ${instruction.definition.ownership} ownership`,
       );
     }
-    const source = values.get(operation.operands[0]);
+    const source = values.get(instruction.operands[0]);
     if (source === undefined) {
       throw new TypeError(
-        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} has no source Store`,
+        `${module.source}: ${operation.kind} ${function_.name}:${instruction.definition.value} has no source Store`,
       );
     }
     const sourceType = module.types[source.type];
-    const resultType = module.types[operation.type];
+    const resultType = module.types[instruction.definition.type];
     if (sourceType.kind !== "store" || resultType.kind !== "store") {
       throw new TypeError(
-        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse without Store source and result types`,
+        `${module.source}: ${operation.kind} ${function_.name}:${instruction.definition.value} claims owned reuse without Store source and result types`,
       );
     }
     const sourceLayout = runtimeLayoutWitness(module, source.type);
-    const resultLayout = runtimeLayoutWitness(module, operation.type);
+    const resultLayout = runtimeLayoutWitness(
+      module,
+      instruction.definition.type,
+    );
     if (sourceLayout.fingerprint !== resultLayout.fingerprint) {
       throw new TypeError(
-        `${module.source}: ${operation.kind} ${function_.name}:${operation.result} claims owned reuse across incompatible layouts ${sourceLayout.fingerprint} and ${resultLayout.fingerprint}`,
+        `${module.source}: ${operation.kind} ${function_.name}:${instruction.definition.value} claims owned reuse across incompatible layouts ${sourceLayout.fingerprint} and ${resultLayout.fingerprint}`,
       );
     }
   }
@@ -1366,13 +1489,15 @@ function isStaticStoreValue(
 function validateScratchOperation(
   module: BlotRuntimeModule,
   function_: BlotRuntimeFunction,
-  operation: BlotRuntimeOperation,
+  instruction: BlotRuntimeInstruction,
   values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
 ): void {
-  const location = `${operation.kind} ${function_.name}:${operation.result}`;
-  const resultType = module.types[operation.type];
+  const operation = instruction.operation;
+  const location =
+    `${operation.kind} ${function_.name}:${instruction.definition.value}`;
+  const resultType = module.types[instruction.definition.type];
   const operandTypeId = (index: number): number => {
-    const operand = operation.operands[index];
+    const operand = instruction.operands[index];
     if (operand === undefined) {
       throw new TypeError(
         `${module.source}: ${location} omits operand ${index}`,
@@ -1391,7 +1516,7 @@ function validateScratchOperation(
   };
   if (operation.kind === "scratch.with-capacity") {
     if (
-      operation.operands.length !== 1 || resultType.kind !== "scratch" ||
+      instruction.operands.length !== 1 || resultType.kind !== "scratch" ||
       operandType(0).kind !== "signed-integer-64"
     ) {
       throw new TypeError(
@@ -1404,7 +1529,7 @@ function validateScratchOperation(
     const sourceType = operandType(0);
     const valueType = operandTypeId(1);
     if (
-      operation.operands.length !== 2 || resultType.kind !== "scratch" ||
+      instruction.operands.length !== 2 || resultType.kind !== "scratch" ||
       sourceType.kind !== "scratch" ||
       sourceType.elementType !== resultType.elementType ||
       valueType !== resultType.elementType
@@ -1418,7 +1543,7 @@ function validateScratchOperation(
   const sourceType = operandType(0);
   if (operation.kind === "scratch.finish") {
     if (
-      operation.operands.length !== 1 || resultType.kind !== "store" ||
+      instruction.operands.length !== 1 || resultType.kind !== "store" ||
       sourceType.kind !== "scratch" ||
       sourceType.elementType !== resultType.elementType
     ) {
@@ -1429,7 +1554,7 @@ function validateScratchOperation(
     return;
   }
   if (
-    operation.operands.length !== 1 || resultType.kind !== "scratch" ||
+    instruction.operands.length !== 1 || resultType.kind !== "scratch" ||
     sourceType.kind !== "store" ||
     sourceType.elementType !== resultType.elementType
   ) {
@@ -1468,251 +1593,6 @@ function typeContainsScratch(
     return typeContainsScratch(module, type.representationType, seen);
   }
   return false;
-}
-
-function validateEffectClosure(
-  module: BlotRuntimeModule,
-): void {
-  const declaredCapabilities = new Set(
-    module.capabilities.map((capability) => capability.name),
-  );
-  module.signatures.forEach((signature, signatureId) => {
-    for (const effect of signature.effects) {
-      if (!declaredCapabilities.has(effect)) {
-        throw new TypeError(
-          `${module.source}: signature ${signatureId} names undeclared effect ${effect}`,
-        );
-      }
-    }
-  });
-  const observed = module.functions.map(() => new Set<string>());
-  const directCalls = module.functions.map(() => new Set<number>());
-  for (const function_ of module.functions) {
-    const reachable = reachableBlocks(function_);
-    for (const block of function_.blocks) {
-      if (!reachable.has(block.id)) continue;
-      for (const operation of block.operations) {
-        if (operation.kind === "host.call") {
-          observed[function_.id].add(
-            operation.capability,
-          );
-        } else if (operation.kind === "call.direct") {
-          directCalls[function_.id].add(operation.function);
-        } else if (operation.kind === "call.external") {
-          module.signatures[operation.signature].effects.forEach((effect) =>
-            observed[function_.id].add(effect)
-          );
-        } else if (operation.kind === "call.indirect") {
-          module.signatures[operation.signature].effects.forEach((effect) =>
-            observed[function_.id].add(effect)
-          );
-        }
-      }
-    }
-  }
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const function_ of module.functions) {
-      for (const callee of directCalls[function_.id]) {
-        for (const effect of observed[callee]) {
-          if (observed[function_.id].has(effect)) continue;
-          observed[function_.id].add(effect);
-          changed = true;
-        }
-      }
-    }
-  }
-  for (const function_ of module.functions) {
-    const declared = new Set(module.signatures[function_.signature].effects);
-    if (setsEqual(declared, observed[function_.id])) continue;
-    throw new TypeError(
-      `${module.source}: function ${function_.name} effect row [${
-        [...declared].sort().join(", ")
-      }] differs from reachable effects [${
-        [...observed[function_.id]].sort().join(", ")
-      }]`,
-    );
-  }
-}
-
-function reachableBlocks(function_: BlotRuntimeFunction): ReadonlySet<number> {
-  const reachable = new Set<number>();
-  const pending = [function_.entryBlock];
-  while (pending.length > 0) {
-    const block = pending.pop()!;
-    if (reachable.has(block)) continue;
-    reachable.add(block);
-    const terminator = function_.blocks[block].terminator;
-    if (terminator.kind === "branch") pending.push(terminator.target);
-    if (terminator.kind === "conditional") {
-      pending.push(terminator.consequent, terminator.alternate);
-    }
-    if (terminator.kind === "switch") {
-      pending.push(
-        ...terminator.cases.map((case_) => case_.target),
-        terminator.fallback,
-      );
-    }
-  }
-  return reachable;
-}
-
-function validateTerminator(
-  module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
-  block: BlotRuntimeBlock,
-  values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
-  resultType: number,
-): void {
-  const terminator = block.terminator;
-  if (terminator.kind === "return") {
-    const definition = values.get(terminator.value);
-    if (definition === undefined) {
-      throw new TypeError(
-        `${module.source}: return ${function_.name}:${block.id} uses undefined value ${terminator.value}`,
-      );
-    }
-    if (definition.type !== resultType) {
-      throw new TypeError(
-        `${module.source}: return ${function_.name}:${block.id} has type ${definition.type}; signature requires ${resultType}`,
-      );
-    }
-    return;
-  }
-  if (terminator.kind === "trap") return;
-  if (terminator.kind === "conditional") {
-    const conditionType = values.get(terminator.condition)?.type;
-    if (
-      conditionType === undefined ||
-      module.types[conditionType]?.kind !== "boolean"
-    ) {
-      throw new TypeError(
-        `${module.source}: conditional ${function_.name}:${block.id} requires boolean value; received ${terminator.condition} of type ${conditionType}`,
-      );
-    }
-    validateEdge(
-      module,
-      function_,
-      terminator.consequent,
-      terminator.consequentArguments,
-      values,
-      `${block.id} consequent`,
-    );
-    validateEdge(
-      module,
-      function_,
-      terminator.alternate,
-      terminator.alternateArguments,
-      values,
-      `${block.id} alternate`,
-    );
-    return;
-  }
-  if (terminator.kind === "switch") {
-    const selectorType = values.get(terminator.selector)?.type;
-    const selectorKind = selectorType === undefined
-      ? undefined
-      : module.types[selectorType]?.kind;
-    if (selectorKind !== "integer-32" && selectorKind !== "signed-integer-64") {
-      throw new TypeError(
-        `${module.source}: switch ${function_.name}:${block.id} requires an integer selector; received ${terminator.selector} of type ${selectorType}`,
-      );
-    }
-    const expectedConstantKind = selectorKind;
-    const seen = new Set<string>();
-    for (const case_ of terminator.cases) {
-      if (case_.value.kind !== expectedConstantKind) {
-        throw new TypeError(
-          `${module.source}: switch ${function_.name}:${block.id} case ${case_.value.value} has kind ${case_.value.kind}; selector requires ${expectedConstantKind}`,
-        );
-      }
-      const key = `${case_.value.kind}:${case_.value.value}`;
-      if (seen.has(key)) {
-        throw new TypeError(
-          `${module.source}: switch ${function_.name}:${block.id} repeats case ${case_.value.value}`,
-        );
-      }
-      seen.add(key);
-      validateEdge(
-        module,
-        function_,
-        case_.target,
-        [],
-        values,
-        `${block.id} switch case ${case_.value.value}`,
-      );
-    }
-    validateEdge(
-      module,
-      function_,
-      terminator.fallback,
-      [],
-      values,
-      `${block.id} switch fallback`,
-    );
-    return;
-  }
-  validateEdge(
-    module,
-    function_,
-    terminator.target,
-    terminator.arguments,
-    values,
-    `${block.id} branch`,
-  );
-}
-
-function validateEdge(
-  module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
-  target: number,
-  arguments_: readonly number[],
-  values: ReadonlyMap<number, BlotRuntimeValueDefinition>,
-  location: string,
-): void {
-  const targetBlock = function_.blocks[target];
-  if (targetBlock === undefined) {
-    throw new TypeError(
-      `${module.source}: ${function_.name}:${location} targets absent block ${target}`,
-    );
-  }
-  if (arguments_.length !== targetBlock.parameters.length) {
-    throw new TypeError(
-      `${module.source}: ${function_.name}:${location} passes ${arguments_.length} values to ${targetBlock.parameters.length} block parameters`,
-    );
-  }
-  arguments_.forEach((argument, index) => {
-    const type = values.get(argument)?.type;
-    const expected = targetBlock.parameters[index].type;
-    if (type !== expected) {
-      throw new TypeError(
-        `${module.source}: ${function_.name}:${location} argument ${index} has type ${type}; target requires ${expected}`,
-      );
-    }
-  });
-}
-
-function defineValue(
-  module: BlotRuntimeModule,
-  function_: BlotRuntimeFunction,
-  values: Map<number, BlotRuntimeValueDefinition>,
-  value: number,
-  type: number,
-  block: number,
-  operation: number,
-): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(
-      `${module.source}: function ${function_.name} defines invalid value ID ${value}`,
-    );
-  }
-  if (values.has(value)) {
-    throw new TypeError(
-      `${module.source}: function ${function_.name} defines value ${value} more than once`,
-    );
-  }
-  values.set(value, { type, block, operation });
 }
 
 function requireType(

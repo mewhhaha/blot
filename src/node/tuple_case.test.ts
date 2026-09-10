@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -63,19 +64,21 @@ return { .pick = pick; .strict = strict; .identity = identity; .flip = flip; .en
         },
       },
     );
-    const pick = instance.exports["blot:pick"] as (
+    const pick = scalarExport(instance, "blot:pick") as (
       flag: number,
       y: bigint,
     ) => bigint;
-    const strict = instance.exports["blot:strict"] as () => bigint;
-    const identity = instance.exports["blot:identity"] as (
+    const strict = scalarExport(instance, "blot:strict") as () => bigint;
+    const identity = scalarExport(instance, "blot:identity") as (
       flag: number,
     ) => number;
-    const flip = instance.exports["blot:flip"] as (flag: number) => number;
-    const enumIdentity = instance.exports["blot:enum_identity"] as (
+    const flip = scalarExport(instance, "blot:flip") as (
+      flag: number,
+    ) => number;
+    const enumIdentity = scalarExport(instance, "blot:enum_identity") as (
       tag: number,
     ) => number;
-    const enumIndex = instance.exports["blot:enum_index"] as (
+    const enumIndex = scalarExport(instance, "blot:enum_index") as (
       tag: number,
     ) => bigint;
     // Public constructor tags are canonical by name, not source order.

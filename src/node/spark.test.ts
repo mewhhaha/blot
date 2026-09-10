@@ -188,6 +188,26 @@ test("child scopes inherit the executor, cancellation drains one job, and scope 
       }
     };
     const capabilities = new Map(sparks.capabilitiesFor(artifact));
+    const sparkOperations = capabilities.get("SparkRuntime");
+    assert.ok(sparkOperations !== undefined);
+    const cancel = sparkOperations.get("cancel");
+    assert.ok(cancel !== undefined);
+    const cancelOnce: HostOperation = async (context, job) => {
+      const pending = Promise.resolve(cancel(context, job));
+      await assert.rejects(
+        Promise.resolve(cancel(context, job)),
+        /revoked|consumed/,
+      );
+      await pending;
+      assert.equal(drained, 1);
+      assert.equal(sparks.statistics.jobsActive, 0);
+      assert.equal(sparks.statistics.jobsRetained, 0);
+      return null;
+    };
+    capabilities.set(
+      "SparkRuntime",
+      new Map([...sparkOperations, ["cancel", cancelOnce]]),
+    );
     capabilities.set("Clock", new Map([["tick", tick]]));
     const hosted = await instantiateArtifact(artifact, capabilities, {
       scope: root,

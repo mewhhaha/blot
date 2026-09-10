@@ -458,10 +458,34 @@ export interface CompilerDevelopmentMemoryProfile {
   readonly checkpoints: readonly CompilerDevelopmentMemoryCheckpoint[];
 }
 
+export type GraphCacheOutcome =
+  | "hit"
+  | "miss"
+  | "representation-changed"
+  | "unsupported-identity"
+  | "incomplete-component"
+  | "unsupported-operation"
+  | "live-authority"
+  | "generative-change"
+  | "budget";
+
+const graphCacheOutcomes = new Set<string>([
+  "hit",
+  "miss",
+  "representation-changed",
+  "unsupported-identity",
+  "incomplete-component",
+  "unsupported-operation",
+  "live-authority",
+  "generative-change",
+  "budget",
+]);
+
 export interface DevelopmentWork {
   readonly specializedFunctions: Readonly<Record<string, number>>;
   readonly reusedFunctions: Readonly<Record<string, number>>;
   readonly emittedUnits: number;
+  readonly graphCache: Readonly<Partial<Record<GraphCacheOutcome, number>>>;
 }
 
 export type CompilerDevelopmentCompilationResult =
@@ -1022,6 +1046,12 @@ export class CompilerWasm {
         Object.values(work.specializedFunctions).some((count) =>
           !Number.isSafeInteger(count) || count < 0
         ) ||
+        typeof work.graphCache !== "object" || work.graphCache === null ||
+        Array.isArray(work.graphCache) ||
+        Object.entries(work.graphCache).some(([outcome, count]) =>
+          !graphCacheOutcomes.has(outcome) || !Number.isSafeInteger(count) ||
+          count < 0
+        ) ||
         typeof work.reusedFunctions !== "object" ||
         work.reusedFunctions === null ||
         Array.isArray(work.reusedFunctions) ||
@@ -1070,6 +1100,7 @@ export class CompilerWasm {
         developmentProfile: result.developmentProfile,
         work: Object.freeze({
           emittedUnits: work.emittedUnits,
+          graphCache: Object.freeze({ ...work.graphCache }),
           specializedFunctions: Object.freeze({ ...work.specializedFunctions }),
           reusedFunctions: Object.freeze({ ...work.reusedFunctions }),
         }),
@@ -1274,19 +1305,49 @@ function decodeRuntimeHir(value: unknown): BlotRuntimeModule {
     if (typeof function_ !== "object" || function_ === null) {
       throw new TypeError("Rust Runtime HIR function is not an object");
     }
-    const blocks = (function_ as Record<string, unknown>).blocks;
-    if (!Array.isArray(blocks)) {
-      throw new TypeError("Rust Runtime HIR function has no block table");
+    const continuations = (function_ as Record<string, unknown>).continuations;
+    if (!Array.isArray(continuations)) {
+      throw new TypeError(
+        "Rust Runtime HIR function has no continuation table",
+      );
     }
-    for (const block of blocks) {
-      if (typeof block !== "object" || block === null) {
-        throw new TypeError("Rust Runtime HIR block is not an object");
+    for (const continuation of continuations) {
+      if (typeof continuation !== "object" || continuation === null) {
+        throw new TypeError("Rust Runtime HIR continuation is not an object");
       }
-      const operations = (block as Record<string, unknown>).operations;
-      if (!Array.isArray(operations)) {
-        throw new TypeError("Rust Runtime HIR block has no operation table");
+      const instructions =
+        (continuation as Record<string, unknown>).instructions;
+      if (!Array.isArray(instructions)) {
+        throw new TypeError(
+          "Rust Runtime HIR continuation has no instruction table",
+        );
       }
-      for (const operation of operations) decodeRuntimeConstant(operation);
+      for (const instruction of instructions) {
+        if (typeof instruction !== "object" || instruction === null) {
+          throw new TypeError("Rust Runtime HIR instruction is not an object");
+        }
+        decodeRuntimeConstant(
+          (instruction as Record<string, unknown>).operation,
+        );
+      }
+      const transition = (continuation as Record<string, unknown>).transition;
+      if (typeof transition !== "object" || transition === null) {
+        throw new TypeError("Rust Runtime HIR continuation has no transition");
+      }
+      if ((transition as Record<string, unknown>).kind === "switch") {
+        const cases = (transition as Record<string, unknown>).cases;
+        if (!Array.isArray(cases)) {
+          throw new TypeError("Rust Runtime HIR switch has no case table");
+        }
+        for (const case_ of cases) {
+          if (!Array.isArray(case_) || case_.length !== 2) {
+            throw new TypeError(
+              "Rust Runtime HIR switch case is not a constant/edge pair",
+            );
+          }
+          case_[0] = decodeRuntimeWireConstant(case_[0]);
+        }
+      }
     }
   }
   const staticStores = module.staticStores;
@@ -1309,7 +1370,11 @@ function decodeRuntimeHir(value: unknown): BlotRuntimeModule {
 }
 
 function decodeRuntimeConstant(value: unknown): void {
-  if (typeof value !== "object" || value === null) return;
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError(
+      "Rust Runtime HIR instruction operation is not an object",
+    );
+  }
   const operation = value as Record<string, unknown>;
   if (operation.kind !== "constant") return;
   operation.value = decodeRuntimeWireConstant(operation.value);

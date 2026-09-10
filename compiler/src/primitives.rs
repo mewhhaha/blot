@@ -147,6 +147,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@text.cmp"
         | "@text.contains"
         | "@text.scalar_at"
+        | "@text.next_byte"
         | "@json.parse"
         | "@float.add"
         | "@float.sub"
@@ -340,7 +341,7 @@ pub fn run_primitive(
         "@fail" => Err(Diagnostic::new(
             "BLOT_REFUSED",
             match &arguments[0] {
-                Value::Text(message) => message.clone(),
+                Value::Text(message) => message.to_string(),
                 value => show(value),
             },
             span,
@@ -435,8 +436,7 @@ pub fn run_primitive(
         "@shape.names" => Ok(Value::Array(
             shape(&arguments[0], span, name)?
                 .keys()
-                .cloned()
-                .map(Value::Text)
+                .map(|name| Value::Text(name.as_str().into()))
                 .collect(),
         )),
         "@shape.has" => Ok(boolean(
@@ -758,11 +758,14 @@ pub fn run_primitive(
             span,
             name,
         )?))),
-        "@text.concat" => Ok(Value::Text(format!(
-            "{}{}",
-            text(&arguments[0], span, name)?,
-            text(&arguments[1], span, name)?
-        ))),
+        "@text.concat" => Ok(Value::Text(
+            format!(
+                "{}{}",
+                text(&arguments[0], span, name)?,
+                text(&arguments[1], span, name)?
+            )
+            .into(),
+        )),
         "@text.join" => {
             let values = array(&arguments[0], span, name)?;
             let mut joined = String::with_capacity(
@@ -774,7 +777,7 @@ pub fn run_primitive(
             for value in values {
                 joined.push_str(text(value, span, name)?);
             }
-            Ok(Value::Text(joined))
+            Ok(Value::Text(joined.into()))
         }
         "@text.len" => Ok(Value::Int(BigInt::from(
             text(&arguments[0], span, name)?.chars().count(),
@@ -785,8 +788,32 @@ pub fn run_primitive(
             source
                 .chars()
                 .nth(index)
-                .map(|scalar| Value::Text(scalar.to_string()))
+                .map(|scalar| Value::Text(scalar.to_string().into()))
                 .ok_or_else(|| text_bounds_error(name, span))
+        }
+        "@text.next_byte" => {
+            let source = text(&arguments[0], span, name)?;
+            let (byte, suffix) = integer(&arguments[1], span, name)?
+                .to_usize()
+                .and_then(|byte| source.get(byte..).map(|remaining| (byte, remaining)))
+                .ok_or_else(|| Diagnostic::new(
+                    "BLOT_TEXT_BYTE_BOUNDS",
+                    "@text.next_byte requires a UTF-8 byte boundary within its Text, including the end.",
+                    span,
+                ))?;
+            Ok(match suffix.chars().next() {
+                Some(scalar) => Value::Tag {
+                    name: "Some".to_owned(),
+                    payload: Some(Box::new(tuple(vec![
+                        Value::Text(scalar.to_string().into()),
+                        Value::Int(BigInt::from(byte + scalar.len_utf8())),
+                    ]))),
+                },
+                None => Value::Tag {
+                    name: "None".to_owned(),
+                    payload: None,
+                },
+            })
         }
         "@text.slice" => {
             let source = text(&arguments[0], span, name)?;
@@ -797,7 +824,12 @@ pub fn run_primitive(
                 return Err(text_bounds_error(name, span));
             }
             Ok(Value::Text(
-                source.chars().skip(start).take(end - start).collect(),
+                source
+                    .chars()
+                    .skip(start)
+                    .take(end - start)
+                    .collect::<String>()
+                    .into(),
             ))
         }
         "@text.find_from" => {
@@ -832,7 +864,9 @@ pub fn run_primitive(
             span,
             name,
         )?))),
-        "@text.of_int" => Ok(Value::Text(integer(&arguments[0], span, name)?.to_string())),
+        "@text.of_int" => Ok(Value::Text(
+            integer(&arguments[0], span, name)?.to_string().into(),
+        )),
         "@json.parse" => parse_json(arguments, span, phase),
         "@assert.reuse" => {
             let mut value = arguments[0].clone();
@@ -952,7 +986,7 @@ pub fn run_primitive(
         "@panic" => Err(Diagnostic::new(
             "BLOT_PANIC",
             match &arguments[0] {
-                Value::Text(message) => message.clone(),
+                Value::Text(message) => message.to_string(),
                 value => show(value),
             },
             span,
@@ -1822,7 +1856,7 @@ fn reflect(value: &Value) -> Value {
         Value::Tag { name, payload } => tagged(
             "Tag",
             Value::Shape(OrderedFields::from([
-                ("name".to_owned(), Value::Text(name.clone())),
+                ("name".to_owned(), Value::Text(name.as_str().into())),
                 (
                     "payload".to_owned(),
                     match payload {
@@ -1879,7 +1913,7 @@ fn reflect(value: &Value) -> Value {
         Value::Sealed { name, inner } => tagged(
             "Sealed",
             Value::Shape(OrderedFields::from([
-                ("name".to_owned(), Value::Text(name.clone())),
+                ("name".to_owned(), Value::Text(name.as_str().into())),
                 ("inner".to_owned(), (**inner).clone()),
             ])),
         ),
@@ -2031,7 +2065,7 @@ fn resolve_member(arguments: Vec<Value>, span: Span, phase: Phase) -> Result<Val
             "le" => Ok(boolean(a <= b)),
             "gt" => Ok(boolean(a > b)),
             "ge" => Ok(boolean(a >= b)),
-            "add" => Ok(Value::Text(format!("{a}{b}"))),
+            "add" => Ok(Value::Text(format!("{a}{b}").into())),
             _ => Err(Diagnostic::new(
                 "BLOT_UNKNOWN_MEMBER",
                 format!("Text has no member `{member}`"),
@@ -2183,7 +2217,7 @@ fn json_to_value(value: serde_json::Value, span: Span) -> Result<Value, Diagnost
     match value {
         serde_json::Value::Null => Ok(Value::Unit),
         serde_json::Value::Bool(value) => Ok(boolean(value)),
-        serde_json::Value::String(value) => Ok(Value::Text(value)),
+        serde_json::Value::String(value) => Ok(Value::Text(value.into())),
         serde_json::Value::Array(values) => values
             .into_iter()
             .map(|value| json_to_value(value, span))
@@ -2223,6 +2257,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_cursor_steps_all_utf8_widths_and_preserves_scalar_contents() {
+        let source = "aéβ\u{feff}🐱\0e\u{301}";
+        let span = Span { start: 4, end: 9 };
+        for (byte, scalar) in source.char_indices() {
+            let stepped = run_primitive(
+                "@text.next_byte",
+                vec![Value::Text(source.into()), Value::Int(byte.into())],
+                span,
+                Phase::Comptime,
+            )
+            .expect("a UTF-8 boundary should step");
+            let expected = Value::Tag {
+                name: "Some".to_owned(),
+                payload: Some(Box::new(tuple(vec![
+                    Value::Text(scalar.to_string().into()),
+                    Value::Int((byte + scalar.len_utf8()).into()),
+                ]))),
+            };
+            assert!(
+                equal(&stepped, &expected),
+                "byte {byte}: {}",
+                show(&stepped)
+            );
+        }
+        for source in ["", source] {
+            let end = run_primitive(
+                "@text.next_byte",
+                vec![Value::Text(source.into()), Value::Int(source.len().into())],
+                span,
+                Phase::Comptime,
+            )
+            .expect("EOF is a valid boundary");
+            assert!(matches!(end, Value::Tag { name, payload: None } if name == "None"));
+        }
+    }
+
+    #[test]
+    fn text_cursor_rejects_invalid_byte_offsets_with_source_evidence() {
+        let span = Span { start: 4, end: 9 };
+        let invalid = [(-1).into(), 1.into(), 3.into(), BigInt::from(1) << 80];
+        for byte in invalid {
+            let error = run_primitive(
+                "@text.next_byte",
+                vec![Value::Text("é".into()), Value::Int(byte)],
+                span,
+                Phase::Comptime,
+            )
+            .expect_err("an invalid byte boundary must fail");
+            assert_eq!(error.code, "BLOT_TEXT_BYTE_BOUNDS");
+            assert_eq!(error.span, span);
+        }
+    }
+
+    #[test]
     fn float_ordering_refuses_nan() {
         for operation in ["@float.cmp", "@f32.cmp"] {
             let error = float_ordering(f64::NAN, 0.0, Span { start: 1, end: 2 }, operation)
@@ -2260,9 +2348,9 @@ mod tests {
             "@text.join",
             vec![Value::Array(
                 vec![
-                    Value::Text("left".to_owned()),
-                    Value::Text(String::new()),
-                    Value::Text("right".to_owned()),
+                    Value::Text("left".into()),
+                    Value::Text("".into()),
+                    Value::Text("right".into()),
                 ]
                 .into(),
             )],
@@ -2271,7 +2359,7 @@ mod tests {
         )
         .expect("Text slices should join");
 
-        assert!(matches!(joined, Value::Text(value) if value == "leftright"));
+        assert!(matches!(joined, Value::Text(value) if value.as_ref() == "leftright"));
     }
 
     #[test]

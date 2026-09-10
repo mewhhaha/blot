@@ -1,3 +1,4 @@
+import { requiredFunction } from "../abi_values.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -66,20 +67,25 @@ return encode`,
         throw new Error("missing ABI memory");
       }
       for (const value of [0n, -17n, 9223372036854775807n]) {
-        const address: unknown = encode(value);
-        if (typeof address !== "number") {
-          throw new Error("missing indirect result address");
-        }
+        const scope = Number(requiredFunction(instance, "cabi_enter")());
         try {
-          const view = new DataView(memory.buffer);
-          const pointer = view.getUint32(address, true);
-          const length = view.getUint32(address + 4, true);
-          const text = new TextDecoder("utf-8", { fatal: true }).decode(
-            new Uint8Array(memory.buffer, pointer, length),
-          );
-          assert.equal(text, `5:count=${value};4:code=7;`);
+          const address: unknown = encode(scope, value);
+          if (typeof address !== "number") {
+            throw new Error("missing indirect result address");
+          }
+          try {
+            const view = new DataView(memory.buffer);
+            const pointer = view.getUint32(address, true);
+            const length = view.getUint32(address + 4, true);
+            const text = new TextDecoder("utf-8", { fatal: true }).decode(
+              new Uint8Array(memory.buffer, pointer, length),
+            );
+            assert.equal(text, `5:count=${value};4:code=7;`);
+          } finally {
+            release(scope, address);
+          }
         } finally {
-          release(address);
+          requiredFunction(instance, "cabi_leave")(scope);
         }
       }
     },

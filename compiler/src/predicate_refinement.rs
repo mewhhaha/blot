@@ -113,9 +113,10 @@ fn predicate_intervals(
     budget: &mut usize,
 ) -> Result<Vec<Interval>, Diagnostic> {
     if *budget == 0 {
-        return Err(unsupported(
+        return Err(Diagnostic::new(
+            "BLOT_PREDICATE_BUDGET",
+            format!("Predicate normalization exceeded its {MAX_PREDICATE_NODES}-node budget."),
             span,
-            &format!("A predicate may contain at most {MAX_PREDICATE_NODES} expression nodes."),
         ));
     }
     *budget -= 1;

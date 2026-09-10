@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -42,34 +43,44 @@ try {
 
       const hir = await compiler.prepare(quicksortPath);
       const operations = hir.functions.flatMap((function_) =>
-        function_.blocks.flatMap((block) => block.operations)
+        function_.continuations.flatMap((continuation) =>
+          continuation.instructions
+        )
       );
-      const writes = operations.filter((operation) =>
-        operation.kind === "store.write"
+      const writes = operations.filter((instruction) =>
+        instruction.operation.kind === "store.write"
       );
       assert.ok(writes.length > 0, "runtime quicksort emitted no Store writes");
-      for (const operation of operations) {
+      for (const instruction of operations) {
         if (
-          operation.kind === "store.write" || operation.kind === "store.grow"
+          instruction.operation.kind === "store.write" ||
+          instruction.operation.kind === "store.grow"
         ) {
-          assert.equal(operation.update, "owned-reuse");
+          assert.equal(instruction.operation.update, "owned-reuse");
         }
       }
       const writers = hir.functions.filter((function_) =>
-        function_.blocks.some((block) =>
-          block.operations.some((operation) => operation.kind === "store.write")
+        function_.continuations.some((continuation) =>
+          continuation.instructions.some((instruction) =>
+            instruction.operation.kind === "store.write"
+          )
         )
       );
       assert.ok(writers.length > 0);
       assert.ok(writers.every((function_) => function_.reuse === "checked"));
       assert.ok(
-        operations.some((operation) => operation.kind === "call.direct"),
+        hir.functions.some((function_) =>
+          function_.continuations.some((continuation) =>
+            continuation.transition.kind === "call" &&
+            continuation.transition.target.kind === "function"
+          )
+        ),
       );
       assert.ok(
         hir.functions.some((function_) =>
-          function_.blocks.some((block) =>
-            block.terminator.kind === "branch" &&
-            block.terminator.target === function_.entryBlock
+          function_.continuations.some((continuation) =>
+            continuation.transition.kind === "jump" &&
+            continuation.transition.edge.target === function_.entry
           )
         ),
       );
@@ -145,13 +156,13 @@ async function instantiate(
 > {
   const instance = await WebAssembly.instantiate(module, {
     "blot:host/Source": {
-      value(input: bigint) {
+      value(_scope: number, input: bigint) {
         if (input === 0n) return BigInt(first);
         return 1n;
       },
     },
   });
-  const run = instance.exports["blot:default"];
+  const run = scalarExport(instance, "blot:default");
   const memory = instance.exports.memory;
   assert.equal(typeof run, "function");
   assert.ok(memory instanceof WebAssembly.Memory);

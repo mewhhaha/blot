@@ -1,3 +1,4 @@
+import { scalarExport } from "../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -65,7 +66,7 @@ test("capsules keep distinct POSIX filenames distinct", {
       const { instance } = await WebAssembly.instantiate(
         Uint8Array.from(artifact.wasm),
       );
-      const run = instance.exports["blot:default"];
+      const run = scalarExport(instance, "blot:default");
       assert.equal(typeof run, "function");
       if (typeof run !== "function") throw new Error("missing default export");
       assert.equal(run(), 42n);

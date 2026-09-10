@@ -326,7 +326,7 @@ A seal name is a manifest and conformance fact. Equal raw Core Wasm carrier
 bytes do not dynamically enforce source nominality. The ABI theorem assumes a
 caller that follows the declared manifest and ownership protocol.
 
-A private Runtime-HIR root or capability with no ABI 3 relation must be refused
+A private Runtime-HIR root or capability with no ABI 4 relation must be refused
 at public-layout construction. Reaching the emitter with such a boundary is an
 invariant failure.
 

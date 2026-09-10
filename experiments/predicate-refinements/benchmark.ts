@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -199,7 +200,7 @@ async function instantiate(
   const instantiated = await WebAssembly.instantiate(
     Uint8Array.from(artifact.wasm),
   );
-  const exported = instantiated.instance.exports["blot:default"];
+  const exported = scalarExport(instantiated.instance, "blot:default");
   if (typeof exported !== "function") {
     throw new Error("The benchmark artifact omitted `blot:default`.");
   }
@@ -215,11 +216,11 @@ async function instantiate(
 function operationHistogram(hir: Awaited<ReturnType<Compiler["prepare"]>>) {
   const counts = new Map<string, number>();
   for (const fn of hir.functions) {
-    for (const block of fn.blocks) {
-      for (const operation of block.operations) {
-        const before = counts.get(operation.kind);
-        if (before === undefined) counts.set(operation.kind, 1);
-        else counts.set(operation.kind, before + 1);
+    for (const continuation of fn.continuations) {
+      for (const instruction of continuation.instructions) {
+        const before = counts.get(instruction.operation.kind);
+        if (before === undefined) counts.set(instruction.operation.kind, 1);
+        else counts.set(instruction.operation.kind, before + 1);
       }
     }
   }

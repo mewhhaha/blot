@@ -322,6 +322,12 @@ The refinement fact does not duplicate the owned carrier.
 
 ## 8. Erasure and representation
 
+The production normalizer visits at most 256 predicate expression nodes per
+refinement. Exhaustion reports `BLOT_PREDICATE_BUDGET` through the
+compiler-limit transport. An unsupported predicate form remains a source
+diagnostic; budget exhaustion is neither unsupported syntax nor proof of source
+invalidity.
+
 Predicate normalization completes before Runtime HIR. For an integer refinement:
 
 ```text

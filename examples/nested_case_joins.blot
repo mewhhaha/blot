@@ -1,0 +1,3 @@
+const cases = import "./lib/nested_case_joins.blot"
+
+return [cases.observe 0, cases.observe 1, cases.observe 2]

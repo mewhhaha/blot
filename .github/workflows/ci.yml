@@ -102,6 +102,10 @@ jobs:
       - name: Test Rust compiler
         timeout-minutes: 10
         run: cargo test --manifest-path compiler/Cargo.toml -- --nocapture
+      - name: Verify emitted memory lifetimes
+        run: pnpm test:memory
+      - name: Verify guest ABI callers
+        run: pnpm test:guest-abi
       - name: Deterministic compiler performance gates
         run: >-
           node

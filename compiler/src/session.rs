@@ -612,7 +612,7 @@ impl CompilerSession {
 
     pub fn evaluate_module(&self, path: &str) -> serde_json::Value {
         if let Err(diagnostic) = self.begin_semantic_request(path) {
-            return diagnostic_json(diagnostic);
+            return diagnostic.failure_json("semantic preparation");
         }
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
@@ -642,14 +642,14 @@ impl CompilerSession {
 
     pub fn check_module(&self, path: &str) -> serde_json::Value {
         if let Err(diagnostic) = self.begin_semantic_request(path) {
-            return diagnostic_json(diagnostic);
+            return diagnostic.failure_json("semantic preparation");
         }
         self.checker.check_json(path)
     }
 
     pub fn analyze_module(&self, path: &str) -> serde_json::Value {
         if let Err(diagnostic) = self.begin_semantic_request(path) {
-            return diagnostic_json(diagnostic);
+            return diagnostic.failure_json("semantic preparation");
         }
         let mut analysis = self.checker.analysis_json(path);
         if let Some(object) = analysis.as_object_mut() {
@@ -695,7 +695,7 @@ impl CompilerSession {
 
     pub fn test_module(&mut self, path: &str) -> serde_json::Value {
         if let Err(diagnostic) = self.begin_semantic_request(path) {
-            return diagnostic_json(diagnostic);
+            return diagnostic.failure_json("semantic preparation");
         }
         let checked = match self.checker.check(path) {
             Ok(checked) => checked,
@@ -1870,7 +1870,7 @@ fn run_tool(mut computation: Computation) -> Result<(Value, Vec<String>), Diagno
                     && request.operation == "write" =>
             {
                 let line = match request.argument {
-                    Value::Text(text) => text,
+                    Value::Text(text) => text.to_string(),
                     value => show(&value),
                 };
                 writes.push(line);
@@ -7239,7 +7239,7 @@ mod tests {
             .as_str()
             .expect("a diagnostic message");
         assert!(
-            message.contains("function choice") && message.contains("ABI 3"),
+            message.contains("function choice") && message.contains("ABI 4"),
             "the refusal must name the private layout: {message}"
         );
     }
@@ -7929,38 +7929,39 @@ return F32.add (-1) 2.5
             let loop_function = functions
                 .iter()
                 .find(|function| {
-                    let entry = function["entryBlock"]
+                    let entry = function["entry"]
                         .as_u64()
                         .expect("runtime function entry block");
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                         .any(|block| {
-                            block["terminator"]["kind"] == "branch"
-                                && block["terminator"]["target"] == entry
+                            block["transition"]["kind"] == "jump"
+                                && block["transition"]["edge"]["target"] == entry
                         })
                 })
                 .unwrap_or_else(|| {
                     panic!("surface iteration should contain an entry-cycle loop: {prepared}")
                 });
-            let blocks = loop_function["blocks"]
+            let blocks = loop_function["continuations"]
                 .as_array()
                 .expect("runtime loop blocks");
             assert!(
                 blocks
                     .iter()
-                    .all(|block| block["terminator"]["kind"] != "switch"),
+                    .all(|block| block["transition"]["kind"] != "switch"),
                 "iterator sum dispatch remained in {loop_function}"
             );
-            for operation in blocks
-                .iter()
-                .flat_map(|block| block["operations"].as_array().expect("runtime operations"))
-            {
+            for operation in blocks.iter().flat_map(|block| {
+                block["instructions"]
+                    .as_array()
+                    .expect("runtime operations")
+            }) {
                 assert!(
-                    operation["kind"] != "sum.make"
-                        && operation["kind"] != "sum.tag"
-                        && operation["kind"] != "sum.payload",
+                    operation["operation"]["kind"] != "sum.make"
+                        && operation["operation"]["kind"] != "sum.tag"
+                        && operation["operation"]["kind"] != "sum.payload",
                     "iterator sum operation remained in {loop_function}"
                 );
             }
@@ -8180,27 +8181,36 @@ return F32.add (-1) 2.5
             let writing_functions = functions
                 .iter()
                 .filter(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                         .flat_map(|block| {
-                            block["operations"].as_array().expect("runtime operations")
+                            block["instructions"]
+                                .as_array()
+                                .expect("runtime operations")
                         })
-                        .any(|operation| operation["kind"] == "store.write")
+                        .any(|operation| operation["operation"]["kind"] == "store.write")
                 })
                 .collect::<Vec<_>>();
             assert!(!writing_functions.is_empty(), "{prepared}");
             for function in writing_functions {
                 assert_eq!(function["reuse"], "checked", "{prepared}");
-                for operation in function["blocks"]
+                for operation in function["continuations"]
                     .as_array()
                     .expect("runtime blocks")
                     .iter()
-                    .flat_map(|block| block["operations"].as_array().expect("runtime operations"))
-                    .filter(|operation| operation["kind"] == "store.write")
+                    .flat_map(|block| {
+                        block["instructions"]
+                            .as_array()
+                            .expect("runtime operations")
+                    })
+                    .filter(|operation| operation["operation"]["kind"] == "store.write")
                 {
-                    assert_eq!(operation["update"], "owned-reuse", "{prepared}");
+                    assert_eq!(
+                        operation["operation"]["update"], "owned-reuse",
+                        "{prepared}"
+                    );
                 }
             }
         });
@@ -8287,12 +8297,13 @@ return F32.add (-1) 2.5
                 .iter()
                 .flat_map(|function| {
                     function
-                        .blocks
+                        .continuations
                         .iter()
-                        .flat_map(|block| block.operations.iter())
+                        .flat_map(|continuation| continuation.instructions.iter())
                 })
                 .filter(|operation| {
-                    operation.kind == "store.write" && operation.update == Some("persistent")
+                    operation.operation.kind == "store.write"
+                        && operation.operation.update == Some("persistent")
                 })
                 .count();
             assert_eq!(persistent_writes, 3);
@@ -8339,13 +8350,13 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
@@ -8374,23 +8385,23 @@ return F32.add (-1) 2.5
             assert_eq!(
                 operations
                     .iter()
-                    .filter(|operation| operation["kind"] == "store.literal")
+                    .filter(|operation| operation["operation"]["kind"] == "store.literal")
                     .count(),
                 1,
                 "{prepared}"
             );
             for literal in operations
                 .iter()
-                .filter(|operation| operation["kind"] == "store.literal")
+                .filter(|operation| operation["operation"]["kind"] == "store.literal")
             {
-                assert_eq!(literal["staticStore"], 0, "{prepared}");
+                assert_eq!(literal["operation"]["staticStore"], 0, "{prepared}");
                 assert_eq!(literal["operands"], serde_json::json!([]), "{prepared}");
             }
             assert!(
                 !operations.iter().any(|operation| {
-                    operation["kind"] == "constant"
+                    operation["operation"]["kind"] == "constant"
                         && matches!(
-                            operation["value"]["value"].as_str(),
+                            operation["operation"]["value"]["value"].as_str(),
                             Some("10" | "20" | "30")
                         )
                 }),
@@ -8399,7 +8410,7 @@ return F32.add (-1) 2.5
             assert!(
                 !operations
                     .iter()
-                    .any(|operation| operation["kind"] == "store.grow"),
+                    .any(|operation| operation["operation"]["kind"] == "store.grow"),
                 "{prepared}"
             );
             let compiled = session
@@ -8471,16 +8482,15 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
-                        .flat_map(|block| {
-                            block["operations"].as_array().expect("runtime operations")
-                        })
-                        .filter_map(|operation| {
-                            (operation["kind"] == "call.direct")
-                                .then(|| operation["function"].as_u64())
+                        .filter_map(|continuation| {
+                            let transition = &continuation["transition"];
+                            (transition["kind"] == "call"
+                                && transition["target"]["kind"] == "function")
+                                .then(|| transition["target"]["function"].as_u64())
                                 .flatten()
                         })
                         .collect::<Vec<_>>()
@@ -8610,20 +8620,20 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .find(|operation| operation["kind"] == "store.grow")
+                .find(|operation| operation["operation"]["kind"] == "store.grow")
                 .expect("collect should grow its result Store");
-            assert_eq!(growth["update"], "owned-reuse", "{prepared}");
+            assert_eq!(growth["operation"]["update"], "owned-reuse", "{prepared}");
         });
     }
 
@@ -8660,24 +8670,91 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .filter_map(|operation| operation["kind"].as_str())
+                .filter_map(|operation| operation["operation"]["kind"].as_str())
                 .collect::<Vec<_>>();
             assert!(operations.contains(&"scratch.push"), "{prepared}");
             assert!(operations.contains(&"text.join"), "{prepared}");
             session
                 .compile_module("main.blot")
                 .expect("runtime memory fixture should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn text_cursor_prelude_evaluates_and_emits_without_scalar_prefix_scans() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("cursor prelude should install");
+            for (path, text) in [
+                (
+                    "example.blot",
+                    include_str!("../../examples/text_cursor.blot"),
+                ),
+                (
+                    "runtime.blot",
+                    include_str!("../../examples/lib/text_cursor_runtime.blot"),
+                ),
+            ] {
+                session
+                    .add_source(path.to_owned(), source(text))
+                    .expect("cursor source should load");
+                session
+                    .configure_module(
+                        path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("cursor source should configure");
+            }
+            let evaluated = session.evaluate_module("example.blot");
+            assert_eq!(evaluated["ok"], true, "{evaluated}");
+            assert_eq!(
+                evaluated["display"],
+                "[[\"α\", \"α\"], [\"a\", \"é\", \"🐱\"], [\"α🐱 β\"], []]"
+            );
+            let prepared = session.prepare_runtime_hir("runtime.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let operations = prepared["module"]["functions"]
+                .as_array()
+                .expect("runtime functions")
+                .iter()
+                .flat_map(|function| {
+                    function["continuations"]
+                        .as_array()
+                        .expect("runtime blocks")
+                })
+                .flat_map(|block| {
+                    block["instructions"]
+                        .as_array()
+                        .expect("runtime operations")
+                })
+                .filter_map(|operation| operation["operation"]["kind"].as_str())
+                .collect::<Vec<_>>();
+            assert!(operations.contains(&"text.next-byte"));
+            assert!(!operations.contains(&"text.scalar-at"));
+            session
+                .compile_module("runtime.blot")
+                .expect("cursor runtime should emit");
+            session
+                .compile_module("example.blot")
+                .expect("cursor example should emit");
         });
     }
 
@@ -8719,18 +8796,18 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .filter(|operation| operation["kind"] == "text.join")
+                .filter(|operation| operation["operation"]["kind"] == "text.join")
                 .count();
             assert_eq!(joins, 1, "{prepared}");
             session
@@ -8782,20 +8859,20 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .find(|operation| operation["kind"] == "store.grow")
+                .find(|operation| operation["operation"]["kind"] == "store.grow")
                 .expect("surface loop should append to its Store");
-            assert_eq!(growth["update"], "owned-reuse", "{prepared}");
+            assert_eq!(growth["operation"]["update"], "owned-reuse", "{prepared}");
         });
     }
 
@@ -8848,18 +8925,18 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .filter(|operation| operation["kind"] == "store.write")
+                .filter(|operation| operation["operation"]["kind"] == "store.write")
                 .collect::<Vec<_>>();
             assert!(
                 !writes.is_empty(),
@@ -8868,7 +8945,7 @@ return F32.add (-1) 2.5
             assert!(
                 writes
                     .iter()
-                    .all(|operation| operation["update"] == "owned-reuse"),
+                    .all(|operation| operation["operation"]["update"] == "owned-reuse"),
                 "{prepared}"
             );
         });
@@ -8921,24 +8998,24 @@ return F32.add (-1) 2.5
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .filter(|operation| operation["kind"] == "store.grow")
+                .filter(|operation| operation["operation"]["kind"] == "store.grow")
                 .collect::<Vec<_>>();
             assert!(!growth.is_empty(), "nested loops should append to a Store");
             assert!(
                 growth
                     .iter()
-                    .all(|operation| operation["update"] == "owned-reuse"),
+                    .all(|operation| operation["operation"]["update"] == "owned-reuse"),
                 "{prepared}"
             );
         });
@@ -9162,16 +9239,16 @@ return { .pick = pick; }
             .expect("runtime functions")
             .iter()
             .flat_map(|function| {
-                function["blocks"]
+                function["continuations"]
                     .as_array()
                     .expect("runtime blocks")
                     .iter()
             })
-            .filter(|block| block["terminator"]["kind"] == "switch")
+            .filter(|block| block["transition"]["kind"] == "switch")
             .collect::<Vec<_>>();
         assert_eq!(switches.len(), 1, "{prepared}");
         assert_eq!(
-            switches[0]["terminator"]["cases"]
+            switches[0]["transition"]["cases"]
                 .as_array()
                 .expect("switch cases")
                 .len(),
@@ -10271,24 +10348,22 @@ return { .pick = pick; }
                 .expect("runtime functions")
                 .iter()
                 .find(|function| {
-                    let entry = function["entryBlock"]
+                    let entry = function["entry"]
                         .as_u64()
                         .expect("runtime function entry block");
-                    let blocks = function["blocks"].as_array().expect("runtime blocks");
-                    let reads_frame = blocks.iter().any(|block| {
-                        block["operations"]
-                            .as_array()
-                            .expect("runtime operations")
-                            .iter()
-                            .any(|operation| {
-                                operation["kind"] == "host.call"
-                                    && operation["capability"] == "Host"
-                                    && operation["operation"] == "frame"
-                            })
+                    let blocks = function["continuations"]
+                        .as_array()
+                        .expect("runtime blocks");
+                    let reads_frame = blocks.iter().any(|continuation| {
+                        let transition = &continuation["transition"];
+                        transition["kind"] == "call"
+                            && transition["target"]["kind"] == "host"
+                            && transition["target"]["capability"] == "Host"
+                            && transition["target"]["operation"] == "frame"
                     });
                     let returns_to_entry = blocks.iter().any(|block| {
-                        block["terminator"]["kind"] == "branch"
-                            && block["terminator"]["target"] == entry
+                        block["transition"]["kind"] == "jump"
+                            && block["transition"]["edge"]["target"] == entry
                     });
                     reads_frame && returns_to_entry
                 });
@@ -10714,7 +10789,64 @@ return ()
     }
 
     #[test]
-    fn affine_refinement_budget_refuses_an_unbounded_proof_graph() {
+    fn continuation_graph_closes_calls_and_live_captures() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            for (name, example) in [
+                (
+                    "numeric",
+                    include_str!("../../examples/dynamic_negation.blot"),
+                ),
+                (
+                    "effects",
+                    include_str!("../../examples/lib/suspension.blot"),
+                ),
+                (
+                    "callbacks",
+                    include_str!("../../examples/lib/compiled_callback.blot"),
+                ),
+                ("loop", include_str!("../../examples/continuing.blot")),
+                (
+                    "owned",
+                    include_str!("../../examples/owned_merge_sort.blot"),
+                ),
+                (
+                    "higher_order",
+                    include_str!("../../examples/higher_order_owned_fold.blot"),
+                ),
+            ] {
+                let path = format!("{name}.blot");
+                session
+                    .add_source(path.clone(), source(example))
+                    .expect("graph example parses");
+                session
+                    .configure_module(
+                        &path,
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .expect("graph example resolves");
+                let closed = session
+                    .close_program(&path)
+                    .unwrap_or_else(|error| panic!("{name}: {}", error.message));
+                closed
+                    .runtime()
+                    .graph
+                    .validate(closed.runtime().tables())
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    #[test]
+    fn affine_refinement_budget_ignores_unrelated_declarations() {
         let mut source_text = String::new();
         for index in 0..513 {
             source_text.push_str(&format!("let value_{index} = {index}\n"));
@@ -10730,8 +10862,80 @@ return ()
 
         let checked = session.check_module("main.blot");
 
-        assert_eq!(checked["ok"], false, "{checked}");
-        assert_eq!(checked["diagnostic"]["code"], "BLOT_REFINEMENT_BUDGET");
+        assert_eq!(checked["ok"], true, "{checked}");
+    }
+
+    #[test]
+    fn predicate_normalization_limits_keep_their_public_class() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .expect("prelude installs");
+            let mut predicates = vec!["value >= 0".to_owned(); 129];
+            while predicates.len() > 1 {
+                predicates = predicates
+                    .chunks(2)
+                    .map(|chunk| match chunk {
+                        [left, right] => format!("({left}) && ({right})"),
+                        [only] => only.clone(),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+            }
+            let text = format!(
+                "open import \"blot:prelude\"\nconst Allowed = refine (Int, fn value => {})\nlet answer :: Allowed\nlet answer = 0\nreturn answer\n",
+                predicates[0]
+            );
+            session
+                .add_source("main.blot".to_owned(), source(&text))
+                .expect("predicate parses");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("predicate resolves");
+            for _ in 0..2 {
+                let checked = session.check_module("main.blot");
+                assert_eq!(
+                    checked["limitDiagnostic"]["code"], "BLOT_PREDICATE_BUDGET",
+                    "{checked}"
+                );
+                assert!(checked.get("diagnostic").is_none(), "{checked}");
+            }
+        });
+    }
+
+    #[test]
+    fn refinement_limits_keep_their_class_during_semantic_preparation() {
+        let mut source_text = String::from("let value_0 = 0\n");
+        for index in 1..=513 {
+            source_text.push_str(&format!("let value_{index} = value_{}\n", index - 1));
+        }
+        source_text.push_str("return @array.get [1] value_513\n");
+        let mut session = CompilerSession::default();
+        session
+            .add_source("main.blot".to_owned(), source(&source_text))
+            .expect("budget source should load");
+        session
+            .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+            .expect("budget source should configure");
+
+        for _ in 0..2 {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], false, "{checked}");
+            assert_eq!(
+                checked["limitDiagnostic"]["code"], "BLOT_REFINEMENT_BUDGET",
+                "{checked}"
+            );
+            assert!(checked.get("diagnostic").is_none(), "{checked}");
+        }
     }
 
     #[test]
@@ -10776,18 +10980,18 @@ return ()
                 .expect("runtime functions")
                 .iter()
                 .flat_map(|function| {
-                    function["blocks"]
+                    function["continuations"]
                         .as_array()
                         .expect("runtime blocks")
                         .iter()
                 })
                 .flat_map(|block| {
-                    block["operations"]
+                    block["instructions"]
                         .as_array()
                         .expect("runtime operations")
                         .iter()
                 })
-                .filter_map(|operation| operation["kind"].as_str())
+                .filter_map(|operation| operation["operation"]["kind"].as_str())
                 .collect::<Vec<_>>();
             assert!(operations.contains(&"scratch.with-capacity"));
             assert!(operations.contains(&"scratch.finish"));

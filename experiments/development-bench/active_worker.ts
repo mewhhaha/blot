@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { DevelopmentProject } from "../../src/development.ts";
 import { DevelopmentRuntime } from "../../src/development_runtime.ts";
 import { writeActiveDevelopmentWorkload } from "./active_workload.ts";
@@ -56,8 +57,8 @@ if (phase === "restart") {
         );
       });
       const committedMilliseconds = performance.now() - started;
-      const integerRun = runtime.entryInstance.exports["blot:run"];
-      const floatRun = runtime.entryInstance.exports["blot:float_run"];
+      const integerRun = scalarExport(runtime.entryInstance, "blot:run");
+      const floatRun = scalarExport(runtime.entryInstance, "blot:float_run");
       if (typeof integerRun !== "function" || typeof floatRun !== "function") {
         throw new Error("active workload lost its exports");
       }

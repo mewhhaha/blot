@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,7 +34,9 @@ try {
       const run = await instantiate(module, values[0]);
       assert.equal(run.value(), expected, `${algorithm} n=${size}`);
       const operations = hir.functions.flatMap((function_) =>
-        function_.blocks.flatMap((block) => block.operations)
+        function_.continuations.flatMap((continuation) =>
+          continuation.instructions
+        )
       );
       const beforePages = run.pages();
       for (let index = 0; index < 64; index += 1) run.value();
@@ -53,11 +56,11 @@ try {
         "compile ms": compileMs.toFixed(1),
         "median us": samples[Math.floor(samples.length / 2)].toFixed(2),
         "Wasm bytes": bytes.byteLength,
-        "Store writes": operations.filter((op) =>
-          op.kind === "store.write"
+        "Store writes": operations.filter((instruction) =>
+          instruction.operation.kind === "store.write"
         ).length,
-        "Scratch ops": operations.filter((op) =>
-          op.kind.startsWith("scratch.")
+        "Scratch ops": operations.filter((instruction) =>
+          instruction.operation.kind.startsWith("scratch.")
         ).length,
         "pages / 64": memoryPages,
       });
@@ -73,7 +76,7 @@ async function instantiate(module: WebAssembly.Module, first: number) {
   const instance = await WebAssembly.instantiate(module, {
     "blot:host/Source": { value: () => BigInt(first) },
   });
-  const value = instance.exports["blot:default"];
+  const value = scalarExport(instance, "blot:default");
   const memory = instance.exports.memory;
   assert.equal(typeof value, "function");
   assert.ok(memory instanceof WebAssembly.Memory);

@@ -18,7 +18,7 @@ Authority is applied in this order:
 5. [`PAPER.md`](PAPER.md) explains how those judgments compose; it is not a
    second source semantics.
 6. Files under `docs/` are operational or historical, except that
-   [`docs/abi.md`](../docs/abi.md) is normative for the versioned ABI 3 byte and
+   [`docs/abi.md`](../docs/abi.md) is normative for the versioned ABI 4 byte and
    caller-ownership contract by reference from [`RUNTIME.md`](RUNTIME.md).
 
 A subordinate document's broader claim of authority is read subject to this
@@ -227,7 +227,7 @@ source diagnostic or a target-policy escape hatch.
 
 [`RUNTIME.md`](RUNTIME.md) owns the semantic relation between source values,
 Runtime HIR, and caller values, including which closed types are admissible.
-[`docs/abi.md`](../docs/abi.md) owns the exact versioned Core Wasm ABI 3 bytes,
+[`docs/abi.md`](../docs/abi.md) owns the exact versioned Core Wasm ABI 4 bytes,
 lifting/lowering rules, and caller ownership obligations. Its section describing
 current runtime-target coverage is operational and cannot weaken an ABI rule for
 an artifact the compiler accepts.
@@ -323,7 +323,7 @@ value delivered and the ownership of retained facts.
 ### 12.1 Length-delimited text is data
 
 For a sequence `s` of Unicode scalar values, decoding its length-delimited UTF-8
-encoding must return exactly `s`. Compiler-frame strings and ABI 3 Text have no
+encoding must return exactly `s`. Compiler-frame strings and ABI 4 Text have no
 encoding-signature prefix. In either boundary a leading U+FEFF is a value, not
 metadata to strip; repeated and interior U+FEFF values are preserved as well.
 Decoding remains strict: overlong sequences, surrogate encodings, truncated
@@ -338,10 +338,10 @@ UTF-16 input. The public ABI, compiler-host ABI, and frame schema are unchanged.
 A validated resident Runtime-HIR graph belongs to its exact compiler revision.
 `Compiler.prepare` returns a detached snapshot on both initial preparation and
 cache hits. Caller writes to that snapshot, including nested types, signatures,
-blocks, operations, spans, and exports, cannot change the resident graph or any
-later snapshot. Exact scalar values, including BigInt constants, survive the
-copy. Repeated reads may reuse the Rust preparation; copying is host observation
-work rather than repeated checking or residualization.
+continuations, instructions, spans, and exports, cannot change the resident
+graph or any later snapshot. Exact scalar values, including BigInt constants,
+survive the copy. Repeated reads may reuse the Rust preparation; copying is host
+observation work rather than repeated checking or residualization.
 
 Validation applies to the snapshot as delivered. A caller-modified snapshot is
 not thereby a newly compiler-validated artifact and grants no authority to the

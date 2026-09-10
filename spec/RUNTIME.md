@@ -11,7 +11,7 @@ This document owns:
 - public-layout admissibility; and
 - the Runtime-HIR-to-WebAssembly correctness obligation.
 
-[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 3 bytes,
+[`docs/abi.md`](../docs/abi.md) is normative for exact Core Wasm ABI 4 bytes,
 canonical lifting/lowering encodings, and caller ownership. Its **Runtime target
 status** section is operational and cannot weaken a rule for an artifact the
 compiler accepts. Cross-document corrections are in
@@ -41,11 +41,13 @@ substitutes for WebAssembly validation.
 
 An internal direct call in exact tail position lowers to `return_call` when the
 callee and caller have the same flattened result layout. Exact tail position may
-include a cycle-free chain of empty blocks that only rename the result before
-the return; any operation or control decision ends the proof. This preserves
-source returns, requests, traps, and divergence while discarding a target-only
-caller frame. Public wrappers retain ordinary calls because canonical lifting,
-lowering, call checkpoints, and post-return ownership must still execute.
+include a cycle-free chain of empty continuations that only rename the result
+before the return; any operation or control decision ends the proof. This
+preserves source returns, requests, traps, and divergence while discarding a
+target-only caller frame. Public wrappers retain ordinary calls because
+canonical lifting, lowering and transfer into the caller's invocation scope must
+still execute; the caller performs post-return cleanup before leaving that
+scope.
 
 A newer WebAssembly feature is enabled only when it either removes a compiler
 transformation or has measured benefit and its source semantics are explicit.
@@ -117,7 +119,7 @@ It contains no:
 - general run-time thunk introduced only for a known deferred source call;
 - source binding name used as semantic evidence;
 - unchecked proof-required operation; or
-- private capability object crossing ABI 3.
+- private capability object crossing ABI 4.
 
 During construction, a recursive result may temporarily have a private indirect
 identity before a finite branch determines its target representation. The
@@ -182,8 +184,11 @@ validate_hir(H, facts, target_policy) = Ok(H_valid)
 
 Validation independently checks at least:
 
-1. every block, value, operation, and metadata reference is in range;
-2. control-flow predecessors and branch arguments agree;
+1. every function, continuation, value, operation, and metadata reference is in
+   range;
+2. parallel edge arguments match continuation parameters, call edges supply one
+   result, and exact live captures are locally available with unchanged
+   ownership;
 3. every operation receives its closed expected representation;
 4. calls agree with closed parameter, result, effect, and calling-convention
    metadata;
@@ -310,20 +315,25 @@ When finite branches expose narrower nested members of the same checked
 aggregate, the join closes products, sums, Stores, Scratch builders, and seals
 structurally and injects each branch into that representation. This adapts
 already-checked representations; it does not infer a source type in Runtime HIR.
-The same closure applies to binary and multi-way joins.
+The same closure applies to binary and multi-way joins, including repeated
+constructors whose nested payloads have different finite representations. A
+dynamic sum with several possible constructors is injected case by case.
+Residual function returns use the same conversion to the checked result
+representation; a narrower finite result need not already have its layout.
 
 An acyclic function emits as direct structured Wasm without a program-counter
 local or dispatch loop. The same structural expansion emits an entry-recursive
 cycle as one Wasm loop and lowers integer switches to nested structured
 conditionals. A shared acyclic join may be duplicated, but a fixed budget counts
-only those duplicate expansions rather than unique blocks. This admits large
-linear graphs without a size cliff while bounding code growth. Non-entry cycles
-and graphs whose duplicated joins exceed that budget retain the indexed
+only those duplicate expansions rather than unique continuations. This admits
+large linear graphs without a size cliff while bounding code growth. Non-entry
+cycles and graphs whose duplicated joins exceed that budget retain the indexed
 dispatcher.
 
-Every `call.direct` target receives an internal callable Wasm body even when the
-same normalized Runtime-HIR function also backs a public export wrapper. The
-wrapper remains separate because it owns canonical ABI lifting and lowering.
+Every direct call-transition target receives an internal callable Wasm body even
+when the same normalized Runtime-HIR function also backs a public export
+wrapper. The wrapper remains separate because it owns canonical ABI lifting and
+lowering.
 
 A residual multi-way function value is defunctionalized only when every arm has
 a closed lambda or partially applied primitive source. One private sum selector
@@ -335,6 +345,15 @@ does not construct this selector.
 checks, allocates the exact result once, and copies each slice in order. It does
 not mutate the Store or any source text. Scratch-backed prelude builders use it
 to make repeated text replacement linear in the bytes copied to the result.
+
+`text.next-byte` takes a Text and signed integer byte position and returns the
+closed sum `None | Some (Text, Int)`. `None` means exactly the byte length;
+negative positions, positions beyond the byte length, and UTF-8 continuation
+positions trap. Input Text has already passed UTF-8 validation. One lead-byte
+load determines the next scalar's width, and the result Text borrows that scalar
+slice from the input. The operation performs no allocation or input writes. Its
+source cursor wrapper remains ordinary tagged prelude values and receives no
+special Runtime-HIR representation or typing rule.
 
 When every predecessor constructs a known member of that closed sum and no other
 reader observes the joined sum, Runtime-HIR simplification may bypass the tag
@@ -420,7 +439,7 @@ contract, or fail to respond.
 ## 7. Seals at the boundary
 
 A seal is nominal in source through its public name and canonical invariant
-carrier. ABI 3 may lower it transparently to the carrier representation, while
+carrier. ABI 4 may lower it transparently to the carrier representation, while
 the manifest records the public name and carrier contract.
 
 The public name therefore distinguishes contracts for conforming tooling and in
@@ -481,32 +500,43 @@ behavior selected by their validated Runtime-HIR operation. A convenient Wasm
 instruction is not permission to change overflow, bounds, NaN, evaluation-order,
 or ownership semantics.
 
-The private allocator stores capacity immediately before each returned heap
-pointer. Fresh nonempty allocations reserve at least 16 bytes, and authorized
-growth doubles capacity until it covers the requested size. Growth at the heap
-cursor extends in place; other growth moves and copies only when capacity is
-exhausted. The capacity word is backend-private and does not change the Store,
-canonical ABI, or `cabi_realloc` pointer contract.
+The private allocator uses isolated invocation scopes and reusable power-of-two
+capacity classes. A 48-byte header records capacity, initialized bytes,
+reference count, child layout and initialized count, owning scope, and intrusive
+links. The payload owner is distinct from a Text slice's interior pointer. Text
+and Store private values carry `(pointer, length, owner)`; Scratch also carries
+capacity. The public canonical encodings retain their pointer and length lanes.
+An owner of zero denotes static or empty storage and is never reference counted.
+
+Each graph value definition owns one reference per represented root. A fresh
+allocation is adopted once; projections and aggregate construction retain shared
+roots. Last-use analysis releases dead roots and transfers live roots on the
+selected continuation edge. Calls transfer owned arguments and return owned
+results. Containers retain only initialized children; overwrites release the old
+child, recycling releases all initialized children, and growth moves child edges
+without releasing them. Freeing a container queues child releases so deep
+recursive values cannot overflow the Wasm stack while being destroyed.
+
+Authorized resizing requires a unique root in the selected scope. A moved
+backing allocation retires its consumed SSA owner before later root releases.
+Dead allocations return to free lists while the invocation continues. Separate
+scope records and monotonic tokens prevent a completed invocation from retaining
+or freeing a sibling's state. Scope exit bulk-reclaims its remaining allocations
+only after external work drains; Wasm page capacity remains at its high water.
+Canonical adapters copy through public layouts and maintain separate temporary
+roots, including nested arrays. No canonical pointer aliases private backing.
 
 The emitter interns equal physical WebAssembly function signatures. Within one
-function it derives Runtime-HIR block liveness, assigns identical flattened
-representations to the same local tuple only when their live ranges do not
-interfere, and emits adjacent equal local types as counted declarations. These
-are physical layout choices over validated values, not another type judgment.
-ABI closure computes each directly demanded flattened Runtime-HIR representation
-once, including demanded product-field starting offsets. A type used only
-through an indirect representation remains unflattened. Function emission
-indexes validated SSA value types once. Projection, assignment, direct-call, and
-local-allocation emission consume these indexes rather than rescanning earlier
-product fields or function definitions.
-
-A structured entry loop may use an iteration allocation region only when each
-owned entry parameter is carried across every entry backedge as the exact same
-Runtime-HIR value. The function saves the private heap cursor before the loop
-and restores it on each such backedge after branch arguments have been assigned.
-Replacing an owned parameter disables the region because the new value may
-retain an iteration allocation. Plain scalar parameters may vary. Returns and
-exits do not restore the cursor, so returned values remain live.
+function it consumes the graph's explicit continuation captures and parameters,
+assigns identical flattened representations to the same local tuple only when
+their live ranges do not interfere, and emits adjacent equal local types as
+counted declarations. These are physical layout choices over validated values,
+not another type judgment. ABI closure computes each directly demanded flattened
+Runtime-HIR representation once, including demanded product-field starting
+offsets. A type used only through an indirect representation remains
+unflattened. Function emission indexes validated SSA value types once.
+Projection, assignment, direct-call, and local-allocation emission consume these
+indexes rather than rescanning earlier product fields or function definitions.
 
 Store and Scratch elements use a private memory layout distinct from public ABI
 layout. Fixed-width SIMD vectors and masks occupy 16-byte-aligned, 16-byte slots
@@ -626,3 +656,20 @@ effects remain observable. A pool never replays required work and waits for
 physical worker termination after transport loss before settling a loan. A loan
 cancelled before dispatch restores idle ownership. This is a host execution
 protocol, with real Node and Web Worker tests, not a second Blot evaluator.
+
+Individual host resources may be released before their scope exits. Release
+revokes the handle synchronously and removes its lease and cleanup entry before
+awaiting the registered disposer. Unlinking uses constant work; disposal and
+work draining may take longer. Scope exit waits for releases already in flight
+and reports their failures. A failed disposer does not restore authority, and a
+released payload is not retained as a tombstone. Revocation alone does not drain
+an admitted operation: the owner must settle that operation before reclaiming
+its underlying storage.
+
+Spark join and cancel claim and revoke a job before suspension. A consumed job
+cannot be replayed or joined again. Completion releases its submitted callback
+and execution lifetime after cleanup drains; an unconsumed handle retains only
+its result or failure for a later join. Consumption retires that retained state
+before returning. Optional-work promotion preserves the same job and cannot
+replay execution. Required failure evidence remains available to the containing
+scope even after the job is retired.

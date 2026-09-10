@@ -1,3 +1,4 @@
+import { requiredFunction } from "../../src/abi_values.ts";
 /** Both Text operands remain dynamic, including long repetitive queries. */
 export const textSearchSource = `open import "blot:prelude"
 let contains :: (Text, Text) -> Int
@@ -40,32 +41,18 @@ export function expectedFind(
 
 export function textSearchInstance(instance: WebAssembly.Instance) {
   const memory = instance.exports.memory;
-  const realloc = instance.exports.cabi_realloc;
-  const find = instance.exports["blot:find"];
-  const contains = instance.exports["blot:contains"];
+  const realloc = requiredFunction(instance, "cabi_realloc");
+  const find = requiredFunction(instance, "blot:find");
+  const contains = requiredFunction(instance, "blot:contains");
   if (
-    !(memory instanceof WebAssembly.Memory) || typeof realloc !== "function" ||
-    typeof find !== "function" || typeof contains !== "function"
+    !(memory instanceof WebAssembly.Memory)
   ) {
     throw new Error("search artifact omitted its canonical exports");
   }
   const wasmMemory: WebAssembly.Memory = memory;
-  const findFunction = find as (
-    textPointer: number,
-    textLength: number,
-    queryPointer: number,
-    queryLength: number,
-    start: bigint,
-  ) => bigint;
-  const containsFunction = contains as (
-    textPointer: number,
-    textLength: number,
-    queryPointer: number,
-    queryLength: number,
-  ) => bigint;
+  const enter = requiredFunction(instance, "cabi_enter");
+  const leave = requiredFunction(instance, "cabi_leave");
   const capacity = 262_144;
-  const textPointer = Number(realloc(0, 0, 1, capacity));
-  const queryPointer = Number(realloc(0, 0, 1, capacity));
   const encoder = new TextEncoder();
   function input(text: string, query: string) {
     const textBytes = encoder.encode(text);
@@ -73,26 +60,35 @@ export function textSearchInstance(instance: WebAssembly.Instance) {
     if (textBytes.length > capacity || queryBytes.length > capacity) {
       throw new Error("search fixture exceeds its input buffer");
     }
-    const bytes = new Uint8Array(wasmMemory.buffer);
-    bytes.set(textBytes, textPointer);
-    bytes.set(queryBytes, queryPointer);
+    const invoke = (
+      call: CallableFunction,
+      trailing: readonly bigint[],
+    ): bigint => {
+      const scope = Number(enter());
+      try {
+        const textPointer = Number(realloc(scope, 0, 0, 1, textBytes.length));
+        const queryPointer = Number(realloc(scope, 0, 0, 1, queryBytes.length));
+        const bytes = new Uint8Array(wasmMemory.buffer);
+        bytes.set(textBytes, textPointer);
+        bytes.set(queryBytes, queryPointer);
+        return call(
+          scope,
+          textPointer,
+          textBytes.length,
+          queryPointer,
+          queryBytes.length,
+          ...trailing,
+        ) as bigint;
+      } finally {
+        leave(scope);
+      }
+    };
     return {
       find(start: number): bigint {
-        return findFunction(
-          textPointer,
-          textBytes.length,
-          queryPointer,
-          queryBytes.length,
-          BigInt(start),
-        ) as bigint;
+        return invoke(find, [BigInt(start)]);
       },
       contains(): bigint {
-        return containsFunction(
-          textPointer,
-          textBytes.length,
-          queryPointer,
-          queryBytes.length,
-        ) as bigint;
+        return invoke(contains, []);
       },
     };
   }

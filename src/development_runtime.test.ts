@@ -1,30 +1,37 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { flattenedAbiType } from "./compiler/backend/runtime/abi.ts";
-import type { BlotAbiType } from "./compiler/backend/runtime/abi.ts";
+import type {
+  BlotAbiFunction,
+  BlotAbiType,
+} from "./compiler/backend/runtime/abi.ts";
 import type { DevelopmentBuild } from "./development.ts";
 import { developmentRevision } from "./development_identity.ts";
 import { DevelopmentRuntime } from "./development_runtime.ts";
 import { wasmFixture } from "../test_support/wasm_fixture.ts";
 
-test("failed argument copying releases already borrowed allocations", async () => {
-  const fixture = await bridgeFixture({ kind: "unit" });
+test("failed argument copying releases already borrowed allocations", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "unit" });
   assert.throws(() => fixture.invoke(64, 4, 65_537, 1), /exceeds/);
   assert.equal(fixture.calls(), 0);
   assert.equal(fixture.outstanding.get("provider")?.size, 0);
   assert.deepEqual(fixture.freed, [["provider", 1024]]);
 });
 
-test("provider traps release argument allocations in reverse order", async () => {
-  const fixture = await bridgeFixture({ kind: "unit" }, { callFails: true });
+test("provider traps reclaim its argument allocation scope", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "unit" }, {
+    callFails: true,
+  });
   assert.throws(() => fixture.invoke(64, 4, 68, 4), /provider failed/);
   assert.equal(fixture.outstanding.get("provider")?.size, 0);
   assert.deepEqual(fixture.freed, [["provider", 1028], ["provider", 1024]]);
 });
 
-test("post-return traps release borrowed parameters and untransferred results", async () => {
-  const fixture = await bridgeFixture({ kind: "text" }, { postFails: true });
+test("post-return traps release borrowed parameters and untransferred results", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "text" }, {
+    postFails: true,
+  });
   fixture.providerView().setUint32(128, 64, true);
   fixture.providerView().setUint32(132, 4, true);
   assert.throws(() => fixture.invoke(64, 4, 68, 4, 256), /post-return failed/);
@@ -33,8 +40,8 @@ test("post-return traps release borrowed parameters and untransferred results", 
   assert.equal(fixture.posts(), 1);
 });
 
-test("partially copied results are released when a later field is invalid", async () => {
-  const fixture = await bridgeFixture({
+test("partially copied results are released when a later field is invalid", async (context) => {
+  const fixture = await bridgeFixture(context, {
     kind: "record",
     fields: [
       { name: "a", type: { kind: "text" } },
@@ -52,8 +59,10 @@ test("partially copied results are released when a later field is invalid", asyn
   assert.equal(fixture.posts(), 1);
 });
 
-test("successful result copies survive cleanup and memory growth", async () => {
-  const fixture = await bridgeFixture({ kind: "text" }, { grow: true });
+test("successful result copies survive cleanup and memory growth", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "text" }, {
+    grow: true,
+  });
   fixture.providerView().setUint32(128, 64, true);
   fixture.providerView().setUint32(132, 4, true);
   fixture.invoke(64, 4, 68, 4, 256);
@@ -69,8 +78,8 @@ test("successful result copies survive cleanup and memory growth", async () => {
   );
 });
 
-test("allocator failure while copying arguments releases earlier copies", async () => {
-  const fixture = await bridgeFixture({ kind: "unit" }, {
+test("allocator failure while copying arguments releases earlier copies", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "unit" }, {
     allocationFailsAt: 2,
   });
   assert.throws(() => fixture.invoke(64, 4, 68, 4), /allocation failed/);
@@ -79,16 +88,19 @@ test("allocator failure while copying arguments releases earlier copies", async 
   assert.deepEqual(fixture.freed, [["provider", 1024]]);
 });
 
-test("a release trap does not skip the remaining parameter releases", async () => {
-  const fixture = await bridgeFixture({ kind: "unit" }, { releaseFailsAt: 1 });
-  assert.throws(() => fixture.invoke(64, 4, 68, 4), /release failed/);
+test("provider entry consumes canonical input allocations before post-return", async (context) => {
+  const fixture = await bridgeFixture(context, { kind: "text" });
+  fixture.providerView().setUint32(128, 64, true);
+  fixture.providerView().setUint32(132, 4, true);
+  fixture.invoke(64, 4, 68, 4, 256);
   assert.equal(fixture.outstanding.get("provider")?.size, 0);
+  assert.equal(fixture.posts(), 1);
   assert.deepEqual(fixture.freed, [["provider", 1028], ["provider", 1024]]);
 });
 
-test("successful unit and direct scalar results preserve cleanup", async () => {
+test("successful unit and direct scalar results preserve cleanup", async (context) => {
   for (const result of [{ kind: "unit" }, { kind: "float-64" }] as const) {
-    const fixture = await bridgeFixture(result);
+    const fixture = await bridgeFixture(context, result);
     const value = fixture.invoke(64, 4, 68, 4);
     if (result.kind === "unit") assert.equal(value, undefined);
     else assert.equal(value, 128);
@@ -98,7 +110,7 @@ test("successful unit and direct scalar results preserve cleanup", async () => {
   }
 });
 
-test("nested first-order ABI results retain values across allocation growth", async () => {
+test("nested first-order ABI results retain values across allocation growth", async (context) => {
   const element = {
     kind: "sealed",
     name: "Element",
@@ -113,7 +125,7 @@ test("nested first-order ABI results retain values across allocation growth", as
       ],
     },
   } as const;
-  const fixture = await bridgeFixture({
+  const fixture = await bridgeFixture(context, {
     kind: "record",
     fields: [
       { name: "a", type: { kind: "array", element } },
@@ -193,22 +205,67 @@ test("nested first-order ABI results retain values across allocation growth", as
   assert.equal(new Uint8Array(target.buffer, variantText, 4)[0], 5);
 });
 
+test("callback links copy environments while retaining unit-local entry names", async (context) => {
+  const callback = {
+    kind: "callback",
+    entry: "blot:callback:7",
+    function: {
+      parameters: [{ kind: "unit" }],
+      result: { kind: "signed-integer-64" },
+    },
+    environment: {
+      kind: "record",
+      fields: [{ name: "capture", type: { kind: "text" } }],
+    },
+  } as const;
+  const fixture = await bridgeFixture(context, callback, {
+    parameters: [callback],
+    providerFunction: {
+      parameters: [{ ...callback, entry: "blot:callback:19" }],
+      result: { ...callback, entry: "blot:callback:19" },
+    },
+  });
+  fixture.providerView().setUint32(128, 64, true);
+  fixture.providerView().setUint32(132, 4, true);
+  fixture.invoke(64, 4, 256);
+  const target = fixture.consumerMemory();
+  const pointer = new DataView(target.buffer).getUint32(256, true);
+  assert.deepEqual([...new Uint8Array(target.buffer, pointer, 4)], [
+    1,
+    2,
+    3,
+    4,
+  ]);
+  assert.equal(fixture.outstanding.get("provider")?.size, 0);
+  assert.equal(fixture.posts(), 1);
+});
+
 async function bridgeFixture(
+  testContext: TestContext,
   result: BlotAbiType,
   options: {
     callFails?: boolean;
     postFails?: boolean;
     grow?: boolean;
     allocationFailsAt?: number;
-    releaseFailsAt?: number;
+    parameters?: readonly BlotAbiType[];
+    providerFunction?: BlotAbiFunction;
   } = {},
 ) {
-  const function_ = {
-    parameters: [{ kind: "text" }, { kind: "text" }] as const,
-    result,
-  };
+  let parameterTypes: readonly BlotAbiType[] = [{ kind: "text" }, {
+    kind: "text",
+  }];
+  if (options.parameters !== undefined) parameterTypes = options.parameters;
+  const function_ = { parameters: parameterTypes, result };
+  let providerFunction = function_;
+  if (options.providerFunction !== undefined) {
+    providerFunction = options.providerFunction;
+  }
   const width = flattenedAbiType(result).length;
-  const parameters = function_.parameters.flatMap(flattenedAbiType);
+  const parameters = [
+    "i32" as const,
+    ...function_.parameters.flatMap(flattenedAbiType),
+  ];
   const consumerParameters = [...parameters];
   if (width > 1) consumerParameters.push("i32");
   const results: ("i32" | "i64" | "f32" | "f64")[] = [];
@@ -218,7 +275,7 @@ async function bridgeFixture(
   let postReturn: string | null = null;
   if (width > 1) postReturn = "cabi_post_echo";
   const abi = {
-    major: 3,
+    major: 4,
     minor: 0,
     memory: "memory32",
     stringEncoding: "utf-8",
@@ -237,7 +294,7 @@ async function bridgeFixture(
       name: "blot:dev:echo",
       phase: "runtime",
       execution: "direct",
-      function: function_,
+      function: providerFunction,
       postReturn,
       effects: [],
       ownership: "owned",
@@ -265,30 +322,49 @@ async function bridgeFixture(
     JSON.stringify(consumerManifest),
   );
   const reallocateType = {
-    parameters: ["i32", "i32", "i32", "i32"],
+    parameters: ["i32", "i32", "i32", "i32", "i32"],
     results: ["i32"],
   } as const;
   const provider = wasmFixture({
     manifest: providerBytes,
-    types: [reallocateType, { parameters, results: providerResults }, {
-      parameters: ["i32"],
-      results: [],
-    }],
+    types: [
+      reallocateType,
+      { parameters, results: providerResults },
+      {
+        parameters: ["i32", "i32"],
+        results: [],
+      },
+      { parameters: [], results: ["i32"] },
+      { parameters: ["i32"], results: [] },
+    ],
     imports: [
       { module: "fixture", name: "reallocate", type: 0 },
       { module: "fixture", name: "call", type: 1 },
       { module: "fixture", name: "post", type: 2 },
+      { module: "fixture", name: "enter", type: 3 },
+      { module: "fixture", name: "leave", type: 4 },
     ],
-    exports: { cabi_realloc: 0, "blot:dev:echo": 1, cabi_post_echo: 2 },
+    exports: {
+      cabi_realloc: 0,
+      "blot:dev:echo": 1,
+      cabi_post_echo: 2,
+      cabi_enter: 3,
+      cabi_leave: 4,
+    },
   });
   const consumer = wasmFixture({
     manifest: consumerBytes,
-    types: [reallocateType, { parameters: consumerParameters, results }],
+    types: [reallocateType, { parameters: consumerParameters, results }, {
+      parameters: [],
+      results: ["i32"],
+    }, { parameters: ["i32"], results: [] }],
     imports: [
       { module: "fixture", name: "reallocate", type: 0 },
       { module: "blot:dev/provider", name: "blot:dev:echo", type: 1 },
+      { module: "fixture", name: "enter", type: 2 },
+      { module: "fixture", name: "leave", type: 3 },
     ],
-    exports: { cabi_realloc: 0, invoke: 1 },
+    exports: { cabi_realloc: 0, invoke: 1, cabi_enter: 2, cabi_leave: 3 },
   });
   const changedUnits = [
     {
@@ -322,31 +398,50 @@ async function bridgeFixture(
     durationMilliseconds: 0,
   } as unknown as DevelopmentBuild;
   const outstanding = new Map<string, Map<number, number>>();
+  const activeScopes = new Map<string, Set<number>>();
   const freed: [string, number][] = [];
   let calls = 0;
   let posts = 0;
   const runtime = new DevelopmentRuntime((context) => {
     let next = 1024;
     let allocations = 0;
-    let releases = 0;
     const live = new Map<number, number>();
+    const scopes = new Set<number>();
+    const owners = new Map<number, number>();
+    activeScopes.set(context.unit, scopes);
+    let nextScope = 1;
+    if (context.unit === "provider") nextScope = 100;
     outstanding.set(context.unit, live);
     return {
       fixture: {
+        enter() {
+          const token = nextScope++;
+          scopes.add(token);
+          return token;
+        },
+        leave(scope: number) {
+          assert.equal(scopes.delete(scope), true);
+          for (const [pointer, owner] of [...owners].reverse()) {
+            if (owner !== scope) continue;
+            live.delete(pointer);
+            owners.delete(pointer);
+            freed.push([context.unit, pointer]);
+          }
+        },
         reallocate(
+          scope: number,
           pointer: number,
           size: number,
           _alignment: number,
           newSize: number,
         ) {
+          assert.equal(scopes.has(scope), true);
+          if (pointer !== 0) assert.equal(owners.get(pointer), scope);
           if (newSize === 0) {
             assert.equal(live.get(pointer), size);
             live.delete(pointer);
+            owners.delete(pointer);
             freed.push([context.unit, pointer]);
-            releases += 1;
-            if (releases === options.releaseFailsAt) {
-              throw new Error("release failed");
-            }
             return 0;
           }
           allocations += 1;
@@ -357,14 +452,23 @@ async function bridgeFixture(
           const allocated = next;
           next += newSize;
           live.set(allocated, newSize);
+          owners.set(allocated, scope);
           return allocated;
         },
-        call() {
+        call(scope: number) {
+          assert.equal(scopes.has(scope), true);
           calls += 1;
+          for (const [pointer, owner] of [...owners].reverse()) {
+            if (owner !== scope) continue;
+            live.delete(pointer);
+            owners.delete(pointer);
+            freed.push([context.unit, pointer]);
+          }
           if (options.callFails === true) throw new Error("provider failed");
           return 128;
         },
-        post() {
+        post(scope: number) {
+          assert.equal(scopes.has(scope), true);
           posts += 1;
           if (options.postFails === true) throw new Error("post-return failed");
         },
@@ -379,10 +483,20 @@ async function bridgeFixture(
   for (const memory of [providerMemory, consumerMemory]) {
     new Uint8Array(memory.buffer, 64, 8).set([1, 2, 3, 4, 5, 6, 7, 8]);
   }
+  const enter = runtime.entryInstance.exports.cabi_enter as () => number;
+  const leave = runtime.entryInstance.exports.cabi_leave as (
+    scope: number,
+  ) => void;
+  const invoke = runtime.entryInstance.exports.invoke as (
+    ...values: number[]
+  ) => unknown;
+  const scope = enter();
+  testContext.after(() => {
+    leave(scope);
+    for (const scopes of activeScopes.values()) assert.equal(scopes.size, 0);
+  });
   return {
-    invoke: runtime.entryInstance.exports.invoke as (
-      ...values: number[]
-    ) => unknown,
+    invoke: (...values: number[]) => invoke(scope, ...values),
     outstanding,
     freed,
     calls: () => calls,

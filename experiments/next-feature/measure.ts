@@ -17,11 +17,13 @@ try {
     const checked = await compiler.check(path);
     const runtime = await compiler.prepare(path);
     const artifact = await compiler.compile(path);
-    const blocks = runtime.functions.flatMap((fn) => fn.blocks);
+    const continuations = runtime.functions.flatMap((fn) => fn.continuations);
     const operationKinds = [
       ...new Set(
-        blocks.flatMap((block) =>
-          block.operations.map((operation) => operation.kind)
+        continuations.flatMap((continuation) =>
+          continuation.instructions.map((instruction) =>
+            instruction.operation.kind
+          )
         ),
       ),
     ].sort();
@@ -31,9 +33,9 @@ try {
       type: checked.type,
       effects: checked.effects,
       functions: runtime.functions.length,
-      blocks: blocks.length,
-      operations: blocks.reduce(
-        (total, block) => total + block.operations.length,
+      continuations: continuations.length,
+      operations: continuations.reduce(
+        (total, continuation) => total + continuation.instructions.length,
         0,
       ),
       operationKinds,

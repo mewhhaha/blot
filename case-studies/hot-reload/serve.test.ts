@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { cp, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -85,7 +86,7 @@ test("browser development reloads only changed units and survives invalid edits"
     });
     const initialApp = runtime.entryInstance;
     const initialFormula = runtime.unitInstance("formula");
-    const score = initialApp.exports["blot:score"];
+    const score = scalarExport(initialApp, "blot:score");
     if (typeof score !== "function") {
       throw new Error("app omitted its score export");
     }

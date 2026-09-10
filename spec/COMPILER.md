@@ -49,6 +49,12 @@ Only a source diagnostic establishes that a language derivation failed. A limit
 diagnostic establishes neither acceptance nor rejection and is not a source
 return, request, trap, or divergence.
 
+Affine proof exhaustion (`BLOT_REFINEMENT_BUDGET`) and predicate-normalization
+exhaustion (`BLOT_PREDICATE_BUDGET`) use the compiler-limit transport. The
+affine budget applies to the indexed dependency graph of the queried index and
+length, with constant zero as a terminal, rather than every fact in the source
+module.
+
 Successful compilation has no diagnostics. The sidecar and embedded manifest
 bytes are identical.
 
@@ -110,12 +116,12 @@ syntax snapshots on demand. The receiving session creates its own revision,
 configuration, checked facts, and artifacts; sharing the AST allocation grants
 no semantic cache authority. The graph-delta frame remains schema 3.
 
-ABI 7 adds opaque scalar graph-cache import/export and development work
-counters. Import admits disposable Rust graph memos; it cannot install checked
-modules or move an artifact transaction. Counters count residual function bodies
-actually specialized or restored, grouped by source module, and units actually
-emitted. Root export wrappers and fully static applications are outside these
-body counts. Counters describe the current request, including zero work on a
+ABI 7 adds opaque graph-cache import/export and development work counters.
+Import admits disposable Rust graph memos; it cannot install checked modules or
+move an artifact transaction. Counters count residual function bodies actually
+specialized or restored, grouped by source module, and units actually emitted.
+Root export wrappers and fully static applications are outside these body
+counts. Counters describe the current request, including zero work on a
 closed-program cache hit; they are observations, not checked facts or cache
 authority.
 
@@ -549,32 +555,32 @@ Runtime HIR is constructed only after representation closure. The producer emits
 closed operations, values, control flow, Store lineage, host requests with
 normalized input/result ownership, traps, and public metadata.
 
-Before validation, Runtime-HIR normalization pools closed scalar Store literals
-in the module's typed static-Store table, cancels inverse indirect
-construction/loading and product construction/projection representations,
-removes unused total operations through result-use propagation, and removes
-non-entry block parameters together with the corresponding arguments on every
-incoming edge. Representation aliases, operation uses, and block-parameter
-liveness use dependency worklists; a chain is not rediscovered by rescanning the
-whole function after each removed node. Entry parameters stay aligned with the
-closed function signature. It then interns structurally equal closed types,
-signatures, and alpha-normalized function bodies. Closed runtime types and
-function call graphs use inverse-edge partition refinement, including recursive
-components, instead of repeated whole-table remapping rounds. Each body is
-alpha-normalized and serialized once with function targets replaced by ordered
-call positions. A global inverse-edge partition refinement starts from those
-body shapes and splits classes only when an equally positioned callee enters a
-different class. This single judgment covers acyclic and recursive functions,
-including equivalent functions in separate recursive components. Calls and
-exports are rewritten to the first canonical body; source names and spans select
-that representative but do not prevent body sharing in a production program.
-Development preparation adds the configured unit root to the initial equivalence
-class, so equal bodies within one unit still share while bodies owned by
-different reload units remain distinct. Outside the proved representation
-cancellations above, normalization does not remove calls, host operations,
-allocation, mutation, reads, or arithmetic whose checked operation may trap.
-Every rewritten reference is validated against the compacted tables; the backend
-consumes those facts and does not repeat type or effect inference.
+Before graph publication, private staging normalization pools closed scalar
+Store literals in the module's typed static-Store table, cancels inverse
+indirect construction/loading and product construction/projection
+representations, removes unused total operations through result-use propagation,
+and removes non-entry block parameters together with the corresponding arguments
+on every incoming edge. Representation aliases, operation uses, and
+block-parameter liveness use dependency worklists; a chain is not rediscovered
+by rescanning the whole function after each removed node. Entry parameters stay
+aligned with the closed function signature. It then interns structurally equal
+closed types, signatures, and alpha-normalized function bodies. Closed runtime
+types and function call graphs use inverse-edge partition refinement, including
+recursive components, instead of repeated whole-table remapping rounds. Each
+body is alpha-normalized and serialized once with function targets replaced by
+ordered call positions. A global inverse-edge partition refinement starts from
+those body shapes and splits classes only when an equally positioned callee
+enters a different class. This single judgment covers acyclic and recursive
+functions, including equivalent functions in separate recursive components.
+Calls and exports are rewritten to the first canonical body; source names and
+spans select that representative but do not prevent body sharing in a production
+program. Development preparation adds the configured unit root to the initial
+equivalence class, so equal bodies within one unit still share while bodies
+owned by different reload units remain distinct. Outside the proved
+representation cancellations above, normalization does not remove calls, host
+operations, allocation, mutation, reads, or arithmetic whose checked operation
+may trap. Every rewritten reference is validated against the compacted tables;
+the backend consumes those facts and does not repeat type or effect inference.
 
 Schema 6 adds an integer `switch` terminator. The producer creates every arm
 block before evaluating its residual body, settles survivors against the checked
@@ -631,48 +637,60 @@ must not accept a boundary whose required malformed-input validation is
 unimplemented.
 
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
-ABI 3 bytes and caller ownership.
+ABI 4 bytes and caller ownership.
 
-The Rust suspension planner consumes validated Runtime HIR before emission. It
-indexes direct callers and callees once, then propagates suspension from host
-operations, development links, and explicit resumable roots through a caller
-worklist. A separate callee worklist includes pure callback dependencies for
-cooperative execution without changing their direct export convention. The plan
-records block entries and segments ending at framed calls and host requests; the
-emitter consumes those boundaries without reconstructing the call graph.
-Emission assigns typed frames with explicit block state, parent frames, and
-result destinations. The poll trampoline performs bounded block work and reports
-host requests using canonical arguments and results. The Node host schedules
-requests; it does not interpret Runtime HIR or guest instructions. Direct
-functions keep their ordinary Wasm calling convention. Suspension participates
-in effect identity, boundary fingerprints, and the checked-module certificate.
-Runtime HIR schema 12 names capability metadata `contract` with `input`,
-`result`, and mandatory Boolean `suspends` fields. Capability operations also
-preserve `sourceName` independently of their concrete operation identifier.
-Residual staging interns each closed argument/result signature and contract for
-a polymorphic host operation. The host binds its source name once; each concrete
-import marshals against its own checked type. No host performs type inference or
-selects a source specialization.
+The validated owned continuation graph supplies function entries, call
+transitions, successor parameters, captures, and suspension/framing flags to
+both development partitioning and emission. Suspension propagates through the
+call graph; framing also includes pure callback dependencies for cooperative
+execution. Emission consumes these published facts without a separate suspension
+plan. Typed frames retain exact successor parameters and captures, parent
+frames, and result destinations. The poll trampoline performs bounded
+continuation work and reports host requests using canonical arguments and
+results. The Node host schedules requests; it does not interpret Runtime HIR or
+guest instructions. Direct functions retain direct execution. Suspension
+participates in effect identity, boundary fingerprints, and the checked-module
+certificate. Runtime HIR schema 13 names capability metadata `contract` with
+`input`, `result`, and mandatory Boolean `suspends` fields. Capability
+operations also preserve `sourceName` independently of their concrete operation
+identifier. Residual staging interns each closed argument/result signature and
+contract for a polymorphic host operation. The host binds its source name once;
+each concrete import marshals against its own checked type. No host performs
+type inference or selects a source specialization.
 
-Checked-module certificate schema 19 invalidates ownership evidence produced
-before lexical borrows were excluded from possibly suspending calls. The guest
-ABI layout and suspension protocol are unchanged. `SUSPENSION.md` owns the
-planning and lifetime obligations shared by closure, emission, and hosts. When
-an inferred callee has no positive type bounds, ownership receives its checked
-upper function constraint. This preserves the open effect row of an unannotated
-callback instead of treating its bottom positive view as proof of synchronous
-execution. Ownership consumes these inference facts without reconstructing a
-function type.
+Checked-module certificate schema 20 records the checking contract with last-use
+borrow lifetimes and per-proof refinement limits. Borrow liveness uses demanded
+declarations, lexical identities, aliases, closure dependencies, and held
+operands; it does not change type inference or consume source bindings. The
+guest ABI layout and suspension protocol are unchanged at this stage.
+`SUSPENSION.md` owns the planning and lifetime obligations shared by closure,
+emission, and hosts. When an inferred callee has no positive type bounds,
+ownership receives its checked upper function constraint. This preserves the
+open effect row of an unannotated callback instead of treating its bottom
+positive view as proof of synchronous execution. Ownership consumes these
+inference facts without reconstructing a function type.
 
-Development partitioning preserves the whole-module framed call graph. Link
-metadata records mandatory `suspends`; a provider's `resumableRoots` names the
-export wrappers that must retain frames and cooperative checkpoints, including
-pure callees of worker callbacks. Function remapping and module merging remap
-those roots. A link's suspension contract must match the provider export before
-activation. The poll request ordinal selects ordinary host imports first and
-development links afterward; both use canonical request/result storage. The host
-invokes the captured provider with the caller's explicit scope and execution
-authority, preserving cancellation and resource ancestry across units.
+Runtime HIR schema 13 replaces blocks and call instructions with typed function,
+continuation, value, representation, and signature references. Each continuation
+contains explicit parameters, exact live captures, pure instructions, and one
+transition: jump, branch, switch, call, return, or trap. A call's successor edge
+contains exactly one result argument. Instruction metadata cannot contain a
+call. Rust validates references, local availability, parallel edge types,
+capture liveness and ownership, and closed call contracts before ABI closure.
+The host reads these versioned facts without reconstructing dominance or
+effects. Private staging and memo builders may use blocks internally; those
+blocks do not cross the Runtime-HIR boundary and are not an alternative
+production representation.
+
+Development partitioning preserves the graph's suspension and framing facts.
+Link metadata records mandatory `suspends` matching the provider's ordinary
+export. Private framing of a pure callback callee does not make its public
+boundary asynchronous. Function remapping rewrites graph calls, callback
+entries, and representation references together. The poll request ordinal
+selects ordinary host imports first and development links afterward; both use
+canonical request/result storage. The host invokes the captured provider with
+the caller's explicit scope and execution authority, preserving cancellation and
+resource ancestry across units.
 
 Generative import instantiation records effect substitutions through matching
 members of imported records and namespace attachments, including nested imports.
@@ -775,7 +793,7 @@ separate from target refusal.
 
 Target refusal means a checked program lies outside the selected target or ABI
 policy. It is permitted only at an explicit policy boundary, such as a public
-vector type refused by ABI 3 or an experimental target feature not enabled for
+vector type refused by ABI 4 or an experimental target feature not enabled for
 production.
 
 It cannot hide an unresolved production-supported internal representation,
@@ -960,9 +978,9 @@ unrelated named declarations therefore do not rename a later boundary. A changed
 specialization demand can conservatively rename links. Diagnostic spans remain
 source offsets; lexical addresses do not replace their evidence.
 
-Development mode may restore closed scalar call graphs under the admission and
-exact-prefix obligations in `INCREMENTAL.md` section 8.1. This memoization does
-not replace checking or change residual outlining.
+Development mode may restore closed continuation graphs under the admission,
+component, and relocation obligations in `INCREMENTAL.md` section 8.1. This
+memoization does not replace checking or change residual outlining.
 
 Production and development preparation use the same residual outlining rule. The
 splitter partitions the resulting graph; it does not cause additional closures
@@ -1170,3 +1188,13 @@ Trust is reduced when:
 
 A theorem about a seed calculus does not automatically cover the production
 frontend, module system, ownership checker, specialization, Runtime HIR, or ABI.
+
+The whole-compiler CI obligation includes emitted memory lifetime checks.
+`pnpm test:memory` builds native fixture emitters and runs their actual Wasm
+allocator, canonical adapter, continuation-frame, and managed-value artifacts.
+It requires independent invocation reclamation, nested and sliced retention,
+correct reference transfer, bounded frame/allocation reuse, and complete
+cleanup. `pnpm test:guest-abi` audits administrative ABI 4 arities across host
+tools, examples, tests, and experiments; source-dependent export signatures
+additionally require execution checks. Neither check substitutes for
+evaluator/Wasm agreement.

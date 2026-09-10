@@ -1,3 +1,4 @@
+import { scalarExport } from "../test_support/guest_abi.ts";
 import {
   assertEquals,
   assertNotEquals,
@@ -1098,7 +1099,7 @@ return label + single + double + incremented
 });
 
 function run(instance: WebAssembly.Instance): bigint {
-  const exported = instance.exports["blot:default"];
+  const exported = scalarExport(instance, "blot:default");
   if (typeof exported !== "function") {
     throw new Error("development entry unit omitted blot:default");
   }

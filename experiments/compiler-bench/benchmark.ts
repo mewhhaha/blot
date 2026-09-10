@@ -168,8 +168,9 @@ function runtimeHirNodes(
 ): number {
   return module.functions.reduce(
     (total, function_) =>
-      total + function_.blocks.reduce(
-        (blockTotal, block) => blockTotal + block.operations.length + 1,
+      total + function_.continuations.reduce(
+        (continuationTotal, continuation) =>
+          continuationTotal + continuation.instructions.length + 1,
         0,
       ),
     0,

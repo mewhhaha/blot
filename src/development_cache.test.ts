@@ -1,3 +1,4 @@
+import { scalarExport } from "../test_support/guest_abi.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { join } from "@std/path";
 import { DevelopmentProject } from "./development.ts";
@@ -45,8 +46,8 @@ Deno.test("development graph cache survives restarts and never restores a browse
           assertEquals(build.cache.loadedEntries, 0);
           assert(build.cache.storedEntries > 0);
         }
-        const run = runtime.entryInstance.exports["blot:run"];
-        const floatRun = runtime.entryInstance.exports["blot:float_run"];
+        const run = scalarExport(runtime.entryInstance, "blot:run");
+        const floatRun = scalarExport(runtime.entryInstance, "blot:float_run");
         assert(typeof run === "function" && typeof floatRun === "function");
         for (const argument of [-7n, 0n, 7n, 17n]) {
           assertEquals(run(argument), workload.expectedInteger(argument, 1));
@@ -196,7 +197,7 @@ return { .run = run; }
     try {
       const runtime = new DevelopmentRuntime();
       await project.activate(runtime);
-      const run = runtime.entryInstance.exports["blot:run"];
+      const run = scalarExport(runtime.entryInstance, "blot:run");
       assert(typeof run === "function");
       assertEquals(run(7n), 10n);
       await project.setOverlay(provider, source(5));
@@ -243,7 +244,7 @@ Deno.test("unavailable disk cache reports the failure and keeps compiling", asyn
       assert(
         Object.values(edited.work.reusedFunctions).some((count) => count > 0),
       );
-      const run = runtime.entryInstance.exports["blot:run"];
+      const run = scalarExport(runtime.entryInstance, "blot:run");
       assert(typeof run === "function");
       assertEquals(run(7n), workload.expectedInteger(7n, 10));
     } finally {
@@ -300,7 +301,8 @@ return { .run = run; }
     const runtime = new DevelopmentRuntime(() => ({}));
     try {
       const initial = await project.activate(runtime);
-      const run = runtime.entryInstance.exports["blot:run"];
+      const originalRun = runtime.entryInstance.exports["blot:run"];
+      const run = scalarExport(runtime.entryInstance, "blot:run");
       assert(typeof run === "function");
       assertEquals(run(7n), 17n);
       assertEquals(new Set(initial.edges.map((edge) => edge.name)).size, 2);
@@ -310,7 +312,7 @@ return { .run = run; }
       );
       const edited = await project.activate(runtime);
       assertEquals(edited.changedUnits.map((unit) => unit.name), ["provider"]);
-      assertEquals(runtime.entryInstance.exports["blot:run"], run);
+      assertEquals(runtime.entryInstance.exports["blot:run"], originalRun);
       assertEquals(run(7n), 26n);
     } finally {
       project.destroy();

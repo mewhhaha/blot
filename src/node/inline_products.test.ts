@@ -1,3 +1,4 @@
+import { requiredFunction } from "../abi_values.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -83,7 +84,9 @@ test("products stay inline beyond destructured arguments", async (t) => {
   await withSource(productSource, async (compiler, path) => {
     const hir = await compiler.prepare(path);
     const operations = hir.functions.flatMap((function_) =>
-      function_.blocks.flatMap((block) => block.operations)
+      function_.continuations.flatMap((continuation) =>
+        continuation.instructions
+      )
     );
     assert.ok(
       hir.signatures.some((signature) =>
@@ -92,13 +95,18 @@ test("products stay inline beyond destructured arguments", async (t) => {
       "the recursive helper must retain an internal product result",
     );
     assert.ok(
-      operations.some((operation) => operation.kind === "call.direct"),
+      hir.functions.some((function_) =>
+        function_.continuations.some((continuation) =>
+          continuation.transition.kind === "call" &&
+          continuation.transition.target.kind === "function"
+        )
+      ),
       "the test must exercise a residual call, not only inlined arithmetic",
     );
     assert.equal(
-      operations.some((operation) =>
-        operation.kind.startsWith("store.") ||
-        operation.kind.startsWith("indirect.")
+      operations.some((instruction) =>
+        instruction.operation.kind.startsWith("store.") ||
+        instruction.operation.kind.startsWith("indirect.")
       ),
       false,
       "plain products must not lower to an array Store or recursive box",
@@ -111,13 +119,6 @@ test("products stay inline beyond destructured arguments", async (t) => {
     const memory = instance.exports.memory;
     assert.ok(memory instanceof WebAssembly.Memory);
 
-    // These exports return a scalar: canonical indirect-result buffers are
-    // deliberately outside this internal-product test. Poisoning all linear
-    // memory catches transient writes even when an export restores the heap
-    // cursor. Checking only page count would miss allocate-and-reset paths.
-    const sentinel = new Uint8Array(memory.buffer);
-    sentinel.fill(0xa5);
-    const before = sentinel.slice();
     const cases: readonly {
       readonly name: string;
       readonly arguments: readonly (number | bigint)[];
@@ -136,14 +137,26 @@ test("products stay inline beyond destructured arguments", async (t) => {
     ];
     for (const entry of cases) {
       await t.test(`${entry.name} ${entry.arguments.join(", ")}`, () => {
-        const run = instance.exports[`blot:${entry.name}`];
+        const run = requiredFunction(instance, `blot:${entry.name}`);
         assert.equal(typeof run, "function");
         if (typeof run !== "function") {
           throw new Error(`missing product test export ${entry.name}`);
         }
-        assert.equal(run(...entry.arguments), entry.expected);
-        assert.equal(memory.buffer.byteLength, before.byteLength);
-        assert.deepEqual(new Uint8Array(memory.buffer), before);
+        const scope = Number(requiredFunction(instance, "cabi_enter")());
+        try {
+          // Scope entry writes its administrative record. The source call itself
+          // must keep products in locals, including transient intermediate values.
+          const before = new Uint8Array(memory.buffer).slice();
+          assert.equal(run(scope, ...entry.arguments), entry.expected);
+          assert.equal(memory.buffer.byteLength, before.byteLength);
+          assert.deepEqual(new Uint8Array(memory.buffer), before);
+          assert.equal(
+            requiredFunction(instance, "blot:live-allocations")(),
+            0,
+          );
+        } finally {
+          requiredFunction(instance, "cabi_leave")(scope);
+        }
       });
     }
   });

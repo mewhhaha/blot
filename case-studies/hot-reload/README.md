@@ -27,26 +27,27 @@ invoke Cargo or rebuild the compiler on source edits.
 5. Open a second tab. Each browser starts from the current units, without
    another server compilation. Input values belong to each tab and survive
    source reloads.
-6. Restart the server. Its disk cache restores eligible scalar graphs; the page
-   reports restored graphs and reused function bodies. Each tab reconnects to
-   the complete current build.
+6. Restart the server. Its disk cache restores eligible continuation graphs; the
+   page reports restored graphs and reused function bodies. Each tab reconnects
+   to the complete current build.
 
 `blot.json` declares the two reload boundaries. `main.blot` uses an ordinary
 relative import to call `formula.blot`. Both are pure; the browser supplies the
-runtime integer argument directly through the ABI 3 export.
+runtime integer argument directly through the ABI 4 export.
 
 ## What is reused
 
 The watcher batches editor save events for 35 ms and serializes builds. Known
 changed source paths go through `markChanged` on the resident project. Closed
-scalar graphs are cached in `.blot/cache/development/`, including ordinary
-helpers, generic instances, and recursion. The page distinguishes specialized
-and reused bodies. Source is checked again after restart, and initial Wasm units
-are still emitted. Delete the cache directory to force a cold start.
-Implementation-only provider edits reuse the unchanged app artifact. The page
-shows the server's update duration separately from the browser's artifact fetch
-and activation duration; neither measurement includes the debounce or guarantees
-an iteration-time budget.
+continuation graphs are cached in `.blot/cache/development/`, including ordinary
+helpers, generic instances, recursive components, aggregates, and runtime
+capture slots. Live resources, callbacks, and generative identities are excluded
+from persistence. The page distinguishes specialized and reused bodies. Source
+is checked again after restart, and initial Wasm units are still emitted. Delete
+the cache directory to force a cold start. Implementation-only provider edits
+reuse the unchanged app artifact. The page shows the server's update duration
+separately from the browser's artifact fetch and activation duration; neither
+measurement includes the debounce or guarantees an iteration-time budget.
 
 The server publishes a metadata snapshot and notifies tabs over server-sent
 events. Browsers compare all three unit identities (interface, implementation,

@@ -5,7 +5,7 @@ import {
 } from "./compiler/backend/runtime/abi.ts";
 import { AbiMemoryLayouts } from "./compiler/backend/runtime/memory_layout.ts";
 import type { HostScope } from "./resources.ts";
-import type { HostCallbackFactory } from "./callbacks.ts";
+import type { CallbackType, HostCallbackFactory } from "./callbacks.ts";
 
 type Lane = number | bigint;
 type LaneType = "i32" | "i64" | "f32" | "f64";
@@ -19,13 +19,20 @@ export class AbiCodec {
     readonly allocate: (size: number, alignment: number) => number,
     readonly resources?: HostScope,
     readonly callbacks?: HostCallbackFactory,
+    readonly callbackInputs?: (
+      type: CallbackType,
+      value: RuntimeValue,
+    ) => RuntimeValue,
   ) {}
 
   lower(type: BlotAbiType, value: RuntimeValue): Lane[] {
     if (type.kind === "callback") {
-      throw new TypeError(
-        "compiled callbacks can only leave their defining artifact",
-      );
+      if (this.callbackInputs === undefined) {
+        throw new TypeError(
+          "callback input requires a checked development link",
+        );
+      }
+      return this.lower(type.environment, this.callbackInputs(type, value));
     }
     if (type.kind === "resource") {
       if (

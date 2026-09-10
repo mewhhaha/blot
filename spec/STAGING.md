@@ -116,6 +116,17 @@ that execution and therefore cannot outlive a revision or substitute one module
 occurrence for another. This changes evaluation work only; the exported runtime
 body retains the source algorithm.
 
+Memo-key admission visits at most 256 value nodes and admits at most 4,096
+variable-size payload bytes per argument or result. The byte budget includes
+UTF-8 Text and field or constructor names, integer magnitude bytes, and integer
+vector or mask lane storage. Fixed-size scalar payloads are bounded by the node
+budget. Admission checks each size before copying or descending into that
+payload; an oversized value skips memoization and still evaluates normally.
+Admitted keys retain structural value equality, including equal Text held in
+different allocations. Immutable evaluator Text storage is shared when values
+are cloned; this storage choice does not change its content, public encoding, or
+semantic identity.
+
 ## 5. Generative and applicative identities
 
 ### 5.1 Ordinary effects
@@ -291,6 +302,21 @@ representation holes are not genuine quantified binders and must not be admitted
 as rigid source evidence. Sum arguments are lowered against their
 call-site-substituted representation, not the original open signature spelling.
 
+Host-operation specialization applies one binder substitution to both the
+declared parameter and result, recursively through arrays, matching constructor
+payloads, and nominal resource payloads. The request retains that specialized
+parameter evidence. Rebuilding an aggregate while preparing host arguments
+preserves its checked representation; choosing a first element's narrower sum
+after reconstruction is not a valid replacement for that evidence.
+
+Closed callback evidence is classified by free variables. Quantifiers inside
+nominal effect operations bind their own variables, including effect-row tails,
+and do not make the enclosing callback open. A shared type-value occurrence must
+be examined under its binder scope. An open inferred signature cannot overwrite
+an attached closed signature merely because the latter mentions an effect with
+polymorphic operations. Collection of all variable identities for freshness
+remains a separate judgment.
+
 ### 8.1 Residual code sharing is an environment judgment
 
 Representation equality is necessary but not sufficient for sharing a residual
@@ -425,7 +451,7 @@ Public-layout construction either produces a validated adapter and manifest
 entry or returns `TargetRefusal`. It cannot accept a type whose required
 malformed-input checks are unimplemented.
 
-Exact ABI 3 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
+Exact ABI 4 bytes are owned by [`docs/abi.md`](../docs/abi.md); the semantic
 representation relation is owned by [`RUNTIME.md`](RUNTIME.md).
 
 ## 12. Obligations

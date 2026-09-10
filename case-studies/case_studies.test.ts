@@ -1,3 +1,4 @@
+import { scalarExport } from "../test_support/guest_abi.ts";
 import { assertEquals } from "@std/assert";
 import { Worker } from "node:worker_threads";
 import { checkFile } from "../src/check.ts";
@@ -218,7 +219,7 @@ return {
   const module = await WebAssembly.compile(artifact.wasm as BufferSource);
   const instance = await WebAssembly.instantiate(module);
   const call = (name: string) => {
-    const exported = instance.exports[`blot:${name}`];
+    const exported = scalarExport(instance, `blot:${name}`);
     if (typeof exported !== "function") {
       throw new Error(`missing blot:${name}`);
     }
@@ -233,28 +234,47 @@ Deno.test("terminal preserves its dynamic Text dependency in Runtime HIR", async
   const compiler = await Compiler.create();
   const hir = await compiler.prepare("case-studies/terminal/main.blot");
   compiler.destroy();
-  const operations = hir.functions[0].blocks.flatMap((block) =>
-    block.operations
+  const continuations = hir.functions[0].continuations;
+  const read = continuations.map((continuation) => continuation.transition)
+    .find(
+      (transition) =>
+        transition.kind === "call" &&
+        transition.target.kind === "host" &&
+        transition.target.capability === "Terminal" &&
+        transition.target.operation === "read_line",
+    );
+  if (read?.kind !== "call") {
+    throw new Error("Runtime HIR omitted the Terminal.read_line call");
+  }
+  const successor = continuations.find((continuation) =>
+    continuation.id === read.next.target
   );
-  const read = operations.find((operation) =>
-    operation.kind === "host.call" && operation.capability === "Terminal" &&
-    operation.operation === "read_line"
+  const resultIndex = read.next.arguments.findIndex((argument) =>
+    argument.kind === "result"
   );
-  const append = operations.find((operation) =>
-    operation.kind === "text.append" && operation.operands[1] === read?.result
+  const readResult = successor?.parameters[resultIndex];
+  const append = continuations.flatMap((continuation) =>
+    continuation.instructions
+  ).find((instruction) =>
+    instruction.operation.kind === "text.append" &&
+    instruction.operands[1] === readResult?.value
   );
-  const write = operations.find((operation) =>
-    operation.kind === "host.call" && operation.capability === "Terminal" &&
-    operation.operation === "write" && operation.operands[0] === append?.result
-  );
+  const write = continuations.map((continuation) => continuation.transition)
+    .find(
+      (transition) =>
+        transition.kind === "call" &&
+        transition.target.kind === "host" &&
+        transition.target.capability === "Terminal" &&
+        transition.target.operation === "write" &&
+        transition.arguments[0] === append?.definition.value,
+    );
   if (
-    read?.kind !== "host.call" || append?.kind !== "text.append" ||
-    write?.kind !== "host.call"
+    readResult === undefined || append === undefined || write?.kind !== "call"
   ) {
     throw new Error("Runtime HIR omitted the dynamic Text dependency chain");
   }
-  assertEquals(append.operands[1], read.result);
-  assertEquals(write.operands, [append.result]);
+  assertEquals(append.operands[1], readResult.value);
+  assertEquals(write.arguments, [append.definition.value]);
 });
 
 Deno.test("terminal emitted Wasm preserves both runtime branches", async () => {
@@ -266,7 +286,7 @@ Deno.test("terminal emitted Wasm preserves both runtime branches", async () => {
     const writes: string[] = [];
     const instance = await WebAssembly.instantiate(compiled, {
       "blot:host/Terminal": {
-        read_line(resultPointer: number) {
+        read_line(scope: number, resultPointer: number) {
           const memory = instance.exports.memory;
           const realloc = instance.exports.cabi_realloc;
           if (!(memory instanceof WebAssembly.Memory)) {
@@ -276,13 +296,13 @@ Deno.test("terminal emitted Wasm preserves both runtime branches", async () => {
             throw new Error("emitted Wasm omitted cabi_realloc");
           }
           const encoded = new TextEncoder().encode(input);
-          const pointer = Number(realloc(0, 0, 1, encoded.length));
+          const pointer = Number(realloc(scope, 0, 0, 1, encoded.length));
           new Uint8Array(memory.buffer).set(encoded, pointer);
           const view = new DataView(memory.buffer);
           view.setUint32(resultPointer, pointer, true);
           view.setUint32(resultPointer + 4, encoded.length, true);
         },
-        write(pointer: number, length: number) {
+        write(_scope: number, pointer: number, length: number) {
           const memory = instance.exports.memory;
           if (!(memory instanceof WebAssembly.Memory)) {
             throw new Error("emitted Wasm omitted canonical memory");
@@ -293,7 +313,7 @@ Deno.test("terminal emitted Wasm preserves both runtime branches", async () => {
         },
       },
     });
-    const run = instance.exports["blot:default"];
+    const run = scalarExport(instance, "blot:default");
     if (!(run instanceof Function)) {
       throw new Error("emitted Wasm omitted blot:default");
     }

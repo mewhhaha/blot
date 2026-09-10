@@ -58,6 +58,7 @@ enum PortablePart<'a> {
     Reference(usize),
     Instances([u8; 32]),
     Scope([u8; 32]),
+    Runtime(usize, Vec<u8>, u8, &'a [String]),
 }
 
 impl ResidualEnvironmentKey {
@@ -68,6 +69,7 @@ impl ResidualEnvironmentKey {
         checked_argument: Option<&Value>,
         expected_result: Option<&Value>,
         actual_evidence: Option<&Value>,
+        runtime_types: &[super::RuntimeType],
     ) -> Result<Option<Vec<u8>>, Diagnostic> {
         let stamp = context.residual_cache_effect_stamp();
         let memo = context.residual_cache.borrow().registry.clone();
@@ -85,7 +87,13 @@ impl ResidualEnvironmentKey {
                 }
             }
             let evidence = if supported {
-                portable_evidence(context, registry.parts.iter(), HashMap::new())?.map(Rc::new)
+                portable_evidence(
+                    context,
+                    runtime_types,
+                    registry.parts.iter(),
+                    HashMap::new(),
+                )?
+                .map(Rc::new)
             } else {
                 None
             };
@@ -108,6 +116,7 @@ impl ResidualEnvironmentKey {
         }
         let Some(evidence) = portable_evidence(
             context,
+            runtime_types,
             self.0.iter().chain(&extra.parts),
             registry.variables.clone(),
         )?
@@ -134,6 +143,7 @@ struct PortableEvidence {
 
 fn portable_evidence<'a>(
     context: &Rc<Context>,
+    runtime_types: &[super::RuntimeType],
     parts: impl Iterator<Item = &'a Part>,
     mut variables: HashMap<u32, usize>,
 ) -> Result<Option<PortableEvidence>, Diagnostic> {
@@ -238,7 +248,25 @@ fn portable_evidence<'a>(
                 };
                 PortablePart::Scope(digest)
             }
-            Part::Runtime(..) | Part::Ownership(_) => return Ok(None),
+            Part::Runtime(slot, type_id, meaning) => {
+                let Some(representation) =
+                    super::residual_cache::type_identity(runtime_types, &[*type_id])
+                else {
+                    return Ok(None);
+                };
+                let (meaning, cases) = match meaning {
+                    RuntimeMeaning::Plain => (0, &[][..]),
+                    RuntimeMeaning::DeferredStore => (1, &[][..]),
+                    RuntimeMeaning::SharedStore => (2, &[][..]),
+                    RuntimeMeaning::ReusableStore => (3, &[][..]),
+                    RuntimeMeaning::Sum { cases } => (4, cases.as_slice()),
+                    RuntimeMeaning::Ordering | RuntimeMeaning::ScalarOrdering { .. } => {
+                        return Ok(None);
+                    }
+                };
+                PortablePart::Runtime(*slot, representation, meaning, cases)
+            }
+            Part::Ownership(_) => return Ok(None),
         };
         encoded.push(value);
     }
@@ -589,7 +617,8 @@ impl<'a> Builder<'a> {
                     self.number(u64::from(*value));
                 }
             }
-            Value::Text(value) | Value::OpaqueType(value) => self.text(value),
+            Value::Text(value) => self.text(value),
+            Value::OpaqueType(value) => self.text(value),
             Value::Unit | Value::Unbounded => {}
             Value::TypeVariable(variable) => self.parts.push(Part::Variable(*variable)),
             Value::Shape(fields) => return self.fields(fields),

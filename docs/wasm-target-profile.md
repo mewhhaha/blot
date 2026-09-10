@@ -3,7 +3,7 @@
 ## Status
 
 Blot's production target is standard WebAssembly 3.0, tested on V8 through the
-current Node LTS and Current release lines. Core Wasm ABI 2 remains memory32.
+current Node LTS and Current release lines. Core Wasm ABI 4 remains memory32.
 This document records target selection and implementation status; semantic and
 byte-level authority remain in `spec/RUNTIME.md` and `docs/abi.md`.
 
@@ -42,9 +42,9 @@ concrete engine.
 | branch hinting                | cold immediate-trap branches                                          | improves V8 layout/register decisions without changing validation or observations   |
 | typed references / `call_ref` | deferred                                                              | residual known choices already become direct calls; open closures are refused       |
 | GC / JS string builtins       | separate future V8 profile                                            | can remove Text/runtime work but replaces Store and ABI representation proofs       |
-| memory64                      | deferred                                                              | ABI 2 is memory32 and current programs gain no offset-space benefit                 |
+| memory64                      | deferred                                                              | ABI 4 is memory32 and current programs gain no offset-space benefit                 |
 | multiple memories             | deferred                                                              | no measured benefit yet; complicates canonical adapters and interpreter portability |
-| exception handling / JSPI     | separate future async profile                                         | Blot effects are resumable and ABI 2 host calls are synchronous                     |
+| exception handling / JSPI     | separate future async profile                                         | checked suspending effects use the explicit poll/resume protocol                    |
 | relaxed SIMD                  | deferred                                                              | relaxed/FMA instructions can change deterministic floating-point results            |
 
 ## Branch-hint lowering
@@ -72,23 +72,17 @@ may use it for code layout and register allocation.
 
 ## Tail-call lowering
 
-For an internal Runtime-HIR block:
-
-```text
-r = call.direct f(args)
-return r
-```
-
-lowering emits `return_call f` only when the call is the final operation and its
-result reaches the function return directly or through a cycle-free chain of
-empty forwarding blocks. Target, caller, argument, and result layouts must
-agree. Any intervening operation, condition, trap, or cycle disables the
+For an internal Runtime-HIR call transition whose successor returns its result,
+lowering emits `return_call f` when the successor is a direct return or a
+cycle-free chain of empty continuation jumps. The result is carried through
+successor parameters. Target, caller, argument, and result layouts must agree.
+Any intervening instruction, condition, trap, or cycle disables the
 optimization.
 
 The optimization applies to self recursion and mutual recursion. It does not
-apply across a public export wrapper because that wrapper must execute
-allocation checkpoint restoration, canonical lowering, and post-return
-bookkeeping.
+apply across a public export wrapper because that wrapper must execute canonical
+result lowering and ownership transfer into the explicit invocation scope. The
+caller performs post-return cleanup before leaving that scope.
 
 Tail calls remove caller frames from target stack traces. Stack traces are not a
 Blot source observation, so this target difference is admissible and is recorded

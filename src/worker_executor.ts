@@ -2,6 +2,7 @@ import type { RuntimeValue } from "./abi_values.ts";
 import type { CallbackExecutor, CompiledCallback } from "./callbacks.ts";
 import type { BlotAbiType } from "./compiler/backend/runtime/abi.ts";
 import type { HostScope } from "./resources.ts";
+import { Queue } from "./queue.ts";
 import type { SharedLoan } from "./shared_memory.ts";
 import { type WorkerConnection, workerResponse } from "./worker_protocol.ts";
 
@@ -15,6 +16,8 @@ interface PendingJob {
   readonly completion: PromiseWithResolvers<RuntimeValue>;
   readonly detach: () => void;
   worker: PoolWorker | undefined;
+  unlinkQueue: (() => void) | undefined;
+  unlinkCallback: (() => void) | undefined;
   priority: "required" | "speculative";
   started: boolean;
 }
@@ -24,6 +27,7 @@ interface PoolWorker {
   readonly installed: Set<number>;
   readonly detach: () => void;
   job: PendingJob | undefined;
+  unlinkIdle: (() => void) | undefined;
 }
 
 /** A reusable pool; each admitted callback runs at most once in a private heap. */
@@ -32,6 +36,11 @@ export class WorkerExecutor implements CallbackExecutor {
   readonly #createWorker: () => WorkerConnection;
   readonly #workers = new Set<PoolWorker>();
   readonly #pending = new Map<number, PendingJob>();
+  readonly #required = new Queue<PendingJob>();
+  readonly #speculative = new Queue<PendingJob>();
+  readonly #idle = new Queue<PoolWorker>();
+  readonly #callbacks = new WeakMap<CompiledCallback, Queue<PendingJob>>();
+  #activeSpeculative = 0;
   readonly #programs = new WeakMap<WebAssembly.Module, number>();
   readonly #developmentPrograms = new Map<string, number>();
   readonly #modules = new WeakMap<WebAssembly.Module, number>();
@@ -162,22 +171,36 @@ export class WorkerExecutor implements CallbackExecutor {
       signal: cancellation,
       completion: Promise.withResolvers<RuntimeValue>(),
       worker: undefined,
+      unlinkQueue: undefined,
+      unlinkCallback: undefined,
       priority: options.priority,
       started: false,
       detach: () => cancellation.removeEventListener("abort", abort),
     };
     this.#pending.set(job.id, job);
+    let callbacks = this.#callbacks.get(callback);
+    if (callbacks === undefined) {
+      callbacks = new Queue<PendingJob>();
+      this.#callbacks.set(callback, callbacks);
+    }
+    job.unlinkCallback = callbacks.push(job);
+    if (job.priority === "required") job.unlinkQueue = this.#required.push(job);
+    else job.unlinkQueue = this.#speculative.push(job);
     cancellation.addEventListener("abort", abort, { once: true });
     this.#dispatch();
     return job.completion.promise;
   }
 
   promote(callback: CompiledCallback): void {
-    const job = [...this.#pending.values()].find((job) =>
-      job.callback === callback
-    );
-    if (job === undefined) return;
+    const job = this.#callbacks.get(callback)?.peek();
+    if (job === undefined || job.priority === "required") return;
     job.priority = "required";
+    if (job.worker === undefined) {
+      job.unlinkQueue?.();
+      job.unlinkQueue = this.#required.push(job);
+    } else {
+      this.#activeSpeculative -= 1;
+    }
     this.#dispatch();
   }
 
@@ -195,6 +218,7 @@ export class WorkerExecutor implements CallbackExecutor {
       );
       await Promise.all(this.#retiring);
       this.#workers.clear();
+      this.#idle.clear();
       this.#detach();
       const failures = [...this.#retirementFailures];
       for (const outcome of outcomes) {
@@ -212,26 +236,16 @@ export class WorkerExecutor implements CallbackExecutor {
 
   #dispatch(): void {
     if (this.#controller.signal.aborted) return;
-    const waiting = [...this.#pending.values()];
-    waiting.sort((left, right) => {
-      if (left.priority === right.priority) return left.id - right.id;
-      if (left.priority === "required") return -1;
-      return 1;
-    });
-    for (const job of waiting) {
-      if (job.worker !== undefined) continue;
-      if (job.priority === "speculative") {
-        const speculative = [...this.#workers].filter((worker) =>
-          worker.job?.priority === "speculative"
-        ).length;
+    while (true) {
+      let job = this.#required.peek();
+      if (job === undefined) {
         // Keep one worker available for required work even if a spark diverges.
-        if (speculative >= this.#size - 1) {
-          continue;
-        }
+        if (this.#activeSpeculative >= this.#size - 1) return;
+        job = this.#speculative.peek();
       }
-      let worker = [...this.#workers].find((worker) =>
-        worker.job === undefined
-      );
+      if (job === undefined) return;
+      let worker = this.#idle.shift();
+      if (worker !== undefined) worker.unlinkIdle = undefined;
       if (worker === undefined) {
         if (this.#workers.size === this.#size) return;
         try {
@@ -241,8 +255,11 @@ export class WorkerExecutor implements CallbackExecutor {
           continue;
         }
       }
+      job.unlinkQueue?.();
+      job.unlinkQueue = undefined;
       worker.job = job;
       job.worker = worker;
+      if (job.priority === "speculative") this.#activeSpeculative += 1;
       try {
         if (!worker.installed.has(job.program)) {
           if (worker.installed.size >= 16) {
@@ -324,6 +341,7 @@ export class WorkerExecutor implements CallbackExecutor {
       connection,
       installed: new Set(),
       job: undefined,
+      unlinkIdle: undefined,
       detach: () => {
         offMessage();
         offError();
@@ -342,7 +360,18 @@ export class WorkerExecutor implements CallbackExecutor {
       throw new Error("worker job completed twice");
     }
     job.detach();
-    if (job.worker !== undefined) job.worker.job = undefined;
+    job.unlinkQueue?.();
+    job.unlinkQueue = undefined;
+    job.unlinkCallback?.();
+    job.unlinkCallback = undefined;
+    if (job.worker !== undefined) {
+      const worker = job.worker;
+      worker.job = undefined;
+      if (job.priority === "speculative") this.#activeSpeculative -= 1;
+      if (this.#workers.has(worker)) {
+        worker.unlinkIdle = this.#idle.push(worker);
+      }
+    }
     this.#completed += 1;
     if ("error" in outcome) job.completion.reject(outcome.error);
     else job.completion.resolve(outcome.value);
@@ -351,6 +380,8 @@ export class WorkerExecutor implements CallbackExecutor {
   #lose(worker: PoolWorker, error: unknown): void {
     if (!this.#workers.delete(worker)) return;
     worker.detach();
+    worker.unlinkIdle?.();
+    worker.unlinkIdle = undefined;
     const job = worker.job;
     const retirement = Promise.resolve().then(() =>
       worker.connection.terminate()

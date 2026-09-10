@@ -1,5 +1,8 @@
 import type { RuntimeValue } from "./abi_values.ts";
-import type { BlotAbiType } from "./compiler/backend/runtime/abi.ts";
+import {
+  abiLayoutIdentity,
+  type BlotAbiType,
+} from "./compiler/backend/runtime/abi.ts";
 import type { HostScope } from "./resources.ts";
 import type { SharedLoan } from "./shared_memory.ts";
 
@@ -57,9 +60,10 @@ interface CallbackState {
   owner: HostScope;
   detach: () => void;
   phase: "ready" | "registered" | "running" | "released";
-  readonly validateScope: (scope: HostScope) => void;
+  validateScope: (scope: HostScope) => void;
   readonly release: () => Promise<void>;
-  readonly compiled: CompiledCallback | undefined;
+  compiled: CompiledCallback | undefined;
+  type: CallbackType | undefined;
   executor: CallbackExecutor | undefined;
   priority: "required" | "speculative";
   shared: SharedLoan | undefined;
@@ -76,11 +80,34 @@ export function createHostCallback(
     signal?: AbortSignal,
   ) => Promise<RuntimeValue>,
   compiled?: CompiledCallback,
+  options: {
+    readonly dispose?: () => Promise<void>;
+    readonly type?: CallbackType;
+  } = {},
 ): HostCallback {
+  let invokeCallback: typeof invoke | undefined = invoke;
+  let disposeCallback = options.dispose;
   let pending: Promise<RuntimeValue> | undefined;
+  const finalize = async () => {
+    state.phase = "released";
+    state.detach();
+    state.detach = () => {};
+    invokeCallback = undefined;
+    state.compiled = undefined;
+    state.type = undefined;
+    state.validateScope = () => {
+      throw new Error("compiled callback has been released");
+    };
+    state.executor = undefined;
+    state.shared = undefined;
+    const disposal = disposeCallback;
+    disposeCallback = undefined;
+    if (disposal !== undefined) await disposal();
+  };
   const release = async () => {
     state.phase = "released";
     if (pending !== undefined) await pending.then(() => {}, () => {});
+    await finalize();
   };
   const state: CallbackState = {
     owner,
@@ -89,6 +116,7 @@ export function createHostCallback(
     validateScope,
     release,
     compiled,
+    type: options.type,
     executor: undefined,
     priority: "required",
     shared: undefined,
@@ -112,7 +140,10 @@ export function createHostCallback(
         state.phase = "running";
         pending = Promise.resolve().then(() => {
           if (state.executor === undefined) {
-            return invoke(state.owner, argument, options.signal);
+            if (invokeCallback === undefined) {
+              throw new Error("compiled callback lost its invocation");
+            }
+            return invokeCallback(state.owner, argument, options.signal);
           }
           if (state.compiled === undefined) {
             throw new Error("worker callback lost its compiled entry");
@@ -125,9 +156,21 @@ export function createHostCallback(
             priority: state.priority,
             shared: state.shared,
           });
+        }).then(async (result) => {
+          await finalize();
+          return result;
+        }, async (cause) => {
+          try {
+            await finalize();
+          } catch (cleanup) {
+            throw new AggregateError(
+              [cause, cleanup],
+              "callback execution and snapshot disposal failed",
+            );
+          }
+          throw cause;
         }).finally(() => {
-          state.phase = "released";
-          state.detach();
+          pending = undefined;
         });
         return pending;
       },
@@ -211,4 +254,48 @@ export function registerHostFinalizer(
   state.detach = () => {};
   state.owner = destination;
   state.phase = "registered";
+}
+
+/** Consume a compiler-checked development link argument and transfer its captures. */
+export function takeDevelopmentCallback(
+  callback: HostCallback,
+  type: CallbackType,
+  destination: HostScope,
+): {
+  readonly environment: RuntimeValue;
+  readonly release: () => Promise<void>;
+} {
+  const state = callbacks.get(callback);
+  if (
+    state === undefined || state.phase !== "ready" ||
+    state.compiled === undefined || state.type === undefined
+  ) {
+    throw new TypeError(
+      "development link requires an unconsumed compiled callback",
+    );
+  }
+  state.owner.assertOpen();
+  destination.assertOpen();
+  state.validateScope(destination);
+  if (
+    abiLayoutIdentity(state.type) !== abiLayoutIdentity(type) ||
+    state.compiled.environmentType.kind !== "record"
+  ) {
+    throw new TypeError(
+      "development callback disagrees with its checked link layout",
+    );
+  }
+  const compiled = state.compiled;
+  const environment: RuntimeValue = {
+    kind: "record",
+    fields: new Map(
+      state.compiled.environmentType.fields.map((
+        field,
+        index,
+      ) => [field.name, compiled.captures[index]]),
+    ),
+  };
+  state.phase = "released";
+  state.detach();
+  return { environment, release: state.release };
 }

@@ -1,9 +1,13 @@
+import type { CompiledDevelopmentProgram } from "./callbacks.ts";
 import { AbiMemoryLayouts } from "./compiler/backend/runtime/memory_layout.ts";
 import type {
   BlotAbiFunction,
   BlotAbiType,
 } from "./compiler/backend/runtime/abi.ts";
-import { flattenedAbiType } from "./compiler/backend/runtime/abi.ts";
+import {
+  abiLayoutIdentity,
+  flattenedAbiType,
+} from "./compiler/backend/runtime/abi.ts";
 import type {
   DevelopmentBuild,
   RetainedDevelopmentUnit,
@@ -11,12 +15,17 @@ import type {
 import type { DevelopmentUnitArtifact } from "./compiler/session.ts";
 import { developmentRevision } from "./development_identity.ts";
 import {
+  type ExecutionContext,
   type HostCapabilities,
   type HostedModule,
   instantiateArtifact,
 } from "./host.ts";
 import { HostScope } from "./resources.ts";
-import type { RuntimeValue } from "./abi_values.ts";
+import {
+  type GuestScopeToken,
+  requireGuestScopeToken,
+  type RuntimeValue,
+} from "./abi_values.ts";
 
 const memoryLayouts = new AbiMemoryLayouts();
 
@@ -52,6 +61,7 @@ export interface LinkedDevelopmentUnit {
   readonly artifact: Pick<DevelopmentUnitArtifact, "name">;
   readonly manifest: DevelopmentManifest;
   readonly instance: WebAssembly.Instance;
+  readonly hosted?: Pick<HostedModule, "invokeLinked">;
 }
 
 interface UnitActivation extends LinkedDevelopmentUnit {
@@ -133,6 +143,13 @@ export class DevelopmentRuntime {
   #closing: Promise<void> | undefined;
   #blockedUnits = new Set<string>();
   #units = new Map<string, UnitActivation>();
+  readonly #snapshots = new WeakMap<
+    CompiledDevelopmentProgram,
+    ReadonlyMap<string, UnitActivation>
+  >();
+  readonly #pins = new Map<UnitActivation, number>();
+  readonly #retired = new Set<UnitActivation>();
+  readonly #disposals = new Map<UnitActivation, Promise<void>>();
   #entryUnit: string | undefined;
   #revision: string | undefined;
   #state: DevelopmentRuntimeState = { tag: "ready" };
@@ -150,6 +167,13 @@ export class DevelopmentRuntime {
 
   get revision(): string | undefined {
     return this.#revision;
+  }
+
+  get statistics(): {
+    readonly pinnedUnits: number;
+    readonly retiredUnits: number;
+  } {
+    return { pinnedUnits: this.#pins.size, retiredUnits: this.#retired.size };
   }
 
   get entryInstance(): WebAssembly.Instance {
@@ -266,8 +290,8 @@ export class DevelopmentRuntime {
             );
           }
           if (
-            JSON.stringify(exported.function) !==
-              JSON.stringify(link.function) ||
+            abiLayoutIdentity(exported.function) !==
+              abiLayoutIdentity(link.function) ||
             link.suspends !== (exported.execution === "resumable")
           ) {
             throw new Error(
@@ -427,7 +451,9 @@ export class DevelopmentRuntime {
               scope: this.#lifetime,
               links: linkedImports,
               callLink: async (link, arguments_, context) => {
-                const provider = this.#units.get(link.unit);
+                const provider = this.#providers(context.development).get(
+                  link.unit,
+                );
                 if (provider?.hosted === undefined) {
                   throw new Error(
                     `inactive hosted development provider ${link.unit}`,
@@ -439,34 +465,28 @@ export class DevelopmentRuntime {
                   context,
                 );
               },
-              development: () => {
-                const units = new Map<string, UnitActivation>();
-                const pending = [prepared.artifact.name];
-                while (pending.length > 0) {
-                  const name = pending.pop();
-                  if (name === undefined) {
-                    throw new Error("development dependency queue lost a unit");
-                  }
-                  if (units.has(name)) continue;
-                  const unit = this.#units.get(name);
-                  if (unit === undefined) {
-                    throw new Error(
-                      `inactive development callback unit ${name}`,
-                    );
-                  }
-                  units.set(name, unit);
-                  pending.push(...unit.manifest.links.map((link) => link.unit));
+              invokeLink: (link, arguments_, context) => {
+                const provider = this.#providers(context.development).get(
+                  link.unit,
+                );
+                if (
+                  provider === undefined || activation.instance === undefined
+                ) {
+                  throw new Error(`inactive development provider ${link.unit}`);
                 }
-                return {
-                  entryUnit: prepared.artifact.name,
-                  units: [...units.values()].map((unit) => ({
-                    name: unit.artifact.name,
-                    root: unit.artifact.root,
-                    module: unit.module,
-                    manifestBytes: unit.artifact.manifestBytes,
-                  })),
-                };
+                return invokeLink(
+                  prepared.artifact.name,
+                  activation.instance,
+                  prepared.manifest,
+                  link.function,
+                  provider,
+                  link.name,
+                  arguments_,
+                  context,
+                );
               },
+              development: (previous) =>
+                this.#snapshot(prepared.artifact.name, previous),
             },
           );
           activation.instance = hosted.instance;
@@ -564,7 +584,7 @@ export class DevelopmentRuntime {
         calls.map((call) => call.completion),
       );
       const cleanup = await Promise.allSettled(
-        retired.map((unit) => unit.hosted?.close()),
+        retired.map((unit) => this.#retire(unit)),
       );
       const failures: unknown[] = [];
       for (const outcome of [...outcomes, ...cleanup]) {
@@ -627,10 +647,98 @@ export class DevelopmentRuntime {
 
   close(): Promise<void> {
     if (this.#closing !== undefined) return this.#closing;
-    this.#closing = this.#lifetime.close().then(() => {
+    this.#closing = this.#lifetime.close().then(async () => {
+      await Promise.all(this.#disposals.values());
+    }).finally(() => {
       this.#units.clear();
+      this.#retired.clear();
+      this.#pins.clear();
     });
     return this.#closing;
+  }
+
+  #providers(
+    program?: CompiledDevelopmentProgram,
+  ): ReadonlyMap<string, UnitActivation> {
+    if (program === undefined) return this.#units;
+    const providers = this.#snapshots.get(program);
+    if (providers === undefined) {
+      throw new Error("development callback lost its pinned providers");
+    }
+    return providers;
+  }
+
+  #snapshot(entryUnit: string, previous?: CompiledDevelopmentProgram) {
+    const providers = this.#providers(previous);
+    const units = new Map<string, UnitActivation>();
+    const pending = [entryUnit];
+    while (pending.length > 0) {
+      const name = pending.pop();
+      if (name === undefined) {
+        throw new Error("development dependency queue lost a unit");
+      }
+      if (units.has(name)) continue;
+      const unit = providers.get(name);
+      if (unit === undefined) {
+        throw new Error(`inactive development callback unit ${name}`);
+      }
+      units.set(name, unit);
+      pending.push(...unit.manifest.links.map((link) => link.unit));
+    }
+    const program: CompiledDevelopmentProgram = {
+      entryUnit,
+      units: [...units.values()].map((unit) => ({
+        name: unit.artifact.name,
+        root: unit.artifact.root,
+        module: unit.module,
+        manifestBytes: unit.artifact.manifestBytes,
+      })),
+    };
+    this.#snapshots.set(program, units);
+    for (const unit of units.values()) {
+      let count = this.#pins.get(unit);
+      if (count === undefined) count = 0;
+      this.#pins.set(unit, count + 1);
+    }
+    const release = async () => {
+      const pinned = [...units.values()];
+      units.clear();
+      this.#snapshots.delete(program);
+      const disposals: Promise<void>[] = [];
+      for (const unit of pinned) {
+        const count = this.#pins.get(unit);
+        if (count === undefined) {
+          throw new Error("development callback lost its provider pin");
+        }
+        if (count > 1) {
+          this.#pins.set(unit, count - 1);
+          continue;
+        }
+        this.#pins.delete(unit);
+        if (this.#retired.has(unit) && !this.#lifetime.signal.aborted) {
+          disposals.push(this.#retire(unit));
+        }
+      }
+      await Promise.all(disposals);
+    };
+    return { program, release };
+  }
+
+  #retire(unit: UnitActivation): Promise<void> {
+    if (this.#pins.has(unit)) {
+      this.#retired.add(unit);
+      return Promise.resolve();
+    }
+    this.#retired.delete(unit);
+    const previous = this.#disposals.get(unit);
+    if (previous !== undefined) return previous;
+    const disposal = Promise.resolve().then(() => unit.hosted?.close()).finally(
+      () => {
+        this.#disposals.delete(unit);
+      },
+    );
+    this.#disposals.set(unit, disposal);
+    return disposal;
   }
 
   #pendingActivation(
@@ -784,7 +892,7 @@ export function decodeDevelopmentManifest(
   }
   const abi = requireRecord(decoded.abi, `${position}.abi`);
   if (
-    abi.major !== 3 || abi.minor !== 0 || abi.memory !== "memory32" ||
+    abi.major !== 4 || abi.minor !== 0 || abi.memory !== "memory32" ||
     abi.stringEncoding !== "utf-8" || abi.maximumFlatParameters !== 16 ||
     abi.maximumFlatResults !== 1 || abi.memoryExport !== "memory" ||
     abi.reallocExport !== "cabi_realloc"
@@ -1164,14 +1272,18 @@ function parseLink(
   };
 }
 
-function parseFunction(value: unknown, position: string): BlotAbiFunction {
+function parseFunction(
+  value: unknown,
+  position: string,
+  depth = 0,
+): BlotAbiFunction {
   const encoded = requireRecord(value, position);
   return {
     parameters: requireArray(encoded.parameters, `${position}.parameters`).map(
       (parameter, index) =>
-        parseAbiType(parameter, `${position}.parameters[${index}]`, 0),
+        parseAbiType(parameter, `${position}.parameters[${index}]`, depth),
     ),
-    result: parseAbiType(encoded.result, `${position}.result`, 0),
+    result: parseAbiType(encoded.result, `${position}.result`, depth),
   };
 }
 
@@ -1191,6 +1303,22 @@ function parseAbiType(
   if (kind === "float-64") return { kind: "float-64" };
   if (kind === "boolean") return { kind: "boolean" };
   if (kind === "text") return { kind: "text" };
+  if (kind === "callback") {
+    return {
+      kind: "callback",
+      entry: requireString(encoded.entry, `${position}.entry`),
+      function: parseFunction(
+        encoded.function,
+        `${position}.function`,
+        depth + 1,
+      ),
+      environment: parseAbiType(
+        encoded.environment,
+        `${position}.environment`,
+        depth + 1,
+      ),
+    };
+  }
   if (kind === "resource") {
     return {
       kind: "resource",
@@ -1343,6 +1471,7 @@ function invokeLink(
   provider: LinkedDevelopmentUnit,
   linkName: string,
   arguments_: readonly WasmValue[],
+  context?: ExecutionContext,
 ): WasmValue | undefined {
   const exportName = `blot:dev:${linkName}`;
   const exports = provider.manifest.exports.filter((candidate) =>
@@ -1369,11 +1498,9 @@ function invokeLink(
     provider.manifest,
     provider.artifact.name,
   );
-  const providerReallocate = requiredReallocate(provider);
-  const allocations: Allocation[] = [];
   const parameterWidth = function_.parameters.flatMap(flattenedAbiType).length;
   const resultWidth = flattenedAbiType(function_.result).length;
-  let expectedArguments = parameterWidth;
+  let expectedArguments = parameterWidth + 1;
   if (resultWidth > 1) expectedArguments += 1;
   if (arguments_.length !== expectedArguments) {
     throw new Error(
@@ -1383,13 +1510,34 @@ function invokeLink(
     );
   }
 
+  const consumerScope = requireGuestScopeToken(arguments_[0]);
+  const enterProvider = requiredExportedFunction(
+    provider.instance,
+    "cabi_enter",
+  );
+  const leaveProvider = requiredExportedFunction(
+    provider.instance,
+    "cabi_leave",
+  );
+  const providerScope = requireGuestScopeToken(enterProvider());
+  let providerReallocate: Reallocate;
+  try {
+    providerReallocate = requiredReallocateFromInstance(
+      provider.instance,
+      provider.artifact.name,
+      providerScope,
+    );
+  } catch (cause) {
+    leaveProvider(providerScope);
+    throw cause;
+  }
   let resultReallocate: Reallocate | undefined;
   const resultAllocations: Allocation[] = [];
   try {
     let providerResultPointer: number | undefined;
     try {
-      let offset = 0;
-      const providerArguments: WasmValue[] = [];
+      let offset = 1;
+      const providerArguments: WasmValue[] = [providerScope];
       for (const parameter of function_.parameters) {
         const width = flattenedAbiType(parameter).length;
         providerArguments.push(...copyFlatValue(
@@ -1398,13 +1546,23 @@ function invokeLink(
           consumerMemory,
           providerMemory,
           providerReallocate,
-          allocations,
+          undefined,
+          context?.scope,
         ));
         offset += width;
       }
 
       const callable = requiredExportedFunction(provider.instance, exportName);
-      const raw = callable(...providerArguments);
+      let raw: unknown;
+      if (context !== undefined && provider.hosted !== undefined) {
+        raw = provider.hosted.invokeLinked(
+          exportName,
+          providerArguments,
+          context,
+        );
+      } else {
+        raw = callable(...providerArguments);
+      }
       if (resultWidth === 0) return undefined;
       if (resultWidth === 1) {
         if (!isWasmValue(raw)) {
@@ -1417,6 +1575,7 @@ function invokeLink(
         resultReallocate = requiredReallocateFromInstance(
           consumer,
           consumerName,
+          consumerScope,
         );
         return copyFlatValue(
           function_.result,
@@ -1425,6 +1584,7 @@ function invokeLink(
           consumerMemory,
           resultReallocate,
           resultAllocations,
+          context?.scope,
         )[0];
       }
       if (typeof raw !== "number") {
@@ -1443,7 +1603,11 @@ function invokeLink(
           } received an invalid caller result pointer`,
         );
       }
-      resultReallocate = requiredReallocateFromInstance(consumer, consumerName);
+      resultReallocate = requiredReallocateFromInstance(
+        consumer,
+        consumerName,
+        consumerScope,
+      );
       copyMemoryValue(
         function_.result,
         providerMemory,
@@ -1452,6 +1616,7 @@ function invokeLink(
         resultPointer,
         resultReallocate,
         resultAllocations,
+        context?.scope,
       );
       return undefined;
     } finally {
@@ -1463,10 +1628,10 @@ function invokeLink(
             provider.instance,
             exported.postReturn,
           );
-          postReturn(providerResultPointer);
+          postReturn(providerScope, providerResultPointer);
         }
       } finally {
-        releaseAllocations(providerReallocate, allocations);
+        leaveProvider(providerScope);
       }
     }
   } catch (error) {
@@ -1502,12 +1667,28 @@ function copyFlatValue(
   sourceMemory: WebAssembly.Memory,
   targetMemory: WebAssembly.Memory,
   targetReallocate: Reallocate,
-  allocations: Allocation[],
+  allocations: Allocation[] | undefined,
+  resources?: HostScope,
 ): WasmValue[] {
-  if (type.kind === "resource" || type.kind === "callback") {
-    throw new TypeError(
-      "resource and callback links require a scope-aware development runtime",
+  if (type.kind === "callback") {
+    return copyFlatValue(
+      type.environment,
+      values,
+      sourceMemory,
+      targetMemory,
+      targetReallocate,
+      allocations,
+      resources,
     );
+  }
+  if (type.kind === "resource") {
+    if (resources === undefined || typeof values[0] !== "bigint") {
+      throw new TypeError(
+        "resource links require a scope-aware development runtime",
+      );
+    }
+    const resource = resources.lift(type.name, values[0], type.payload);
+    return [resources.lower(type.name, resource, type.payload)];
   }
   if (type.kind === "unit") return [];
   if (
@@ -1522,6 +1703,7 @@ function copyFlatValue(
       targetMemory,
       targetReallocate,
       allocations,
+      resources,
     );
   }
   if (type.kind === "text") {
@@ -1558,6 +1740,7 @@ function copyFlatValue(
         copied + index * element.size,
         targetReallocate,
         allocations,
+        resources,
       );
     }
     return [copied, length];
@@ -1574,6 +1757,7 @@ function copyFlatValue(
         targetMemory,
         targetReallocate,
         allocations,
+        resources,
       ));
       offset += width;
     }
@@ -1597,6 +1781,7 @@ function copyFlatValue(
     targetMemory,
     targetReallocate,
     allocations,
+    resources,
   );
   copied.splice(1, payload.length, ...payload);
   return copied;
@@ -1609,13 +1794,49 @@ function copyMemoryValue(
   targetMemory: WebAssembly.Memory,
   targetPointer: number,
   targetReallocate: Reallocate,
-  allocations: Allocation[],
+  allocations: Allocation[] | undefined,
+  resources?: HostScope,
 ): void {
   const layout = memoryLayouts.get(type);
-  if (type.kind === "resource" || type.kind === "callback") {
-    throw new TypeError(
-      "resource and callback links require a scope-aware development runtime",
+  if (type.kind === "callback") {
+    copyMemoryValue(
+      type.environment,
+      sourceMemory,
+      sourcePointer,
+      targetMemory,
+      targetPointer,
+      targetReallocate,
+      allocations,
+      resources,
     );
+    return;
+  }
+  if (type.kind === "resource") {
+    if (resources === undefined) {
+      throw new TypeError(
+        "resource links require a scope-aware development runtime",
+      );
+    }
+    requireMemoryRange(
+      sourceMemory,
+      sourcePointer,
+      layout.size,
+      "source resource",
+    );
+    requireMemoryRange(
+      targetMemory,
+      targetPointer,
+      layout.size,
+      "target resource",
+    );
+    const token = readView(sourceMemory).getBigInt64(sourcePointer, true);
+    const resource = resources.lift(type.name, token, type.payload);
+    writeView(targetMemory).setBigInt64(
+      targetPointer,
+      resources.lower(type.name, resource, type.payload),
+      true,
+    );
+    return;
   }
   requireMemoryRange(sourceMemory, sourcePointer, layout.size, "source value");
   requireMemoryRange(targetMemory, targetPointer, layout.size, "target value");
@@ -1660,6 +1881,7 @@ function copyMemoryValue(
       targetPointer,
       targetReallocate,
       allocations,
+      resources,
     );
     return;
   }
@@ -1702,6 +1924,7 @@ function copyMemoryValue(
         copied + index * element.size,
         targetReallocate,
         allocations,
+        resources,
       );
     }
     const target = writeView(targetMemory);
@@ -1719,6 +1942,7 @@ function copyMemoryValue(
         targetPointer + field.offset,
         targetReallocate,
         allocations,
+        resources,
       );
     }
     return;
@@ -1750,6 +1974,7 @@ function copyMemoryValue(
     targetPointer + variant.payloadOffset,
     targetReallocate,
     allocations,
+    resources,
   );
 }
 
@@ -1760,7 +1985,7 @@ function copyBytes(
   targetMemory: WebAssembly.Memory,
   alignment: number,
   targetReallocate: Reallocate,
-  allocations: Allocation[],
+  allocations: Allocation[] | undefined,
 ): number {
   if (length === 0) return 0;
   requireMemoryRange(sourceMemory, sourcePointer, length, "byte sequence");
@@ -1776,11 +2001,11 @@ function allocate(
   reallocate: Reallocate,
   size: number,
   alignment: number,
-  allocations: Allocation[],
+  allocations: Allocation[] | undefined,
 ): number {
   if (size === 0) return 0;
   const pointer = reallocate(0, 0, alignment, size);
-  allocations.push({ pointer, size, alignment });
+  allocations?.push({ pointer, size, alignment });
   return pointer;
 }
 
@@ -1800,13 +2025,10 @@ function requiredMemory(
   return memory;
 }
 
-function requiredReallocate(active: LinkedDevelopmentUnit): Reallocate {
-  return requiredReallocateFromInstance(active.instance, active.artifact.name);
-}
-
 function requiredReallocateFromInstance(
   instance: WebAssembly.Instance,
   unit: string,
+  scope: GuestScopeToken,
 ): Reallocate {
   const value = instance.exports.cabi_realloc;
   if (typeof value !== "function") {
@@ -1814,7 +2036,8 @@ function requiredReallocateFromInstance(
       `development unit ${JSON.stringify(unit)} omitted cabi_realloc`,
     );
   }
-  return value as Reallocate;
+  return (pointer, size, alignment, newSize) =>
+    Number(value(scope, pointer, size, alignment, newSize)) >>> 0;
 }
 
 function requiredExportedFunction(

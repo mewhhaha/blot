@@ -24,9 +24,9 @@ type JobOutcome =
 interface SparkJob {
   readonly scope: HostScope;
   readonly outcome: Promise<JobOutcome>;
-  readonly work: HostCallback;
   readonly kind: "required" | "speculative";
-  demanded: boolean;
+  work: HostCallback | undefined;
+  state: "available" | "joining" | "cancelled" | "released";
 }
 
 interface SparkScope {
@@ -44,6 +44,9 @@ export class SparkRuntime {
   readonly #scopes: ResourceFamily<SparkScope>;
   readonly #jobs = new Map<string, ResourceFamily<SparkJob>>();
   readonly #operations: ReadonlyMap<string, HostOperation>;
+  #jobsActive = 0;
+  #jobsRetained = 0;
+  #maximumJobsRetained = 0;
 
   constructor(
     root: HostScope,
@@ -76,31 +79,30 @@ export class SparkRuntime {
           outcome: completion.promise,
           work,
           kind,
-          demanded: false,
+          state: "available",
         };
         const handle = this.#jobFamily(result.payload).grant(
           scope.lifetime,
           job,
           async () => {
-            await lifetime.close();
-            await job.outcome;
+            try {
+              if (job.state !== "joining") await lifetime.close();
+              await job.outcome;
+            } finally {
+              job.state = "released";
+              this.#jobsRetained -= 1;
+            }
           },
         );
         scope.jobs.add(job);
-        // Admission, capture transfer, and cleanup registration precede execution.
-        void Promise.resolve().then(() => work.call()).then(
-          (value) => completion.resolve({ kind: "returned", value }),
-          (cause: unknown) => {
-            if (
-              (job.kind === "required" || job.demanded) &&
-              (!lifetime.signal.aborted || cause !== lifetime.signal.reason)
-            ) {
-              scope.failures.add(cause);
-              scope.lifetime.cancel(cause);
-            }
-            completion.resolve({ kind: "failed", cause });
-          },
+        this.#jobsActive += 1;
+        this.#jobsRetained += 1;
+        this.#maximumJobsRetained = Math.max(
+          this.#maximumJobsRetained,
+          this.#jobsRetained,
         );
+        // Admission, capture transfer, and cleanup registration precede execution.
+        void this.#runJob(scope, job, work, completion.resolve);
         return handle;
       } catch (error) {
         await lifetime.close(error);
@@ -147,22 +149,24 @@ export class SparkRuntime {
       ["speculate", parallel],
       ["join", async (context, handle) => {
         const parameter = context.operation.function.parameters[0];
-        const job = this.#requireJob(parameter, handle);
-        job.demanded = true;
-        demandHostCallback(job.work);
-        const outcome = await job.outcome;
-        if (outcome.kind === "failed") throw outcome.cause;
-        return outcome.value;
+        const { family, job } = this.#requireJob(parameter, handle);
+        job.state = "joining";
+        if (job.work !== undefined) demandHostCallback(job.work);
+        const retired = family.release(handle);
+        try {
+          const outcome = await job.outcome;
+          if (outcome.kind === "failed") throw outcome.cause;
+          return outcome.value;
+        } finally {
+          await retired;
+        }
       }],
       ["cancel", async (context, handle) => {
-        const job = this.#requireJob(
-          context.operation.function.parameters[0],
-          handle,
-        );
-        await job.scope.close(
-          new DOMException("Spark job cancelled", "AbortError"),
-        );
-        await job.outcome;
+        const parameter = context.operation.function.parameters[0];
+        const { family, job } = this.#requireJob(parameter, handle);
+        job.state = "cancelled";
+        job.scope.cancel(new DOMException("Spark job cancelled", "AbortError"));
+        await family.release(handle);
         return null;
       }],
       ["yield", async (_context, handle) => {
@@ -185,6 +189,18 @@ export class SparkRuntime {
         return null;
       }],
     ]);
+  }
+
+  get statistics(): Readonly<{
+    jobsActive: number;
+    jobsRetained: number;
+    maximumJobsRetained: number;
+  }> {
+    return Object.freeze({
+      jobsActive: this.#jobsActive,
+      jobsRetained: this.#jobsRetained,
+      maximumJobsRetained: this.#maximumJobsRetained,
+    });
   }
 
   capabilitiesFor(
@@ -211,6 +227,47 @@ export class SparkRuntime {
     return scope.lifetime;
   }
 
+  // Keep the callback out of the handle disposer's retained lexical environment.
+  async #runJob(
+    scope: SparkScope,
+    job: SparkJob,
+    work: HostCallback,
+    complete: (outcome: JobOutcome) => void,
+  ): Promise<void> {
+    let outcome: JobOutcome;
+    try {
+      const value = await work.call();
+      outcome = { kind: "returned", value };
+    } catch (cause) {
+      if (
+        (job.kind === "required" || job.state === "joining") &&
+        (!job.scope.signal.aborted || cause !== job.scope.signal.reason)
+      ) {
+        scope.failures.add(cause);
+        scope.lifetime.cancel(cause);
+      }
+      outcome = { kind: "failed", cause };
+    }
+    job.work = undefined;
+    try {
+      await job.scope.close();
+    } catch (cause) {
+      let failure = cause;
+      if (outcome.kind === "failed") {
+        failure = new AggregateError(
+          [outcome.cause, cause],
+          "Spark job cleanup failed",
+        );
+      }
+      scope.failures.add(failure);
+      scope.lifetime.cancel(failure);
+      outcome = { kind: "failed", cause: failure };
+    }
+    scope.jobs.delete(job);
+    this.#jobsActive -= 1;
+    complete(outcome);
+  }
+
   async #runScope(
     parent: HostScope,
     body: HostCallback,
@@ -227,10 +284,11 @@ export class SparkRuntime {
       moveHostCallback(body, lifetime);
       const handle = this.#scopes.grant(lifetime, scope);
       const result = await body.call(handle);
+      moveResultCallbacks(result, parent);
       scope.phase = "joining";
       await Promise.all(
         [...scope.jobs].filter((job) =>
-          job.kind === "speculative" && !job.demanded
+          job.kind === "speculative" && job.state === "available"
         ).map((job) =>
           job.scope.close(
             new DOMException("unused speculative Spark", "AbortError"),
@@ -278,11 +336,51 @@ export class SparkRuntime {
     return family;
   }
 
-  #requireJob(type: BlotAbiType, handle: RuntimeValue): SparkJob {
+  #requireJob(
+    type: BlotAbiType,
+    handle: RuntimeValue,
+  ): { readonly family: ResourceFamily<SparkJob>; readonly job: SparkJob } {
     if (type.kind !== "resource" || type.name !== "Spark.Job") {
       throw new Error("checked Spark operation has no job parameter");
     }
-    return this.#jobFamily(type.payload).get(handle);
+    const family = this.#jobFamily(type.payload);
+    const job = family.get(handle);
+    if (job.state !== "available") {
+      throw new Error("Spark job has already been consumed");
+    }
+    return { family, job };
+  }
+}
+
+function moveResultCallbacks(
+  value: RuntimeValue,
+  destination: HostScope,
+): void {
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const element of value) moveResultCallbacks(element, destination);
+    return;
+  }
+  if (!("kind" in value)) throw new Error("invalid Spark result");
+  switch (value.kind) {
+    case "callback":
+      moveHostCallback(value, destination);
+      return;
+    case "record":
+      for (const field of value.fields.values()) {
+        moveResultCallbacks(field, destination);
+      }
+      return;
+    case "variant":
+      if (value.payload !== undefined) {
+        moveResultCallbacks(value.payload, destination);
+      }
+      return;
+    case "sealed":
+      moveResultCallbacks(value.value, destination);
+      return;
+    case "resource":
+      return;
   }
 }
 

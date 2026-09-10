@@ -167,14 +167,14 @@ test("host checks ABI identity before exposing exports", async () => {
         }),
       /manifests disagree/,
     );
-    manifest.abi.major = 4;
+    manifest.abi.major = 3;
     await assert.rejects(
       () =>
         instantiateArtifact({
           ...artifact,
           manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
         }),
-      /ABI 3.0/,
+      /ABI 4.0/,
     );
     await assert.rejects(
       () => instantiateArtifact(artifact, new Map([["Ambient", new Map()]])),

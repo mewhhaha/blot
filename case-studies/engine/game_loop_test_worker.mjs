@@ -54,7 +54,7 @@ const instance = await WebAssembly.instantiate(executionInput.module, {
     clear() {
       uploadedVoxels = 0;
     },
-    voxel(colorBlue, colorGreen, colorRed, scale, x, y, z) {
+    voxel(_scope, colorBlue, colorGreen, colorRed, scale, x, y, z) {
       if (voxelCalls < treeOracle.length) {
         assert.deepEqual(
           [x, y, z, scale, colorRed, colorGreen, colorBlue].map(Number),
@@ -102,7 +102,18 @@ if (!(run instanceof Function)) {
   throw new Error("game_loop.blot omitted blot:default");
 }
 
-const frames = run();
+const enter = instance.exports.cabi_enter;
+const leave = instance.exports.cabi_leave;
+if (typeof enter !== "function" || typeof leave !== "function") {
+  throw new Error("game_loop.blot omitted allocation scope exports");
+}
+const scope = enter();
+let frames;
+try {
+  frames = run(scope);
+} finally {
+  leave(scope);
+}
 assert.ok(
   voxelCalls >= treeOracle.length,
   "every reference tree voxel was emitted",

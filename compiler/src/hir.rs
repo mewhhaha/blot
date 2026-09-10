@@ -4,7 +4,7 @@ use std::rc::Rc;
 use serde::{Deserialize, Serialize};
 
 // Cached HIR decodes words through the finite compiler vocabulary.
-type RuntimeWord = &'static str;
+pub(crate) type RuntimeWord = &'static str;
 
 #[path = "residual_cache.rs"]
 pub(crate) mod residual_cache;
@@ -382,7 +382,7 @@ pub(crate) struct RuntimeSignature {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RuntimeOperation {
+pub(crate) struct StagedOperation {
     #[serde(deserialize_with = "residual_cache::word")]
     pub(crate) kind: RuntimeWord,
     pub(crate) result: usize,
@@ -437,7 +437,7 @@ pub(crate) enum WireConstant {
     Text(String),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RuntimeStaticStore {
     #[serde(rename = "elementType")]
     pub(crate) element_type: usize,
@@ -459,7 +459,7 @@ pub(crate) struct RuntimeSpan {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-pub(crate) enum RuntimeTerminator {
+pub(crate) enum StagedTerminator {
     Branch {
         target: usize,
         arguments: Vec<usize>,
@@ -495,7 +495,7 @@ pub(crate) enum RuntimeTerminator {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RuntimeBlockParameter {
+pub(crate) struct StagedBlockParameter {
     pub(crate) value: usize,
     #[serde(rename = "type")]
     pub(crate) type_id: usize,
@@ -505,15 +505,15 @@ pub(crate) struct RuntimeBlockParameter {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RuntimeBlock {
+pub(crate) struct StagedBlock {
     pub(crate) id: usize,
-    pub(crate) parameters: Vec<RuntimeBlockParameter>,
-    pub(crate) operations: Vec<RuntimeOperation>,
-    pub(crate) terminator: RuntimeTerminator,
+    pub(crate) parameters: Vec<StagedBlockParameter>,
+    pub(crate) operations: Vec<StagedOperation>,
+    pub(crate) terminator: StagedTerminator,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct RuntimeFunction {
+pub(crate) struct StagedFunction {
     pub(crate) id: usize,
     pub(crate) name: String,
     pub(crate) signature: usize,
@@ -522,7 +522,7 @@ pub(crate) struct RuntimeFunction {
     pub(crate) reuse: Option<RuntimeWord>,
     #[serde(rename = "entryBlock")]
     pub(crate) entry_block: usize,
-    pub(crate) blocks: Vec<RuntimeBlock>,
+    pub(crate) blocks: Vec<StagedBlock>,
     pub(crate) span: RuntimeSpan,
 }
 
@@ -643,7 +643,7 @@ pub(crate) enum RuntimeExport {
 }
 
 #[derive(Clone, Serialize)]
-pub struct RuntimeModule {
+pub struct StagedModule {
     pub(crate) format: &'static str,
     #[serde(rename = "schemaVersion")]
     pub(crate) schema_version: u8,
@@ -652,12 +652,90 @@ pub struct RuntimeModule {
     pub(crate) signatures: Vec<RuntimeSignature>,
     #[serde(rename = "staticStores")]
     pub(crate) static_stores: Vec<RuntimeStaticStore>,
-    pub(crate) functions: Vec<RuntimeFunction>,
+    pub(crate) functions: Vec<StagedFunction>,
+    #[serde(skip)]
+    pub(crate) checked_functions: Vec<crate::continuation::Function>,
     pub(crate) capabilities: Vec<RuntimeCapability>,
     pub(crate) links: Vec<RuntimeLink>,
     #[serde(rename = "resumableRoots")]
     pub(crate) resumable_roots: Vec<usize>,
     pub(crate) exports: Vec<RuntimeExport>,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct RuntimeModule {
+    pub(crate) format: &'static str,
+    #[serde(rename = "schemaVersion")]
+    pub(crate) schema_version: u8,
+    pub(crate) source: String,
+    pub(crate) types: Vec<RuntimeType>,
+    pub(crate) signatures: Vec<RuntimeSignature>,
+    #[serde(rename = "staticStores")]
+    pub(crate) static_stores: Vec<RuntimeStaticStore>,
+    #[serde(flatten)]
+    pub(crate) graph: crate::continuation::Graph,
+    pub(crate) capabilities: Vec<RuntimeCapability>,
+    pub(crate) links: Vec<RuntimeLink>,
+    pub(crate) exports: Vec<RuntimeExport>,
+}
+
+impl std::ops::Deref for RuntimeModule {
+    type Target = crate::continuation::Graph;
+    fn deref(&self) -> &Self::Target {
+        &self.graph
+    }
+}
+
+impl std::ops::DerefMut for RuntimeModule {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.graph
+    }
+}
+
+impl StagedModule {
+    pub(crate) fn tables(&self) -> crate::continuation::Tables<'_> {
+        crate::continuation::Tables {
+            types: &self.types,
+            signatures: &self.signatures,
+            static_stores: &self.static_stores,
+            capabilities: &self.capabilities,
+            links: &self.links,
+        }
+    }
+    fn into_runtime(self) -> Result<RuntimeModule, Diagnostic> {
+        let graph = crate::continuation::Graph::lower(&self).map_err(|message| {
+            Diagnostic::new(
+                "BLOT_RUST_INVARIANT",
+                message,
+                crate::ast::Span { start: 0, end: 0 },
+            )
+            .at(&self.source)
+        })?;
+        Ok(RuntimeModule {
+            format: "blot-runtime-hir",
+            schema_version: RUNTIME_HIR_SCHEMA,
+            source: self.source,
+            types: self.types,
+            signatures: self.signatures,
+            static_stores: self.static_stores,
+            graph,
+            capabilities: self.capabilities,
+            links: self.links,
+            exports: self.exports,
+        })
+    }
+}
+
+impl RuntimeModule {
+    pub(crate) fn tables(&self) -> crate::continuation::Tables<'_> {
+        crate::continuation::Tables {
+            types: &self.types,
+            signatures: &self.signatures,
+            static_stores: &self.static_stores,
+            capabilities: &self.capabilities,
+            links: &self.links,
+        }
+    }
 }
 
 pub(crate) struct ResidualTrace {
@@ -667,12 +745,14 @@ pub(crate) struct ResidualTrace {
     types: Vec<RuntimeType>,
     type_ids: HashMap<String, usize>,
     signatures: Vec<RuntimeSignature>,
+    static_stores: Vec<RuntimeStaticStore>,
     capabilities: BTreeMap<String, BTreeMap<String, ResidualHostOperation>>,
     blocks: Vec<ResidualBlock>,
     current_block: usize,
     next_value: usize,
     active_primitive: Option<String>,
-    functions: BTreeMap<usize, RuntimeFunction>,
+    functions: BTreeMap<usize, StagedFunction>,
+    checked_functions: BTreeMap<usize, crate::continuation::Function>,
     function_ids: Vec<ResidualFunctionIdentity>,
     pending_recursive_types: HashSet<usize>,
     settled_recursive_types: HashSet<usize>,
@@ -705,7 +785,7 @@ struct ResidualFunctionIdentity {
     runtime_signature: usize,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 enum StoreReuseWitness {
     None,
     Deferred,
@@ -972,9 +1052,9 @@ fn simd_layout(name: &str) -> Option<SimdLayout> {
 
 struct ResidualBlock {
     id: usize,
-    parameters: Vec<RuntimeBlockParameter>,
-    operations: Vec<RuntimeOperation>,
-    terminator: Option<RuntimeTerminator>,
+    parameters: Vec<StagedBlockParameter>,
+    operations: Vec<StagedOperation>,
+    terminator: Option<StagedTerminator>,
 }
 
 pub(crate) struct ResidualReuseScope {
@@ -1076,12 +1156,14 @@ impl ResidualTrace {
             types: Vec::new(),
             type_ids: HashMap::new(),
             signatures: Vec::new(),
+            static_stores: Vec::new(),
             capabilities: BTreeMap::new(),
             blocks: Vec::new(),
             current_block: 0,
             next_value: 0,
             active_primitive: None,
             functions: BTreeMap::new(),
+            checked_functions: BTreeMap::new(),
             function_ids: Vec::new(),
             pending_recursive_types: HashSet::new(),
             settled_recursive_types: HashSet::new(),
@@ -1163,7 +1245,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(result_type);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "host.call",
             result,
             type_id: result_type,
@@ -1419,7 +1501,7 @@ impl ResidualTrace {
         // block the trace is standing in. A curried export applies one argument
         // at a time, and applying an earlier one can leave the trace inside a
         // branch — a defunctionalized function choice does exactly that.
-        self.blocks[0].parameters.push(RuntimeBlockParameter {
+        self.blocks[0].parameters.push(StagedBlockParameter {
             value: parameter,
             type_id,
             ownership,
@@ -1463,7 +1545,7 @@ impl ResidualTrace {
             ));
         }
         let end = self.current_block;
-        self.blocks[end].terminator = Some(RuntimeTerminator::Return {
+        self.blocks[end].terminator = Some(StagedTerminator::Return {
             value: result.id,
             span: self.span(crate::ast::Span { start: 0, end: 0 }),
         });
@@ -1477,7 +1559,7 @@ impl ResidualTrace {
         let blocks = self.take_blocks()?;
         self.functions.insert(
             self.root_function,
-            simplify_runtime_function(RuntimeFunction {
+            simplify_runtime_function(StagedFunction {
                 id: self.root_function,
                 name: format!("blot$residual${name}"),
                 signature,
@@ -1514,7 +1596,7 @@ impl ResidualTrace {
         Ok(())
     }
 
-    pub(crate) fn finish_module(mut self) -> Result<RuntimeModule, Diagnostic> {
+    pub(crate) fn finish_module(mut self) -> Result<StagedModule, Diagnostic> {
         let capabilities = std::mem::take(&mut self.capabilities)
             .into_iter()
             .map(|(name, operations)| RuntimeCapability {
@@ -1531,13 +1613,14 @@ impl ResidualTrace {
             })
             .collect();
         validate_runtime_layouts(&self.types)?;
-        Ok(RuntimeModule {
+        Ok(StagedModule {
+            checked_functions: self.checked_functions.into_values().collect(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source,
             types: self.types,
             signatures: self.signatures,
-            static_stores: Vec::new(),
+            static_stores: self.static_stores,
             functions: self.functions.into_values().collect(),
             capabilities,
             links: Vec::new(),
@@ -1917,6 +2000,31 @@ impl ResidualTrace {
                 let index = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
                 self.operation("text.scalar-at", 3, vec![text.id, index.id], span, None)
             }
+            "@text.next_byte" => {
+                let text = self.lower_as(arguments.first(), "text", span)?;
+                let byte = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
+                let payload_type = self.insert_product_type(vec![
+                    RuntimeField {
+                        name: "0".to_owned(),
+                        type_id: text.type_id,
+                    },
+                    RuntimeField {
+                        name: "1".to_owned(),
+                        type_id: byte.type_id,
+                    },
+                ]);
+                let cases = vec!["None".to_owned(), "Some".to_owned()];
+                let result_type = self.sum_type(&cases, &[0, payload_type]);
+                let mut stepped = self.operation(
+                    "text.next-byte",
+                    result_type,
+                    vec![text.id, byte.id],
+                    span,
+                    None,
+                );
+                stepped.meaning = RuntimeMeaning::Sum { cases };
+                stepped
+            }
             "@text.slice" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
                 let start = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
@@ -1997,7 +2105,7 @@ impl ResidualTrace {
             }
             "@type.resolve_member" => {
                 let member = match arguments.first() {
-                    Some(Value::Text(s)) => s.as_str(),
+                    Some(Value::Text(s)) => s.as_ref(),
                     _ => return Err(hir_error("@type.resolve_member expected text member")),
                 };
                 let left = self.lower_value(&arguments[1], span)?;
@@ -2828,7 +2936,7 @@ impl ResidualTrace {
         let consequent = self.block();
         let alternate = self.block();
         let join = self.block();
-        self.blocks[source].terminator = Some(RuntimeTerminator::Conditional {
+        self.blocks[source].terminator = Some(StagedTerminator::Conditional {
             condition: condition.id,
             consequent,
             consequent_arguments: Vec::new(),
@@ -2900,7 +3008,7 @@ impl ResidualTrace {
                 target: *target,
             })
             .collect();
-        self.blocks[source].terminator = Some(RuntimeTerminator::Switch {
+        self.blocks[source].terminator = Some(StagedTerminator::Switch {
             selector: selector.id,
             cases,
             fallback,
@@ -2937,7 +3045,7 @@ impl ResidualTrace {
             .all(|(_, value)| crate::value::equal(first, value))
         {
             for (end, _) in &survivors {
-                self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
+                self.blocks[*end].terminator = Some(StagedTerminator::Branch {
                     target: switch.join,
                     arguments: Vec::new(),
                     span: self.span(span),
@@ -2971,19 +3079,15 @@ impl ResidualTrace {
                     required_cases.insert(name.clone());
                     let payload_type =
                         self.value_type(&compiler_tag_payload(payload.as_deref()))?;
-                    if let Some(known) = required_payloads.get(name) {
-                        if *known != payload_type {
-                            return Err(Diagnostic::new(
-                                "BLOT_RUST_INVARIANT",
-                                format!(
-                                    "Constructor `#{name}` reached one multi-way join with payload representations {known} and {payload_type}."
-                                ),
-                                span,
-                            ));
-                        }
-                    } else {
-                        required_payloads.insert(name.clone(), payload_type);
-                    }
+                    let payload_type = match required_payloads.get(name).copied() {
+                        Some(known) => self
+                            .join_runtime_types(vec![known, payload_type])
+                            .ok_or_else(|| {
+                                Diagnostic::new("BLOT_RUST_INVARIANT", format!("Checked constructor `#{name}` cannot join payload representations {known} and {payload_type}."), span)
+                            })?,
+                        None => payload_type,
+                    };
+                    required_payloads.insert(name.clone(), payload_type);
                 }
                 Value::Runtime(runtime) => {
                     let Some((_, cases)) = self
@@ -2994,20 +3098,15 @@ impl ResidualTrace {
                     };
                     required_cases.extend(cases.iter().map(|case_| case_.name.clone()));
                     for case_ in cases {
-                        if let Some(known) = required_payloads.get(&case_.name) {
-                            if *known != case_.payload_type {
-                                return Err(Diagnostic::new(
-                                    "BLOT_RUST_INVARIANT",
-                                    format!(
-                                        "Constructor `#{}` reached one multi-way join with payload representations {known} and {}.",
-                                        case_.name, case_.payload_type
-                                    ),
-                                    span,
-                                ));
-                            }
-                        } else {
-                            required_payloads.insert(case_.name, case_.payload_type);
-                        }
+                        let payload_type = match required_payloads.get(&case_.name).copied() {
+                            Some(known) => self
+                                .join_runtime_types(vec![known, case_.payload_type])
+                                .ok_or_else(|| {
+                                    Diagnostic::new("BLOT_RUST_INVARIANT", format!("Checked constructor `#{}` cannot join payload representations {known} and {}.", case_.name, case_.payload_type), span)
+                                })?,
+                            None => case_.payload_type,
+                        };
+                        required_payloads.insert(case_.name, payload_type);
                     }
                     if !candidate_sums.contains(&runtime.type_id) {
                         candidate_sums.push(runtime.type_id);
@@ -3027,13 +3126,18 @@ impl ResidualTrace {
             .or_else(|| {
                 candidate_sums.iter().copied().find(|type_id| {
                     self.sum_representation(*type_id).is_some_and(|(_, cases)| {
-                        required_cases
-                            .iter()
-                            .all(|required| cases.iter().any(|case_| case_.name == *required))
+                        required_payloads.iter().all(|(name, payload)| {
+                            cases
+                                .iter()
+                                .any(|case_| case_.name == *name && case_.payload_type == *payload)
+                        })
                     })
                 })
             });
-        let expected_sum = match (expected_sum, candidate_sums.is_empty()) {
+        let expected_sum = match (
+            expected_sum,
+            candidate_sums.is_empty() && (!all_tags || boolean_tags),
+        ) {
             (Some(type_id), _) => Some(type_id),
             (None, true) => None,
             (None, false) => {
@@ -3049,59 +3153,11 @@ impl ResidualTrace {
                 let value = match value {
                     Value::Tag { .. } => self.lower_sum_member(&value, expected_sum, span)?,
                     Value::Runtime(runtime) => {
-                        if runtime.type_id == expected_sum {
-                            runtime
-                        } else {
-                            let (_, cases) = self
-                                .sum_representation(runtime.type_id)
-                                .map(|(type_id, cases)| (type_id, cases.to_vec()))
-                                .ok_or_else(|| {
-                                    hir_error("A sum join received a non-sum runtime value.")
-                                })?;
-                            let [case_] = cases.as_slice() else {
-                                return Err(Diagnostic::new(
-                                    "BLOT_UNSUPPORTED_LOWERING",
-                                    "A multi-way case cannot widen a dynamic sum with more than one possible constructor.",
-                                    span,
-                                ));
-                            };
-                            let payload = self.sum_payload(&runtime, 0, span)?;
-                            let payload = if matches!(payload, Value::Unit) {
-                                None
-                            } else {
-                                Some(Box::new(payload))
-                            };
-                            self.lower_sum_member(
-                                &Value::Tag {
-                                    name: case_.name.clone(),
-                                    payload,
-                                },
-                                expected_sum,
-                                span,
-                            )?
-                        }
+                        self.coerce_runtime_value(&runtime, expected_sum, span)?
                     }
                     value => self.lower_value_as(&value, expected_sum, span)?,
                 };
-                lowered.push((end, value));
-            }
-        } else if all_tags && !boolean_tags {
-            let mut cases = Vec::new();
-            let mut payload_types = Vec::new();
-            for (_, value) in &survivors {
-                let Value::Tag { name, payload } = value else {
-                    unreachable!("all switch results are constructors")
-                };
-                if cases.contains(name) {
-                    continue;
-                }
-                cases.push(name.clone());
-                payload_types.push(self.value_type(&compiler_tag_payload(payload.as_deref()))?);
-            }
-            let sum_type = self.sum_type(&cases, &payload_types);
-            for (end, value) in survivors.drain(..) {
-                self.current_block = end;
-                lowered.push((end, self.lower_sum_member(&value, sum_type, span)?));
+                lowered.push((self.current_block, value));
             }
         } else {
             let mut represented_types = BTreeSet::new();
@@ -3118,7 +3174,7 @@ impl ResidualTrace {
                     Some(expected_type) => self.lower_value_as(&value, expected_type, span)?,
                     None => self.lower_value(&value, span)?,
                 };
-                lowered.push((end, value));
+                lowered.push((self.current_block, value));
             }
         }
         if let Some(indirect_type) = lowered
@@ -3172,7 +3228,7 @@ impl ResidualTrace {
             meaning = merge_meaning(&meaning, &value.meaning);
         }
         for (end, value) in &lowered {
-            self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
+            self.blocks[*end].terminator = Some(StagedTerminator::Branch {
                 target: switch.join,
                 arguments: vec![value.id],
                 span: self.span(span),
@@ -3183,7 +3239,7 @@ impl ResidualTrace {
         let runtime_span = self.span(span);
         self.blocks[switch.join]
             .parameters
-            .push(RuntimeBlockParameter {
+            .push(StagedBlockParameter {
                 value: joined,
                 type_id: expected_type,
                 ownership,
@@ -3384,7 +3440,7 @@ impl ResidualTrace {
                 sum_type,
                 span,
             )?;
-            self.blocks[end].terminator = Some(RuntimeTerminator::Branch {
+            self.blocks[end].terminator = Some(StagedTerminator::Branch {
                 target: switch.join,
                 arguments: vec![selector.id],
                 span: self.span(span),
@@ -3395,7 +3451,7 @@ impl ResidualTrace {
         let runtime_span = self.span(span);
         self.blocks[switch.join]
             .parameters
-            .push(RuntimeBlockParameter {
+            .push(StagedBlockParameter {
                 value: selector,
                 type_id: sum_type,
                 ownership,
@@ -3421,7 +3477,7 @@ impl ResidualTrace {
     /// program traps if execution reaches it.
     pub(crate) fn trap_current_block(&mut self, message: &str, span: crate::ast::Span) {
         let block = self.current_block;
-        self.blocks[block].terminator = Some(RuntimeTerminator::Trap {
+        self.blocks[block].terminator = Some(StagedTerminator::Trap {
             message: message.to_owned(),
             span: self.span(span),
         });
@@ -3437,7 +3493,7 @@ impl ResidualTrace {
         end: usize,
         span: crate::ast::Span,
     ) {
-        self.blocks[end].terminator = Some(RuntimeTerminator::Branch {
+        self.blocks[end].terminator = Some(StagedTerminator::Branch {
             target: branches.join,
             arguments: Vec::new(),
             span: self.span(span),
@@ -3468,20 +3524,20 @@ impl ResidualTrace {
                 continue;
             };
             let successors = match terminator {
-                RuntimeTerminator::Branch { target, .. } => vec![*target],
-                RuntimeTerminator::Conditional {
+                StagedTerminator::Branch { target, .. } => vec![*target],
+                StagedTerminator::Conditional {
                     consequent,
                     alternate,
                     ..
                 } => vec![*consequent, *alternate],
-                RuntimeTerminator::Switch {
+                StagedTerminator::Switch {
                     cases, fallback, ..
                 } => cases
                     .iter()
                     .map(|case| case.target)
                     .chain(std::iter::once(*fallback))
                     .collect(),
-                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
+                StagedTerminator::Return { .. } | StagedTerminator::Trap { .. } => Vec::new(),
             };
             if successors.contains(&target) {
                 return true;
@@ -3555,12 +3611,12 @@ impl ResidualTrace {
         alternate: RuntimeValue,
         span: crate::ast::Span,
     ) -> RuntimeValue {
-        self.blocks[consequent_end].terminator = Some(RuntimeTerminator::Branch {
+        self.blocks[consequent_end].terminator = Some(StagedTerminator::Branch {
             target: branches.join,
             arguments: vec![consequent.id],
             span: self.span(span),
         });
-        self.blocks[alternate_end].terminator = Some(RuntimeTerminator::Branch {
+        self.blocks[alternate_end].terminator = Some(StagedTerminator::Branch {
             target: branches.join,
             arguments: vec![alternate.id],
             span: self.span(span),
@@ -3568,7 +3624,7 @@ impl ResidualTrace {
         let joined = self.next_value();
         let meaning = merge_meaning(&consequent.meaning, &alternate.meaning);
         let ownership = self.ownership(consequent.type_id);
-        let parameter = RuntimeBlockParameter {
+        let parameter = StagedBlockParameter {
             value: joined,
             type_id: consequent.type_id,
             ownership,
@@ -4043,7 +4099,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(payload_type);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "sum.payload",
             result,
             type_id: payload_type,
@@ -4237,7 +4293,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(payload_type);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "sum.payload",
             result,
             type_id: payload_type,
@@ -4755,69 +4811,80 @@ impl ResidualTrace {
         let cache_request = if !host_callback
             && crosses_development_boundary
             && context.residual_cache.borrow().enabled()
-            && captures.is_empty()
             && effects.is_empty()
-            && argument_reuse == StoreReuseWitness::None
             && !self.pending_recursive_types.contains(&result_type)
         {
-            environment_key
-                .portable(
+            let identity = environment_key.portable(
+                context,
+                signature_value,
+                checked_argument_type,
+                expected_result,
+                actual_evidence.as_ref(),
+                &self.types,
+            )?;
+            if identity.is_none() {
+                residual_cache::record(
                     context,
-                    signature_value,
-                    checked_argument_type,
-                    expected_result,
-                    actual_evidence.as_ref(),
-                )?
-                .map(|mut key| {
-                    key.extend(
-                        rmp_serde::to_vec(&(
-                            self.development_units
-                                .as_ref()
-                                .expect("development boundary has configured roots")
-                                .iter()
-                                .collect::<BTreeSet<_>>(),
-                            &self.source,
-                            span,
-                            caller_argument.type_id,
-                            result_type,
-                        ))
-                        .expect("residual cache call identity serialization"),
-                    );
-                    Box::new(residual_cache::Request::new(
-                        context,
-                        key,
-                        self,
-                        RuntimeSignature {
-                            parameters: vec![caller_argument.type_id],
-                            result: result_type,
-                            effects: Vec::new(),
-                        },
+                    residual_cache::GraphCacheOutcome::UnsupportedIdentity,
+                );
+            }
+            identity.and_then(|mut key| {
+                key.extend(
+                    rmp_serde::to_vec(&(
+                        self.development_units
+                            .as_ref()
+                            .expect("development boundary has configured roots")
+                            .iter()
+                            .collect::<BTreeSet<_>>(),
+                        &self.source,
+                        span,
+                        &argument_reuse,
                     ))
-                })
+                    .expect("residual cache call identity serialization"),
+                );
+                residual_cache::Request::new(
+                    context,
+                    key,
+                    self,
+                    RuntimeSignature {
+                        parameters: std::iter::once(caller_argument.type_id)
+                            .chain(capture_types.iter().copied())
+                            .collect(),
+                        result: result_type,
+                        effects: Vec::new(),
+                    },
+                )
+                .map(Box::new)
+            })
         } else {
             None
         };
-        if let Some(request) = &cache_request {
-            let function = self.next_function;
-            let runtime_signature = self.signatures.len();
-            if request.restore(self) {
-                self.function_ids.push(ResidualFunctionIdentity {
-                    environment_key,
-                    module: module.to_owned(),
-                    body,
-                    argument_type: caller_argument.type_id,
-                    argument_reuse,
-                    result_reuse: StoreReuseWitness::None,
-                    result_type,
-                    capture_types: Vec::new(),
-                    signature: signature_value.clone(),
-                    function,
-                    runtime_signature,
-                });
-                return self
-                    .direct_call(function, result_type, vec![caller_argument.id], span)
-                    .map(ResidualFunctionCall::Existing);
-            }
+        if let Some(request) = &cache_request
+            && let Some(restored) = request.restore(self)
+        {
+            self.function_ids.push(ResidualFunctionIdentity {
+                environment_key,
+                module: module.to_owned(),
+                body,
+                argument_type: caller_argument.type_id,
+                argument_reuse,
+                result_reuse: restored.result_reuse.clone(),
+                result_type,
+                capture_types,
+                signature: signature_value.clone(),
+                function: restored.function,
+                runtime_signature: restored.signature,
+            });
+            let arguments = std::iter::once(caller_argument.id)
+                .chain(captures.iter().map(|capture| capture.id))
+                .collect();
+            let value = self.direct_call(restored.function, result_type, arguments, span)?;
+            let value = apply_store_reuse_witness(&restored.result_reuse, value, &self.types);
+            return Ok(ResidualFunctionCall::Existing(mark_reusable_stores(
+                &result_ownership,
+                value,
+                &self.types,
+            )));
         }
         if self.development_units.is_some() {
             *context
@@ -4879,7 +4946,7 @@ impl ResidualTrace {
         let parameter_value = self.next_value();
         let ownership = self.ownership(caller_argument.type_id);
         let runtime_span = self.span(span);
-        self.current().parameters.push(RuntimeBlockParameter {
+        self.current().parameters.push(StagedBlockParameter {
             value: parameter_value,
             type_id: caller_argument.type_id,
             ownership,
@@ -4899,7 +4966,7 @@ impl ResidualTrace {
             let parameter = self.next_value();
             let ownership = self.ownership(capture.type_id);
             let runtime_span = self.span(span);
-            self.current().parameters.push(RuntimeBlockParameter {
+            self.current().parameters.push(StagedBlockParameter {
                 value: parameter,
                 type_id: capture.type_id,
                 ownership,
@@ -5050,47 +5117,30 @@ impl ResidualTrace {
             self.settled_recursive_types
                 .remove(&compilation.result_type);
         } else if result.type_id != compilation.result_type {
-            let RuntimeType::Indirect { target_type } = self.types[result.type_id] else {
-                return Err(hir_error(&format!(
-                    "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
-                    compilation.name,
-                    compilation.function,
-                    result.type_id,
-                    self.types[result.type_id],
-                    compilation.signature,
+            if matches!(self.types[result.type_id], RuntimeType::Indirect { target_type }
+                if target_type == compilation.result_type)
+            {
+                result = self.operation(
+                    "indirect.load",
                     compilation.result_type,
-                    self.types[compilation.result_type],
-                )));
-            };
-            if target_type != compilation.result_type {
-                return Err(hir_error(&format!(
-                    "Residual function {} ({}) returned runtime type {} {:?}, but signature {} requires runtime type {} {:?}.",
-                    compilation.name,
-                    compilation.function,
-                    result.type_id,
-                    self.types[result.type_id],
-                    compilation.signature,
-                    compilation.result_type,
-                    self.types[compilation.result_type],
-                )));
+                    vec![result.id],
+                    compilation.span,
+                    None,
+                );
+            } else {
+                result =
+                    self.coerce_runtime_value(&result, compilation.result_type, compilation.span)?;
             }
-            result = self.operation(
-                "indirect.load",
-                compilation.result_type,
-                vec![result.id],
-                compilation.span,
-                None,
-            );
         }
         let end = self.current_block;
-        self.blocks[end].terminator = Some(RuntimeTerminator::Return {
+        self.blocks[end].terminator = Some(StagedTerminator::Return {
             value: result.id,
             span: self.span(compilation.span),
         });
         let blocks = self.take_blocks()?;
         self.functions.insert(
             compilation.function,
-            simplify_runtime_function(RuntimeFunction {
+            simplify_runtime_function(StagedFunction {
                 id: compilation.function,
                 name: format!("blot$residual${}", compilation.name),
                 signature: compilation.signature,
@@ -5108,10 +5158,8 @@ impl ResidualTrace {
         let result_reuse =
             settle_store_reuse_witness(&identity.result_reuse, &observed_result_reuse);
         identity.result_reuse = result_reuse.clone();
-        if result_reuse == StoreReuseWitness::None
-            && let Some(request) = compilation.cache_request
-        {
-            request.store(self);
+        if let Some(request) = compilation.cache_request {
+            request.store(self, &result_reuse);
         }
         let frame = self
             .function_frames
@@ -5208,7 +5256,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(result_type);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "call.direct",
             result,
             type_id: result_type,
@@ -5242,7 +5290,7 @@ impl ResidualTrace {
         mut self,
         value: Value,
         result_type: &Type,
-    ) -> Result<RuntimeModule, Diagnostic> {
+    ) -> Result<StagedModule, Diagnostic> {
         let result = self.lower_value(&value, crate::ast::Span { start: 0, end: 0 })?;
         let expected = self.runtime_type_from_checked(result_type, &value)?;
         if result.type_id != expected {
@@ -5251,7 +5299,7 @@ impl ResidualTrace {
             ));
         }
         let end = self.current_block;
-        self.blocks[end].terminator = Some(RuntimeTerminator::Return {
+        self.blocks[end].terminator = Some(StagedTerminator::Return {
             value: result.id,
             span: self.span(crate::ast::Span { start: 0, end: 0 }),
         });
@@ -5284,7 +5332,7 @@ impl ResidualTrace {
             .collect();
         self.functions.insert(
             0,
-            simplify_runtime_function(RuntimeFunction {
+            simplify_runtime_function(StagedFunction {
                 id: 0,
                 name: "blot$residual$blot:default".to_owned(),
                 signature: function_signature,
@@ -5299,13 +5347,14 @@ impl ResidualTrace {
             }),
         );
         validate_runtime_layouts(&self.types)?;
-        Ok(RuntimeModule {
+        Ok(StagedModule {
+            checked_functions: self.checked_functions.into_values().collect(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source.clone(),
             types: self.types,
             signatures: self.signatures,
-            static_stores: Vec::new(),
+            static_stores: self.static_stores,
             functions: self.functions.into_values().collect(),
             capabilities,
             links: Vec::new(),
@@ -5321,14 +5370,14 @@ impl ResidualTrace {
         })
     }
 
-    fn take_blocks(&mut self) -> Result<Vec<RuntimeBlock>, Diagnostic> {
+    fn take_blocks(&mut self) -> Result<Vec<StagedBlock>, Diagnostic> {
         std::mem::take(&mut self.blocks)
             .into_iter()
             .map(|block| {
                 let terminator = block.terminator.ok_or_else(|| {
                     hir_error(&format!("Residual block {} has no terminator.", block.id))
                 })?;
-                Ok(RuntimeBlock {
+                Ok(StagedBlock {
                     id: block.id,
                     parameters: block.parameters,
                     operations: block.operations,
@@ -5999,7 +6048,7 @@ impl ResidualTrace {
             branches.push((self.current_block, result));
         }
         for (end, result) in &branches {
-            self.blocks[*end].terminator = Some(RuntimeTerminator::Branch {
+            self.blocks[*end].terminator = Some(StagedTerminator::Branch {
                 target: switch.join,
                 arguments: vec![result.id],
                 span: self.span(span),
@@ -6010,7 +6059,7 @@ impl ResidualTrace {
         let runtime_span = self.span(span);
         self.blocks[switch.join]
             .parameters
-            .push(RuntimeBlockParameter {
+            .push(StagedBlockParameter {
                 value: joined,
                 type_id: expected_type,
                 ownership,
@@ -6082,7 +6131,7 @@ impl ResidualTrace {
         match value {
             Value::Runtime(value) => Ok(value.clone()),
             Value::Unit => Ok(self.constant(WireConstant::Unit, 0, span)),
-            Value::Text(value) => Ok(self.constant(WireConstant::Text(value.clone()), 3, span)),
+            Value::Text(value) => Ok(self.constant(WireConstant::Text(value.to_string()), 3, span)),
             Value::Int(value) => {
                 let type_id = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
                 Ok(self.constant(
@@ -7453,7 +7502,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(type_id);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "constant",
             result,
             type_id,
@@ -7491,7 +7540,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(type_id);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind,
             result,
             type_id,
@@ -7538,7 +7587,7 @@ impl ResidualTrace {
         let result = self.next_value();
         let ownership = self.ownership(type_id);
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind,
             result,
             type_id,
@@ -7612,7 +7661,7 @@ impl ResidualTrace {
     ) -> RuntimeValue {
         let result = self.next_value();
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "vector",
             result,
             type_id,
@@ -7648,7 +7697,7 @@ impl ResidualTrace {
     ) -> RuntimeValue {
         let result = self.next_value();
         let runtime_span = self.span(span);
-        self.current().operations.push(RuntimeOperation {
+        self.current().operations.push(StagedOperation {
             kind: "convert",
             result,
             type_id,
@@ -7803,7 +7852,7 @@ impl ResidualTrace {
         let integer = self.region_integer_type();
         let source = self.current_block;
         let header = self.block();
-        self.blocks[source].terminator = Some(RuntimeTerminator::Branch {
+        self.blocks[source].terminator = Some(StagedTerminator::Branch {
             target: header,
             arguments: vec![start.id, initial.id],
             span: self.span(span),
@@ -7812,13 +7861,13 @@ impl ResidualTrace {
         let output = self.next_value();
         let cursor_span = self.span(span);
         let output_span = self.span(span);
-        self.blocks[header].parameters.push(RuntimeBlockParameter {
+        self.blocks[header].parameters.push(StagedBlockParameter {
             value: cursor,
             type_id: integer,
             ownership: "plain",
             span: cursor_span,
         });
-        self.blocks[header].parameters.push(RuntimeBlockParameter {
+        self.blocks[header].parameters.push(StagedBlockParameter {
             value: output,
             type_id: source_store.type_id,
             ownership: "owned",
@@ -7828,7 +7877,7 @@ impl ResidualTrace {
         let has_next = self.operation("scalar", 1, vec![cursor, end.id], span, Some("less-than"));
         let body = self.block();
         let done = self.block();
-        self.blocks[header].terminator = Some(RuntimeTerminator::Conditional {
+        self.blocks[header].terminator = Some(StagedTerminator::Conditional {
             condition: has_next.id,
             consequent: body,
             consequent_arguments: Vec::new(),
@@ -7853,14 +7902,14 @@ impl ResidualTrace {
         );
         let one = self.constant(WireConstant::SignedInteger64("1".to_owned()), integer, span);
         let next = self.operation("scalar", integer, vec![cursor, one.id], span, Some("add"));
-        self.blocks[body].terminator = Some(RuntimeTerminator::Branch {
+        self.blocks[body].terminator = Some(StagedTerminator::Branch {
             target: header,
             arguments: vec![next.id, grown.id],
             span: self.span(span),
         });
         let result = self.next_value();
         let result_span = self.span(span);
-        self.blocks[done].parameters.push(RuntimeBlockParameter {
+        self.blocks[done].parameters.push(StagedBlockParameter {
             value: result,
             type_id: source_store.type_id,
             ownership: "owned",
@@ -8552,7 +8601,7 @@ impl ResidualTrace {
             let result = self.next_value();
             let ownership = self.ownership(field.type_id);
             let runtime_span = self.span(span);
-            self.current().operations.push(RuntimeOperation {
+            self.current().operations.push(StagedOperation {
                 kind: "product.project",
                 result,
                 type_id: field.type_id,
@@ -9912,7 +9961,7 @@ enum StaticWireKey {
 }
 
 fn optimize_runtime_module(
-    module: &mut RuntimeModule,
+    module: &mut StagedModule,
     development_units: Option<&HashSet<String>>,
 ) -> Result<(), Diagnostic> {
     compact_static_stores(module)?;
@@ -9939,7 +9988,7 @@ fn optimize_runtime_module(
     validate_runtime_layouts(&module.types)
 }
 
-fn fold_store_field_reads(function: &mut RuntimeFunction) {
+fn fold_store_field_reads(function: &mut StagedFunction) {
     let definitions = function
         .blocks
         .iter()
@@ -9969,7 +10018,7 @@ fn fold_store_field_reads(function: &mut RuntimeFunction) {
     }
 }
 
-fn compact_static_stores(module: &mut RuntimeModule) -> Result<(), Diagnostic> {
+fn compact_static_stores(module: &mut StagedModule) -> Result<(), Diagnostic> {
     let mut store_ids = HashMap::<(usize, Vec<StaticWireKey>), usize>::new();
     for (store_id, store) in module.static_stores.iter().enumerate() {
         let Some(key) = static_store_key(store.element_type, &store.values) else {
@@ -10066,7 +10115,7 @@ fn static_wire_key(value: &WireConstant) -> Option<StaticWireKey> {
     }
 }
 
-fn eliminate_dead_pure_operations(function: &mut RuntimeFunction) {
+fn eliminate_dead_pure_operations(function: &mut StagedFunction) {
     let definitions = function
         .blocks
         .iter()
@@ -10124,7 +10173,7 @@ fn eliminate_dead_pure_operations(function: &mut RuntimeFunction) {
     }
 }
 
-fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
+fn fold_representation_roundtrips(function: &mut StagedFunction) {
     let definitions = function
         .blocks
         .iter()
@@ -10235,12 +10284,12 @@ fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
             }
         }
         match &mut block.terminator {
-            RuntimeTerminator::Branch { arguments, .. } => {
+            StagedTerminator::Branch { arguments, .. } => {
                 for argument in arguments {
                     *argument = resolve_runtime_alias(*argument, &mut aliases);
                 }
             }
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 condition,
                 consequent_arguments,
                 alternate_arguments,
@@ -10254,13 +10303,13 @@ fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
                     *argument = resolve_runtime_alias(*argument, &mut aliases);
                 }
             }
-            RuntimeTerminator::Switch { selector, .. } => {
+            StagedTerminator::Switch { selector, .. } => {
                 *selector = resolve_runtime_alias(*selector, &mut aliases);
             }
-            RuntimeTerminator::Return { value, .. } => {
+            StagedTerminator::Return { value, .. } => {
                 *value = resolve_runtime_alias(*value, &mut aliases);
             }
-            RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Trap { .. } => {}
         }
         block
             .operations
@@ -10281,10 +10330,10 @@ fn fold_representation_roundtrips(function: &mut RuntimeFunction) {
     fold_representation_roundtrips(function);
 }
 
-fn terminator_runtime_values(terminator: &RuntimeTerminator) -> Vec<usize> {
+fn terminator_runtime_values(terminator: &StagedTerminator) -> Vec<usize> {
     match terminator {
-        RuntimeTerminator::Branch { arguments, .. } => arguments.clone(),
-        RuntimeTerminator::Conditional {
+        StagedTerminator::Branch { arguments, .. } => arguments.clone(),
+        StagedTerminator::Conditional {
             condition,
             consequent_arguments,
             alternate_arguments,
@@ -10293,9 +10342,9 @@ fn terminator_runtime_values(terminator: &RuntimeTerminator) -> Vec<usize> {
             .chain(consequent_arguments.iter().copied())
             .chain(alternate_arguments.iter().copied())
             .collect(),
-        RuntimeTerminator::Switch { selector, .. } => vec![*selector],
-        RuntimeTerminator::Return { value, .. } => vec![*value],
-        RuntimeTerminator::Trap { .. } => Vec::new(),
+        StagedTerminator::Switch { selector, .. } => vec![*selector],
+        StagedTerminator::Return { value, .. } => vec![*value],
+        StagedTerminator::Trap { .. } => Vec::new(),
     }
 }
 
@@ -10316,7 +10365,7 @@ fn resolve_runtime_alias(mut value: usize, aliases: &mut HashMap<usize, usize>) 
     value
 }
 
-fn discardable_runtime_operation(operation: &RuntimeOperation) -> bool {
+fn discardable_runtime_operation(operation: &StagedOperation) -> bool {
     match operation.kind {
         "constant" | "scalar.unary" | "vector" | "product.make" | "product.project"
         | "sum.make" | "sum.tag" | "sum.payload" | "indirect.load" | "store.length"
@@ -10328,7 +10377,7 @@ fn discardable_runtime_operation(operation: &RuntimeOperation) -> bool {
     }
 }
 
-fn deduplicate_runtime_types(module: &mut RuntimeModule) {
+fn deduplicate_runtime_types(module: &mut StagedModule) {
     if module.types.is_empty() {
         return;
     }
@@ -10400,6 +10449,9 @@ fn deduplicate_runtime_types(module: &mut RuntimeModule) {
                 operation.type_id = remap[operation.type_id];
             }
         }
+    }
+    for function in &mut module.checked_functions {
+        function.map_types(|type_id| crate::continuation::TypeId(remap[type_id.0]));
     }
     module.types = types;
 }
@@ -10519,7 +10571,7 @@ fn remap_runtime_type(type_: &mut RuntimeType, remap: &[usize]) {
     }
 }
 
-fn deduplicate_runtime_signatures(module: &mut RuntimeModule) {
+fn deduplicate_runtime_signatures(module: &mut StagedModule) {
     let mut ids = HashMap::new();
     let mut remap = Vec::with_capacity(module.signatures.len());
     let mut signatures = Vec::new();
@@ -10551,6 +10603,9 @@ fn deduplicate_runtime_signatures(module: &mut RuntimeModule) {
             }
         }
     }
+    for function in &mut module.checked_functions {
+        function.map_signatures(|signature| crate::continuation::SignatureId(remap[signature.0]));
+    }
     for capability in &mut module.capabilities {
         for operation in &mut capability.operations {
             operation.signature = remap[operation.signature];
@@ -10568,23 +10623,35 @@ fn deduplicate_runtime_signatures(module: &mut RuntimeModule) {
 }
 
 fn deduplicate_runtime_functions(
-    module: &mut RuntimeModule,
+    module: &mut StagedModule,
     development_units: Option<&HashSet<String>>,
 ) -> Result<(), Diagnostic> {
-    if module.functions.is_empty() {
-        return Ok(());
-    }
-    let function_indices = module
+    let mut graph_functions = module
         .functions
         .iter()
+        .map(|function| {
+            let mut graph = crate::continuation::lower_function(module, function)
+                .map_err(|message| hir_error(&message))?;
+            graph
+                .fill_captures()
+                .map_err(|message| hir_error(&message))?;
+            Ok(graph)
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>()?;
+    graph_functions.extend(module.checked_functions.iter().cloned());
+    if graph_functions.is_empty() {
+        return Ok(());
+    }
+    let function_indices = graph_functions
+        .iter()
         .enumerate()
-        .map(|(index, function)| (function.id, index))
+        .map(|(index, function)| (function.id.0, index))
         .collect::<HashMap<_, _>>();
     let mut body_classes = HashMap::<(Option<&str>, Vec<u8>), usize>::new();
-    let mut canonical_calls = Vec::with_capacity(module.functions.len());
-    let mut classes = Vec::with_capacity(module.functions.len());
+    let mut canonical_calls = Vec::with_capacity(graph_functions.len());
+    let mut classes = Vec::with_capacity(graph_functions.len());
     let mut partitions = Vec::<Vec<usize>>::new();
-    for (function_index, function) in module.functions.iter().enumerate() {
+    for (function_index, function) in graph_functions.iter().enumerate() {
         let (body, calls) = canonical_runtime_function_shape(function, &function_indices)?;
         let development_unit = development_units
             .filter(|units| units.contains(&function.span.file))
@@ -10600,42 +10667,46 @@ fn deduplicate_runtime_functions(
         classes.push(class);
         canonical_calls.push(calls);
     }
-    let mut predecessors = vec![Vec::<(usize, usize)>::new(); module.functions.len()];
+    let mut predecessors = vec![Vec::<(usize, usize)>::new(); graph_functions.len()];
     for (caller, targets) in canonical_calls.iter().enumerate() {
         for (position, target) in targets.iter().copied().enumerate() {
             predecessors[target].push((caller, position));
         }
     }
     refine_indexed_partitions(&mut partitions, &mut classes, &predecessors);
-
     let mut class_ids = HashMap::new();
     let mut function_ids = HashMap::new();
-    let mut functions = Vec::new();
-    for (function_index, function) in module.functions.iter().enumerate() {
-        let class = classes[function_index];
-        let function_id = if let Some(function_id) = class_ids.get(&class) {
-            *function_id
-        } else {
-            let function_id = functions.len();
-            class_ids.insert(class, function_id);
-            functions.push(function.clone());
-            function_id
-        };
-        function_ids.insert(function.id, function_id);
+    let mut retained = HashSet::new();
+    for (index, function) in graph_functions.iter().enumerate() {
+        let class = classes[index];
+        let next_id = class_ids.len();
+        let function_id = *class_ids.entry(class).or_insert_with(|| {
+            retained.insert(function.id.0);
+            next_id
+        });
+        function_ids.insert(function.id.0, function_id);
     }
-    for (function_id, function) in functions.iter_mut().enumerate() {
-        function.id = function_id;
+    module
+        .functions
+        .retain(|function| retained.contains(&function.id));
+    for function in &mut module.functions {
+        function.id = function_ids[&function.id];
         for operation in function
             .blocks
             .iter_mut()
             .flat_map(|block| &mut block.operations)
         {
             if let Some(target) = &mut operation.function {
-                *target = *function_ids.get(target).ok_or_else(|| {
-                    hir_error("A direct call references an unknown residual function.")
-                })?;
+                *target = function_ids[target];
             }
         }
+    }
+    module
+        .checked_functions
+        .retain(|function| retained.contains(&function.id.0));
+    for function in &mut module.checked_functions {
+        function
+            .map_functions(|function| crate::continuation::FunctionId(function_ids[&function.0]));
     }
     for exported in &mut module.exports {
         if let RuntimeExport::Runtime { function, .. } = exported {
@@ -10658,7 +10729,6 @@ fn deduplicate_runtime_functions(
     }
     module.resumable_roots.sort_unstable();
     module.resumable_roots.dedup();
-    module.functions = functions;
     Ok(())
 }
 
@@ -10718,184 +10788,127 @@ fn refine_indexed_partitions(
 }
 
 fn canonical_runtime_function_shape(
-    function: &RuntimeFunction,
+    function: &crate::continuation::Function,
     function_indices: &HashMap<usize, usize>,
 ) -> Result<(Vec<u8>, Vec<usize>), Diagnostic> {
+    use crate::continuation::{
+        Argument, CallTarget, ContinuationId, FunctionId, Transition, ValueId,
+    };
     #[cfg(test)]
     RUNTIME_FUNCTION_KEY_VISITS.with(|visits| visits.set(visits.get() + 1));
-    let blocks = function
-        .blocks
-        .iter()
-        .map(|block| (block.id, block))
-        .collect::<HashMap<_, _>>();
-    let mut block_ids = HashMap::new();
-    let mut pending = VecDeque::from([function.entry_block]);
-    while let Some(block_id) = pending.pop_front() {
-        if block_ids.contains_key(&block_id) {
+    let mut continuation_ids = HashMap::new();
+    let mut pending = VecDeque::from([function.entry]);
+    while let Some(id) = pending.pop_front() {
+        if continuation_ids.contains_key(&id) {
             continue;
         }
-        let block = blocks
-            .get(&block_id)
-            .ok_or_else(|| hir_error("A residual function targets an unknown block."))?;
-        block_ids.insert(block_id, block_ids.len());
-        match &block.terminator {
-            RuntimeTerminator::Branch { target, .. } => pending.push_back(*target),
-            RuntimeTerminator::Conditional {
-                consequent,
-                alternate,
-                ..
-            } => {
-                pending.push_back(*consequent);
-                pending.push_back(*alternate);
-            }
-            RuntimeTerminator::Switch {
-                cases, fallback, ..
-            } => {
-                pending.extend(cases.iter().map(|case| case.target));
-                pending.push_back(*fallback);
-            }
-            RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
-        }
+        let continuation = function
+            .continuations
+            .get(id.0)
+            .ok_or_else(|| hir_error("A residual function targets an unknown continuation."))?;
+        continuation_ids.insert(id, ContinuationId(continuation_ids.len()));
+        pending.extend(
+            continuation
+                .transition
+                .edges()
+                .iter()
+                .map(|edge| edge.target),
+        );
     }
-    if block_ids.len() != function.blocks.len() {
+    if continuation_ids.len() != function.continuations.len() {
         return Err(hir_error(
-            "A residual function retained an unreachable block during interning.",
+            "A residual function retained an unreachable continuation during interning.",
         ));
     }
-
     let mut canonical = function.clone();
-    canonical.id = 0;
+    canonical.id = FunctionId(0);
     canonical.name.clear();
-    canonical.entry_block = 0;
+    canonical.entry = ContinuationId(0);
     canonical.span = RuntimeSpan {
         file: String::new(),
         start: 0,
         end: 0,
     };
-    canonical.blocks.sort_by_key(|block| block_ids[&block.id]);
+    canonical
+        .continuations
+        .sort_by_key(|continuation| continuation_ids[&continuation.id]);
     let mut value_ids = HashMap::new();
-    for block in &canonical.blocks {
-        for parameter in &block.parameters {
-            let value_id = value_ids.len();
-            if value_ids.insert(parameter.value, value_id).is_some() {
-                return Err(hir_error(
-                    "A residual function defines one value more than once.",
-                ));
-            }
-        }
-        for operation in &block.operations {
-            let value_id = value_ids.len();
-            if value_ids.insert(operation.result, value_id).is_some() {
+    for continuation in &canonical.continuations {
+        for definition in continuation.parameters.iter().chain(
+            continuation
+                .instructions
+                .iter()
+                .map(|instruction| &instruction.definition),
+        ) {
+            let value_id = ValueId(value_ids.len());
+            if value_ids.insert(definition.value, value_id).is_some() {
                 return Err(hir_error(
                     "A residual function defines one value more than once.",
                 ));
             }
         }
     }
-    let remap_value = |value: usize| {
+    let remap_value = |value: ValueId| {
         value_ids
             .get(&value)
             .copied()
             .ok_or_else(|| hir_error("A residual function uses an undefined value."))
     };
     let mut calls = Vec::new();
-    for block in &mut canonical.blocks {
-        block.id = block_ids[&block.id];
-        for parameter in &mut block.parameters {
-            parameter.value = remap_value(parameter.value)?;
-            parameter.span = RuntimeSpan {
-                file: String::new(),
-                start: 0,
-                end: 0,
-            };
+    for continuation in &mut canonical.continuations {
+        continuation.id = continuation_ids[&continuation.id];
+        continuation.span = canonical.span.clone();
+        for definition in continuation
+            .parameters
+            .iter_mut()
+            .chain(&mut continuation.captures)
+            .chain(
+                continuation
+                    .instructions
+                    .iter_mut()
+                    .map(|instruction| &mut instruction.definition),
+            )
+        {
+            definition.value = remap_value(definition.value)?;
+            definition.span = canonical.span.clone();
         }
-        for operation in &mut block.operations {
-            operation.result = remap_value(operation.result)?;
-            for operand in &mut operation.operands {
+        continuation.captures.sort_by_key(|capture| capture.value);
+        for instruction in &mut continuation.instructions {
+            for operand in &mut instruction.operands {
                 *operand = remap_value(*operand)?;
             }
-            if let Some(target) = &mut operation.function {
-                calls.push(*function_indices.get(target).ok_or_else(|| {
-                    hir_error("A direct call references an unknown residual function.")
+            if let Some(target) = &mut instruction.operation.function {
+                calls.push(*function_indices.get(&target.0).ok_or_else(|| {
+                    hir_error("A function value references an unknown residual function.")
                 })?);
-                *target = 0;
+                *target = FunctionId(0);
             }
-            operation.span = RuntimeSpan {
-                file: String::new(),
-                start: 0,
-                end: 0,
-            };
         }
-        match &mut block.terminator {
-            RuntimeTerminator::Branch {
-                target,
-                arguments,
-                span,
+        match &mut continuation.transition {
+            Transition::Branch { condition, .. } => *condition = remap_value(*condition)?,
+            Transition::Switch { selector, .. } => *selector = remap_value(*selector)?,
+            Transition::Return { value } => *value = remap_value(*value)?,
+            Transition::Call {
+                target, arguments, ..
             } => {
-                *target = block_ids[target];
                 for argument in arguments {
                     *argument = remap_value(*argument)?;
                 }
-                *span = RuntimeSpan {
-                    file: String::new(),
-                    start: 0,
-                    end: 0,
-                };
-            }
-            RuntimeTerminator::Conditional {
-                condition,
-                consequent,
-                consequent_arguments,
-                alternate,
-                alternate_arguments,
-                span,
-            } => {
-                *condition = remap_value(*condition)?;
-                *consequent = block_ids[consequent];
-                *alternate = block_ids[alternate];
-                for argument in consequent_arguments
-                    .iter_mut()
-                    .chain(alternate_arguments.iter_mut())
-                {
-                    *argument = remap_value(*argument)?;
+                if let CallTarget::Function { function } = target {
+                    calls.push(*function_indices.get(&function.0).ok_or_else(|| {
+                        hir_error("A direct call references an unknown residual function.")
+                    })?);
+                    *function = FunctionId(0);
                 }
-                *span = RuntimeSpan {
-                    file: String::new(),
-                    start: 0,
-                    end: 0,
-                };
             }
-            RuntimeTerminator::Switch {
-                selector,
-                cases,
-                fallback,
-                span,
-            } => {
-                *selector = remap_value(*selector)?;
-                for case in cases {
-                    case.target = block_ids[&case.target];
+            Transition::Jump { .. } | Transition::Trap { .. } => {}
+        }
+        for edge in continuation.transition.edges_mut() {
+            edge.target = continuation_ids[&edge.target];
+            for argument in &mut edge.arguments {
+                if let Argument::Value(value) = argument {
+                    *value = remap_value(*value)?;
                 }
-                *fallback = block_ids[fallback];
-                *span = RuntimeSpan {
-                    file: String::new(),
-                    start: 0,
-                    end: 0,
-                };
-            }
-            RuntimeTerminator::Return { value, span } => {
-                *value = remap_value(*value)?;
-                *span = RuntimeSpan {
-                    file: String::new(),
-                    start: 0,
-                    end: 0,
-                };
-            }
-            RuntimeTerminator::Trap { span, .. } => {
-                *span = RuntimeSpan {
-                    file: String::new(),
-                    start: 0,
-                    end: 0,
-                };
             }
         }
     }
@@ -10920,7 +10933,7 @@ thread_local! {
     };
 }
 
-fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
+fn simplify_runtime_function(mut function: StagedFunction) -> StagedFunction {
     recover_direct_tail_calls(&mut function);
     loop {
         fold_boolean_branch_roundtrips(&mut function);
@@ -10933,7 +10946,7 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                 if block.id == function.entry_block || !block.operations.is_empty() {
                     return None;
                 }
-                let RuntimeTerminator::Branch {
+                let StagedTerminator::Branch {
                     target, arguments, ..
                 } = &block.terminator
                 else {
@@ -10966,8 +10979,8 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
             }
             let block = &function.blocks[block_id];
             match &block.terminator {
-                RuntimeTerminator::Branch { target, .. } => pending.push(*target),
-                RuntimeTerminator::Conditional {
+                StagedTerminator::Branch { target, .. } => pending.push(*target),
+                StagedTerminator::Conditional {
                     consequent,
                     alternate,
                     ..
@@ -10975,13 +10988,13 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     pending.push(*consequent);
                     pending.push(*alternate);
                 }
-                RuntimeTerminator::Switch {
+                StagedTerminator::Switch {
                     cases, fallback, ..
                 } => {
                     pending.extend(cases.iter().map(|case| case.target));
                     pending.push(*fallback);
                 }
-                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
+                StagedTerminator::Return { .. } | StagedTerminator::Trap { .. } => {}
             }
         }
         if forwarding.is_empty() && reachable.len() == function.blocks.len() {
@@ -10999,10 +11012,10 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
         for block in &mut function.blocks {
             block.id = block_ids[&block.id];
             match &mut block.terminator {
-                RuntimeTerminator::Branch { target, .. } => {
+                StagedTerminator::Branch { target, .. } => {
                     *target = block_ids[&resolve(*target)];
                 }
-                RuntimeTerminator::Conditional {
+                StagedTerminator::Conditional {
                     consequent,
                     alternate,
                     ..
@@ -11010,7 +11023,7 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     *consequent = block_ids[&resolve(*consequent)];
                     *alternate = block_ids[&resolve(*alternate)];
                 }
-                RuntimeTerminator::Switch {
+                StagedTerminator::Switch {
                     cases, fallback, ..
                 } => {
                     for case in cases {
@@ -11018,14 +11031,14 @@ fn simplify_runtime_function(mut function: RuntimeFunction) -> RuntimeFunction {
                     }
                     *fallback = block_ids[&resolve(*fallback)];
                 }
-                RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
+                StagedTerminator::Return { .. } | StagedTerminator::Trap { .. } => {}
             }
         }
         function.entry_block = block_ids[&function.entry_block];
     }
 }
 
-fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
+fn remove_unused_block_parameters(function: &mut StagedFunction) {
     let mut live_values = HashSet::new();
     let mut incoming_arguments = HashMap::<usize, Vec<usize>>::new();
     let parameters = function
@@ -11038,7 +11051,7 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
             live_values.extend(operation.operands.iter().copied());
         }
         match &block.terminator {
-            RuntimeTerminator::Branch {
+            StagedTerminator::Branch {
                 target, arguments, ..
             } => record_block_argument_dependencies(
                 *target,
@@ -11046,7 +11059,7 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
                 &parameters,
                 &mut incoming_arguments,
             ),
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 condition,
                 consequent,
                 consequent_arguments,
@@ -11068,13 +11081,13 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
                     &mut incoming_arguments,
                 );
             }
-            RuntimeTerminator::Switch { selector, .. } => {
+            StagedTerminator::Switch { selector, .. } => {
                 live_values.insert(*selector);
             }
-            RuntimeTerminator::Return { value, .. } => {
+            StagedTerminator::Return { value, .. } => {
                 live_values.insert(*value);
             }
-            RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Trap { .. } => {}
         }
     }
     let mut pending = live_values.iter().copied().collect::<VecDeque<_>>();
@@ -11114,7 +11127,7 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
             });
         }
         match &mut block.terminator {
-            RuntimeTerminator::Branch {
+            StagedTerminator::Branch {
                 target, arguments, ..
             } => {
                 if let Some(indices) = removed.get(target) {
@@ -11126,7 +11139,7 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
                     });
                 }
             }
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 consequent,
                 consequent_arguments,
                 alternate,
@@ -11150,9 +11163,9 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
                     });
                 }
             }
-            RuntimeTerminator::Switch { .. }
-            | RuntimeTerminator::Return { .. }
-            | RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Switch { .. }
+            | StagedTerminator::Return { .. }
+            | StagedTerminator::Trap { .. } => {}
         }
     }
 }
@@ -11160,7 +11173,7 @@ fn remove_unused_block_parameters(function: &mut RuntimeFunction) {
 fn record_block_argument_dependencies(
     target: usize,
     arguments: &[usize],
-    parameters: &HashMap<usize, &[RuntimeBlockParameter]>,
+    parameters: &HashMap<usize, &[StagedBlockParameter]>,
     incoming_arguments: &mut HashMap<usize, Vec<usize>>,
 ) {
     let parameters = parameters
@@ -11181,7 +11194,7 @@ fn record_block_argument_dependencies(
     }
 }
 
-fn fold_boolean_branch_roundtrips(function: &mut RuntimeFunction) {
+fn fold_boolean_branch_roundtrips(function: &mut StagedFunction) {
     let mut predecessors = HashMap::<usize, Vec<usize>>::new();
     for block in &function.blocks {
         for target in runtime_terminator_targets(&block.terminator) {
@@ -11217,30 +11230,30 @@ fn fold_boolean_branch_roundtrips(function: &mut RuntimeFunction) {
     }
 }
 
-fn runtime_terminator_targets(terminator: &RuntimeTerminator) -> Vec<usize> {
+fn runtime_terminator_targets(terminator: &StagedTerminator) -> Vec<usize> {
     match terminator {
-        RuntimeTerminator::Branch { target, .. } => vec![*target],
-        RuntimeTerminator::Conditional {
+        StagedTerminator::Branch { target, .. } => vec![*target],
+        StagedTerminator::Conditional {
             consequent,
             alternate,
             ..
         } => vec![*consequent, *alternate],
-        RuntimeTerminator::Switch {
+        StagedTerminator::Switch {
             cases, fallback, ..
         } => cases
             .iter()
             .map(|case_| case_.target)
             .chain(std::iter::once(*fallback))
             .collect(),
-        RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => Vec::new(),
+        StagedTerminator::Return { .. } | StagedTerminator::Trap { .. } => Vec::new(),
     }
 }
 
 fn folded_boolean_terminator(
-    function: &RuntimeFunction,
-    block: &RuntimeBlock,
-) -> Option<RuntimeTerminator> {
-    let RuntimeTerminator::Conditional {
+    function: &StagedFunction,
+    block: &StagedBlock,
+) -> Option<StagedTerminator> {
+    let StagedTerminator::Conditional {
         condition,
         consequent,
         consequent_arguments,
@@ -11263,7 +11276,7 @@ fn folded_boolean_terminator(
     if join.parameters.len() != 1 || !join.operations.is_empty() {
         return None;
     }
-    let RuntimeTerminator::Conditional {
+    let StagedTerminator::Conditional {
         condition: joined_condition,
         consequent: joined_consequent,
         consequent_arguments: joined_consequent_arguments,
@@ -11292,7 +11305,7 @@ fn folded_boolean_terminator(
             joined_consequent_arguments.clone(),
         )
     };
-    Some(RuntimeTerminator::Conditional {
+    Some(StagedTerminator::Conditional {
         condition: *condition,
         consequent,
         consequent_arguments,
@@ -11302,7 +11315,7 @@ fn folded_boolean_terminator(
     })
 }
 
-fn branch_boolean(function: &RuntimeFunction, block_id: usize) -> Option<(bool, usize)> {
+fn branch_boolean(function: &StagedFunction, block_id: usize) -> Option<(bool, usize)> {
     let block = function.blocks.get(block_id)?;
     let [operation] = block.operations.as_slice() else {
         return None;
@@ -11313,7 +11326,7 @@ fn branch_boolean(function: &RuntimeFunction, block_id: usize) -> Option<(bool, 
     let Some(WireConstant::Boolean(value)) = operation.value else {
         return None;
     };
-    let RuntimeTerminator::Branch {
+    let StagedTerminator::Branch {
         target, arguments, ..
     } = &block.terminator
     else {
@@ -11348,7 +11361,7 @@ struct SumFoldFacts {
 }
 
 impl SumFoldFacts {
-    fn new(function: &RuntimeFunction) -> Self {
+    fn new(function: &StagedFunction) -> Self {
         let mut facts = Self {
             incoming: vec![0; function.blocks.len()],
             branch_predecessors: vec![Vec::new(); function.blocks.len()],
@@ -11363,21 +11376,21 @@ impl SumFoldFacts {
         facts
     }
 
-    fn add_operation(&mut self, operation: &RuntimeOperation) {
+    fn add_operation(&mut self, operation: &StagedOperation) {
         for operand in &operation.operands {
             *self.value_uses.entry(*operand).or_default() += 1;
         }
     }
 
-    fn remove_operation(&mut self, operation: &RuntimeOperation) {
+    fn remove_operation(&mut self, operation: &StagedOperation) {
         for operand in &operation.operands {
             self.remove_value_use(*operand);
         }
     }
 
-    fn add_terminator(&mut self, block: usize, terminator: &RuntimeTerminator) {
+    fn add_terminator(&mut self, block: usize, terminator: &StagedTerminator) {
         match terminator {
-            RuntimeTerminator::Branch {
+            StagedTerminator::Branch {
                 target, arguments, ..
             } => {
                 self.add_incoming(*target);
@@ -11386,7 +11399,7 @@ impl SumFoldFacts {
                     *self.value_uses.entry(*argument).or_default() += 1;
                 }
             }
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 condition,
                 consequent,
                 consequent_arguments,
@@ -11401,7 +11414,7 @@ impl SumFoldFacts {
                     *self.value_uses.entry(*argument).or_default() += 1;
                 }
             }
-            RuntimeTerminator::Switch {
+            StagedTerminator::Switch {
                 selector,
                 cases,
                 fallback,
@@ -11413,16 +11426,16 @@ impl SumFoldFacts {
                 }
                 self.add_incoming(*fallback);
             }
-            RuntimeTerminator::Return { value, .. } => {
+            StagedTerminator::Return { value, .. } => {
                 *self.value_uses.entry(*value).or_default() += 1;
             }
-            RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Trap { .. } => {}
         }
     }
 
-    fn remove_terminator(&mut self, block: usize, terminator: &RuntimeTerminator) {
+    fn remove_terminator(&mut self, block: usize, terminator: &StagedTerminator) {
         match terminator {
-            RuntimeTerminator::Branch {
+            StagedTerminator::Branch {
                 target, arguments, ..
             } => {
                 self.remove_incoming(*target);
@@ -11438,7 +11451,7 @@ impl SumFoldFacts {
                     self.remove_value_use(*argument);
                 }
             }
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 condition,
                 consequent,
                 consequent_arguments,
@@ -11453,7 +11466,7 @@ impl SumFoldFacts {
                     self.remove_value_use(*argument);
                 }
             }
-            RuntimeTerminator::Switch {
+            StagedTerminator::Switch {
                 selector,
                 cases,
                 fallback,
@@ -11465,8 +11478,8 @@ impl SumFoldFacts {
                 }
                 self.remove_incoming(*fallback);
             }
-            RuntimeTerminator::Return { value, .. } => self.remove_value_use(*value),
-            RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Return { value, .. } => self.remove_value_use(*value),
+            StagedTerminator::Trap { .. } => {}
         }
     }
 
@@ -11494,7 +11507,7 @@ impl SumFoldFacts {
     }
 }
 
-fn fold_known_sum_switches(function: &mut RuntimeFunction) {
+fn fold_known_sum_switches(function: &mut StagedFunction) {
     let mut facts = SumFoldFacts::new(function);
     let mut pending = function
         .blocks
@@ -11522,7 +11535,7 @@ fn fold_known_sum_switches(function: &mut RuntimeFunction) {
             facts.remove_operation(&payload);
             function.blocks[target]
                 .parameters
-                .push(RuntimeBlockParameter {
+                .push(StagedBlockParameter {
                     value: payload.result,
                     type_id: payload.type_id,
                     ownership: payload.ownership,
@@ -11536,11 +11549,11 @@ fn fold_known_sum_switches(function: &mut RuntimeFunction) {
                 .expect("known sum predecessor lost its constructor");
             facts.remove_operation(&constructor);
             let old_terminator = function.blocks[predecessor.block].terminator.clone();
-            let RuntimeTerminator::Branch { span, .. } = &old_terminator else {
+            let StagedTerminator::Branch { span, .. } = &old_terminator else {
                 unreachable!();
             };
             facts.remove_terminator(predecessor.block, &old_terminator);
-            let new_terminator = RuntimeTerminator::Branch {
+            let new_terminator = StagedTerminator::Branch {
                 target: predecessor.target,
                 arguments: vec![predecessor.payload],
                 span: span.clone(),
@@ -11557,8 +11570,8 @@ fn fold_known_sum_switches(function: &mut RuntimeFunction) {
 }
 
 fn known_sum_switch_fold(
-    function: &RuntimeFunction,
-    join: &RuntimeBlock,
+    function: &StagedFunction,
+    join: &StagedBlock,
     facts: &SumFoldFacts,
 ) -> Option<SumDispatchFold> {
     if join.id == function.entry_block {
@@ -11573,7 +11586,7 @@ fn known_sum_switch_fold(
     if tag.kind != "sum.tag" || tag.operands.as_slice() != [parameter.value] {
         return None;
     }
-    let RuntimeTerminator::Switch {
+    let StagedTerminator::Switch {
         selector,
         cases,
         fallback,
@@ -11641,7 +11654,7 @@ fn known_sum_switch_fold(
     }
     for block_id in branch_predecessors {
         let block = &function.blocks[*block_id];
-        let RuntimeTerminator::Branch { arguments, .. } = &block.terminator else {
+        let StagedTerminator::Branch { arguments, .. } = &block.terminator else {
             unreachable!();
         };
         let [sum] = arguments.as_slice() else {
@@ -11680,15 +11693,15 @@ struct TailDemand {
     sum_case: Option<usize>,
 }
 
-fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
+fn recover_direct_tail_calls(function: &mut StagedFunction) {
     recover_unit_tail_calls(function);
     let mut incoming = HashMap::<usize, Vec<usize>>::new();
     for block in &function.blocks {
         match &block.terminator {
-            RuntimeTerminator::Branch {
+            StagedTerminator::Branch {
                 target, arguments, ..
             } => record_incoming_arguments(function, *target, arguments, &mut incoming),
-            RuntimeTerminator::Conditional {
+            StagedTerminator::Conditional {
                 consequent,
                 consequent_arguments,
                 alternate,
@@ -11703,8 +11716,8 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
                 );
                 record_incoming_arguments(function, *alternate, alternate_arguments, &mut incoming);
             }
-            RuntimeTerminator::Switch { .. } => {}
-            RuntimeTerminator::Return { .. } | RuntimeTerminator::Trap { .. } => {}
+            StagedTerminator::Switch { .. } => {}
+            StagedTerminator::Return { .. } | StagedTerminator::Trap { .. } => {}
         }
     }
     let definitions = function
@@ -11744,7 +11757,7 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
         .blocks
         .iter()
         .filter_map(|block| match block.terminator {
-            RuntimeTerminator::Return { value, .. } => Some(TailDemand {
+            StagedTerminator::Return { value, .. } => Some(TailDemand {
                 value,
                 sum_case: None,
             }),
@@ -11824,7 +11837,7 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
         }
         let call = block.operations[call_index].clone();
         block.operations.truncate(call_index);
-        block.terminator = RuntimeTerminator::Branch {
+        block.terminator = StagedTerminator::Branch {
             target: function.entry_block,
             arguments: call.operands,
             span: call.span,
@@ -11832,8 +11845,8 @@ fn recover_direct_tail_calls(function: &mut RuntimeFunction) {
     }
 }
 
-fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
-    let is_unit_constant = |operation: &RuntimeOperation| {
+fn recover_unit_tail_calls(function: &mut StagedFunction) {
+    let is_unit_constant = |operation: &StagedOperation| {
         operation.kind == "constant" && matches!(operation.value, Some(WireConstant::Unit))
     };
     let unit_types = function
@@ -11870,10 +11883,10 @@ fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
             continue;
         }
         match &block.terminator {
-            RuntimeTerminator::Return { value, .. } if unit_values.contains(value) => {
+            StagedTerminator::Return { value, .. } if unit_values.contains(value) => {
                 pending.push(block.id);
             }
-            RuntimeTerminator::Branch { target, .. } => {
+            StagedTerminator::Branch { target, .. } => {
                 predecessors.entry(*target).or_default().push(block.id);
             }
             _ => {}
@@ -11889,8 +11902,8 @@ fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
     }
     for block in &mut function.blocks {
         let returns_unit = match &block.terminator {
-            RuntimeTerminator::Return { value, .. } => unit_values.contains(value),
-            RuntimeTerminator::Branch { target, .. } => unit_returns.contains(target),
+            StagedTerminator::Return { value, .. } => unit_values.contains(value),
+            StagedTerminator::Branch { target, .. } => unit_returns.contains(target),
             _ => false,
         };
         if !returns_unit {
@@ -11912,7 +11925,7 @@ fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
         }
         let call = block.operations[call_index].clone();
         block.operations.truncate(call_index);
-        block.terminator = RuntimeTerminator::Branch {
+        block.terminator = StagedTerminator::Branch {
             target: function.entry_block,
             arguments: call.operands,
             span: call.span,
@@ -11921,8 +11934,8 @@ fn recover_unit_tail_calls(function: &mut RuntimeFunction) {
 }
 
 fn product_eta_source(
-    operation: &RuntimeOperation,
-    definitions: &HashMap<usize, &RuntimeOperation>,
+    operation: &StagedOperation,
+    definitions: &HashMap<usize, &StagedOperation>,
     value_types: &HashMap<usize, usize>,
 ) -> Option<usize> {
     if operation.kind != "product.make" || operation.operands.is_empty() {
@@ -11951,7 +11964,7 @@ fn product_eta_source(
 }
 
 fn record_incoming_arguments(
-    function: &RuntimeFunction,
+    function: &StagedFunction,
     target: usize,
     arguments: &[usize],
     incoming: &mut HashMap<usize, Vec<usize>>,
@@ -11974,9 +11987,9 @@ fn record_incoming_arguments(
 }
 
 fn tail_call_suffix_returns(
-    operations: &[RuntimeOperation],
+    operations: &[StagedOperation],
     call_index: usize,
-    terminator: &RuntimeTerminator,
+    terminator: &StagedTerminator,
 ) -> bool {
     let administrative_suffix = operations[call_index + 1..].iter().all(|operation| {
         matches!(
@@ -11988,11 +12001,11 @@ fn tail_call_suffix_returns(
         return false;
     }
     match terminator {
-        RuntimeTerminator::Return { .. } => true,
-        RuntimeTerminator::Branch { arguments, .. } => arguments.len() == 1,
-        RuntimeTerminator::Conditional { .. }
-        | RuntimeTerminator::Switch { .. }
-        | RuntimeTerminator::Trap { .. } => false,
+        StagedTerminator::Return { .. } => true,
+        StagedTerminator::Branch { arguments, .. } => arguments.len() == 1,
+        StagedTerminator::Conditional { .. }
+        | StagedTerminator::Switch { .. }
+        | StagedTerminator::Trap { .. } => false,
     }
 }
 
@@ -12184,7 +12197,7 @@ pub fn elaborate(
 ) -> Result<RuntimeModule, Diagnostic> {
     let mut module = elaborate_common(context, path, checked, None)?;
     optimize_runtime_module(&mut module, None)?;
-    Ok(module)
+    module.into_runtime()
 }
 
 pub(crate) fn elaborate_development(
@@ -12196,7 +12209,7 @@ pub(crate) fn elaborate_development(
     let units = Rc::new(units);
     let mut module = elaborate_common(context, path, checked, Some(units.clone()))?;
     optimize_runtime_module(&mut module, Some(units.as_ref()))?;
-    Ok(module)
+    module.into_runtime()
 }
 
 fn elaborate_common(
@@ -12204,7 +12217,7 @@ fn elaborate_common(
     path: &str,
     checked: CheckedModule,
     development_units: Option<Rc<HashSet<String>>>,
-) -> Result<RuntimeModule, Diagnostic> {
+) -> Result<StagedModule, Diagnostic> {
     let (result_is_shape, result_span) = {
         let modules = context.modules.borrow();
         let loaded = modules
@@ -12261,7 +12274,7 @@ fn prepare_exports(
     staged: Vec<StagedExport>,
     host_calls: Vec<HostCall>,
     development_units: Option<Rc<HashSet<String>>>,
-) -> Result<RuntimeModule, Diagnostic> {
+) -> Result<StagedModule, Diagnostic> {
     let mut value_exports = Vec::new();
     let mut function_exports = Vec::new();
     for exported in staged {
@@ -12423,8 +12436,8 @@ fn prepare_function_export(
 
 fn merge_runtime_modules(
     source: &str,
-    modules: Vec<RuntimeModule>,
-) -> Result<RuntimeModule, Diagnostic> {
+    modules: Vec<StagedModule>,
+) -> Result<StagedModule, Diagnostic> {
     if modules.len() == 1 {
         return modules
             .into_iter()
@@ -12432,16 +12445,19 @@ fn merge_runtime_modules(
             .ok_or_else(|| hir_error("A runtime module merge lost its input."));
     }
     let mut types = Vec::new();
+    let mut static_stores = Vec::new();
     let mut signatures = Vec::new();
     let mut functions = Vec::new();
     let mut capabilities = Vec::new();
+    let mut checked_functions = Vec::new();
     let mut links = Vec::new();
     let mut resumable_roots = Vec::new();
     let mut exports = Vec::new();
     for module in modules {
         let type_offset = types.len();
+        let store_offset = static_stores.len();
         let signature_offset = signatures.len();
-        let function_offset = functions.len();
+        let function_offset = functions.len() + checked_functions.len();
         resumable_roots.extend(
             module
                 .resumable_roots
@@ -12498,6 +12514,9 @@ fn merge_runtime_modules(
                 }
                 for operation in &mut block.operations {
                     operation.type_id += type_offset;
+                    if let Some(store) = &mut operation.static_store {
+                        *store += store_offset;
+                    }
                     if let Some(target) = &mut operation.function {
                         *target += function_offset;
                     }
@@ -12507,6 +12526,25 @@ fn merge_runtime_modules(
                 }
             }
             functions.push(function);
+        }
+        for mut function in module.checked_functions {
+            function.map_types(|id| crate::continuation::TypeId(id.0 + type_offset));
+            function.map_signatures(|id| crate::continuation::SignatureId(id.0 + signature_offset));
+            function.map_functions(|id| crate::continuation::FunctionId(id.0 + function_offset));
+            for instruction in function
+                .continuations
+                .iter_mut()
+                .flat_map(|continuation| &mut continuation.instructions)
+            {
+                if let Some(store) = &mut instruction.operation.static_store {
+                    *store += store_offset;
+                }
+            }
+            checked_functions.push(function);
+        }
+        for mut store in module.static_stores {
+            store.element_type += type_offset;
+            static_stores.push(store);
         }
         for mut capability in module.capabilities {
             for operation in &mut capability.operations {
@@ -12532,13 +12570,14 @@ fn merge_runtime_modules(
         }
     }
     validate_runtime_layouts(&types)?;
-    Ok(RuntimeModule {
+    Ok(StagedModule {
+        checked_functions,
         format: "blot-runtime-hir",
         schema_version: RUNTIME_HIR_SCHEMA,
         source: source.to_owned(),
         types,
         signatures,
-        static_stores: Vec::new(),
+        static_stores,
         functions,
         capabilities,
         links,
@@ -12552,7 +12591,7 @@ fn prepare_residual(
     path: &str,
     checked: CheckedModule,
     development_units: Option<Rc<HashSet<String>>>,
-) -> Result<RuntimeModule, Diagnostic> {
+) -> Result<StagedModule, Diagnostic> {
     let trace = Rc::new(std::cell::RefCell::new(match development_units {
         Some(units) => ResidualTrace::development(path, units),
         None => ResidualTrace::new(path),
@@ -12616,10 +12655,11 @@ fn prepare_host_argument(
     substitutions: &Environment,
     span: crate::ast::Span,
 ) -> Result<Value, Diagnostic> {
-    match &mut value {
+    let aggregate_type = trace.borrow().checked_aggregate_representations.get(&value);
+    let prepared = match &mut value {
         Value::Closure { .. } => {
             if let Some(expected @ Value::Arrow { .. }) = expected
-                && !crate::value::contains_type_variables(expected)
+                && !crate::value::contains_free_type_variables(expected)
             {
                 crate::value::attach_signature(&mut value, expected);
             }
@@ -12748,7 +12788,19 @@ fn prepare_host_argument(
             Ok(value)
         }
         _ => Ok(value),
+    }?;
+    let expected_aggregate = if matches!(prepared, Value::Array(_) | Value::Shape(_)) {
+        expected.and_then(|expected| trace.borrow_mut().type_from_type_value(expected).ok())
+    } else {
+        None
+    };
+    if let Some(type_id) = expected_aggregate.or(aggregate_type) {
+        trace
+            .borrow_mut()
+            .checked_aggregate_representations
+            .record(&prepared, type_id);
     }
+    Ok(prepared)
 }
 
 fn complete_residual_host_calls(
@@ -12878,7 +12930,7 @@ fn type_value(type_: &Type) -> Value {
         Type::Range { domain, low, high } => {
             let bound = |bound: &Option<Scalar>| match bound {
                 Some(Scalar::Int(value)) => Value::Int(value.clone()),
-                Some(Scalar::Text(value)) => Value::Text(value.clone()),
+                Some(Scalar::Text(value)) => Value::Text(value.as_str().into()),
                 None => Value::Unbounded,
             };
             let domain = match domain {
@@ -13082,7 +13134,7 @@ impl HirBuilder {
         mut self,
         staged: Vec<StagedExport>,
         host_calls: Vec<HostCall>,
-    ) -> Result<RuntimeModule, Diagnostic> {
+    ) -> Result<StagedModule, Diagnostic> {
         let mut functions = Vec::new();
         let mut exports = Vec::new();
         for exported in staged {
@@ -13129,7 +13181,8 @@ impl HirBuilder {
             })
             .collect();
         validate_runtime_layouts(&self.types)?;
-        Ok(RuntimeModule {
+        Ok(StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: self.source,
@@ -13149,7 +13202,7 @@ impl HirBuilder {
         exported: &RuntimeValueExport,
         host_calls: &[HostCall],
         id: usize,
-    ) -> Result<RuntimeFunction, Diagnostic> {
+    ) -> Result<StagedFunction, Diagnostic> {
         self.next_value = 0;
         let result_type = self.runtime_type(&exported.type_, &exported.value)?;
         let effects = host_calls
@@ -13169,17 +13222,17 @@ impl HirBuilder {
             self.host_call(call, &mut operations)?;
         }
         let result = self.value(&exported.value, &exported.type_, &mut operations)?;
-        Ok(RuntimeFunction {
+        Ok(StagedFunction {
             id,
             name: format!("blot$constant${}", exported.name),
             signature,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: Vec::new(),
                 operations,
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: result,
                     span: self.span.clone(),
                 },
@@ -13416,10 +13469,27 @@ impl HirBuilder {
         &mut self,
         value: &Value,
         type_: &Type,
-        operations: &mut Vec<RuntimeOperation>,
+        operations: &mut Vec<StagedOperation>,
     ) -> Result<usize, Diagnostic> {
+        let type_id = self.runtime_type(type_, value)?;
+        self.value_as(value, type_, type_id, operations)
+    }
+
+    fn value_as(
+        &mut self,
+        value: &Value,
+        type_: &Type,
+        type_id: usize,
+        operations: &mut Vec<StagedOperation>,
+    ) -> Result<usize, Diagnostic> {
+        let span = crate::ast::Span {
+            start: self.span.start,
+            end: self.span.end,
+        };
+        let representation_failure =
+            |message| Diagnostic::new("BLOT_RUST_INVARIANT", message, span);
         if matches!(type_, Type::Bottom) {
-            return self.value(value, &type_from_value(value), operations);
+            return self.value_as(value, &type_from_value(value), type_id, operations);
         }
         if let Type::Union(members) = type_ {
             if let Value::Tag { .. } = value {
@@ -13435,19 +13505,19 @@ impl HirBuilder {
                     }
                 }
                 if !cases.is_empty() {
-                    return self.value(
+                    return self.value_as(
                         value,
                         &Type::Variant {
                             cases: cases.into(),
                             open: false,
                         },
+                        type_id,
                         operations,
                     );
                 }
             }
-            return self.value(value, &type_from_value(value), operations);
+            return self.value_as(value, &type_from_value(value), type_id, operations);
         }
-        let type_id = self.runtime_type(type_, value)?;
         match value {
             Value::Unit => Ok(self.constant(WireConstant::Unit, type_id, "plain", operations)),
             Value::Int(value) => Ok(self.constant(
@@ -13463,7 +13533,7 @@ impl HirBuilder {
                 Ok(self.constant(WireConstant::Float32(*value), type_id, "plain", operations))
             }
             Value::Text(value) => Ok(self.constant(
-                WireConstant::Text(value.clone()),
+                WireConstant::Text(value.to_string()),
                 type_id,
                 "owned",
                 operations,
@@ -13483,11 +13553,33 @@ impl HirBuilder {
                     return Err(self.mismatch(value, "record"));
                 };
                 let mut operands = Vec::new();
+                let RuntimeType::Product {
+                    fields: runtime_fields,
+                    ..
+                } = self.types[type_id].clone()
+                else {
+                    return Err(representation_failure(
+                        "A constant record lost its closed product representation.",
+                    ));
+                };
                 for (name, field_type) in types {
                     let field = fields
                         .get(name)
                         .ok_or_else(|| self.mismatch(value, "record"))?;
-                    operands.push(self.value(field, field_type, operations)?);
+                    let runtime_field = runtime_fields
+                        .iter()
+                        .find(|field| field.name == *name)
+                        .ok_or_else(|| {
+                            representation_failure(
+                                "A constant record field lost its closed representation.",
+                            )
+                        })?;
+                    operands.push(self.value_as(
+                        field,
+                        field_type,
+                        runtime_field.type_id,
+                        operations,
+                    )?);
                 }
                 Ok(self.operation("product.make", type_id, operands, "owned", operations))
             }
@@ -13504,9 +13596,19 @@ impl HirBuilder {
                         operations,
                     ));
                 }
+                let RuntimeType::Store {
+                    element_type: runtime_element,
+                } = self.types[type_id]
+                else {
+                    return Err(representation_failure(
+                        "A constant array lost its closed Store representation.",
+                    ));
+                };
                 let elements = elements
                     .iter()
-                    .map(|element| self.value(element, element_type, operations))
+                    .map(|element| {
+                        self.value_as(element, element_type, runtime_element, operations)
+                    })
                     .collect::<Result<Vec<_>, Diagnostic>>()?;
                 Ok(self.operation("store.literal", type_id, elements, "owned", operations))
             }
@@ -13531,14 +13633,16 @@ impl HirBuilder {
                     .iter()
                     .position(|candidate| &candidate.name == name)
                     .ok_or_else(|| self.mismatch(value, "variant"))?;
+                let runtime_payload = runtime_cases[case].payload_type;
                 let inferred_payload = cases.get(name).cloned();
                 let unit = Value::Unit;
                 let payload_value = payload.as_deref().unwrap_or(&unit);
                 let payload_type =
                     inferred_payload.unwrap_or_else(|| type_from_value(payload_value));
-                let payload = self.value(payload_value, &payload_type, operations)?;
+                let payload =
+                    self.value_as(payload_value, &payload_type, runtime_payload, operations)?;
                 let result = self.next_value();
-                operations.push(RuntimeOperation {
+                operations.push(StagedOperation {
                     kind: "sum.make",
                     result,
                     type_id,
@@ -13562,12 +13666,30 @@ impl HirBuilder {
             }
             Value::Sealed { inner, .. } => {
                 let inner_type = type_from_value(inner);
-                let inner = self.value(inner, &inner_type, operations)?;
+                let RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } = self.types[type_id]
+                else {
+                    return Err(representation_failure(
+                        "A constant seal lost its closed representation.",
+                    ));
+                };
+                let inner = self.value_as(inner, &inner_type, representation_type, operations)?;
                 Ok(self.operation("seal.wrap", type_id, vec![inner], "owned", operations))
             }
             value if matches!(type_, Type::Opaque(name) if sealed_type_name(name).is_some()) => {
                 let inner_type = type_from_value(value);
-                let inner = self.value(value, &inner_type, operations)?;
+                let RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } = self.types[type_id]
+                else {
+                    return Err(representation_failure(
+                        "A constant seal lost its closed representation.",
+                    ));
+                };
+                let inner = self.value_as(value, &inner_type, representation_type, operations)?;
                 Ok(self.operation("seal.wrap", type_id, vec![inner], "owned", operations))
             }
             _ => Err(self.mismatch(value, "first-order runtime value")),
@@ -13577,7 +13699,7 @@ impl HirBuilder {
     fn host_call(
         &mut self,
         call: &HostCall,
-        operations: &mut Vec<RuntimeOperation>,
+        operations: &mut Vec<StagedOperation>,
     ) -> Result<(), Diagnostic> {
         let argument_type = type_from_value(&call.argument);
         let parameter_type = self.runtime_type(&argument_type, &call.argument)?;
@@ -13613,7 +13735,7 @@ impl HirBuilder {
         let _ = signature;
         let argument = self.value(&call.argument, &argument_type, operations)?;
         let result = self.next_value();
-        operations.push(RuntimeOperation {
+        operations.push(StagedOperation {
             kind: "host.call",
             result,
             type_id: unit_type,
@@ -13641,10 +13763,10 @@ impl HirBuilder {
         value: WireConstant,
         type_id: usize,
         ownership: &'static str,
-        operations: &mut Vec<RuntimeOperation>,
+        operations: &mut Vec<StagedOperation>,
     ) -> usize {
         let result = self.next_value();
-        operations.push(RuntimeOperation {
+        operations.push(StagedOperation {
             kind: "constant",
             result,
             type_id,
@@ -13673,10 +13795,10 @@ impl HirBuilder {
         type_id: usize,
         operands: Vec<usize>,
         ownership: &'static str,
-        operations: &mut Vec<RuntimeOperation>,
+        operations: &mut Vec<StagedOperation>,
     ) -> usize {
         let result = self.next_value();
-        operations.push(RuntimeOperation {
+        operations.push(StagedOperation {
             kind,
             result,
             type_id,
@@ -13742,8 +13864,8 @@ fn type_from_value(value: &Value) -> Type {
         },
         Value::Text(value) => Type::Range {
             domain: Domain::Text,
-            low: Some(Scalar::Text(value.clone())),
-            high: Some(Scalar::Text(value.clone())),
+            low: Some(Scalar::Text(value.to_string())),
+            high: Some(Scalar::Text(value.to_string())),
         },
         Value::Unit => Type::Unit,
         Value::Shape(fields) => Type::Record(
@@ -13801,11 +13923,11 @@ fn representative_value(type_: &Type) -> Option<Value> {
             domain: Domain::Text,
             low: Some(Scalar::Text(value)),
             ..
-        } => Some(Value::Text(value.clone())),
+        } => Some(Value::Text(value.as_str().into())),
         Type::Range {
             domain: Domain::Text,
             ..
-        } => Some(Value::Text(String::new())),
+        } => Some(Value::Text("".into())),
         Type::Range {
             domain: Domain::Float,
             ..
@@ -13878,12 +14000,12 @@ fn type_name(type_: &Type) -> &'static str {
     }
 }
 
-/// What ABI 3 says about the private function-choice layout. The tag and its
+/// What ABI 4 says about the private function-choice layout. The tag and its
 /// capture product are Runtime HIR's own bookkeeping: they name compiler-local
 /// closure sources, so no caller could read one even if it were exported.
 fn closure_choice_refusal(alternatives: usize) -> String {
     format!(
-        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 3 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
+        "A function choice over {alternatives} closure sources is a private Runtime HIR layout. Blot Core Wasm ABI 4 has no representation for it, so it cannot cross a runtime boundary; apply the function inside the program instead."
     )
 }
 
@@ -13898,6 +14020,39 @@ fn hir_error(message: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constant_empty_children_keep_their_parent_array_representation() {
+        let value = Value::Array(
+            vec![
+                Value::Array(vec![Value::Text("kept".into())].into()),
+                Value::Array(Vec::new().into()),
+            ]
+            .into(),
+        );
+        let type_ = type_from_value(&value);
+        let module = HirBuilder::new("constant-empty-child.blot")
+            .build(
+                vec![StagedExport {
+                    name: "run".to_owned(),
+                    runtime: Some((value, type_)),
+                }],
+                Vec::new(),
+            )
+            .unwrap()
+            .into_runtime()
+            .unwrap();
+        module.graph.validate(module.tables()).unwrap();
+        let empty = module.functions[0].continuations[0]
+            .instructions
+            .iter()
+            .find(|instruction| instruction.operation.kind == "store.empty")
+            .unwrap();
+        let RuntimeType::Store { element_type } = module.types[empty.definition.type_id.0] else {
+            unreachable!()
+        };
+        assert_eq!(module.types[element_type], RuntimeType::Text);
+    }
 
     #[test]
     fn dynamic_sum_tags_use_the_runtime_type_constructor_set() {
@@ -13945,7 +14100,7 @@ mod tests {
         let source = trace.next_value();
         let ownership = trace.ownership(source_type);
         let runtime_span = trace.span(span);
-        trace.blocks[0].parameters.push(RuntimeBlockParameter {
+        trace.blocks[0].parameters.push(StagedBlockParameter {
             value: source,
             type_id: source_type,
             ownership,
@@ -14040,17 +14195,17 @@ mod tests {
         total.field = Some(0);
         let mut trapping = operation("scalar", 2, vec![0, 0], None, None);
         trapping.operator = Some("divide");
-        let mut function = RuntimeFunction {
+        let mut function = StagedFunction {
             id: 0,
             name: "dead-operation-test".to_owned(),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations: vec![total, trapping],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 0,
                     span: span(),
                 },
@@ -14078,17 +14233,17 @@ mod tests {
                 )
             })
             .collect();
-        let mut function = RuntimeFunction {
+        let mut function = StagedFunction {
             id: 0,
             name: "dead-operation-chain-test".to_owned(),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations,
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 0,
                     span: span(),
                 },
@@ -14122,7 +14277,8 @@ mod tests {
                 element_type: right - 2,
             });
         }
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "runtime-type-chain-test.blot".to_owned(),
@@ -14285,7 +14441,7 @@ mod tests {
         assert_eq!(trace.blocks[0].operations[0].kind, "scalar");
         assert_eq!(trace.blocks[0].operations[0].operands, [11, 11]);
         assert_eq!(trace.blocks[0].operations[0].operator, Some("not-equal"));
-        let Some(RuntimeTerminator::Conditional {
+        let Some(StagedTerminator::Conditional {
             consequent,
             alternate,
             ..
@@ -14294,11 +14450,11 @@ mod tests {
             panic!("the NaN check did not branch");
         };
         assert_eq!((*consequent, *alternate), (1, 2));
-        let Some(RuntimeTerminator::Trap { message, .. }) = &trace.blocks[1].terminator else {
+        let Some(StagedTerminator::Trap { message, .. }) = &trace.blocks[1].terminator else {
             panic!("the unordered branch did not trap");
         };
         assert!(message.starts_with("@float.cmp cannot order NaN"));
-        let Some(RuntimeTerminator::Branch { target, .. }) = &trace.blocks[2].terminator else {
+        let Some(StagedTerminator::Branch { target, .. }) = &trace.blocks[2].terminator else {
             panic!("the ordered branch did not rejoin");
         };
         assert_eq!(*target, 3);
@@ -14473,41 +14629,42 @@ mod tests {
 
     #[test]
     fn normalized_equivalent_functions_share_one_runtime_body() {
-        let body = |id, name: &str, value| RuntimeFunction {
+        let body = |id, name: &str, value| StagedFunction {
             id,
             name: name.to_owned(),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(value)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value,
                     span: span(),
                 },
             }],
             span: span(),
         };
-        let caller = RuntimeFunction {
+        let caller = StagedFunction {
             id: 12,
             name: "caller".to_owned(),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(20)],
                 operations: vec![operation("call.direct", 21, vec![20], Some(9), None)],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 21,
                     span: span(),
                 },
             }],
             span: span(),
         };
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "function-interning-test.blot".to_owned(),
@@ -14549,17 +14706,17 @@ mod tests {
     #[test]
     fn acyclic_function_interning_visits_each_body_once() {
         const CHAIN_LENGTH: usize = 256;
-        let leaf = |id, message: &str| RuntimeFunction {
+        let leaf = |id, message: &str| StagedFunction {
             id,
             name: format!("leaf-{id}"),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: Vec::new(),
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Trap {
+                terminator: StagedTerminator::Trap {
                     message: message.to_owned(),
                     span: span(),
                 },
@@ -14569,13 +14726,13 @@ mod tests {
         let caller = |id, target| {
             let parameter_value = id * 2;
             let result = parameter_value + 1;
-            RuntimeFunction {
+            StagedFunction {
                 id,
                 name: format!("caller-{id}"),
                 signature: 0,
                 reuse: None,
                 entry_block: 0,
-                blocks: vec![RuntimeBlock {
+                blocks: vec![StagedBlock {
                     id: 0,
                     parameters: vec![parameter(parameter_value)],
                     operations: vec![operation(
@@ -14585,7 +14742,7 @@ mod tests {
                         Some(target),
                         None,
                     )],
-                    terminator: RuntimeTerminator::Return {
+                    terminator: StagedTerminator::Return {
                         value: result,
                         span: span(),
                     },
@@ -14605,7 +14762,8 @@ mod tests {
             right = right_caller;
         }
         let function_count = functions.len();
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "acyclic-function-interning-test.blot".to_owned(),
@@ -14639,23 +14797,23 @@ mod tests {
                 let parameter_value = id * 2;
                 let result = parameter_value + 1;
                 let terminator = if id == 0 {
-                    RuntimeTerminator::Trap {
+                    StagedTerminator::Trap {
                         message: "marked cycle function".to_owned(),
                         span: span(),
                     }
                 } else {
-                    RuntimeTerminator::Return {
+                    StagedTerminator::Return {
                         value: result,
                         span: span(),
                     }
                 };
-                RuntimeFunction {
+                StagedFunction {
                     id,
                     name: format!("recursive-cycle-{id}"),
                     signature: 0,
                     reuse: None,
                     entry_block: 0,
-                    blocks: vec![RuntimeBlock {
+                    blocks: vec![StagedBlock {
                         id: 0,
                         parameters: vec![parameter(parameter_value)],
                         operations: vec![operation(
@@ -14671,7 +14829,8 @@ mod tests {
                 }
             })
             .collect();
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "recursive-function-scaling-test.blot".to_owned(),
@@ -14705,13 +14864,13 @@ mod tests {
 
     #[test]
     fn equivalent_recursive_functions_share_one_runtime_body() {
-        let recursive = |id, target| RuntimeFunction {
+        let recursive = |id, target| StagedFunction {
             id,
             name: format!("recursive-{id}"),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(id + 10)],
                 operations: vec![operation(
@@ -14721,14 +14880,15 @@ mod tests {
                     Some(target),
                     None,
                 )],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: id + 20,
                     span: span(),
                 },
             }],
             span: span(),
         };
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "recursive-function-interning-test.blot".to_owned(),
@@ -14758,24 +14918,25 @@ mod tests {
 
     #[test]
     fn functions_with_distinct_traps_keep_distinct_runtime_bodies() {
-        let body = |id, message: &str| RuntimeFunction {
+        let body = |id, message: &str| StagedFunction {
             id,
             name: format!("trap-{id}"),
             signature: 0,
             reuse: None,
             entry_block: 0,
-            blocks: vec![RuntimeBlock {
+            blocks: vec![StagedBlock {
                 id: 0,
                 parameters: vec![parameter(id + 10)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Trap {
+                terminator: StagedTerminator::Trap {
                     message: message.to_owned(),
                     span: span(),
                 },
             }],
             span: span(),
         };
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "trap-interning-test.blot".to_owned(),
@@ -14802,20 +14963,20 @@ mod tests {
     fn functions_with_distinct_nonfinite_constants_keep_distinct_runtime_bodies() {
         let body = |id, value| {
             let result = id + 10;
-            RuntimeFunction {
+            StagedFunction {
                 id,
                 name: format!("float-{id}"),
                 signature: 0,
                 reuse: None,
                 entry_block: 0,
-                blocks: vec![RuntimeBlock {
+                blocks: vec![StagedBlock {
                     id: 0,
                     parameters: Vec::new(),
-                    operations: vec![RuntimeOperation {
+                    operations: vec![StagedOperation {
                         value: Some(WireConstant::Float64(value)),
                         ..operation("constant", result, Vec::new(), None, None)
                     }],
-                    terminator: RuntimeTerminator::Return {
+                    terminator: StagedTerminator::Return {
                         value: result,
                         span: span(),
                     },
@@ -14823,7 +14984,8 @@ mod tests {
                 span: span(),
             }
         };
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "float-function-interning-test.blot".to_owned(),
@@ -14849,21 +15011,21 @@ mod tests {
     #[test]
     fn dead_loop_carried_parameter_and_incoming_arguments_are_removed() {
         let mut function = runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0), parameter(9)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 1,
                     arguments: vec![0, 9],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: vec![parameter(1), parameter(2)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Conditional {
+                terminator: StagedTerminator::Conditional {
                     condition: 1,
                     consequent: 1,
                     consequent_arguments: vec![1, 2],
@@ -14872,11 +15034,11 @@ mod tests {
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 2,
                 parameters: vec![parameter(3)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 3,
                     span: span(),
                 },
@@ -14886,11 +15048,11 @@ mod tests {
         remove_unused_block_parameters(&mut function);
 
         assert_eq!(function.blocks[1].parameters.len(), 1);
-        let RuntimeTerminator::Branch { arguments, .. } = &function.blocks[0].terminator else {
+        let StagedTerminator::Branch { arguments, .. } = &function.blocks[0].terminator else {
             panic!("entry branch changed shape");
         };
         assert_eq!(arguments, &[0]);
-        let RuntimeTerminator::Conditional {
+        let StagedTerminator::Conditional {
             consequent_arguments,
             ..
         } = &function.blocks[1].terminator
@@ -14904,14 +15066,14 @@ mod tests {
     fn inverse_indirect_operations_cancel() {
         let mut indirect_make = operation("indirect.make", 1, vec![0], None, None);
         indirect_make.type_id = 1;
-        let mut function = runtime_function(vec![RuntimeBlock {
+        let mut function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: vec![parameter(0)],
             operations: vec![
                 indirect_make,
                 operation("indirect.load", 2, vec![1], None, None),
             ],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 2,
                 span: span(),
             },
@@ -14921,7 +15083,7 @@ mod tests {
         eliminate_dead_pure_operations(&mut function);
 
         assert!(function.blocks[0].operations.is_empty());
-        let RuntimeTerminator::Return { value, .. } = function.blocks[0].terminator else {
+        let StagedTerminator::Return { value, .. } = function.blocks[0].terminator else {
             panic!("roundtrip return changed shape");
         };
         assert_eq!(value, 0);
@@ -14937,11 +15099,11 @@ mod tests {
         let projection = product_operation("product.project", 4, 12, vec![3], Some(0));
         let mut make = operation("indirect.make", 5, vec![4], None, None);
         make.type_id = 11;
-        let mut function = runtime_function(vec![RuntimeBlock {
+        let mut function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: Vec::new(),
             operations: vec![call, load, product, projection, make],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 5,
                 span: span(),
             },
@@ -14952,7 +15114,7 @@ mod tests {
 
         assert_eq!(function.blocks[0].operations.len(), 1);
         assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
-        let RuntimeTerminator::Return { value, .. } = function.blocks[0].terminator else {
+        let StagedTerminator::Return { value, .. } = function.blocks[0].terminator else {
             panic!("roundtrip return changed shape");
         };
         assert_eq!(value, 1);
@@ -14966,16 +15128,17 @@ mod tests {
         load.type_id = 0;
         let mut make = operation("indirect.make", 3, vec![2], None, None);
         make.type_id = 3;
-        let function = runtime_function(vec![RuntimeBlock {
+        let function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: Vec::new(),
             operations: vec![source, load, make],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 3,
                 span: span(),
             },
         }]);
-        let mut module = RuntimeModule {
+        let mut module = StagedModule {
+            checked_functions: Vec::new(),
             format: "blot-runtime-hir",
             schema_version: RUNTIME_HIR_SCHEMA,
             source: "roundtrip-after-type-deduplication.blot".to_owned(),
@@ -15002,7 +15165,7 @@ mod tests {
 
         assert_eq!(module.functions[0].blocks[0].operations.len(), 1);
         assert_eq!(module.functions[0].blocks[0].operations[0].kind, "opaque");
-        let RuntimeTerminator::Return { value, .. } = module.functions[0].blocks[0].terminator
+        let StagedTerminator::Return { value, .. } = module.functions[0].blocks[0].terminator
         else {
             panic!("roundtrip return changed shape");
         };
@@ -15013,11 +15176,11 @@ mod tests {
     fn unused_indirect_allocation_is_not_dead_code() {
         let mut indirect_make = operation("indirect.make", 1, vec![0], None, None);
         indirect_make.type_id = 1;
-        let mut function = runtime_function(vec![RuntimeBlock {
+        let mut function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: vec![parameter(0)],
             operations: vec![indirect_make],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 0,
                 span: span(),
             },
@@ -15033,11 +15196,11 @@ mod tests {
         let mut read = operation("store.read", 2, vec![0, 1], None, None);
         read.type_id = 4;
         let projection = product_operation("product.project", 3, 1, vec![2], Some(1));
-        let mut function = runtime_function(vec![RuntimeBlock {
+        let mut function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: vec![parameter(0), parameter(1)],
             operations: vec![read, projection],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 3,
                 span: span(),
             },
@@ -15056,11 +15219,11 @@ mod tests {
 
     #[test]
     fn direct_self_call_return_becomes_entry_back_edge() {
-        let mut function = runtime_function(vec![RuntimeBlock {
+        let mut function = runtime_function(vec![StagedBlock {
             id: 0,
             parameters: vec![parameter(0)],
             operations: vec![operation("call.direct", 1, vec![0], Some(7), None)],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 1,
                 span: span(),
             },
@@ -15069,7 +15232,7 @@ mod tests {
         recover_direct_tail_calls(&mut function);
 
         assert!(function.blocks[0].operations.is_empty());
-        let RuntimeTerminator::Branch {
+        let StagedTerminator::Branch {
             target, arguments, ..
         } = &function.blocks[0].terminator
         else {
@@ -15084,7 +15247,7 @@ mod tests {
         let mut function = unit_tail_function();
         recover_direct_tail_calls(&mut function);
         assert!(function.blocks[0].operations.is_empty());
-        let RuntimeTerminator::Branch {
+        let StagedTerminator::Branch {
             target, arguments, ..
         } = &function.blocks[0].terminator
         else {
@@ -15120,7 +15283,7 @@ mod tests {
     #[test]
     fn unit_tail_recovery_preserves_nonreturning_control_flow() {
         let mut function = unit_tail_function();
-        function.blocks[1].terminator = RuntimeTerminator::Branch {
+        function.blocks[1].terminator = StagedTerminator::Branch {
             target: 1,
             arguments: Vec::new(),
             span: span(),
@@ -15129,7 +15292,7 @@ mod tests {
         assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
 
         let mut function = unit_tail_function();
-        function.blocks[1].terminator = RuntimeTerminator::Conditional {
+        function.blocks[1].terminator = StagedTerminator::Conditional {
             condition: 0,
             consequent: 2,
             consequent_arguments: Vec::new(),
@@ -15141,7 +15304,7 @@ mod tests {
         assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
 
         let mut function = unit_tail_function();
-        function.blocks[1].terminator = RuntimeTerminator::Trap {
+        function.blocks[1].terminator = StagedTerminator::Trap {
             message: "pending trap".to_owned(),
             span: span(),
         };
@@ -15149,39 +15312,39 @@ mod tests {
         assert_eq!(function.blocks[0].operations[0].kind, "call.direct");
     }
 
-    fn unit_tail_function() -> RuntimeFunction {
+    fn unit_tail_function() -> StagedFunction {
         runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
-                parameters: vec![RuntimeBlockParameter {
+                parameters: vec![StagedBlockParameter {
                     type_id: 1,
                     ..parameter(0)
                 }],
                 operations: vec![operation("call.direct", 1, vec![0], Some(7), None)],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 1,
                     arguments: Vec::new(),
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: Vec::new(),
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 2,
                     arguments: Vec::new(),
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 2,
                 parameters: Vec::new(),
-                operations: vec![RuntimeOperation {
+                operations: vec![StagedOperation {
                     value: Some(WireConstant::Unit),
                     ..operation("constant", 2, Vec::new(), None, None)
                 }],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 2,
                     span: span(),
                 },
@@ -15192,24 +15355,24 @@ mod tests {
     #[test]
     fn returned_private_sum_payload_becomes_entry_back_edge() {
         let mut function = runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations: vec![
                     operation("call.direct", 1, vec![0], Some(7), None),
                     operation("sum.make", 2, vec![1], None, Some(1)),
                 ],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 1,
                     arguments: vec![2],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: vec![parameter(3)],
                 operations: vec![operation("sum.payload", 4, vec![3], None, Some(1))],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 4,
                     span: span(),
                 },
@@ -15219,7 +15382,7 @@ mod tests {
         recover_direct_tail_calls(&mut function);
 
         assert!(function.blocks[0].operations.is_empty());
-        let RuntimeTerminator::Branch {
+        let StagedTerminator::Branch {
             target, arguments, ..
         } = &function.blocks[0].terminator
         else {
@@ -15232,11 +15395,11 @@ mod tests {
     #[test]
     fn reconstructed_product_return_becomes_entry_back_edge() {
         let mut function = runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations: vec![
-                    RuntimeOperation {
+                    StagedOperation {
                         type_id: 1,
                         ..operation("call.direct", 1, vec![0], Some(7), None)
                     },
@@ -15244,13 +15407,13 @@ mod tests {
                     product_operation("product.project", 3, 1, vec![1], Some(1)),
                     product_operation("product.make", 4, 1, vec![2, 3], None),
                 ],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 1,
                     arguments: vec![4],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: vec![product_parameter(5)],
                 operations: vec![
@@ -15258,7 +15421,7 @@ mod tests {
                     product_operation("product.project", 7, 1, vec![5], Some(1)),
                     product_operation("product.make", 8, 1, vec![6, 7], None),
                 ],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 8,
                     span: span(),
                 },
@@ -15268,7 +15431,7 @@ mod tests {
         recover_direct_tail_calls(&mut function);
 
         assert!(function.blocks[0].operations.is_empty());
-        let RuntimeTerminator::Branch {
+        let StagedTerminator::Branch {
             target, arguments, ..
         } = &function.blocks[0].terminator
         else {
@@ -15280,14 +15443,14 @@ mod tests {
 
     #[test]
     fn work_after_self_call_keeps_the_call() {
-        let function = simplify_runtime_function(runtime_function(vec![RuntimeBlock {
+        let function = simplify_runtime_function(runtime_function(vec![StagedBlock {
             id: 0,
             parameters: vec![parameter(0)],
             operations: vec![
                 operation("call.direct", 1, vec![0], Some(7), None),
                 operation("scalar", 2, vec![1, 0], None, None),
             ],
-            terminator: RuntimeTerminator::Return {
+            terminator: StagedTerminator::Return {
                 value: 2,
                 span: span(),
             },
@@ -15300,11 +15463,11 @@ mod tests {
     #[test]
     fn boolean_branch_roundtrip_becomes_direct_control_flow() {
         let function = simplify_runtime_function(runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Conditional {
+                terminator: StagedTerminator::Conditional {
                     condition: 0,
                     consequent: 1,
                     consequent_arguments: Vec::new(),
@@ -15313,31 +15476,31 @@ mod tests {
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: Vec::new(),
                 operations: vec![boolean_constant(1, false)],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 3,
                     arguments: vec![1],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 2,
                 parameters: Vec::new(),
                 operations: vec![boolean_constant(2, true)],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 3,
                     arguments: vec![2],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 3,
                 parameters: vec![parameter(3)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Conditional {
+                terminator: StagedTerminator::Conditional {
                     condition: 3,
                     consequent: 4,
                     consequent_arguments: Vec::new(),
@@ -15346,20 +15509,20 @@ mod tests {
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 4,
                 parameters: Vec::new(),
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 0,
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 5,
                 parameters: Vec::new(),
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 0,
                     span: span(),
                 },
@@ -15367,7 +15530,7 @@ mod tests {
         ]));
 
         assert_eq!(function.blocks.len(), 3);
-        let RuntimeTerminator::Conditional {
+        let StagedTerminator::Conditional {
             condition,
             consequent,
             alternate,
@@ -15388,7 +15551,7 @@ mod tests {
         assert_eq!(function.blocks.len(), 7);
         for (block, target, parameter) in [(1, 4, 8), (2, 5, 9), (3, 6, 10)] {
             assert!(function.blocks[block].operations.is_empty());
-            let RuntimeTerminator::Branch {
+            let StagedTerminator::Branch {
                 target: actual_target,
                 arguments,
                 ..
@@ -15416,7 +15579,7 @@ mod tests {
     #[test]
     fn sum_switch_with_a_shared_target_is_not_folded() {
         let mut function = known_sum_switch_function();
-        let RuntimeTerminator::Switch { fallback, .. } = &mut function.blocks[4].terminator else {
+        let StagedTerminator::Switch { fallback, .. } = &mut function.blocks[4].terminator else {
             unreachable!();
         };
         *fallback = 6;
@@ -15428,7 +15591,7 @@ mod tests {
     #[test]
     fn sum_switch_with_an_invalid_constructor_tag_is_not_folded() {
         let mut function = known_sum_switch_function();
-        let RuntimeTerminator::Switch { cases, .. } = &mut function.blocks[4].terminator else {
+        let StagedTerminator::Switch { cases, .. } = &mut function.blocks[4].terminator else {
             unreachable!();
         };
         cases[0].value = WireConstant::SignedInteger32(-1);
@@ -15440,7 +15603,7 @@ mod tests {
     #[test]
     fn sum_switch_with_an_indirect_incoming_edge_is_not_folded() {
         let mut function = known_sum_switch_function();
-        let RuntimeTerminator::Switch { cases, .. } = &mut function.blocks[0].terminator else {
+        let StagedTerminator::Switch { cases, .. } = &mut function.blocks[0].terminator else {
             unreachable!();
         };
         cases[0].target = 4;
@@ -15449,13 +15612,13 @@ mod tests {
         assert!(known_sum_switch_fold(&function, &function.blocks[4], &facts).is_none());
     }
 
-    fn known_sum_switch_function() -> RuntimeFunction {
+    fn known_sum_switch_function() -> StagedFunction {
         runtime_function(vec![
-            RuntimeBlock {
+            StagedBlock {
                 id: 0,
                 parameters: vec![parameter(0)],
                 operations: Vec::new(),
-                terminator: RuntimeTerminator::Switch {
+                terminator: StagedTerminator::Switch {
                     selector: 0,
                     cases: vec![
                         RuntimeSwitchCase {
@@ -15471,41 +15634,41 @@ mod tests {
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 1,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.make", 1, vec![0], None, Some(0))],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 4,
                     arguments: vec![1],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 2,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.make", 2, vec![0], None, Some(1))],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 4,
                     arguments: vec![2],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 3,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.make", 3, vec![0], None, Some(2))],
-                terminator: RuntimeTerminator::Branch {
+                terminator: StagedTerminator::Branch {
                     target: 4,
                     arguments: vec![3],
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 4,
                 parameters: vec![parameter(4)],
                 operations: vec![operation("sum.tag", 5, vec![4], None, None)],
-                terminator: RuntimeTerminator::Switch {
+                terminator: StagedTerminator::Switch {
                     selector: 5,
                     cases: vec![
                         RuntimeSwitchCase {
@@ -15521,29 +15684,29 @@ mod tests {
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 5,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.payload", 8, vec![4], None, Some(0))],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 8,
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 6,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.payload", 9, vec![4], None, Some(1))],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 9,
                     span: span(),
                 },
             },
-            RuntimeBlock {
+            StagedBlock {
                 id: 7,
                 parameters: Vec::new(),
                 operations: vec![operation("sum.payload", 10, vec![4], None, Some(2))],
-                terminator: RuntimeTerminator::Return {
+                terminator: StagedTerminator::Return {
                     value: 10,
                     span: span(),
                 },
@@ -15551,8 +15714,8 @@ mod tests {
         ])
     }
 
-    fn runtime_function(blocks: Vec<RuntimeBlock>) -> RuntimeFunction {
-        RuntimeFunction {
+    fn runtime_function(blocks: Vec<StagedBlock>) -> StagedFunction {
+        StagedFunction {
             id: 7,
             name: "tail-test".to_owned(),
             signature: 0,
@@ -15563,8 +15726,8 @@ mod tests {
         }
     }
 
-    fn parameter(value: usize) -> RuntimeBlockParameter {
-        RuntimeBlockParameter {
+    fn parameter(value: usize) -> StagedBlockParameter {
+        StagedBlockParameter {
             value,
             type_id: 0,
             ownership: "plain",
@@ -15572,8 +15735,8 @@ mod tests {
         }
     }
 
-    fn product_parameter(value: usize) -> RuntimeBlockParameter {
-        RuntimeBlockParameter {
+    fn product_parameter(value: usize) -> StagedBlockParameter {
+        StagedBlockParameter {
             value,
             type_id: 1,
             ownership: "owned",
@@ -15587,8 +15750,8 @@ mod tests {
         operands: Vec<usize>,
         function: Option<usize>,
         case: Option<usize>,
-    ) -> RuntimeOperation {
-        RuntimeOperation {
+    ) -> StagedOperation {
+        StagedOperation {
             kind,
             result,
             type_id: 0,
@@ -15616,16 +15779,16 @@ mod tests {
         type_id: usize,
         operands: Vec<usize>,
         field: Option<usize>,
-    ) -> RuntimeOperation {
-        RuntimeOperation {
+    ) -> StagedOperation {
+        StagedOperation {
             field,
             type_id,
             ..operation(kind, result, operands, None, None)
         }
     }
 
-    fn boolean_constant(result: usize, value: bool) -> RuntimeOperation {
-        RuntimeOperation {
+    fn boolean_constant(result: usize, value: bool) -> StagedOperation {
+        StagedOperation {
             value: Some(WireConstant::Boolean(value)),
             ..operation("constant", result, Vec::new(), None, None)
         }

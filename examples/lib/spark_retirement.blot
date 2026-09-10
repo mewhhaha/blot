@@ -1,0 +1,27 @@
+open import "blot:prelude"
+const Spark = import "blot:spark"
+const Probe =
+  @effect.host {
+    .tick = Effect.suspends (Int -> Int);
+    .completed = Effect.suspends (Unit -> Unit);
+    .retired = Effect.suspends (Int -> Unit);
+  }
+
+let run ::
+  { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect, Probe }
+let run = fn io => fn count => do:
+  let body :: Spark.Scope -> Int ~ { Spark.Effect, Probe }
+  let body = fn scope => do:
+    let total = 0
+    for index in Iter.range (0, count):
+      let ?work = fn () => Probe.tick index
+      use job <- Spark.spawn scope (?work)
+      use () <- Probe.completed ()
+      use value <- Spark.join job
+      use () <- Probe.retired value
+      total := total + value
+
+    return total
+  return Spark.scope io.executor body
+
+return { .run = run; }

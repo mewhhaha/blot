@@ -79,10 +79,11 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
             let relates_input_to_output = closure_signature
                 .as_deref()
                 .is_some_and(has_quantified_input_output_relationship);
-            let preserves_closed_signature = contains_type_variables(complete_signature)
-                && closure_signature
-                    .as_deref()
-                    .is_some_and(|signature| !contains_type_variables(signature));
+            let preserves_closed_signature =
+                graph::contains_free_type_variables(complete_signature)
+                    && closure_signature
+                        .as_deref()
+                        .is_some_and(|signature| !graph::contains_free_type_variables(signature));
             if !relates_input_to_output && !preserves_closed_signature {
                 *closure_signature = Some(Box::new(complete_signature.clone()));
             }
@@ -985,7 +986,7 @@ pub enum Value {
         bits: u8,
         lanes: Vec<bool>,
     },
-    Text(String),
+    Text(Rc<str>),
     Unit,
     Shape(OrderedFields),
     Array(ArrayValues),
@@ -1479,6 +1480,8 @@ pub(crate) fn contains_type_variables(value: &Value) -> bool {
     collect_type_variables(value, &mut variables);
     !variables.is_empty()
 }
+
+pub(crate) use graph::contains_free_type_variables;
 
 fn fresh_type_variable(left: &Value, right: &Value) -> u32 {
     let mut variables = BTreeSet::new();
@@ -2197,11 +2200,24 @@ mod show_tests {
     use super::*;
 
     #[test]
+    fn shared_text_clones_keep_the_same_immutable_storage() {
+        let original = Value::Text("α🐱\u{feff}\0".repeat(16_384).into());
+        let cloned = original.clone();
+        let (Value::Text(original), Value::Text(cloned)) = (original, cloned) else {
+            panic!("cloning Text must preserve its value kind");
+        };
+        assert!(Rc::ptr_eq(&original, &cloned));
+        drop(original);
+        assert_eq!(cloned.chars().count(), 65_536);
+        assert!(cloned.ends_with("α🐱\u{feff}\0"));
+    }
+
+    #[test]
     fn source_values_keep_the_public_display_spelling() {
         assert_eq!(
             show(&Value::Shape(OrderedFields::from([
                 ("x".to_owned(), Value::Int(1.into())),
-                ("y".to_owned(), Value::Text("two".to_owned())),
+                ("y".to_owned(), Value::Text("two".into())),
             ]))),
             "{ .x = 1; .y = \"two\"; }"
         );

@@ -14,8 +14,14 @@ function renderScore() {
   quantity.setCustomValidity("");
   if (!quantity.reportValidity()) return;
   try {
-    const score = runtime.entryInstance.exports["blot:score"];
-    result.textContent = String(score(BigInt(quantity.value)));
+    const instance = runtime.entryInstance;
+    const score = instance.exports["blot:score"];
+    const scope = instance.exports.cabi_enter();
+    try {
+      result.textContent = String(score(scope, BigInt(quantity.value)));
+    } finally {
+      instance.exports.cabi_leave(scope);
+    }
     quantity.setCustomValidity("");
   } catch (failure) {
     quantity.setCustomValidity(String(failure));

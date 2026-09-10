@@ -5779,7 +5779,7 @@ impl Checker {
                         values,
                         Phase::Comptime,
                     ) {
-                        Ok(Value::Text(name)) => name,
+                        Ok(Value::Text(name)) => name.to_string(),
                         _ => {
                             return Err(Diagnostic::new(
                                 "BLOT_TYPE_ERROR",
@@ -6074,7 +6074,7 @@ impl Checker {
                     {
                         self.constrain(
                             target.type_,
-                            Type::Record(vec![(name, field.clone())].into()),
+                            Type::Record(vec![(name.to_string(), field.clone())].into()),
                             span,
                         )?;
                     } else if self.phase.get() == Phase::Runtime
@@ -6575,8 +6575,8 @@ impl Checker {
                     .ok()
                     .and_then(|target_value| {
                         if let Some(member) = static_member(&target_value, &name) {
-                            if let Value::Primitive { name, .. } = &member {
-                                return primitive_type(self, name);
+                            if matches!(member, Value::Primitive { .. }) {
+                                return self.static_member_type(&member, None);
                             }
                             if let Some(type_) = self.bridge(&member) {
                                 return Some(type_);
@@ -6747,6 +6747,7 @@ impl Checker {
                                 self.infer(path, module, value, environment, values, dependencies)?;
                             match self.evaluate(path, name_expression, values, Phase::Comptime) {
                                 Ok(Value::Text(name)) => {
+                                    let name = name.to_string();
                                     if !explicit_fields.insert(name.clone()) {
                                         return Err(Diagnostic::new(
                                             "BLOT_DUPLICATE_FIELD",
@@ -7105,7 +7106,7 @@ impl Checker {
                             else {
                                 return None;
                             };
-                            vec![name]
+                            vec![name.to_string()]
                         }
                         ShapeMember::Spread { value } => {
                             self.exact_record_order_expression(module, *value, environment, values)?
@@ -7588,7 +7589,7 @@ impl Checker {
                     Domain::Float => float_type(),
                     Domain::Float32 => float32_type(),
                 };
-                let result = match (domain, operation.as_str()) {
+                let result = match (domain, operation.as_ref()) {
                     (Domain::Int | Domain::Text, "eq" | "ne" | "lt" | "le" | "gt" | "ge")
                     | (Domain::Float | Domain::Float32, "lt" | "le" | "gt" | "ge") => bool_type(),
                     (Domain::Int | Domain::Float, "add" | "sub" | "mul" | "div" | "rem")
@@ -11849,6 +11850,20 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         "@text.join" => curried(vec![Type::Array(Rc::new(text.clone()))], text),
         "@text.len" => curried(vec![text], int),
         "@text.scalar_at" => curried(vec![text.clone(), int], text),
+        "@text.next_byte" => curried(
+            vec![text.clone(), int.clone()],
+            Type::Variant {
+                cases: vec![
+                    ("None".to_owned(), Type::Unit),
+                    (
+                        "Some".to_owned(),
+                        Type::Record(vec![("0".to_owned(), text), ("1".to_owned(), int)].into()),
+                    ),
+                ]
+                .into(),
+                open: false,
+            },
+        ),
         "@text.slice" => curried(vec![text.clone(), int.clone(), int], text),
         "@text.find_from" => curried(vec![text.clone(), text, int.clone()], int),
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
@@ -13590,7 +13605,7 @@ fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnos
         ));
     };
     let name = match fields.get("name") {
-        Some(Value::Text(name)) if !name.is_empty() => name.clone(),
+        Some(Value::Text(name)) if !name.is_empty() => name.to_string(),
         _ => {
             return Err(Diagnostic::new(
                 "BLOT_BAD_DECLARATION_TAG",
@@ -14083,7 +14098,7 @@ fn declaration_header(kind: DeclarationKind, recursive: bool, name: &str) -> Str
 fn scalar_bound(value: &Value) -> Option<Scalar> {
     match value {
         Value::Int(value) => Some(Scalar::Int(value.clone())),
-        Value::Text(value) => Some(Scalar::Text(value.clone())),
+        Value::Text(value) => Some(Scalar::Text(value.to_string())),
         _ => None,
     }
 }
@@ -14224,7 +14239,7 @@ fn reify_bound(bound: &Option<Scalar>) -> Option<Value> {
     match bound {
         None => Some(Value::Unbounded),
         Some(Scalar::Int(value)) => Some(Value::Int(value.clone())),
-        Some(Scalar::Text(value)) => Some(Value::Text(value.clone())),
+        Some(Scalar::Text(value)) => Some(Value::Text(value.as_str().into())),
     }
 }
 

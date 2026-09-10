@@ -36,7 +36,9 @@ impl Diagnostic {
 
     pub fn failure_class(&self) -> FailureClass {
         match self.code {
-            "BLOT_EVALUATION_LIMIT" => FailureClass::Limit,
+            "BLOT_EVALUATION_LIMIT" | "BLOT_REFINEMENT_BUDGET" | "BLOT_PREDICATE_BUDGET" => {
+                FailureClass::Limit
+            }
             "BLOT_TARGET_REFUSAL" | "BLOT_UNSUPPORTED_LOWERING" | "BLOT_DEFERRED_AT_RUNTIME" => {
                 FailureClass::TargetRefusal
             }
@@ -95,6 +97,8 @@ mod tests {
         let cases = [
             ("BLOT_TYPE_ERROR", "diagnostic"),
             ("BLOT_EVALUATION_LIMIT", "limitDiagnostic"),
+            ("BLOT_REFINEMENT_BUDGET", "limitDiagnostic"),
+            ("BLOT_PREDICATE_BUDGET", "limitDiagnostic"),
             ("BLOT_UNSUPPORTED_LOWERING", "targetRefusal"),
             ("BLOT_RUST_INVARIANT", "invariantFailure"),
         ];

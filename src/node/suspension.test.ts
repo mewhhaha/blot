@@ -185,7 +185,7 @@ return run
     const manifest = JSON.parse(
       new TextDecoder().decode(artifact.manifestBytes),
     );
-    assert.equal(manifest.abi.major, 3);
+    assert.equal(manifest.abi.major, 4);
     assert.equal(manifest.exports[0].execution, "resumable");
     assert.equal(manifest.imports[0].contract.suspends, true);
     const module = await WebAssembly.compile(Uint8Array.from(artifact.wasm));
@@ -204,11 +204,12 @@ return run
         ...arguments_,
       );
     };
-    const context = invoke(manifest.exports[0].name, 10n);
+    const scope = invoke("cabi_enter");
+    const context = invoke(manifest.exports[0].name, scope, 10n);
     const observed: bigint[] = [];
     let yields = 0;
     for (;;) {
-      const status = invoke("blot:poll", context, 1);
+      const status = invoke("blot:poll", scope, context, 1);
       if (status === 4) {
         yields += 1;
         continue;
@@ -233,11 +234,12 @@ return run
         argument * 2n,
         true,
       );
-      invoke("blot:resume", context);
+      invoke("blot:resume", scope, context);
     }
     assert.deepEqual(observed, [0n, 1n, 2n, 3n]);
     assert.ok(yields > 0);
-    invoke("blot:release", context);
+    invoke("blot:release", scope, context);
+    invoke("cabi_leave", scope);
   } finally {
     compiler.destroy();
   }

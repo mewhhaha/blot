@@ -46,8 +46,8 @@
     "experiments/compiler-profile-matrix.latest.json"
   ],
   "compilerHostAbi": 7,
-  "checkedModuleCertificate": 19,
+  "checkedModuleCertificate": 20,
   "moduleSnapshotSchema": 3,
   "valueCapsuleSchema": 5,
-  "runtimeHir": 12
+  "runtimeHir": 13
 }

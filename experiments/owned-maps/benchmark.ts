@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,19 +113,21 @@ async function measure(
     times.push((performance.now() - before) * 1_000);
   }
   const operations = hir.functions.flatMap((fn) =>
-    fn.blocks.flatMap((block) => block.operations)
+    fn.continuations.flatMap((continuation) => continuation.instructions)
   );
   return {
     algorithm,
     compileMs,
     medianUs: median(times),
     ownedWriteSites:
-      operations.filter((operation) =>
-        operation.kind === "store.write" && operation.update === "owned-reuse"
+      operations.filter((instruction) =>
+        instruction.operation.kind === "store.write" &&
+        instruction.operation.update === "owned-reuse"
       ).length,
     persistentWriteSites:
-      operations.filter((operation) =>
-        operation.kind === "store.write" && operation.update === "persistent"
+      operations.filter((instruction) =>
+        instruction.operation.kind === "store.write" &&
+        instruction.operation.update === "persistent"
       ).length,
     size,
     wasmBytes: artifact.wasm.byteLength,
@@ -261,7 +264,7 @@ async function instantiate(
       },
     },
   });
-  const run = instance.exports["blot:default"];
+  const run = scalarExport(instance, "blot:default");
   if (typeof run !== "function") throw new Error("benchmark export is missing");
   return { counters, run: run as () => bigint };
 }

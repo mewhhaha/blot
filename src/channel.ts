@@ -4,6 +4,12 @@ import type { CompilerArtifact } from "./compiler.ts";
 import type { HostCapabilities, HostOperation } from "./host.ts";
 import type { HostResource, HostScope, ResourceFamily } from "./resources.ts";
 import type { SparkRuntime } from "./spark.ts";
+import { Queue } from "./queue.ts";
+import {
+  receiveFrom,
+  type ReceiveSource,
+  type ReceiveWaiter,
+} from "./receiving.ts";
 
 interface Sending {
   readonly message: RuntimeValue;
@@ -11,19 +17,14 @@ interface Sending {
   readonly cancel: (reason: unknown) => void;
 }
 
-interface Receiving {
-  readonly finish: (message: RuntimeValue) => void;
-  readonly cancel: (reason: unknown) => void;
-}
-
 const closed: RuntimeValue = Object.freeze({ kind: "variant", name: "None" });
 
 /** A bounded mailbox. Capacity zero is a rendezvous between sender and receiver. */
-class ScopedChannel {
+class ScopedChannel implements ReceiveSource {
   readonly #capacity: number;
-  readonly #messages: RuntimeValue[] = [];
-  readonly #senders = new Map<symbol, Sending>();
-  readonly #receivers = new Map<symbol, Receiving>();
+  readonly #messages = new Queue<RuntimeValue>();
+  readonly #senders = new Queue<Sending>();
+  readonly #receivers = new Queue<ReceiveWaiter>();
   readonly #signal: AbortSignal;
   readonly #cancel: () => void;
   #closed = false;
@@ -34,13 +35,21 @@ class ScopedChannel {
     this.#signal = scope.signal;
     this.#cancel = () => {
       this.#closed = true;
-      for (const sender of this.#senders.values()) {
+      for (
+        let sender = this.#senders.shift();
+        sender !== undefined;
+        sender = this.#senders.shift()
+      ) {
         sender.cancel(this.#signal.reason);
       }
-      for (const receiver of this.#receivers.values()) {
-        receiver.cancel(this.#signal.reason);
+      for (
+        let receiver = this.#receivers.shift();
+        receiver !== undefined;
+        receiver = this.#receivers.shift()
+      ) {
+        receiver.reject(this.#signal.reason);
       }
-      this.#messages.length = 0;
+      this.#messages.clear();
     };
     this.#signal.addEventListener("abort", this.#cancel, { once: true });
   }
@@ -49,23 +58,26 @@ class ScopedChannel {
     signal.throwIfAborted();
     this.#signal.throwIfAborted();
     if (this.#closed) return false;
-    const receiver = this.#receivers.values().next();
-    if (!receiver.done) {
-      receiver.value.finish({
-        kind: "variant",
-        name: "Some",
-        payload: message,
-      });
-      return true;
+    for (
+      let receiver = this.#receivers.shift();
+      receiver !== undefined;
+      receiver = this.#receivers.shift()
+    ) {
+      if (
+        receiver.accept(() => ({
+          kind: "variant",
+          name: "Some",
+          payload: message,
+        }))
+      ) return true;
     }
-    if (this.#messages.length < this.#capacity) {
+    if (this.#messages.size < this.#capacity) {
       this.#messages.push(message);
       return true;
     }
     return new Promise<boolean>((resolve, reject) => {
-      const id = Symbol("pending send");
       const remove = () => {
-        this.#senders.delete(id);
+        unlink();
         signal.removeEventListener("abort", abort);
       };
       const cancel = (reason: unknown) => {
@@ -73,7 +85,7 @@ class ScopedChannel {
         reject(reason);
       };
       const abort = () => cancel(signal.reason);
-      this.#senders.set(id, {
+      const unlink = this.#senders.push({
         message,
         finish(accepted) {
           remove();
@@ -85,57 +97,52 @@ class ScopedChannel {
     });
   }
 
-  receive(signal: AbortSignal): RuntimeValue | Promise<RuntimeValue> {
-    signal.throwIfAborted();
+  register(waiter: ReceiveWaiter): () => void {
     this.#signal.throwIfAborted();
-    if (this.#messages.length > 0) {
-      const message = this.#messages.shift()!;
-      const sender = this.#senders.values().next();
-      if (!sender.done) {
-        this.#messages.push(sender.value.message);
-        sender.value.finish(true);
-      }
-      return { kind: "variant", name: "Some", payload: message };
-    }
-    const sender = this.#senders.values().next();
-    if (!sender.done) {
-      const message = sender.value.message;
-      sender.value.finish(true);
-      return { kind: "variant", name: "Some", payload: message };
-    }
-    if (this.#closed) return closed;
-    return new Promise<RuntimeValue>((resolve, reject) => {
-      const id = Symbol("pending receive");
-      const remove = () => {
-        this.#receivers.delete(id);
-        signal.removeEventListener("abort", abort);
-      };
-      const cancel = (reason: unknown) => {
-        remove();
-        reject(reason);
-      };
-      const abort = () => cancel(signal.reason);
-      this.#receivers.set(id, {
-        finish(message) {
-          remove();
-          resolve(message);
-        },
-        cancel,
+    if (this.#messages.size > 0 || this.#senders.size > 0 || this.#closed) {
+      waiter.accept(() => {
+        if (this.#messages.size > 0) {
+          const message = this.#messages.shift();
+          if (message === undefined) {
+            throw new Error("channel lost its ready message");
+          }
+          const sender = this.#senders.shift();
+          if (sender !== undefined) {
+            this.#messages.push(sender.message);
+            sender.finish(true);
+          }
+          return { kind: "variant", name: "Some", payload: message };
+        }
+        const sender = this.#senders.shift();
+        if (sender !== undefined) {
+          sender.finish(true);
+          return { kind: "variant", name: "Some", payload: sender.message };
+        }
+        return closed;
       });
-      signal.addEventListener("abort", abort, { once: true });
-    });
+      return () => {};
+    }
+    return this.#receivers.push(waiter);
   }
 
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    for (const sender of this.#senders.values()) sender.finish(false);
-    for (const receiver of this.#receivers.values()) receiver.finish(closed);
+    for (
+      let sender = this.#senders.shift();
+      sender !== undefined;
+      sender = this.#senders.shift()
+    ) sender.finish(false);
+    for (
+      let receiver = this.#receivers.shift();
+      receiver !== undefined;
+      receiver = this.#receivers.shift()
+    ) receiver.accept(() => closed);
   }
 
   dispose(): void {
     this.close();
-    this.#messages.length = 0;
+    this.#messages.clear();
     this.#signal.removeEventListener("abort", this.#cancel);
   }
 }
@@ -209,8 +216,12 @@ export class ChannelRuntime {
       [
         "receive",
         (context, receiver) =>
-          this.#family(context.operation.function.parameters[0]).get(receiver)
-            .receive(context.signal),
+          receiveFrom(
+            this.#family(context.operation.function.parameters[0]).get(
+              receiver,
+            ),
+            context.signal,
+          ),
       ],
       ["close", (context, sender) => {
         this.#family(context.operation.function.parameters[0]).get(sender)
@@ -218,6 +229,13 @@ export class ChannelRuntime {
         return null;
       }],
     ]);
+  }
+
+  receiveSource(type: BlotAbiType, handle: RuntimeValue): ReceiveSource {
+    if (type.kind !== "resource" || type.name !== "Channel.Receiver") {
+      throw new TypeError("expected a channel receiver type");
+    }
+    return this.#family(type).get(handle);
   }
 
   capabilitiesFor(

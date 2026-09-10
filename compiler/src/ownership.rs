@@ -17,6 +17,9 @@ use crate::partition::{
 use crate::typecheck::Type;
 use crate::value::{EffectOwnership, Environment as ValueEnvironment, Value, lookup};
 
+#[path = "ownership_liveness.rs"]
+mod liveness;
+
 type BindingRef = Rc<RefCell<Binding>>;
 type ScopeRef = Rc<RefCell<Scope>>;
 type FunctionContract = (
@@ -384,6 +387,8 @@ struct Analysis<'a> {
     callback_requirements: Vec<CallbackRequirement>,
     bindings: Vec<BindingRef>,
     next_binding_id: usize,
+    borrow_liveness: liveness::BorrowLiveness,
+    held_borrows: Vec<Vec<Span>>,
 }
 
 pub(crate) fn check(
@@ -407,6 +412,8 @@ pub(crate) fn check(
         callback_requirements: Vec::new(),
         bindings: Vec::new(),
         next_binding_id: 0,
+        borrow_liveness: liveness::BorrowLiveness::new(context, path, module),
+        held_borrows: Vec::new(),
     };
     let scope = child_scope(None, false);
     if let Some(parameter) = module.parameter {
@@ -839,29 +846,12 @@ fn consume(binding: &BindingRef, span: Span, analysis: &mut Analysis) {
 }
 
 fn walk_declarations(declarations: &[DeclarationId], scope: &ScopeRef, analysis: &mut Analysis) {
-    let mut index = 0;
-    while index < declarations.len() {
-        if recursive_declaration(analysis.module, declarations[index]) {
-            let start = index;
-            while index < declarations.len() {
-                if recursive_declaration(analysis.module, declarations[index]) {
-                    index += 1;
-                    continue;
-                }
-                if signature_declaration(analysis.module, declarations[index])
-                    && index + 1 < declarations.len()
-                    && recursive_declaration(analysis.module, declarations[index + 1])
-                {
-                    index += 1;
-                    continue;
-                }
-                break;
-            }
-            walk_recursive_group(&declarations[start..index], scope, analysis);
-            continue;
+    for group in liveness::declaration_groups(declarations, analysis.module) {
+        if recursive_declaration(analysis.module, group[0]) {
+            walk_recursive_group(group, scope, analysis);
+        } else {
+            walk_declaration(group[0], scope, analysis);
         }
-        walk_declaration(declarations[index], scope, analysis);
-        index += 1;
     }
 }
 
@@ -1196,6 +1186,36 @@ fn walk(
     analysis: &mut Analysis,
     kind: Use,
 ) -> Produced {
+    analysis.held_borrows.push(Vec::new());
+    let produced = walk_expression(expression, scope, analysis, kind);
+    analysis.held_borrows.pop();
+    if contains_borrow(&produced)
+        && let Some(held) = analysis.held_borrows.last_mut()
+    {
+        held.push(analysis.module.arena.expression_span(expression));
+    }
+    produced
+}
+
+fn walk_branch(
+    expression: ExpressionId,
+    scope: &ScopeRef,
+    analysis: &mut Analysis,
+    kind: Use,
+) -> Produced {
+    let frame = analysis.held_borrows.len() - 1;
+    let held = analysis.held_borrows[frame].len();
+    let produced = walk(expression, scope, analysis, kind);
+    analysis.held_borrows[frame].truncate(held);
+    produced
+}
+
+fn walk_expression(
+    expression: ExpressionId,
+    scope: &ScopeRef,
+    analysis: &mut Analysis,
+    kind: Use,
+) -> Produced {
     let expression_node = analysis.module.arena.expressions[expression.0 as usize].clone();
     match expression_node {
         Expression::Var { name, span } => {
@@ -1250,10 +1270,11 @@ fn walk(
             );
             declare(parameter, input.clone(), &inner, analysis);
             mark_function_parameters(parameter, &inner, analysis.module);
-            let result = normalize_unrestricted_region_result(
-                walk(body, &inner, analysis, Use::Move),
-                closure_result_type(body, analysis),
-            );
+            let held = std::mem::take(&mut analysis.held_borrows);
+            let result = walk(body, &inner, analysis, Use::Move);
+            analysis.held_borrows = held;
+            let result =
+                normalize_unrestricted_region_result(result, closure_result_type(body, analysis));
             if contains_borrow(&result) {
                 analysis.report(
                     "BLOT_BORROW_RESULT_ESCAPES",
@@ -1438,12 +1459,12 @@ fn walk(
             let mut produced = Vec::new();
             for branch in branches {
                 restore(&before);
-                produced.push(walk(branch.consequence, scope, analysis, kind));
+                produced.push(walk_branch(branch.consequence, scope, analysis, kind));
                 outcomes.push(snapshot(scope));
             }
             if let Some(fallback) = fallback {
                 restore(&before);
-                produced.push(walk(fallback, scope, analysis, kind));
+                produced.push(walk_branch(fallback, scope, analysis, kind));
                 outcomes.push(snapshot(scope));
             }
             agree(&outcomes, &before, span, analysis);
@@ -1467,7 +1488,7 @@ fn walk(
                 }
                 let arm_target = choice_for_pattern(&target, arm.pattern, analysis.module);
                 declare(arm.pattern, arm_target, &inner, analysis);
-                produced.push(walk(arm.body, &inner, analysis, kind));
+                produced.push(walk_branch(arm.body, &inner, analysis, kind));
                 close_scope(&inner, analysis);
                 outcomes.push(snapshot(scope));
             }
@@ -1787,12 +1808,23 @@ fn walk_apply(
             .is_some_and(|type_| callable_may_suspend(type_, analysis.context)),
     };
     if call_suspends {
+        let live = analysis.borrow_liveness.at_call(expression).clone();
+        if analysis.held_borrows.iter().any(|held| !held.is_empty()) {
+            analysis.report(
+                "BLOT_BORROW_ACROSS_SUSPENSION",
+                "A borrowed operand remains live while this call may suspend.",
+                span,
+            );
+        }
+        let mut seen = HashSet::new();
         let mut current = Some(scope.clone());
         while let Some(scope) = current {
             let scope = scope.borrow();
             for binding in scope.bindings.values() {
                 let binding = binding.borrow();
-                if binding.moved.is_none()
+                if live.contains(&binding.pattern)
+                    && seen.insert(binding.pattern)
+                    && binding.moved.is_none()
                     && (binding.qualifier == Qualifier::Borrow || contains_borrow(&binding.owned))
                 {
                     analysis.report(
@@ -1801,9 +1833,6 @@ fn walk_apply(
                         span,
                     );
                 }
-            }
-            if scope.lambda {
-                break;
             }
             current = scope.parent.clone();
         }
@@ -2428,6 +2457,17 @@ fn walk_apply(
         )
     };
     let argument_value = require_contract_store_access(&input, argument_value, analysis);
+    // A known parameter belongs to a checked body; its own suspension sites
+    // establish when an argument borrow ends. Opaque callees have no such proof.
+    if call_suspends
+        && (contains_borrow(&callee) || (parameter.is_none() && contains_borrow(&argument_value)))
+    {
+        analysis.report(
+            "BLOT_BORROW_ACROSS_SUSPENSION",
+            "This possibly suspending call retains a borrowed callee or argument.",
+            span,
+        );
+    }
     let refined_recursive_contract =
         if recursive_call && recursive_accumulator_unsettled && !relevant(&result) {
             parameter.and_then(|parameter| {
@@ -6776,6 +6816,447 @@ fn pattern_span(module: &Module, pattern: PatternId) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{AstArena, Branch, DeclarationKind, ResultEffects};
+    use crate::value::child_env;
+
+    const TEST_SPAN: Span = Span { start: 1, end: 2 };
+
+    struct BorrowProgram {
+        module: Module,
+        expression_types: HashMap<ExpressionId, Type>,
+    }
+
+    impl BorrowProgram {
+        fn new(qualifier: Qualifier) -> Self {
+            let mut arena = AstArena::default();
+            let parameter = arena.pattern(Pattern::Name {
+                name: "values".to_owned(),
+                qualifier,
+                span: TEST_SPAN,
+            });
+            let result = arena.expression(Expression::Unit { span: TEST_SPAN });
+            Self {
+                module: Module {
+                    parameter: Some(parameter),
+                    declarations: Vec::new(),
+                    result,
+                    result_effects: ResultEffects::Ambient,
+                    span: TEST_SPAN,
+                    arena,
+                },
+                expression_types: HashMap::new(),
+            }
+        }
+
+        fn variable(&mut self, name: &str) -> ExpressionId {
+            self.module.arena.expression(Expression::Var {
+                name: name.to_owned(),
+                span: TEST_SPAN,
+            })
+        }
+
+        fn apply(&mut self, function: ExpressionId, argument: ExpressionId) -> ExpressionId {
+            self.module.arena.expression(Expression::Apply {
+                function,
+                argument,
+                span: TEST_SPAN,
+            })
+        }
+
+        fn primitive(&mut self, name: &str, argument: ExpressionId) -> ExpressionId {
+            let function = self.module.arena.expression(Expression::Intrinsic {
+                name: name.to_owned(),
+                span: TEST_SPAN,
+            });
+            self.apply(function, argument)
+        }
+
+        fn length(&mut self, name: &str) -> ExpressionId {
+            let argument = self.variable(name);
+            self.expression_types
+                .insert(argument, Type::Array(Rc::new(Type::Unit)));
+            self.primitive("@array.len", argument)
+        }
+
+        fn wait(&mut self, argument: ExpressionId) -> ExpressionId {
+            let function = self.variable("wait");
+            self.expression_types.insert(
+                function,
+                Type::Function {
+                    deferred: false,
+                    parameter: Rc::new(Type::Top),
+                    effects: Rc::new(Type::Top),
+                    result: Rc::new(Type::Unit),
+                },
+            );
+            self.apply(function, argument)
+        }
+
+        fn binding(
+            &mut self,
+            name: &str,
+            value: ExpressionId,
+            kind: DeclarationKind,
+        ) -> DeclarationId {
+            let pattern = self.module.arena.pattern(Pattern::Name {
+                name: name.to_owned(),
+                qualifier: Qualifier::None,
+                span: TEST_SPAN,
+            });
+            self.module.arena.declaration(Declaration::Binding {
+                kind,
+                tags: Vec::new(),
+                pattern,
+                value,
+                span: TEST_SPAN,
+            })
+        }
+
+        fn block(
+            &mut self,
+            declarations: Vec<DeclarationId>,
+            result: ExpressionId,
+        ) -> ExpressionId {
+            self.module.arena.expression(Expression::Block {
+                declarations,
+                result,
+                result_effects: ResultEffects::Ambient,
+                span: TEST_SPAN,
+            })
+        }
+
+        fn lambda(&mut self, body: ExpressionId) -> ExpressionId {
+            let parameter = self.module.arena.pattern(Pattern::Unit { span: TEST_SPAN });
+            self.module.arena.expression(Expression::Lambda {
+                parameter,
+                body,
+                deferred: false,
+                span: TEST_SPAN,
+            })
+        }
+
+        fn diagnostics(self) -> Vec<Diagnostic> {
+            let path = "/ownership-liveness.blot";
+            let context = Context::default();
+            check(
+                path,
+                &self.module,
+                &context,
+                &child_env(None),
+                &HashMap::new(),
+                &self.expression_types,
+            )
+            .diagnostics
+        }
+    }
+
+    #[test]
+    fn borrow_liveness_ends_after_the_last_demanded_declaration() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let length = program.length("values");
+        let declaration = program.binding("length", length, DeclarationKind::Let);
+        let argument = program.variable("length");
+        program.module.result = program.wait(argument);
+        program.module.declarations = vec![declaration];
+        assert_eq!(program.diagnostics(), Vec::new());
+    }
+
+    #[test]
+    fn borrow_liveness_ignores_undemanded_reads() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        let length = program.length("values");
+        let dead = program.binding("dead", length, DeclarationKind::Let);
+        program.module.result = program.variable("answer");
+        program.module.declarations = vec![waiting, dead];
+        assert_eq!(program.diagnostics(), Vec::new());
+    }
+
+    #[test]
+    fn borrow_liveness_rejects_a_read_after_suspension() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        program.module.result = program.length("values");
+        program.module.declarations = vec![waiting];
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_is_local_to_each_branch() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let condition = program.variable("condition");
+        let consequence = program.length("values");
+        let fallback = program.wait(program.module.result);
+        program.module.result = program.module.arena.expression(Expression::If {
+            branches: vec![Branch {
+                condition,
+                consequence,
+            }],
+            fallback: Some(fallback),
+            span: TEST_SPAN,
+        });
+        assert_eq!(program.diagnostics(), Vec::new());
+    }
+
+    #[test]
+    fn borrow_liveness_keeps_the_join_continuation_in_each_branch() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let condition = program.variable("condition");
+        let consequence = program.length("values");
+        let fallback = program.wait(program.module.result);
+        let branch = program.module.arena.expression(Expression::If {
+            branches: vec![Branch {
+                condition,
+                consequence,
+            }],
+            fallback: Some(fallback),
+            span: TEST_SPAN,
+        });
+        let branch = program.binding("answer", branch, DeclarationKind::Effect);
+        program.module.declarations = vec![branch];
+        program.module.result = program.length("values");
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_distinguishes_shadowed_bindings() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let empty = program.module.arena.expression(Expression::Array {
+            elements: Vec::new(),
+            span: TEST_SPAN,
+        });
+        let shadow = program.binding("values", empty, DeclarationKind::Let);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        let length = program.length("values");
+        program.module.result = program.block(vec![shadow, waiting], length);
+        assert_eq!(program.diagnostics(), Vec::new());
+    }
+
+    #[test]
+    fn borrow_liveness_does_not_hide_an_outer_live_binding_behind_a_shadow() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let empty = program.module.arena.expression(Expression::Array {
+            elements: Vec::new(),
+            span: TEST_SPAN,
+        });
+        let shadow = program.binding("values", empty, DeclarationKind::Let);
+        let waiting = program.wait(program.module.result);
+        let inner = program.block(vec![shadow], waiting);
+        let inner = program.binding("answer", inner, DeclarationKind::Effect);
+        program.module.declarations = vec![inner];
+        program.module.result = program.length("values");
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_resolves_a_capture_first_read_after_suspension() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        let length = program.length("values");
+        let body = program.block(vec![waiting], length);
+        program.module.result = program.lambda(body);
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_follows_a_live_closure_environment() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let length = program.length("values");
+        let lambda = program.lambda(length);
+        let closure = program.binding("read", lambda, DeclarationKind::Let);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        let read = program.variable("read");
+        program.module.result = program.apply(read, program.module.result);
+        program.module.declarations = vec![closure, waiting];
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_follows_borrow_aliases() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let values = program.variable("values");
+        let borrowed = program.primitive("@linear.borrow", values);
+        let alias = program.binding("alias", borrowed, DeclarationKind::Let);
+        let waiting = program.wait(program.module.result);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        program.module.result = program.length("alias");
+        program.module.declarations = vec![alias, waiting];
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_retains_recursive_captures_for_the_next_iteration() {
+        let mut program = BorrowProgram::new(Qualifier::Borrow);
+        let length = program.length("values");
+        let waiting = program.wait(length);
+        let waiting = program.binding("answer", waiting, DeclarationKind::Effect);
+        let next = program.variable("again");
+        let next = program.apply(next, program.module.result);
+        let body = program.block(vec![waiting], next);
+        let lambda = program.lambda(body);
+        let recursive = program.module.arena.expression(Expression::Rec {
+            lambda,
+            span: TEST_SPAN,
+        });
+        let recursive = program.binding("again", recursive, DeclarationKind::Let);
+        program.module.declarations = vec![recursive];
+        program.module.result = program.variable("again");
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_retains_an_owned_values_borrowed_operand() {
+        let mut program = BorrowProgram::new(Qualifier::Affine);
+        let values = program.variable("values");
+        let borrowed = program.primitive("@linear.borrow", values);
+        let waiting = program.wait(program.module.result);
+        program.module.result = program.module.arena.expression(Expression::Tuple {
+            elements: vec![borrowed, waiting],
+            span: TEST_SPAN,
+        });
+        assert!(
+            program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_does_not_retain_a_sibling_branchs_operand() {
+        let mut program = BorrowProgram::new(Qualifier::Affine);
+        let condition = program.variable("condition");
+        let values = program.variable("values");
+        let consequence = program.primitive("@linear.borrow", values);
+        let fallback = program.wait(program.module.result);
+        program.module.result = program.module.arena.expression(Expression::If {
+            branches: vec![Branch {
+                condition,
+                consequence,
+            }],
+            fallback: Some(fallback),
+            span: TEST_SPAN,
+        });
+        assert!(
+            !program
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "BLOT_BORROW_ACROSS_SUSPENSION")
+        );
+    }
+
+    #[test]
+    fn borrow_liveness_checks_demanded_source_control_flow() {
+        for (name, source, accepted) in [
+            (
+                "last-use",
+                "const run = fn read => fn &values => do:\n  let length = @array.len (&values)\n  use answer <- read length\n  return answer\nreturn run\n",
+                true,
+            ),
+            (
+                "late-use",
+                "const run = fn read => fn &values => do:\n  use answer <- read 1\n  return @array.len (&values)\nreturn run\n",
+                false,
+            ),
+            (
+                "branch-local",
+                "const run = fn read => fn &values => fn condition => do:\n  if condition:\n    return @array.len (&values)\n  use answer <- read 1\n  return answer\nreturn run\n",
+                true,
+            ),
+            (
+                "late-capture",
+                "const run = fn read => fn &values => fn () => do:\n  use answer <- read 1\n  return @array.len (&values)\nreturn run\n",
+                false,
+            ),
+        ] {
+            let mut session = crate::session::CompilerSession::default();
+            let path = format!("borrow-liveness-{name}.blot");
+            session
+                .add_source(path.clone(), source.encode_utf16().collect())
+                .expect("source should parse");
+            session
+                .configure_module(&path, BTreeMap::new(), BTreeMap::new())
+                .expect("module should configure");
+            let checked = session.check_module(&path);
+            assert_eq!(checked["ok"], accepted, "{name}: {checked}");
+            if !accepted {
+                assert_eq!(
+                    checked["diagnostic"]["code"], "BLOT_BORROW_ACROSS_SUSPENSION",
+                    "{checked}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn borrow_liveness_checks_desugared_loops_and_held_arguments() {
+        std::thread::Builder::new().stack_size(32 * 1024 * 1024).spawn(|| {
+            let mut session = crate::session::CompilerSession::default();
+            session.add_source("prelude.blot".to_owned(), include_str!("../../src/prelude/prelude.blot").encode_utf16().collect()).expect("prelude should parse");
+            session.configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new()).expect("prelude should configure");
+            let prefix = "open import \"blot:prelude\"\nconst Device = @effect.host { .read = Effect.suspends (Int -> Int); }\n";
+            for (name, source, accepted) in [
+                ("loop-after-last-use", "const run = fn &values => do:\n  let total = Array.length (&values)\n  for index in Iter.range (0, 3):\n    use next <- Device.read index\n    total := total + next\n  return total\nreturn { .run = run; }\n", true),
+                ("loop-capture", "const run = fn &values => do:\n  let total = 0\n  for index in Iter.range (0, 3):\n    let length = Array.length (&values)\n    use next <- Device.read length\n    total := total + next\n  return total\nreturn { .run = run; }\n", false),
+                ("held-argument", "const inspect = fn (&values, answer) => Array.length (&values) + answer\nconst run = fn ?values => inspect (&values, Device.read 1)\nreturn { .run = run; }\n", false),
+                ("handled-last-use", "const run = fn &values => do:\n  let length = Array.length (&values)\n  use answer <- Device.read length\n  return length + answer\nconst respond = { .read = fn (length, ?resume) => resume (length + 36); .return = identity; }\nreturn @handle (Device, fn () => run [1, 2, 3], respond)\n", true),
+            ] {
+                let path = format!("borrow-liveness-{name}.blot");
+                let source = format!("{prefix}{source}");
+                session.add_source(path.clone(), source.encode_utf16().collect()).expect("source should parse");
+                session.configure_module(&path, BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]), BTreeMap::new()).expect("module should configure");
+                let checked = session.check_module(&path);
+                assert_eq!(checked["ok"], accepted, "{name}: {checked}");
+                if !accepted {
+                    assert_eq!(checked["diagnostic"]["code"], "BLOT_BORROW_ACROSS_SUSPENSION", "{checked}");
+                }
+                if name == "handled-last-use" {
+                    let evaluated = session.evaluate_module(&path);
+                    assert_eq!(evaluated["display"], "42", "{evaluated}");
+                }
+            }
+        }).expect("compiler test thread should start").join().expect("compiler test should finish");
+    }
 
     #[test]
     fn wide_tuple_ownership_retains_numeric_field_order() {

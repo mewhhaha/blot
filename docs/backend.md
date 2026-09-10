@@ -55,7 +55,7 @@ resolved source graph
   -> ownership and safety
   -> specialization and residual evaluation
   -> validated Runtime HIR
-  -> ABI 2 closure
+  -> ABI 4 closure
   -> emitted WebAssembly
 ```
 
@@ -76,7 +76,7 @@ There are two authoritative observations of executable code:
 | Observation    | Purpose                                                       |
 | -------------- | ------------------------------------------------------------- |
 | Rust evaluator | `const`, comptime, interactive evaluation, and test execution |
-| emitted Wasm   | production execution through Blot Core Wasm ABI 2             |
+| emitted Wasm   | production execution through Blot Core Wasm ABI 4             |
 
 `pnpm conformance` requires both to agree on representative scalar and owned-
 collection programs, including owned quicksort. Independent evaluators may be
@@ -110,12 +110,12 @@ Store element layout even when no element exists at the first recursive call.
 ## Runtime HIR
 
 Runtime HIR is typed, closed, ownership-annotated, and source-spanned. Recursive
-closures become internal functions with explicit runtime captures and
-`call.direct` edges. Dynamic branches become blocks and joins. Closed function
-choices are defunctionalized inside the program; an open source set is refused.
-Normalization removes dead join slots and inverse private-representation
-round-trips, then shares alpha-equivalent residual bodies after type and
-signature identifiers have settled.
+closures become internal functions with explicit runtime captures and call
+transitions. Dynamic branches become continuation edges and parameters. Closed
+function choices are defunctionalized inside the program; an open source set is
+refused. Normalization removes dead join slots and inverse
+private-representation round-trips, then shares alpha-equivalent residual bodies
+after type and signature identifiers have settled.
 
 Current scalar lowering covers signed integers, `f32`, `f64`, comparisons,
 conversions, and the supported SIMD families. Text lowering covers append,
@@ -132,22 +132,22 @@ specialization primitive.
 
 ## V8 and WebAssembly 3.0
 
-The production module is standard WebAssembly 3.0 and keeps the existing ABI 2
+The production module is standard WebAssembly 3.0 and keeps the existing ABI 4
 memory32 boundary. The manifest declares the core specification and the exact
 feature families used by each artifact. Current emission uses bulk-memory,
 internal multi-value results, fixed-width SIMD when the source requests vector
 operations, and direct tail calls.
 
-A `call.direct` whose result is returned immediately, or forwarded through only
-empty join blocks to the return, lowers to `return_call`. The backend verifies
-parameter and result flattening before emission. This removes recursive Wasm
-frames without changing Blot's source observation model. Export wrappers are not
-tail-called because they must restore allocation checkpoints and perform
-canonical result lowering. Non-reconvergent acyclic functions emit directly as
-structured Wasm, entry-recursive functions use the structured loop path, and
-only the remaining general CFGs pay for the indexed dispatcher. Local reuse is
-selected by linear scan over conservative live intervals, without constructing a
-pairwise interference graph.
+A call transition whose result is returned immediately, or forwarded through
+only empty continuation jumps to the return, lowers to `return_call`. The
+backend verifies parameter and result flattening before emission. This removes
+recursive Wasm frames without changing Blot's source observation model. Export
+wrappers are not tail-called because they must perform canonical result lowering
+and transfer result ownership into the invocation scope. Non-reconvergent
+acyclic functions emit directly as structured Wasm, entry-recursive functions
+use the structured loop path, and only the remaining general CFGs pay for the
+indexed dispatcher. Local reuse is selected by linear scan over conservative
+live intervals, without constructing a pairwise interference graph.
 
 CI validates and executes the target without feature flags on the current Node
 24 LTS and Node 26 Current V8 lines. The detailed adoption and deferral
@@ -176,10 +176,10 @@ inside a returned function.
 
 ## Public ABI
 
-Blot Core Wasm ABI 2 is memory32 with canonical UTF-8 text adapters. Public
-exports contain only closed first-order types. The emitter derives the sidecar
-manifest and the `blot:abi` custom section from one byte sequence, and the host
-requires them to agree.
+Blot Core Wasm ABI 4 is memory32 with canonical UTF-8 text adapters and explicit
+per-invocation allocation scopes. Public exports contain only closed first-order
+types. The emitter derives the sidecar manifest and the `blot:abi` custom
+section from one byte sequence, and the host requires them to agree.
 
 Compiler-private layouts never cross that boundary. These include recursive
 indirections, Store headers, defunctionalized closure-choice tags, and internal
@@ -194,7 +194,6 @@ The current backend refuses rather than guessing when:
 - a dynamic condition is not Boolean;
 - dynamic branches have incompatible runtime layouts;
 - a runtime function has no settled first-order signature;
-- a dynamic sum requires more than the supported binary residual dispatch;
 - a deferred function escapes known application and would require a runtime
   thunk or public deferred calling convention;
 - a function choice has an open source set or crosses the public ABI; or

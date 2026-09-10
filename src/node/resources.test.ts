@@ -34,6 +34,238 @@ test("resource leases preserve family, runtime, and scope provenance", async () 
   await other.close();
 });
 
+test("individual resource release revokes authority before asynchronous disposal", async () => {
+  const root = new HostScope();
+  const other = new HostScope();
+  const files = root.resource<string>("File");
+  const sockets = root.resource<string>("Socket");
+  const foreignFiles = other.resource<string>("File");
+  const disposed = Promise.withResolvers<void>();
+  let disposals = 0;
+  const handle = files.grant(root, "open", async (value) => {
+    assert.equal(value, "open");
+    disposals += 1;
+    await disposed.promise;
+  });
+  const token = root.lower("File", handle);
+  await assert.rejects(sockets.release(handle), /wrong family/);
+  await assert.rejects(foreignFiles.release(handle), /another runtime/);
+  await assert.rejects(
+    files.release({ kind: "resource", name: "File" }),
+    /wrong family/,
+  );
+  assert.equal(files.get(handle), "open");
+  const releasing = files.release(handle);
+  assert.equal(disposals, 1);
+  assert.throws(() => files.get(handle), /revoked/);
+  assert.throws(() => root.lift("File", token), /revoked/);
+  await assert.rejects(files.release(handle), /revoked/);
+  assert.equal(root.hasLifetimes, true);
+  disposed.resolve();
+  await releasing;
+  assert.equal(root.hasLifetimes, false);
+  await root.close();
+  await other.close();
+  assert.equal(disposals, 1);
+});
+
+test("individual resource release removes every retained lease and cleanup registration", async () => {
+  const scope = new HostScope();
+  const resources = scope.resource<number>("ShortLived");
+  let disposals = 0;
+  for (let index = 0; index < 1024; index += 1) {
+    const handle = resources.grant(scope, index, () => {
+      disposals += 1;
+    });
+    const token = scope.lower("ShortLived", handle);
+    assert.equal(scope.hasLifetimes, true);
+    await resources.release(handle);
+    assert.equal(scope.hasLifetimes, false);
+    assert.throws(() => scope.lift("ShortLived", token), /revoked/);
+  }
+  await scope.close();
+  assert.equal(disposals, 1024);
+});
+
+test("individual releases unlink first, middle, and last cleanup while preserving reverse order", async () => {
+  for (const releasedIndex of [0, 1, 2]) {
+    const scope = new HostScope();
+    const resources = scope.resource<number>("Ordered");
+    const trace: string[] = [];
+    const handles = [0, 1, 2].map((index) => {
+      const handle = resources.grant(scope, index, () => {
+        trace.push(`release ${index}`);
+      });
+      if (index === 1) {
+        scope.onExit(() => {
+          trace.push("finalize");
+          return Promise.resolve();
+        });
+      }
+      return handle;
+    });
+    await resources.release(handles[releasedIndex]);
+    await scope.close();
+    assert.deepEqual(trace, [
+      `release ${releasedIndex}`,
+      ...["release 2", "finalize", "release 1", "release 0"].filter((entry) =>
+        entry !== `release ${releasedIndex}`
+      ),
+    ]);
+    assert.equal(scope.hasLifetimes, false);
+  }
+});
+
+test("resource release failure removes child ownership and never retries the disposer", async () => {
+  const root = new HostScope();
+  const child = new HostScope(root);
+  const resources = root.resource<string>("Failing");
+  const failure = new Error("disposal failed");
+  let disposals = 0;
+  const parent = resources.grant(root, "parent");
+  const local = resources.grant(child, "child", () => {
+    disposals += 1;
+    throw failure;
+  });
+  const token = child.lower("Failing", local);
+  await assert.rejects(resources.release(local), (error) => error === failure);
+  assert.equal(child.hasLifetimes, false);
+  assert.throws(() => resources.get(local), /revoked/);
+  assert.throws(() => child.lift("Failing", token), /revoked/);
+  await assert.rejects(resources.release(local), /revoked/);
+  assert.equal(resources.get(parent), "parent");
+  await child.close();
+  await resources.release(parent);
+  assert.equal(root.hasLifetimes, false);
+  await root.close();
+  assert.equal(disposals, 1);
+});
+
+test("scope closure drains an individual release even when disposal reenters closure", async () => {
+  for (const closeFirst of [false, true]) {
+    const root = new HostScope();
+    const child = new HostScope(root);
+    const resources = root.resource<string>("Racing");
+    const disposed = Promise.withResolvers<void>();
+    let closed = false;
+    let disposals = 0;
+    let reentered: Promise<void> | undefined;
+    const handle = resources.grant(child, "payload", async () => {
+      disposals += 1;
+      reentered = child.close();
+      await assert.rejects(resources.release(handle), /revoked/);
+      await disposed.promise;
+    });
+    if (closeFirst) void root.close();
+    const releasing = resources.release(handle);
+    const closing = root.close().then(() => {
+      closed = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(disposals, 1);
+    assert.equal(closed, false);
+    disposed.resolve();
+    await releasing;
+    await closing;
+    await reentered;
+    assert.equal(closed, true);
+    assert.equal(root.hasLifetimes, false);
+    assert.equal(child.hasLifetimes, false);
+  }
+});
+
+test("release during masked finalization removes its cleanup and is drained before older resources", async () => {
+  const scope = new HostScope();
+  const resources = scope.resource<string>("Finalizing");
+  const started = Promise.withResolvers<void>();
+  const finishFinalizer = Promise.withResolvers<void>();
+  const disposed = Promise.withResolvers<void>();
+  const trace: string[] = [];
+  resources.grant(scope, "older", () => {
+    trace.push("older");
+  });
+  const handle = resources.grant(scope, "released", async () => {
+    trace.push("release started");
+    await disposed.promise;
+    trace.push("release finished");
+  });
+  scope.onExit(async () => {
+    started.resolve();
+    await finishFinalizer.promise;
+    trace.push("finalizer finished");
+  });
+  const closing = scope.close();
+  await started.promise;
+  const releasing = resources.release(handle);
+  finishFinalizer.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(trace, ["release started", "finalizer finished"]);
+  disposed.resolve();
+  await releasing;
+  await closing;
+  assert.deepEqual(trace, [
+    "release started",
+    "finalizer finished",
+    "release finished",
+    "older",
+  ]);
+});
+
+test("scope closure reports release failures that settle during another finalizer", async () => {
+  const scope = new HostScope();
+  const resources = scope.resource<string>("OverlappingFailure");
+  const started = Promise.withResolvers<void>();
+  const finishFinalizer = Promise.withResolvers<void>();
+  const failure = new Error("release failed during finalization");
+  let disposals = 0;
+  const handle = resources.grant(scope, "payload", () => {
+    disposals += 1;
+    throw failure;
+  });
+  scope.onExit(async () => {
+    started.resolve();
+    await finishFinalizer.promise;
+  });
+  const closing = scope.close();
+  const rejected = assert.rejects(closing, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [failure]);
+    return true;
+  });
+  await started.promise;
+  await assert.rejects(resources.release(handle), (error) => error === failure);
+  finishFinalizer.resolve();
+  await rejected;
+  assert.equal(disposals, 1);
+  assert.equal(scope.hasLifetimes, false);
+});
+
+test("failed acquisition registration releases the created value without retaining a lease", async () => {
+  const root = new HostScope();
+  const other = new HostScope();
+  const resources = root.resource<string>("Registration");
+  const failure = new Error("registration disposal failed");
+  let disposals = 0;
+  await assert.rejects(
+    resources.acquire(other, () => Promise.resolve("created"), (value) => {
+      assert.equal(value, "created");
+      disposals += 1;
+      throw failure;
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(String(error.errors[0]), /another runtime/);
+      assert.equal(error.errors[1], failure);
+      return true;
+    },
+  );
+  assert.equal(root.hasLifetimes, false);
+  assert.equal(other.hasLifetimes, false);
+  await root.close();
+  await other.close();
+  assert.equal(disposals, 1);
+});
+
 test("masked finalizers share reverse ordering with resource disposal and aggregate every failure", async () => {
   const root = new HostScope();
   const leases = root.resource<string>("CleanupLease");

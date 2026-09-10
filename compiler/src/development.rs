@@ -4,7 +4,10 @@ use std::rc::Rc;
 use serde::Serialize;
 
 use crate::backend::CompiledModule;
-use crate::hir::{RuntimeExport, RuntimeFunction, RuntimeLink, RuntimeModule, RuntimeOperation};
+use crate::continuation::{
+    CallTarget, Function as RuntimeFunction, FunctionId, Graph, SignatureId, Transition, TypeId,
+};
+use crate::hir::{RuntimeExport, RuntimeLink, RuntimeModule, RuntimeType};
 
 #[cfg(test)]
 thread_local! {
@@ -22,7 +25,7 @@ pub(crate) struct DevelopmentUnit {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DevelopmentUnitPartition {
-    function_ids: Vec<usize>,
+    function_ids: Vec<FunctionId>,
     boundary_links: Vec<(LinkDemand, String)>,
 }
 
@@ -63,6 +66,7 @@ pub(crate) struct DevelopmentWork {
     pub(crate) specialized_functions: BTreeMap<String, usize>,
     pub(crate) reused_functions: BTreeMap<String, usize>,
     pub(crate) emitted_units: usize,
+    pub(crate) graph_cache: BTreeMap<crate::hir::residual_cache::GraphCacheOutcome, usize>,
 }
 
 #[cfg(feature = "development-profile")]
@@ -263,7 +267,7 @@ pub(crate) fn module_identity_computations() -> usize {
 struct LinkDemand {
     consumer: String,
     provider: String,
-    function: usize,
+    function: FunctionId,
 }
 
 pub(crate) fn split_runtime_module(
@@ -295,15 +299,15 @@ pub(crate) fn split_runtime_module(
         .iter()
         .map(|function| (function.id, function))
         .collect::<HashMap<_, _>>();
-    let mut included = BTreeMap::<String, BTreeSet<usize>>::new();
-    let plan = crate::suspension::SuspensionPlan::new(module);
-    let framed = plan.functions.keys().copied().collect::<BTreeSet<_>>();
+    let mut included = BTreeMap::<String, BTreeSet<FunctionId>>::new();
     let mut demands = BTreeSet::new();
     let mut pending = module
         .exports
         .iter()
         .filter_map(|exported| match exported {
-            RuntimeExport::Runtime { function, .. } => Some((entry_unit.to_owned(), *function)),
+            RuntimeExport::Runtime { function, .. } => {
+                Some((entry_unit.to_owned(), FunctionId(*function)))
+            }
             RuntimeExport::Comptime { .. } => None,
         })
         .collect::<Vec<_>>();
@@ -322,42 +326,116 @@ pub(crate) fn split_runtime_module(
                 module.source
             )
         })?;
-        for operation in function.blocks.iter().flat_map(|block| &block.operations) {
-            let Some(target) = operation.function else {
+        let signature = &module.signatures[function.signature.0];
+        let mut pending_types = signature.parameters.clone();
+        pending_types.push(signature.result);
+        for continuation in &function.continuations {
+            pending_types.extend(
+                continuation
+                    .parameters
+                    .iter()
+                    .chain(&continuation.captures)
+                    .map(|definition| definition.type_id.0),
+            );
+            pending_types.extend(
+                continuation
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.definition.type_id.0),
+            );
+            if let Transition::Call { signature, .. } = &continuation.transition {
+                let signature = &module.signatures[signature.0];
+                pending_types.extend(&signature.parameters);
+                pending_types.push(signature.result);
+            }
+        }
+        let mut visited_types = HashSet::new();
+        while let Some(type_id) = pending_types.pop() {
+            if !visited_types.insert(type_id) {
+                continue;
+            }
+            match &module.types[type_id] {
+                crate::hir::RuntimeType::Callback {
+                    function: target,
+                    signature,
+                    environment_type,
+                } => {
+                    pending.push((unit.clone(), FunctionId(*target)));
+                    pending_types.push(*environment_type);
+                    let signature = &module.signatures[*signature];
+                    pending_types.extend(&signature.parameters);
+                    pending_types.push(signature.result);
+                }
+                crate::hir::RuntimeType::Product { fields, .. } => {
+                    pending_types.extend(fields.iter().map(|field| field.type_id))
+                }
+                crate::hir::RuntimeType::Sum { cases, .. } => {
+                    pending_types.extend(cases.iter().map(|case_| case_.payload_type))
+                }
+                crate::hir::RuntimeType::Store { element_type }
+                | crate::hir::RuntimeType::Scratch { element_type } => {
+                    pending_types.push(*element_type)
+                }
+                crate::hir::RuntimeType::Resource { payload_type, .. } => {
+                    pending_types.push(*payload_type)
+                }
+                crate::hir::RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } => pending_types.push(*representation_type),
+                crate::hir::RuntimeType::Indirect { target_type } => {
+                    pending_types.push(*target_type)
+                }
+                _ => {}
+            }
+        }
+        for continuation in &function.continuations {
+            for instruction in &continuation.instructions {
+                let operation = &instruction.operation;
+                let Some(target) = operation.function else {
+                    continue;
+                };
+                let target_function = functions.get(&target).ok_or_else(|| {
+                    format!(
+                        "{}: development unit {unit:?} references absent function {target}",
+                        module.source
+                    )
+                })?;
+                let target_unit = unit_by_root.get(&target_function.span.file);
+                if operation.kind == "closure.make"
+                    && target_unit.is_some_and(|target_unit| target_unit != &unit)
+                {
+                    return Err(format!(
+                        "development unit {unit:?} exposes closure function {target} from unit {:?}; functions may be called through a reload boundary but cannot cross it as values",
+                        target_unit.expect("checked target unit")
+                    ));
+                }
+                pending.push((unit.clone(), target));
+            }
+            let Transition::Call {
+                target: CallTarget::Function { function: target },
+                ..
+            } = &continuation.transition
+            else {
                 continue;
             };
-            let target_function = functions.get(&target).ok_or_else(|| {
+            let target_function = functions.get(target).ok_or_else(|| {
                 format!(
                     "{}: development unit {unit:?} references absent function {target}",
                     module.source
                 )
             })?;
             let target_unit = unit_by_root.get(&target_function.span.file);
-            if operation.kind == "closure.make"
-                && target_unit.is_some_and(|target_unit| target_unit != &unit)
-            {
-                return Err(format!(
-                    "development unit {unit:?} exposes closure function {target} from unit {:?}; functions may be called through a reload boundary but cannot cross it as values",
-                    target_unit.expect("checked target unit")
-                ));
-            }
-            if operation.kind == "callback.make" {
-                pending.push((unit.clone(), target));
-                continue;
-            }
-            if operation.kind != "call.direct" && operation.kind != "closure.make" {
-                continue;
-            }
             if let Some(provider) = target_unit.filter(|provider| *provider != &unit) {
                 demands.insert(LinkDemand {
                     consumer: unit.clone(),
                     provider: provider.clone(),
-                    function: target,
+                    function: *target,
                 });
-                pending.push((provider.clone(), target));
+                pending.push((provider.clone(), *target));
                 continue;
             }
-            pending.push((unit.clone(), target));
+            pending.push((unit.clone(), *target));
         }
     }
 
@@ -415,7 +493,6 @@ pub(crate) fn split_runtime_module(
                 &unit_by_root,
                 &demands,
                 &link_names,
-                &framed,
             )?)
         };
         units.push(DevelopmentUnit {
@@ -447,11 +524,10 @@ fn build_unit_module(
     unit: &str,
     root: &str,
     entry_unit: &str,
-    function_ids: &BTreeSet<usize>,
+    function_ids: &BTreeSet<FunctionId>,
     unit_by_root: &HashMap<String, String>,
     demands: &BTreeSet<LinkDemand>,
     link_names: &BTreeMap<LinkDemand, String>,
-    framed: &BTreeSet<usize>,
 ) -> Result<RuntimeModule, String> {
     let functions_by_id = module
         .functions
@@ -461,7 +537,7 @@ fn build_unit_module(
     let function_map = function_ids
         .iter()
         .enumerate()
-        .map(|(next, previous)| (*previous, next))
+        .map(|(next, previous)| (*previous, FunctionId(next)))
         .collect::<HashMap<_, _>>();
     let mut links = Vec::<RuntimeLink>::new();
     let mut linked_imports = HashSet::<(String, String)>::new();
@@ -475,44 +551,43 @@ fn build_unit_module(
         })?;
         let mut function = (*previous).clone();
         function.id = function_map[previous_id];
-        for operation in function
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.operations)
-        {
-            rewrite_operation(
-                module,
-                unit,
-                operation,
-                &functions_by_id,
-                &function_map,
-                unit_by_root,
-                link_names,
-                &mut links,
-                &mut linked_imports,
-                framed,
-            )?;
-        }
+        rewrite_function(
+            module,
+            unit,
+            &mut function,
+            &functions_by_id,
+            &function_map,
+            unit_by_root,
+            link_names,
+            &mut links,
+            &mut linked_imports,
+        )?;
         functions.push(function);
     }
 
     let mut exports = Vec::new();
-    let mut resumable_roots = Vec::new();
     if unit == entry_unit {
         for exported in &module.exports {
             let mut exported = exported.clone();
             if let RuntimeExport::Runtime { function, .. } = &mut exported {
-                *function = *function_map.get(function).ok_or_else(|| {
-                    format!(
-                        "{}: entry unit {unit:?} omitted exported function {function}",
-                        module.source
-                    )
-                })?;
+                *function = function_map
+                    .get(&FunctionId(*function))
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: entry unit {unit:?} omitted exported function {function}",
+                            module.source
+                        )
+                    })?
+                    .0;
             }
             exports.push(exported);
         }
     }
+    let mut exported_targets = BTreeSet::new();
     for demand in demands.iter().filter(|demand| demand.provider == unit) {
+        if !exported_targets.insert(demand.function) {
+            continue;
+        }
         let target = functions_by_id.get(&demand.function).ok_or_else(|| {
             format!(
                 "{}: development export lost function {}",
@@ -520,37 +595,27 @@ fn build_unit_module(
             )
         })?;
         let mut wrapper = (*target).clone();
-        wrapper.id = functions.len();
-        for operation in wrapper
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.operations)
-        {
-            rewrite_operation(
-                module,
-                unit,
-                operation,
-                &functions_by_id,
-                &function_map,
-                unit_by_root,
-                link_names,
-                &mut links,
-                &mut linked_imports,
-                framed,
-            )?;
-        }
+        wrapper.id = FunctionId(functions.len());
+        rewrite_function(
+            module,
+            unit,
+            &mut wrapper,
+            &functions_by_id,
+            &function_map,
+            unit_by_root,
+            link_names,
+            &mut links,
+            &mut linked_imports,
+        )?;
         let exported_function = wrapper.id;
-        if framed.contains(&demand.function) {
-            resumable_roots.push(exported_function);
-        }
         functions.push(wrapper);
         let link_name = link_names[demand].clone();
         exports.push(RuntimeExport::Runtime {
             source_name: format!("$development${link_name}"),
             phase: "runtime",
             wasm_name: format!("blot:dev:{link_name}"),
-            function: exported_function,
-            signature: target.signature,
+            function: exported_function.0,
+            signature: target.signature.0,
             ownership: "owned",
         });
     }
@@ -562,55 +627,185 @@ fn build_unit_module(
         types: module.types.clone(),
         signatures: module.signatures.clone(),
         static_stores: module.static_stores.clone(),
-        functions,
+        graph: Graph { functions },
         capabilities: module.capabilities.clone(),
         links,
-        resumable_roots,
         exports,
     };
     for type_ in &mut unit_module.types {
         if let crate::hir::RuntimeType::Callback { function, .. } = type_
-            && let Some(mapped) = function_map.get(function)
+            && let Some(mapped) = function_map.get(&FunctionId(*function))
         {
-            *function = *mapped;
+            *function = mapped.0;
         }
     }
     normalize_unit_module(&mut unit_module)?;
+    unit_module.graph.validate(unit_module.tables())?;
     Ok(unit_module)
 }
 
+fn canonicalize_unit_functions(module: &mut RuntimeModule) {
+    module.exports.sort_by(|left, right| {
+        let name = |export: &RuntimeExport| match export {
+            RuntimeExport::Runtime { source_name, .. }
+            | RuntimeExport::Comptime { source_name, .. } => source_name.clone(),
+        };
+        name(left).cmp(&name(right))
+    });
+    let mut pending = module
+        .exports
+        .iter()
+        .filter_map(|export| match export {
+            RuntimeExport::Runtime { function, .. } => Some(FunctionId(*function)),
+            RuntimeExport::Comptime { .. } => None,
+        })
+        .collect::<std::collections::VecDeque<_>>();
+    let mut order = Vec::new();
+    let mut visited = HashSet::new();
+    let mut visited_types = HashSet::new();
+    while let Some(function_id) = pending.pop_front() {
+        if !visited.insert(function_id) {
+            continue;
+        }
+        order.push(function_id);
+        let function = &module.functions[function_id.0];
+        let signature = &module.signatures[function.signature.0];
+        let mut types = signature
+            .parameters
+            .iter()
+            .copied()
+            .chain([signature.result])
+            .collect::<std::collections::VecDeque<_>>();
+        for continuation in &function.continuations {
+            types.extend(
+                continuation
+                    .parameters
+                    .iter()
+                    .chain(&continuation.captures)
+                    .map(|definition| definition.type_id.0),
+            );
+            for instruction in &continuation.instructions {
+                types.push_back(instruction.definition.type_id.0);
+                if let Some(target) = instruction.operation.function {
+                    pending.push_back(target);
+                }
+            }
+            if let Transition::Call {
+                target, signature, ..
+            } = &continuation.transition
+            {
+                if let CallTarget::Function { function } = target {
+                    pending.push_back(*function);
+                }
+                let signature = &module.signatures[signature.0];
+                types.extend(&signature.parameters);
+                types.push_back(signature.result);
+            }
+        }
+        while let Some(type_id) = types.pop_front() {
+            if !visited_types.insert(type_id) {
+                continue;
+            }
+            match &module.types[type_id] {
+                RuntimeType::Callback {
+                    function,
+                    signature,
+                    environment_type,
+                } => {
+                    pending.push_back(FunctionId(*function));
+                    types.push_back(*environment_type);
+                    let signature = &module.signatures[*signature];
+                    types.extend(&signature.parameters);
+                    types.push_back(signature.result);
+                }
+                RuntimeType::Product { fields, .. } => {
+                    types.extend(fields.iter().map(|field| field.type_id))
+                }
+                RuntimeType::Sum { cases, .. } => {
+                    types.extend(cases.iter().map(|case_| case_.payload_type))
+                }
+                RuntimeType::Store { element_type } | RuntimeType::Scratch { element_type } => {
+                    types.push_back(*element_type)
+                }
+                RuntimeType::Resource { payload_type, .. } => types.push_back(*payload_type),
+                RuntimeType::Indirect { target_type } => types.push_back(*target_type),
+                RuntimeType::Sealed {
+                    representation_type,
+                    ..
+                } => types.push_back(*representation_type),
+                _ => {}
+            }
+        }
+    }
+    let functions = order
+        .iter()
+        .enumerate()
+        .map(|(next, previous)| (*previous, FunctionId(next)))
+        .collect::<HashMap<_, _>>();
+    module.graph.functions = order
+        .iter()
+        .map(|previous| {
+            let mut function = module.functions[previous.0].clone();
+            function.map_functions(|function| functions[&function]);
+            function
+        })
+        .collect();
+    for type_ in &mut module.types {
+        if let RuntimeType::Callback { function, .. } = type_
+            && let Some(mapped) = functions.get(&FunctionId(*function))
+        {
+            *function = mapped.0;
+        }
+    }
+    for export in &mut module.exports {
+        if let RuntimeExport::Runtime { function, .. } = export {
+            *function = functions[&FunctionId(*function)].0;
+        }
+    }
+}
+
 fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
+    canonicalize_unit_functions(module);
     retain_referenced_static_stores(module)?;
     let mut signature_ids = BTreeSet::new();
     let mut host_operations = BTreeSet::new();
     for function in &module.functions {
-        signature_ids.insert(function.signature);
-        for operation in function.blocks.iter().flat_map(|block| &block.operations) {
+        signature_ids.insert(function.signature.0);
+        for instruction in function
+            .continuations
+            .iter()
+            .flat_map(|continuation| &continuation.instructions)
+        {
+            let operation = &instruction.operation;
             if let Some(signature) = operation.signature {
-                signature_ids.insert(signature);
+                signature_ids.insert(signature.0);
             }
             if operation.kind == "callback.make" {
                 let crate::hir::RuntimeType::Callback { signature, .. } =
-                    &module.types[operation.type_id]
+                    &module.types[instruction.definition.type_id.0]
                 else {
                     return Err("development callback has no checked callback type".to_owned());
                 };
                 signature_ids.insert(*signature);
             }
-            if operation.kind == "host.call" {
-                let capability = operation.capability.clone().ok_or_else(|| {
-                    format!(
-                        "{}: development host call omitted its capability",
-                        module.source
-                    )
-                })?;
-                let name = operation.operation.clone().ok_or_else(|| {
-                    format!(
-                        "{}: development host call omitted its operation",
-                        module.source
-                    )
-                })?;
-                host_operations.insert((capability, name));
+        }
+    }
+    for continuation in module
+        .functions
+        .iter()
+        .flat_map(|function| &function.continuations)
+    {
+        if let Transition::Call {
+            target, signature, ..
+        } = &continuation.transition
+        {
+            signature_ids.insert(signature.0);
+            if let CallTarget::Host {
+                capability,
+                operation,
+            } = target
+            {
+                host_operations.insert((capability.clone(), operation.clone()));
             }
         }
     }
@@ -667,9 +862,20 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
     let mut type_ids = BTreeSet::from([0]);
     type_ids.extend(module.static_stores.iter().map(|store| store.element_type));
     for function in &module.functions {
-        for block in &function.blocks {
-            type_ids.extend(block.parameters.iter().map(|parameter| parameter.type_id));
-            type_ids.extend(block.operations.iter().map(|operation| operation.type_id));
+        for continuation in &function.continuations {
+            type_ids.extend(
+                continuation
+                    .parameters
+                    .iter()
+                    .chain(&continuation.captures)
+                    .map(|definition| definition.type_id.0),
+            );
+            type_ids.extend(
+                continuation
+                    .instructions
+                    .iter()
+                    .map(|instruction| instruction.definition.type_id.0),
+            );
         }
     }
     for signature in &signature_ids {
@@ -692,8 +898,16 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
         })?;
         let dependencies = match type_ {
             crate::hir::RuntimeType::Callback {
-                environment_type, ..
-            } => vec![*environment_type],
+                signature,
+                environment_type,
+                ..
+            } => {
+                signature_ids.insert(*signature);
+                let signature = &module.signatures[*signature];
+                let mut dependencies = signature.parameters.clone();
+                dependencies.extend([signature.result, *environment_type]);
+                dependencies
+            }
             crate::hir::RuntimeType::Store { element_type }
             | crate::hir::RuntimeType::Scratch { element_type }
             | crate::hir::RuntimeType::Resource {
@@ -786,17 +1000,25 @@ fn normalize_unit_module(module: &mut RuntimeModule) -> Result<(), String> {
         }
         signature.result = type_map[&signature.result];
     }
-    for function in &mut module.functions {
-        function.signature = signature_map[&function.signature];
-        for block in &mut function.blocks {
-            for parameter in &mut block.parameters {
-                parameter.type_id = type_map[&parameter.type_id];
+    for function in &mut module.graph.functions {
+        function.signature = SignatureId(signature_map[&function.signature.0]);
+        for continuation in &mut function.continuations {
+            for definition in continuation
+                .parameters
+                .iter_mut()
+                .chain(&mut continuation.captures)
+            {
+                definition.type_id = TypeId(type_map[&definition.type_id.0]);
             }
-            for operation in &mut block.operations {
-                operation.type_id = type_map[&operation.type_id];
-                if let Some(signature) = &mut operation.signature {
-                    *signature = signature_map[signature];
+            for instruction in &mut continuation.instructions {
+                instruction.definition.type_id =
+                    TypeId(type_map[&instruction.definition.type_id.0]);
+                if let Some(signature) = &mut instruction.operation.signature {
+                    *signature = SignatureId(signature_map[&signature.0]);
                 }
+            }
+            if let Transition::Call { signature, .. } = &mut continuation.transition {
+                *signature = SignatureId(signature_map[&signature.0]);
             }
         }
     }
@@ -825,9 +1047,9 @@ fn retain_referenced_static_stores(module: &mut RuntimeModule) -> Result<(), Str
     let retained_ids = module
         .functions
         .iter()
-        .flat_map(|function| &function.blocks)
-        .flat_map(|block| &block.operations)
-        .filter_map(|operation| operation.static_store)
+        .flat_map(|function| &function.continuations)
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| instruction.operation.static_store)
         .collect::<BTreeSet<_>>();
     let store_map = retained_ids
         .iter()
@@ -848,10 +1070,10 @@ fn retain_referenced_static_stores(module: &mut RuntimeModule) -> Result<(), Str
     for operation in module
         .functions
         .iter_mut()
-        .flat_map(|function| &mut function.blocks)
-        .flat_map(|block| &mut block.operations)
+        .flat_map(|function| &mut function.continuations)
+        .flat_map(|block| &mut block.instructions)
     {
-        let Some(store_id) = &mut operation.static_store else {
+        let Some(store_id) = &mut operation.operation.static_store else {
             continue;
         };
         *store_id = store_map[store_id];
@@ -861,63 +1083,104 @@ fn retain_referenced_static_stores(module: &mut RuntimeModule) -> Result<(), Str
 }
 
 #[allow(clippy::too_many_arguments)]
-fn rewrite_operation(
+fn rewrite_function(
     module: &RuntimeModule,
     unit: &str,
-    operation: &mut RuntimeOperation,
-    functions: &HashMap<usize, &RuntimeFunction>,
-    function_map: &HashMap<usize, usize>,
+    function: &mut RuntimeFunction,
+    functions: &HashMap<FunctionId, &RuntimeFunction>,
+    function_map: &HashMap<FunctionId, FunctionId>,
     unit_by_root: &HashMap<String, String>,
     link_names: &BTreeMap<LinkDemand, String>,
     links: &mut Vec<RuntimeLink>,
     linked_imports: &mut HashSet<(String, String)>,
-    framed: &BTreeSet<usize>,
 ) -> Result<(), String> {
-    let Some(target) = operation.function else {
-        return Ok(());
-    };
-    let target_function = functions.get(&target).ok_or_else(|| {
-        format!(
-            "{}: development operation references absent function {target}",
-            module.source
-        )
-    })?;
-    let provider = unit_by_root.get(&target_function.span.file);
-    if operation.kind == "call.direct" && provider.is_some_and(|provider| provider != unit) {
-        let provider = provider.expect("checked provider");
-        let demand = LinkDemand {
-            consumer: unit.to_owned(),
-            provider: provider.clone(),
-            function: target,
+    for continuation in &mut function.continuations {
+        for instruction in &mut continuation.instructions {
+            if let Some(target) = &mut instruction.operation.function {
+                *target = *function_map.get(target).ok_or_else(|| {
+                    format!(
+                        "{}: development unit {unit:?} omitted local function {target}",
+                        module.source
+                    )
+                })?;
+            }
+        }
+        let Transition::Call {
+            target,
+            signature,
+            suspends,
+            ..
+        } = &mut continuation.transition
+        else {
+            continue;
         };
-        let link_name = link_names.get(&demand).ok_or_else(|| {
+        let callee = match target {
+            CallTarget::Function { function } => *function,
+            CallTarget::Host { .. } => continue,
+            CallTarget::Link {
+                unit: provider,
+                name,
+            } => {
+                let declaration = module
+                    .links
+                    .iter()
+                    .find(|link| link.unit == *provider && link.name == *name)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: development link {provider}.{name} has no declaration",
+                            module.source
+                        )
+                    })?;
+                if linked_imports.insert((provider.clone(), name.clone())) {
+                    links.push(declaration.clone());
+                }
+                continue;
+            }
+        };
+        let target_function = functions.get(&callee).ok_or_else(|| {
             format!(
-                "{}: development call from {unit:?} to {provider:?} function {target} has no demand",
+                "{}: development call references absent function {callee}",
                 module.source
             )
         })?;
-        let key = (provider.clone(), link_name.clone());
-        if linked_imports.insert(key) {
-            links.push(RuntimeLink {
+        let provider = unit_by_root.get(&target_function.span.file);
+        if let Some(provider) = provider.filter(|provider| *provider != unit) {
+            let demand = LinkDemand {
+                consumer: unit.to_owned(),
+                provider: provider.clone(),
+                function: callee,
+            };
+            let link_name = link_names.get(&demand).ok_or_else(|| {
+                format!(
+                    "{}: development call from {unit:?} to {provider:?} function {callee} has no demand",
+                    module.source
+                )
+            })?;
+            if linked_imports.insert((provider.clone(), link_name.clone())) {
+                links.push(RuntimeLink {
+                    unit: provider.clone(),
+                    name: link_name.clone(),
+                    signature: target_function.signature.0,
+                    suspends: target_function.suspends,
+                });
+            }
+            *target = CallTarget::Link {
                 unit: provider.clone(),
                 name: link_name.clone(),
-                signature: target_function.signature,
-                suspends: framed.contains(&target),
-            });
+            };
+            *signature = target_function.signature;
+            *suspends = target_function.suspends;
+            continue;
         }
-        operation.kind = "call.external";
-        operation.function = None;
-        operation.capability = Some(provider.clone());
-        operation.operation = Some(link_name.clone());
-        operation.signature = Some(target_function.signature);
-        return Ok(());
+        *target = CallTarget::Function {
+            function: *function_map.get(&callee).ok_or_else(|| {
+                format!(
+                    "{}: development unit {unit:?} omitted local function {callee}",
+                    module.source
+                )
+            })?,
+        };
     }
-    operation.function = Some(*function_map.get(&target).ok_or_else(|| {
-        format!(
-            "{}: development unit {unit:?} omitted local function {target}",
-            module.source
-        )
-    })?);
     Ok(())
 }
 
@@ -926,7 +1189,7 @@ fn development_export_name(
     provider: &str,
     function: &RuntimeFunction,
 ) -> Result<String, String> {
-    let signature = module.signatures.get(function.signature).ok_or_else(|| {
+    let signature = module.signatures.get(function.signature.0).ok_or_else(|| {
         format!(
             "{}: development function {} references absent signature {}",
             module.source, function.id, function.signature
@@ -987,8 +1250,41 @@ fn development_type_identity(
     })?;
     let identity = match type_ {
         crate::hir::RuntimeType::Unit => "unit".to_owned(),
-        crate::hir::RuntimeType::Callback { .. } => {
-            return Err("Development callback links require a scoped callback adapter.".to_owned());
+        crate::hir::RuntimeType::Callback {
+            function,
+            signature,
+            environment_type,
+        } => {
+            let callback = &module.functions[*function];
+            let signature = &module.signatures[*signature];
+            let parameters = signature
+                .parameters
+                .iter()
+                .map(|type_id| development_type_identity(module, *type_id, active))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result = development_type_identity(module, signature.result, active)?;
+            let environment = development_type_identity(module, *environment_type, active)?;
+            let ordinal = module
+                .functions
+                .iter()
+                .take_while(|candidate| candidate.id != callback.id)
+                .filter(|candidate| {
+                    candidate.span.file == callback.span.file && candidate.name == callback.name
+                })
+                .count();
+            format!(
+                "callback:{}",
+                serde_json::to_string(&(
+                    &callback.span.file,
+                    &callback.name,
+                    ordinal,
+                    parameters,
+                    result,
+                    &signature.effects,
+                    environment
+                ))
+                .map_err(|error| format!("could not identify development callback: {error}"))?
+            )
         }
         crate::hir::RuntimeType::Integer32 => "integer-32".to_owned(),
         crate::hir::RuntimeType::SignedInteger64 => "signed-integer-64".to_owned(),
@@ -1074,10 +1370,11 @@ fn development_type_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::{
-        RuntimeBlock, RuntimeBlockParameter, RuntimeOperation, RuntimeSignature, RuntimeSpan,
-        RuntimeTerminator, RuntimeType,
+    use crate::continuation::{
+        Argument, Continuation, ContinuationId, Definition, Edge, Instruction, Operation, TypeId,
+        ValueId,
     };
+    use crate::hir::{RuntimeSignature, RuntimeSpan, RuntimeType, WireConstant};
 
     #[test]
     fn cached_unit_reuse_returns_metadata_without_retaining_compiled_bytes() {
@@ -1154,9 +1451,14 @@ mod tests {
             .find(|unit| unit.name == "game")
             .expect("entry unit");
         let game_module = game.module.as_ref().expect("entry unit should be prepared");
-        let operation = &game_module.functions[0].blocks[0].operations[0];
-        assert_eq!(operation.kind, "call.external");
-        assert_eq!(operation.capability.as_deref(), Some("math"));
+        let Transition::Call {
+            target: CallTarget::Link { unit, .. },
+            ..
+        } = &game_module.functions[0].continuations[0].transition
+        else {
+            panic!("cross-unit call should become a link transition");
+        };
+        assert_eq!(unit, "math");
         assert_eq!(game_module.links.len(), 1);
         let math = split
             .units
@@ -1195,6 +1497,127 @@ mod tests {
     }
 
     #[test]
+    fn development_links_preserve_suspension_without_promoting_framed_functions() {
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+        ]);
+        for suspends in [false, true] {
+            let mut original = scalar_program(41);
+            original.functions[0].suspends = suspends;
+            original.functions[0].framed = true;
+            original.functions[1].suspends = suspends;
+            original.functions[1].framed = true;
+            let Transition::Call {
+                suspends: call_suspends,
+                ..
+            } = &mut original.functions[0].continuations[0].transition
+            else {
+                panic!("entry fixture should call the provider");
+            };
+            *call_suspends = suspends;
+
+            let split = split_runtime_module(&original, "game", &configured, &HashMap::new())
+                .expect("framed development program should split");
+            for unit in &split.units {
+                let module = unit.module.as_ref().expect("unit should be prepared");
+                assert!(module.functions.iter().all(|function| function.framed));
+                assert!(
+                    module
+                        .functions
+                        .iter()
+                        .all(|function| function.suspends == suspends)
+                );
+                if unit.name == "game" {
+                    assert_eq!(module.links[0].suspends, suspends);
+                    assert!(matches!(module.functions[0].continuations[0].transition,
+                        Transition::Call { suspends: call_suspends, .. } if call_suspends == suspends));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unit_normalization_remaps_captured_definitions_and_call_signatures() {
+        let mut original = scalar_program(41);
+        original.types = vec![
+            RuntimeType::Unit,
+            RuntimeType::Text,
+            RuntimeType::SignedInteger64,
+        ];
+        original.signatures.insert(
+            0,
+            RuntimeSignature {
+                parameters: vec![1],
+                result: 1,
+                effects: Vec::new(),
+            },
+        );
+        original.signatures[1].result = 2;
+        for function in &mut original.graph.functions {
+            function.signature = SignatureId(1);
+        }
+        let RuntimeExport::Runtime { signature, .. } = &mut original.exports[0] else {
+            panic!("entry fixture should export a runtime function");
+        };
+        *signature = 1;
+        let mut captured = instruction("game.blot", "constant");
+        captured.definition.value = ValueId(1);
+        captured.definition.type_id = TypeId(2);
+        captured.operation.value = Some(WireConstant::SignedInteger64("1".to_owned()));
+        let mut sum = instruction("game.blot", "scalar");
+        sum.definition.value = ValueId(2);
+        sum.definition.type_id = TypeId(2);
+        sum.operands = vec![ValueId(0), ValueId(1)];
+        sum.operation.operator = Some("add");
+        let entry = &mut original.functions[0];
+        entry.continuations[1].parameters[0].type_id = TypeId(2);
+        entry.continuations[1]
+            .captures
+            .push(captured.definition.clone());
+        entry.continuations[1].instructions.push(sum);
+        entry.continuations[1].transition = Transition::Return { value: ValueId(2) };
+        entry.continuations[0].instructions.push(captured);
+        let Transition::Call { signature, .. } = &mut entry.continuations[0].transition else {
+            panic!("entry fixture should call the provider");
+        };
+        *signature = SignatureId(1);
+        original.functions[1].continuations[0].instructions[0]
+            .definition
+            .type_id = TypeId(2);
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+        ]);
+
+        let split = split_runtime_module(&original, "game", &configured, &HashMap::new())
+            .expect("captured values should survive development partitioning");
+        let game = split
+            .units
+            .iter()
+            .find(|unit| unit.name == "game")
+            .expect("entry unit")
+            .module
+            .as_ref()
+            .expect("entry unit should be prepared");
+        assert_eq!(game.types.len(), 2);
+        assert_eq!(game.signatures.len(), 1);
+        assert_eq!(game.links[0].signature, 0);
+        let continuation = &game.functions[0].continuations[1];
+        assert_eq!(continuation.parameters[0].type_id, TypeId(1));
+        assert_eq!(continuation.captures[0].type_id, TypeId(1));
+        assert_eq!(continuation.instructions[0].definition.type_id, TypeId(1));
+        assert_eq!(continuation.captures[0].value, ValueId(1));
+        assert!(matches!(
+            game.functions[0].continuations[0].transition,
+            Transition::Call {
+                signature: SignatureId(0),
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn changed_call_demand_rebuilds_an_unchanged_provider_partition() {
         let configured = BTreeMap::from([
             ("game".to_owned(), "game.blot".to_owned()),
@@ -1213,10 +1636,16 @@ mod tests {
 
         let mut edited = scalar_program(41);
         let mut alternative = edited.functions[1].clone();
-        alternative.id = 2;
+        alternative.id = FunctionId(2);
         alternative.name = "alternative".to_owned();
         edited.functions.push(alternative);
-        edited.functions[0].blocks[0].operations[0].function = Some(2);
+        let Transition::Call { target, .. } = &mut edited.functions[0].continuations[0].transition
+        else {
+            panic!("entry fixture should call the provider");
+        };
+        *target = CallTarget::Function {
+            function: FunctionId(2),
+        };
         let reusable_partitions = HashMap::from([("math".to_owned(), math_partition)]);
         let split = split_runtime_module(&edited, "game", &configured, &reusable_partitions)
             .expect("changed call demand should split");
@@ -1302,7 +1731,11 @@ mod tests {
     #[test]
     fn function_values_cannot_cross_development_boundaries() {
         let mut original = scalar_program(41);
-        original.functions[0].blocks[0].operations[0].kind = "closure.make";
+        let mut closure = instruction("game.blot", "closure.make");
+        closure.operation.function = Some(FunctionId(1));
+        original.functions[0].continuations[0]
+            .instructions
+            .push(closure);
         let configured = BTreeMap::from([
             ("game".to_owned(), "game.blot".to_owned()),
             ("math".to_owned(), "math.blot".to_owned()),
@@ -1319,32 +1752,158 @@ mod tests {
         );
     }
 
-    fn scalar_program(value: i64) -> RuntimeModule {
-        let span = |file: &str| RuntimeSpan {
+    #[test]
+    fn development_callback_types_include_entry_bodies_in_both_units() {
+        let mut module = scalar_program(41);
+        module.types.extend([
+            RuntimeType::Unit,
+            RuntimeType::Product {
+                name: "captures".to_owned(),
+                fields: Vec::new(),
+            },
+            RuntimeType::Callback {
+                function: 2,
+                signature: 1,
+                environment_type: 2,
+            },
+        ]);
+        module.signatures.push(RuntimeSignature {
+            parameters: vec![1],
+            result: 0,
+            effects: Vec::new(),
+        });
+        let mut callback = module.functions[1].clone();
+        callback.id = FunctionId(2);
+        callback.name = "callback".to_owned();
+        callback.signature = SignatureId(1);
+        callback.framed = true;
+        callback.continuations[0].parameters.push(Definition {
+            value: ValueId(1),
+            type_id: TypeId(1),
+            ownership: "plain",
+            span: span("math.blot"),
+        });
+        module.functions.push(callback);
+        module.signatures[0].result = 3;
+        module.functions[0].continuations[1].parameters[0].type_id = TypeId(3);
+        module.functions[0].continuations[1].parameters[0].ownership = "owned";
+        let mut make = instruction("math.blot", "callback.make");
+        make.definition.type_id = TypeId(3);
+        make.definition.ownership = "owned";
+        make.operation.function = Some(FunctionId(2));
+        let mut environment = instruction("math.blot", "product.make");
+        environment.definition.value = ValueId(1);
+        environment.definition.type_id = TypeId(2);
+        environment.definition.ownership = "owned";
+        make.operands = vec![ValueId(1)];
+        module.functions[1].continuations[0].instructions = vec![environment, make];
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+        ]);
+        let split = split_runtime_module(&module, "game", &configured, &HashMap::new())
+            .expect("callback boundary should split");
+        for unit in split.units {
+            let module = unit.module.expect("unit should be prepared");
+            assert!(
+                module
+                    .types
+                    .iter()
+                    .any(|type_| matches!(type_, RuntimeType::Callback { .. }))
+            );
+            let compiled = crate::backend::close(module)
+                .and_then(|program| program.compile())
+                .expect("callback entries should emit in each unit");
+            wasmparser::Validator::new()
+                .validate_all(&compiled.wasm)
+                .expect("callback unit should validate");
+        }
+    }
+
+    #[test]
+    fn development_provider_exports_each_target_once_for_multiple_consumers() {
+        let mut module = scalar_program(41);
+        let mut middle = module.functions[0].clone();
+        middle.id = FunctionId(2);
+        middle.span = span("middle.blot");
+        module.functions.push(middle);
+        let entry = &mut module.functions[0];
+        entry.continuations[1].transition = Transition::Call {
+            target: CallTarget::Function {
+                function: FunctionId(2),
+            },
+            signature: SignatureId(0),
+            arguments: Vec::new(),
+            next: Edge {
+                target: ContinuationId(2),
+                arguments: vec![Argument::Result],
+            },
+            suspends: false,
+        };
+        let mut result = entry.continuations[1].clone();
+        result.id = ContinuationId(2);
+        result.parameters[0].value = ValueId(1);
+        result.transition = Transition::Return { value: ValueId(1) };
+        entry.continuations.push(result);
+        let configured = BTreeMap::from([
+            ("game".to_owned(), "game.blot".to_owned()),
+            ("math".to_owned(), "math.blot".to_owned()),
+            ("middle".to_owned(), "middle.blot".to_owned()),
+        ]);
+        let split = split_runtime_module(&module, "game", &configured, &HashMap::new())
+            .expect("shared provider should split");
+        let provider = split
+            .units
+            .into_iter()
+            .find(|unit| unit.name == "math")
+            .unwrap()
+            .module
+            .unwrap();
+        assert_eq!(provider.exports.len(), 1);
+        let compiled = crate::backend::close(provider)
+            .and_then(|program| program.compile())
+            .expect("shared provider should emit");
+        wasmparser::Validator::new()
+            .validate_all(&compiled.wasm)
+            .expect("shared provider must not repeat exports");
+    }
+
+    fn span(file: &str) -> RuntimeSpan {
+        RuntimeSpan {
             file: file.to_owned(),
             start: 0,
             end: 1,
-        };
-        let operation = |kind, result, function, value| RuntimeOperation {
-            kind,
-            result,
-            type_id: 0,
+        }
+    }
+
+    fn instruction(file: &str, kind: &'static str) -> Instruction {
+        Instruction {
+            definition: Definition {
+                value: ValueId(0),
+                type_id: TypeId(0),
+                ownership: "plain",
+                span: span(file),
+            },
             operands: Vec::new(),
-            ownership: "unrestricted",
-            span: span("game.blot"),
-            value,
-            update: None,
-            case: None,
-            capability: None,
-            operation: None,
-            operator: None,
-            conversion: None,
-            lane: None,
-            field: None,
-            function,
-            signature: None,
-            static_store: None,
-        };
+            operation: Operation {
+                kind,
+                value: None,
+                update: None,
+                case: None,
+                operator: None,
+                conversion: None,
+                lane: None,
+                field: None,
+                function: None,
+                signature: None,
+                static_store: None,
+            },
+        }
+    }
+
+    fn scalar_program(value: i64) -> RuntimeModule {
+        let mut constant = instruction("math.blot", "constant");
+        constant.operation.value = Some(WireConstant::SignedInteger64(value.to_string()));
         RuntimeModule {
             format: "blot-runtime-hir",
             schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
@@ -1356,50 +1915,74 @@ mod tests {
                 effects: Vec::new(),
             }],
             static_stores: Vec::new(),
-            functions: vec![
-                RuntimeFunction {
-                    id: 0,
-                    name: "entry".to_owned(),
-                    signature: 0,
-                    reuse: None,
-                    entry_block: 0,
-                    blocks: vec![RuntimeBlock {
-                        id: 0,
-                        parameters: Vec::<RuntimeBlockParameter>::new(),
-                        operations: vec![operation("call.direct", 0, Some(1), None)],
-                        terminator: RuntimeTerminator::Return {
-                            value: 0,
-                            span: span("game.blot"),
-                        },
-                    }],
-                    span: span("game.blot"),
-                },
-                RuntimeFunction {
-                    id: 1,
-                    name: "answer".to_owned(),
-                    signature: 0,
-                    reuse: None,
-                    entry_block: 0,
-                    blocks: vec![RuntimeBlock {
-                        id: 0,
-                        parameters: Vec::new(),
-                        operations: vec![operation(
-                            "constant",
-                            0,
-                            None,
-                            Some(crate::hir::WireConstant::SignedInteger64(value.to_string())),
-                        )],
-                        terminator: RuntimeTerminator::Return {
-                            value: 0,
+            graph: Graph {
+                functions: vec![
+                    RuntimeFunction {
+                        id: FunctionId(0),
+                        name: "entry".to_owned(),
+                        signature: SignatureId(0),
+                        reuse: None,
+                        entry: ContinuationId(0),
+                        suspends: false,
+                        framed: false,
+                        continuations: vec![
+                            Continuation {
+                                id: ContinuationId(0),
+                                parameters: Vec::new(),
+                                captures: Vec::new(),
+                                instructions: Vec::new(),
+                                transition: Transition::Call {
+                                    target: CallTarget::Function {
+                                        function: FunctionId(1),
+                                    },
+                                    signature: SignatureId(0),
+                                    arguments: Vec::new(),
+                                    next: Edge {
+                                        target: ContinuationId(1),
+                                        arguments: vec![Argument::Result],
+                                    },
+                                    suspends: false,
+                                },
+                                span: span("game.blot"),
+                            },
+                            Continuation {
+                                id: ContinuationId(1),
+                                parameters: vec![Definition {
+                                    value: ValueId(0),
+                                    type_id: TypeId(0),
+                                    ownership: "plain",
+                                    span: span("game.blot"),
+                                }],
+                                captures: Vec::new(),
+                                instructions: Vec::new(),
+                                transition: Transition::Return { value: ValueId(0) },
+                                span: span("game.blot"),
+                            },
+                        ],
+                        span: span("game.blot"),
+                    },
+                    RuntimeFunction {
+                        id: FunctionId(1),
+                        name: "answer".to_owned(),
+                        signature: SignatureId(0),
+                        reuse: None,
+                        entry: ContinuationId(0),
+                        suspends: false,
+                        framed: false,
+                        continuations: vec![Continuation {
+                            id: ContinuationId(0),
+                            parameters: Vec::new(),
+                            captures: Vec::new(),
+                            instructions: vec![constant],
+                            transition: Transition::Return { value: ValueId(0) },
                             span: span("math.blot"),
-                        },
-                    }],
-                    span: span("math.blot"),
-                },
-            ],
+                        }],
+                        span: span("math.blot"),
+                    },
+                ],
+            },
             capabilities: Vec::new(),
             links: Vec::new(),
-            resumable_roots: Vec::new(),
             exports: vec![RuntimeExport::Runtime {
                 source_name: "default".to_owned(),
                 phase: "runtime",
@@ -1412,95 +1995,25 @@ mod tests {
     }
 
     fn static_store_program(value: i64) -> RuntimeModule {
-        let span = |file: &str| RuntimeSpan {
-            file: file.to_owned(),
-            start: 0,
-            end: 1,
-        };
-        let operation = |kind, function, static_store, file| RuntimeOperation {
-            kind,
-            result: 0,
-            type_id: 1,
-            operands: Vec::new(),
-            ownership: "owned",
-            span: span(file),
-            value: None,
-            update: None,
-            case: None,
-            capability: None,
-            operation: None,
-            operator: None,
-            conversion: None,
-            lane: None,
-            field: None,
-            function,
-            signature: None,
-            static_store,
-        };
-        RuntimeModule {
-            format: "blot-runtime-hir",
-            schema_version: crate::protocol::RUNTIME_HIR_SCHEMA,
-            source: "game.blot".to_owned(),
-            types: vec![
-                RuntimeType::SignedInteger64,
-                RuntimeType::Store { element_type: 0 },
-            ],
-            signatures: vec![RuntimeSignature {
-                parameters: Vec::new(),
-                result: 1,
-                effects: Vec::new(),
-            }],
-            static_stores: vec![crate::hir::RuntimeStaticStore {
-                element_type: 0,
-                values: vec![crate::hir::WireConstant::SignedInteger64(value.to_string())],
-            }],
-            functions: vec![
-                RuntimeFunction {
-                    id: 0,
-                    name: "entry".to_owned(),
-                    signature: 0,
-                    reuse: None,
-                    entry_block: 0,
-                    blocks: vec![RuntimeBlock {
-                        id: 0,
-                        parameters: Vec::new(),
-                        operations: vec![operation("call.direct", Some(1), None, "game.blot")],
-                        terminator: RuntimeTerminator::Return {
-                            value: 0,
-                            span: span("game.blot"),
-                        },
-                    }],
-                    span: span("game.blot"),
-                },
-                RuntimeFunction {
-                    id: 1,
-                    name: "project".to_owned(),
-                    signature: 0,
-                    reuse: None,
-                    entry_block: 0,
-                    blocks: vec![RuntimeBlock {
-                        id: 0,
-                        parameters: Vec::new(),
-                        operations: vec![operation("store.literal", None, Some(0), "project.blot")],
-                        terminator: RuntimeTerminator::Return {
-                            value: 0,
-                            span: span("project.blot"),
-                        },
-                    }],
-                    span: span("project.blot"),
-                },
-            ],
-            capabilities: Vec::new(),
-            links: Vec::new(),
-            resumable_roots: Vec::new(),
-            exports: vec![RuntimeExport::Runtime {
-                source_name: "default".to_owned(),
-                phase: "runtime",
-                wasm_name: "blot:default".to_owned(),
-                function: 0,
-                signature: 0,
-                ownership: "owned",
-            }],
-        }
+        let mut module = scalar_program(value);
+        module.types.push(RuntimeType::Store { element_type: 0 });
+        module.signatures[0].result = 1;
+        module.static_stores.push(crate::hir::RuntimeStaticStore {
+            element_type: 0,
+            values: vec![WireConstant::SignedInteger64(value.to_string())],
+        });
+        let result = &mut module.functions[0].continuations[1].parameters[0];
+        result.type_id = TypeId(1);
+        result.ownership = "owned";
+        let provider = &mut module.functions[1];
+        provider.name = "project".to_owned();
+        provider.span = span("project.blot");
+        provider.continuations[0].span = span("project.blot");
+        let mut store = instruction("project.blot", "store.literal");
+        store.definition.type_id = TypeId(1);
+        store.definition.ownership = "owned";
+        store.operation.static_store = Some(0);
+        provider.continuations[0].instructions = vec![store];
+        module
     }
 }

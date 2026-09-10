@@ -49,7 +49,7 @@ export type BlotAbiFunction = {
 export type BlotAbiManifest = {
   readonly format: "blot-core-wasm";
   readonly abi: {
-    readonly major: 3;
+    readonly major: 4;
     readonly minor: 0;
     readonly memory: "memory32";
     readonly stringEncoding: "utf-8";
@@ -185,7 +185,7 @@ function requireDirectParameterCount(
   const flatParameters = function_.parameters.flatMap(flattenedAbiType).length;
   if (flatParameters <= maximumFlatParameters) return;
   throw new TypeError(
-    `${position} has ${flatParameters} flat parameters; Blot ABI 3 currently admits at most ${maximumFlatParameters}`,
+    `${position} has ${flatParameters} flat parameters; Blot ABI 4 currently admits at most ${maximumFlatParameters}`,
   );
 }
 
@@ -202,6 +202,24 @@ function requireDirectAbiType(type: BlotAbiType, position: string): void {
     return;
   }
   throw new TypeError(
-    `${position} uses ${type.kind}; the direct Blot ABI 3 path currently admits only flat values`,
+    `${position} uses ${type.kind}; the direct Blot ABI 4 path currently admits only flat values`,
   );
+}
+
+/** Entry names belong to each artifact; the canonical transferred layout does not. */
+export function abiLayoutIdentity(
+  value: BlotAbiType | BlotAbiFunction,
+): string {
+  return JSON.stringify(value, (_key, value) => {
+    if (
+      value !== null && typeof value === "object" && value.kind === "callback"
+    ) {
+      return {
+        kind: "callback",
+        function: value.function,
+        environment: value.environment,
+      };
+    }
+    return value;
+  });
 }

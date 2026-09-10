@@ -2,10 +2,11 @@ open import "blot:prelude"
 const Spark = import "blot:spark"
 
 const square :: Int -> Int = fn value => value * value
-let run :: { .executor = Spark.Executor; } -> [Int] -> [Int] ~ { Spark.Effect }
-let run = fn io => fn values => do:
+let run ::
+  { .executor = Spark.Executor; } -> Int -> [Int] -> [Int] ~ { Spark.Effect }
+let run = fn io => fn concurrency => fn values => do:
   let body :: Spark.Scope -> [Int] ~ { Spark.Effect }
-  let body = fn scope => Spark.map_parallel scope square values
+  let body = fn scope => Spark.map_parallel scope concurrency square values
   return Spark.scope io.executor body
 
 return { .run = run; }

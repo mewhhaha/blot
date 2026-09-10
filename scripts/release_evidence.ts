@@ -20,6 +20,8 @@ const requiredSteps = {
     "Check generated-code Rust formatting",
     "Check Rust lint",
     "Test Rust compiler",
+    "Verify emitted memory lifetimes",
+    "Verify guest ABI callers",
     "Deterministic compiler performance gates",
     "Check TypeScript",
     "Check current implementation manifest",

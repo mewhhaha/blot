@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,23 +100,27 @@ async function measure(
     times.push((performance.now() - before) * 1_000);
   }
   const operations = hir.functions.flatMap((fn) =>
-    fn.blocks.flatMap((block) => block.operations)
+    fn.continuations.flatMap((continuation) => continuation.instructions)
   );
   const writeOwnedSites =
-    operations.filter((operation) =>
-      operation.kind === "store.write" && operation.update === "owned-reuse"
+    operations.filter((instruction) =>
+      instruction.operation.kind === "store.write" &&
+      instruction.operation.update === "owned-reuse"
     ).length;
   const writePersistentSites =
-    operations.filter((operation) =>
-      operation.kind === "store.write" && operation.update === "persistent"
+    operations.filter((instruction) =>
+      instruction.operation.kind === "store.write" &&
+      instruction.operation.update === "persistent"
     ).length;
   const growOwnedSites =
-    operations.filter((operation) =>
-      operation.kind === "store.grow" && operation.update === "owned-reuse"
+    operations.filter((instruction) =>
+      instruction.operation.kind === "store.grow" &&
+      instruction.operation.update === "owned-reuse"
     ).length;
   const growPersistentSites =
-    operations.filter((operation) =>
-      operation.kind === "store.grow" && operation.update === "persistent"
+    operations.filter((instruction) =>
+      instruction.operation.kind === "store.grow" &&
+      instruction.operation.update === "persistent"
     ).length;
   const module = await WebAssembly.compile(artifact.wasm as BufferSource);
   const storeImports = WebAssembly.Module.imports(module)
@@ -190,7 +195,7 @@ async function instantiate(
       },
     },
   });
-  const run = instance.exports["blot:default"];
+  const run = scalarExport(instance, "blot:default");
   if (typeof run !== "function") throw new Error("benchmark export is missing");
   return run as () => bigint;
 }

@@ -317,12 +317,20 @@ const text_ends_with = fn (text, suffix) => do:
     #Some candidate => is_equal (@text.cmp candidate suffix)
     #None => False
 
-const text_scalars = fn text => {
-  .state = (text, 0);
-  .step = fn (value, index) => case text_scalar_at (value, index) of
-    #Some scalar => #Some (scalar, (value, index + 1))
+const TextCursor = #TextCursor (@type.text, @type.int)
+
+const text_cursor :: @type.text -> TextCursor
+const text_cursor = fn text => #TextCursor (text, 0)
+
+const text_next :: TextCursor -> (#None | #Some (@type.text, TextCursor))
+const text_next = fn cursor => case cursor of
+  #TextCursor (source, byte) => case @text.next_byte source byte of
+    #Some (scalar, next_byte) => #Some (scalar, #TextCursor (source, next_byte))
     #None => #None
-  ;
+
+const text_scalars = fn text => {
+  .state = text_cursor text;
+  .step = text_next;
 }
 
 const rec text_split_from ::
@@ -363,28 +371,23 @@ const text_lines = fn text => text_split (text, "\n")
 
 const text_whitespace = fn scalar => @text.contains " \t\r\n" scalar
 
-const rec text_trim_start = fn (text, index, length) => do:
-  if index < length:
-    if text_whitespace (@text.scalar_at text index):
-      return text_trim_start (text, index + 1, length)
-    else:
-      return index
-  else:
-    return length
-const rec text_trim_end = fn (text, start, end) => do:
-  if end > start:
-    if text_whitespace (@text.scalar_at text (end - 1)):
-      return text_trim_end (text, start, end - 1)
-    else:
-      return end
-  else:
-    return start
-
 const text_trim = fn text => do:
-  let length = @text.len text
-  let start = text_trim_start (text, 0, length)
-  let end = text_trim_end (text, start, length)
-  return @text.slice text start end
+  let start = 0
+  let end = 0
+  let index = 0
+  for scalar in text_scalars text:
+    if text_whitespace scalar:
+      if end == 0:
+        start := index + 1
+    else:
+      end := index + 1
+
+    index := index + 1
+
+  if end == 0:
+    return ""
+  else:
+    return @text.slice text start end
 
 const rec text_replace_from ::
   (
@@ -447,6 +450,9 @@ const TextOperations =
     .split = text_split;
     .lines = text_lines;
     .trim = text_trim;
+    .Cursor = TextCursor;
+    .cursor = text_cursor;
+    .next = text_next;
     .scalars = text_scalars;
     .starts_with = text_starts_with;
     .ends_with = text_ends_with;

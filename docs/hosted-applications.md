@@ -62,7 +62,7 @@ try {
 }
 ```
 
-The adapter supports closed ABI 3.0 artifacts with canonical input parameters:
+The adapter supports closed ABI 4.0 artifacts with canonical input parameters:
 `Int` uses JavaScript `bigint`, `F32`/`F64` use `number`, `Bool` uses `boolean`,
 and `Unit` uses `null`. Signatures requiring more than 16 flattened input lanes
 are refused rather than incorrectly passed as scalar arguments. The argument

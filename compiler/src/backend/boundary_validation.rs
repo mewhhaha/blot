@@ -15,6 +15,22 @@ pub(super) fn function(module: &RuntimeModule, index: u32, utf8: u32) -> Result<
                 .chain([signature.result])
         })
         .collect::<Vec<_>>();
+    let public_signatures = module
+        .exports
+        .iter()
+        .filter_map(|export| match export {
+            RuntimeExport::Runtime { signature, .. } => Some(*signature),
+            RuntimeExport::Comptime { .. } => None,
+        })
+        .chain(module.links.iter().map(|link| link.signature))
+        .chain(module.types.iter().filter_map(|type_| match type_ {
+            RuntimeType::Callback { signature, .. } => Some(*signature),
+            _ => None,
+        }));
+    for signature in public_signatures {
+        pending.extend(&module.signatures[signature].parameters);
+        pending.push(module.signatures[signature].result);
+    }
     while let Some(type_id) = pending.pop() {
         if !required.insert(type_id) {
             continue;

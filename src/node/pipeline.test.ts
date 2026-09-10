@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -164,9 +165,12 @@ test("multiple named runtime exports survive Runtime HIR and ABI lowering", asyn
     assert.deepEqual(runtimeAbiNames, expectedNames);
     assert.deepEqual(
       blotFunctionExports(artifact.wasm),
-      expectedNames.map(
-        (name) => `blot:${name}`,
-      ),
+      [
+        "blot:live-bytes",
+        "blot:live-allocations",
+        "blot:live-scopes",
+        ...expectedNames.map((name) => `blot:${name}`),
+      ],
     );
   } finally {
     compiler.destroy();
@@ -196,8 +200,8 @@ return { .original = original; .changed = changed; }
     const instantiated = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm),
     );
-    const changed = exportedFunction(instantiated.instance, "blot:changed");
-    const original = exportedFunction(instantiated.instance, "blot:original");
+    const changed = scalarExport(instantiated.instance, "blot:changed");
+    const original = scalarExport(instantiated.instance, "blot:original");
     assert.equal(changed(99n), 99n);
     assert.equal(original(0n), 10n);
   } finally {
@@ -258,10 +262,10 @@ test("a named .default field is projected as blot:default", async () => {
       Uint8Array.from(artifact.wasm),
     );
     assert.equal(
-      exportedFunction(instantiated.instance, "blot:default")(),
+      scalarExport(instantiated.instance, "blot:default")(),
       42n,
     );
-    assert.equal(exportedFunction(instantiated.instance, "blot:other")(), 7n);
+    assert.equal(scalarExport(instantiated.instance, "blot:other")(), 7n);
   } finally {
     compiler.destroy();
     await rm(directory, { recursive: true });
@@ -274,17 +278,20 @@ test("a deferred runtime argument is omitted when the callee never demands it", 
     const path = resolve("examples/deferred_runtime.blot");
     const hir = await compiler.prepare(path);
     const deferredOperations = hir.functions.flatMap((function_) =>
-      function_.blocks.flatMap((block) => block.operations)
+      function_.continuations.flatMap((continuation) =>
+        continuation.instructions
+      )
     );
     assert.equal(
-      deferredOperations.some((operation) =>
-        /defer|suspend|thunk/.test(operation.kind)
+      deferredOperations.some((instruction) =>
+        /defer|suspend|thunk/.test(instruction.operation.kind)
       ),
       false,
     );
     assert.equal(
-      deferredOperations.filter((operation) =>
-        operation.kind === "scalar" && operation.operator === "divide"
+      deferredOperations.filter((instruction) =>
+        instruction.operation.kind === "scalar" &&
+        instruction.operation.operator === "divide"
       ).length,
       2,
     );
@@ -296,8 +303,8 @@ test("a deferred runtime argument is omitted when the callee never demands it", 
       throw new Error("deferred example has no default HIR");
     }
     assert.equal(
-      runHir.blocks[runHir.entryBlock]?.terminator.kind,
-      "conditional",
+      runHir.continuations[runHir.entry]?.transition.kind,
+      "branch",
     );
 
     const artifact = await compiler.compile(path);
@@ -306,16 +313,16 @@ test("a deferred runtime argument is omitted when the callee never demands it", 
     );
     const memory = exportedMemory(instantiated.instance);
     const pagesBefore = memory.buffer.byteLength;
-    const run = exportedFunction(instantiated.instance, "blot:default");
+    const run = scalarExport(instantiated.instance, "blot:default");
     assert.equal(run(0n), 42n);
     assert.equal(run(7n), 12n);
-    const both = exportedFunction(instantiated.instance, "blot:both");
+    const both = scalarExport(instantiated.instance, "blot:both");
     assert.equal(both(0n), 1n);
     assert.equal(both(7n), 8n);
-    const choice = exportedFunction(instantiated.instance, "blot:choice");
+    const choice = scalarExport(instantiated.instance, "blot:choice");
     assert.equal(choice(0n, 0n), 42n);
     assert.equal(choice(1n, 7n), 12n);
-    const helper = exportedFunction(instantiated.instance, "blot:helper");
+    const helper = scalarExport(instantiated.instance, "blot:helper");
     assert.equal(helper(0n), 1n);
     assert.equal(helper(7n), 8n);
     for (let index = 0; index < 10_000; index += 1) {
@@ -365,7 +372,7 @@ return { .default = run; }
         },
       },
     );
-    const run = exportedFunction(instantiated.instance, "blot:default");
+    const run = scalarExport(instantiated.instance, "blot:default");
     assert.equal(run(0n), 42n);
     assert.equal(reads, 0);
     assert.equal(run(1n), 99n);
@@ -410,7 +417,7 @@ test("module grants keep Unit return typing through canonical text imports", asy
       Uint8Array.from(artifact.wasm),
       {
         "blot:host/Init": {
-          print(pointer: number, length: number): void {
+          print(_scope: number, pointer: number, length: number): void {
             if (active.instance === undefined) {
               throw new Error(
                 "host print called before instantiation completed",
@@ -425,7 +432,7 @@ test("module grants keep Unit return typing through canonical text imports", asy
     );
     active.instance = instantiated.instance;
     assert.equal(
-      exportedFunction(instantiated.instance, "blot:default")(),
+      scalarExport(instantiated.instance, "blot:default")(),
       42n,
     );
     assert.deepEqual(writes, ["compiled", "linked"]);
@@ -477,7 +484,7 @@ test("a module may directly return an effectful computation", async () => {
         },
       },
     );
-    const run = exportedFunction(instantiated.instance, "blot:default");
+    const run = scalarExport(instantiated.instance, "blot:default");
     assert.equal(run(), 42n);
     hostValue = -2n;
     assert.equal(run(), -1n);
@@ -560,13 +567,13 @@ test("dynamic signed i64 to f64 conversion matches WebAssembly edge rounding", a
           read(): bigint {
             return hostValue;
           },
-          observe(value: number): void {
+          observe(_scope: number, value: number): void {
             observed.push(value);
           },
         },
       },
     );
-    const run = exportedFunction(instantiated.instance, "blot:default");
+    const run = scalarExport(instantiated.instance, "blot:default");
     const cases = [
       -9223372036854775808n,
       -9007199254740993n,
@@ -601,20 +608,21 @@ test("agent-style recursion remains dynamic runtime control flow and compiles", 
     const function_ = hir.functions[0];
     assert.notEqual(function_, undefined);
     if (function_ === undefined) throw new Error("agent HIR has no function");
-    const blocks = hir.functions.flatMap((candidate) => candidate.blocks);
-    const hasConditional = blocks.some((block) =>
-      block.terminator.kind === "conditional"
+    const continuations = hir.functions.flatMap((candidate) =>
+      candidate.continuations
     );
-    const hasBackEdge = blocks.some((block) => {
-      if (block.terminator.kind !== "branch") return false;
-      return block.terminator.target <= block.id;
+    const hasConditional = continuations.some((continuation) =>
+      continuation.transition.kind === "branch"
+    );
+    const hasBackEdge = continuations.some((continuation) => {
+      if (continuation.transition.kind !== "jump") return false;
+      return continuation.transition.edge.target <= continuation.id;
     });
     const hasDirectRecursion = hir.functions.some((candidate) =>
-      candidate.blocks.some((block) =>
-        block.operations.some((operation) =>
-          operation.kind === "call.direct" &&
-          operation.function === candidate.id
-        )
+      candidate.continuations.some((continuation) =>
+        continuation.transition.kind === "call" &&
+        continuation.transition.target.kind === "function" &&
+        continuation.transition.target.function === candidate.id
       )
     );
     assert.equal(hasConditional, true);
@@ -660,7 +668,7 @@ test("owned radix sorts preserve signed order and stable equal-key order", async
         throw new Error(`runtime export ${name} has no Wasm name`);
       }
       assert.equal(
-        exportedFunction(instantiated.instance, exported.name)(-1n),
+        scalarExport(instantiated.instance, exported.name)(-1n),
         expected,
       );
     }
@@ -690,7 +698,7 @@ test("owned merge sort preserves equal-key order in emitted Wasm", async () => {
       {},
     );
     assert.equal(
-      exportedFunction(instantiated.instance, exported.name)(-1n),
+      scalarExport(instantiated.instance, exported.name)(-1n),
       20401030n,
     );
     const emptyLength = requiredRuntimeExport(manifest, "empty_length");
@@ -698,7 +706,7 @@ test("owned merge sort preserves equal-key order in emitted Wasm", async () => {
       throw new Error("runtime export empty_length has no Wasm name");
     }
     assert.equal(
-      exportedFunction(instantiated.instance, emptyLength.name)(32n),
+      scalarExport(instantiated.instance, emptyLength.name)(32n),
       0n,
     );
   } finally {
@@ -730,17 +738,6 @@ function blotFunctionExports(wasm: Uint8Array): string[] {
       exported.kind === "function" && exported.name.startsWith("blot:")
     )
     .map((exported) => exported.name);
-}
-
-function exportedFunction(
-  instance: WebAssembly.Instance,
-  name: string,
-): (...arguments_: readonly (bigint | number)[]) => unknown {
-  const exported = instance.exports[name];
-  if (typeof exported !== "function") {
-    throw new Error(`missing WebAssembly function export ${name}`);
-  }
-  return exported as (...arguments_: readonly (bigint | number)[]) => unknown;
 }
 
 function exportedMemory(instance: WebAssembly.Instance): WebAssembly.Memory {

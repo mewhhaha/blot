@@ -1650,7 +1650,7 @@ impl CapsuleEncoder {
             }
             Value::Text(value) => {
                 self.claim_bytes(value.len())?;
-                CapsuleValue::Text(value.clone())
+                CapsuleValue::Text(value.to_string())
             }
             Value::Unit => CapsuleValue::Unit,
             Value::Shape(fields) => CapsuleValue::Shape(self.encode_fields(fields, depth + 1)?),
@@ -2243,7 +2243,7 @@ fn decode_value(
             bits: *bits,
             lanes: lanes.clone(),
         },
-        CapsuleValue::Text(value) => Value::Text(value.clone()),
+        CapsuleValue::Text(value) => Value::Text(value.as_str().into()),
         CapsuleValue::Unit => Value::Unit,
         CapsuleValue::Shape(fields) => Value::Shape(decode_fields(
             fields,

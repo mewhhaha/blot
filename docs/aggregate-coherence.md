@@ -132,13 +132,13 @@ ownership-authorized reuse. Conversely, "array" does not mean "always allocates
 at this source occurrence": the empty array is allocation-free and closed
 literals can be pooled.
 
-The public ABI is another real boundary. ABI 2 flattens parameters but uses
-canonical indirect result storage where its result-lowering rules require it. An
-internal tuple result can therefore be inline even when exporting that value
-requires a caller-facing result buffer. That buffer is not evidence that tuples
-have different source meanings in parameter and result positions. Preserve
-[`docs/abi.md`](abi.md); do not change ABI bytes or signatures under the name of
-syntax cleanup.
+The public ABI is another real boundary. ABI 4 flattens source parameters after
+an explicit invocation-scope token but uses canonical indirect result storage
+where its result-lowering rules require it. An internal tuple result can
+therefore be inline even when exporting that value requires a caller-facing
+result buffer. That buffer is not evidence that tuples have different source
+meanings in parameter and result positions. Preserve [`docs/abi.md`](abi.md); do
+not change ABI bytes or signatures under the name of syntax cleanup.
 
 ## Recommended coherent model
 

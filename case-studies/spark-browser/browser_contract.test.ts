@@ -5,13 +5,55 @@ import { join } from "node:path";
 import test from "node:test";
 import { decodeManifest, type RuntimeValue } from "../../src/abi_values.ts";
 import { DevelopmentRuntime } from "../../src/development_runtime.ts";
-import { EventRuntime } from "../../src/events.ts";
+import { ChannelRuntime } from "../../src/channel.ts";
+import { SelectRuntime } from "../../src/select.ts";
+import { EventRuntime, type EventSink } from "../../src/events.ts";
 import type { HostOperation } from "../../src/host.ts";
-import { IoRuntime } from "../../src/io.ts";
+import { type ClockService, IoRuntime } from "../../src/io.ts";
 import { HostScope } from "../../src/resources.ts";
 import { SparkRuntime } from "../../src/spark.ts";
 import { createNodeWorkerExecutor } from "../../src/node/worker_executor.ts";
 import { serveHotReload } from "../hot-reload/serve.ts";
+
+interface ScheduledSleep {
+  readonly duration: number;
+  readonly signal: AbortSignal;
+  readonly finish: () => void;
+}
+
+class ControlledClock implements ClockService {
+  readonly sleeps: ScheduledSleep[] = [];
+  scheduled = Promise.withResolvers<void>();
+  now = () => 0n;
+
+  sleep = (duration: number, signal: AbortSignal): Promise<void> => {
+    signal.throwIfAborted();
+    const completion = Promise.withResolvers<void>();
+    const abort = () => completion.reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    this.sleeps.push({
+      duration,
+      signal,
+      finish: () => {
+        signal.removeEventListener("abort", abort);
+        completion.resolve();
+      },
+    });
+    this.scheduled.resolve();
+    return completion.promise;
+  };
+
+  async next(duration: number): Promise<ScheduledSleep> {
+    while (this.sleeps.length === 0) await this.scheduled.promise;
+    const sleep = this.sleeps.shift();
+    assert(sleep !== undefined);
+    assert.equal(sleep.duration, duration);
+    if (this.sleeps.length === 0) {
+      this.scheduled = Promise.withResolvers<void>();
+    }
+    return sleep;
+  }
+}
 
 test("the browser example serves isolated assets and executes its event actor through HTTP and Wasm", async () => {
   const directory = await mkdtemp(join(tmpdir(), "blot-browser-events-"));
@@ -26,12 +68,29 @@ test("the browser example serves isolated assets and executes its event actor th
   const sparks = new SparkRuntime(root, { workers });
   const services = new IoRuntime(root);
   const events = new EventRuntime(root, sparks);
+  const channels = new ChannelRuntime(root, sparks);
+  const selection = new SelectRuntime(channels, events, services);
   const displayed = Promise.withResolvers<RuntimeValue>();
+  const publications: RuntimeValue[] = [];
+  const activities: RuntimeValue[] = [];
+  const attached = Promise.withResolvers<EventSink>();
+  const clock = new ControlledClock();
   let message: RuntimeValue | undefined;
   let stopped = 0;
   let detached = 0;
   const ui = new Map<string, HostOperation>([
+    ["activity", (_context, request) => {
+      assert(
+        typeof request === "object" && request !== null &&
+          "kind" in request && request.kind === "record",
+      );
+      const activity = request.fields.get("1");
+      assert(activity !== undefined);
+      activities.push(activity);
+      return null;
+    }],
     ["show", (_context, request) => {
+      publications.push(request);
       displayed.resolve(request);
       return null;
     }],
@@ -51,6 +110,8 @@ test("the browser example serves isolated assets and executes its event actor th
         ...sparks.capabilitiesFor(artifact),
         ...services.capabilitiesFor(artifact),
         ...events.capabilitiesFor(artifact),
+        ...channels.capabilitiesFor(artifact),
+        ...selection.capabilitiesFor(artifact),
       ]);
       const selected = new Map<string, HostOperation>();
       for (const imported of decodeManifest(artifact.manifestBytes).imports) {
@@ -102,6 +163,7 @@ test("the browser example serves isolated assets and executes its event actor th
       { kind: "signed-integer-64" },
       (sink) => {
         sink.emit(21n);
+        attached.resolve(sink);
         return () => {
           detached += 1;
         };
@@ -112,7 +174,7 @@ test("the browser example serves isolated assets and executes its event actor th
       fields: new Map([
         ["executor", sparks.executor],
         ["changes", changes],
-        ["clock", services.clock(root)],
+        ["clock", services.clock(root, clock)],
         ["http", services.http(root, { baseURL: origin })],
         ["view", view],
       ]),
@@ -123,9 +185,23 @@ test("the browser example serves isolated assets and executes its event actor th
     });
     const cancellation = new Error("stop browser example");
     const rejected = assert.rejects(pending, (error) => error === cancellation);
+    const sink = await attached.promise;
+    const firstDebounce = await clock.next(150);
+    sink.emit(22n);
+    const secondDebounce = await clock.next(150);
+    assert.equal(firstDebounce.signal.aborted, true);
+    secondDebounce.finish();
+    const obsolete = await clock.next(300);
+    sink.emit(23n);
+    const latestDebounce = await clock.next(150);
+    assert.equal(obsolete.signal.aborted, true);
+    assert.equal(workers.statistics.jobsSubmitted, 0);
+    assert.equal(publications.length, 0);
+    latestDebounce.finish();
+    (await clock.next(300)).finish();
     assert.deepEqual(await displayed.promise, {
       kind: "record",
-      fields: new Map<string, RuntimeValue>([["0", view], ["1", 42n], [
+      fields: new Map<string, RuntimeValue>([["0", view], ["1", 46n], [
         "2",
         1n,
       ]]),
@@ -137,10 +213,20 @@ test("the browser example serves isolated assets and executes its event actor th
         "Live events, editable code.\n",
       ]]),
     });
+    assert.equal(workers.statistics.jobsCompleted, 1);
+    assert(activities.includes("Superseded"));
+    sink.emit(24n);
+    (await clock.next(150)).finish();
+    const interrupted = await clock.next(300);
     controller.abort(cancellation);
     await rejected;
     assert.equal(stopped, 1);
     assert.equal(detached, 1);
+    assert.equal(interrupted.signal.aborted, true);
+    assert.equal(sparks.statistics.jobsActive, 0);
+    assert.equal(sparks.statistics.jobsRetained, 0);
+    sink.emit(99n);
+    assert.equal(publications.length, 1);
   } finally {
     await runtime.close();
     await root.close();

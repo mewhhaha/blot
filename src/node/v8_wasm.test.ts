@@ -1,3 +1,5 @@
+import { requiredFunction } from "../abi_values.ts";
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -41,7 +43,7 @@ test("V8 executes the Wasm 3 target and accepts branch metadata", async () => {
     assert.ok(branchHints[0].byteLength > 0);
 
     const instance = await WebAssembly.instantiate(module);
-    const isEven = instance.exports["blot:is_even"] as
+    const isEven = scalarExport(instance, "blot:is_even") as
       | ((remaining: bigint) => bigint)
       | undefined;
     assert.equal(typeof isEven, "function");
@@ -69,7 +71,7 @@ test("effectful Unit loops keep bounded stack and preserve pending effects", asy
       Uint8Array.from(artifact.wasm),
       {
         "blot:host/Probe": {
-          visit(index: bigint) {
+          visit(_scope: number, index: bigint) {
             if (recordUnwind) {
               visits.push(index);
               return;
@@ -85,8 +87,8 @@ test("effectful Unit loops keep bounded stack and preserve pending effects", asy
         },
       },
     );
-    const run = instance.exports["blot:run"];
-    const unwind = instance.exports["blot:unwind"];
+    const run = scalarExport(instance, "blot:run");
+    const unwind = scalarExport(instance, "blot:unwind");
     assert.equal(typeof run, "function");
     assert.equal(typeof unwind, "function");
     if (typeof run !== "function" || typeof unwind !== "function") {
@@ -110,7 +112,7 @@ test("effectful Unit loops keep bounded stack and preserve pending effects", asy
   }
 });
 
-test("cabi_realloc grows the active allocation geometrically", async () => {
+test("cabi_realloc reuses each capacity class and preserves moved bytes", async () => {
   const compiler = await Compiler.create();
   try {
     const artifact = await compiler.compile(resolve("examples/minimal.blot"));
@@ -119,6 +121,7 @@ test("cabi_realloc grows the active allocation geometrically", async () => {
     );
     const realloc = instance.instance.exports.cabi_realloc as
       | ((
+        scope: number,
         oldPointer: number,
         oldSize: number,
         alignment: number,
@@ -134,20 +137,26 @@ test("cabi_realloc grows the active allocation geometrically", async () => {
       throw new Error("minimal artifact omitted its canonical allocator");
     }
 
-    const first = realloc(0, 0, 8, 8);
-    new DataView(memory.buffer).setBigInt64(first, 0x102030405060708n, true);
-    const withinInitialCapacity = realloc(first, 8, 8, 16);
-    const grownAtHeapTop = realloc(withinInitialCapacity, 16, 8, 17);
-    assert.equal(withinInitialCapacity, first);
-    assert.equal(grownAtHeapTop, first);
-
-    realloc(0, 0, 8, 16);
-    const moved = realloc(grownAtHeapTop, 17, 8, 40);
-    assert.notEqual(moved, first);
-    assert.equal(
-      new DataView(memory.buffer).getBigInt64(moved, true),
-      0x102030405060708n,
-    );
+    const scope = Number(requiredFunction(instance.instance, "cabi_enter")());
+    try {
+      const first = realloc(scope, 0, 0, 8, 8);
+      new DataView(memory.buffer).setBigInt64(first, 0x102030405060708n, true);
+      const withinInitialCapacity = realloc(scope, first, 8, 8, 16);
+      const grown = realloc(scope, withinInitialCapacity, 16, 8, 17);
+      assert.equal(withinInitialCapacity, first);
+      assert.notEqual(grown, first);
+      const withinGrownCapacity = realloc(scope, grown, 17, 8, 32);
+      assert.equal(withinGrownCapacity, grown);
+      realloc(scope, 0, 0, 8, 16);
+      const moved = realloc(scope, withinGrownCapacity, 32, 8, 40);
+      assert.notEqual(moved, grown);
+      assert.equal(
+        new DataView(memory.buffer).getBigInt64(moved, true),
+        0x102030405060708n,
+      );
+    } finally {
+      requiredFunction(instance.instance, "cabi_leave")(scope);
+    }
   } finally {
     compiler.destroy();
   }

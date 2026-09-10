@@ -346,16 +346,20 @@ meaning. The development compiler specializes demanded polymorphic functions at
 their call sites, then turns a residual direct call whose definition belongs to
 another configured root into a unit link. A closed first-order ABI value may
 cross that link: unit, integers, floats, booleans, text, arrays, records,
-variants, and seals. Functions, compiler-private storage or indirection,
+variants, and seals. A precompiled affine callback may cross with its checked
+entry and copied environment; each unit contains the corresponding specialized
+entry. Other function values, compiler-private storage or indirection,
 continuations, and unresolved source effects cannot cross a reload boundary. The
 development target refuses such a checked program rather than assigning it new
 source semantics. Unit links do not require a host effect; a pure program may
 cross a reload boundary using only ordinary imported functions.
 
 Development caching preserves these same checking and execution rules. It may
-reuse a previously specialized closed scalar call graph, including generic
-instances and recursion, after its current source inputs have been checked.
-Restarting a development server does not restore a browser's live module state.
+reuse a previously specialized closed continuation graph, including generic
+instances, recursive components, aggregates, and runtime capture slots, after
+its current source inputs have been checked. Live authority and generative
+identities are not persistent cache entries. Restarting a development server
+does not restore a browser's live module state.
 
 Each unit has independent runtime memory and module state. Activating a changed
 unit creates a fresh instance, so its state resets. An unchanged unit retains
@@ -1565,7 +1569,9 @@ case value of
 
 The target is evaluated once. Arms are tested from left to right, each in a
 scope containing its pattern bindings. The first matching arm supplies the case
-value.
+value. Branches may supply narrower constructor sets inside the same nested
+variant payload. They are injected into the checked result type at the join and
+when returned from a function.
 
 When the target's type is known, the union of the arm patterns must cover it. A
 wildcard or name pattern is irrefutable. A pinned pattern is not: the binding
@@ -2459,6 +2465,13 @@ its carrier.
 
 ### 10.5 Deliberate inference limits
 
+Affine array-index checking has deterministic budgets of 512 terms and 2,048
+edges per relevant proof graph. Unrelated declarations do not spend that budget.
+Predicate normalization has a 256-node budget. Exhaustion reports the compiler
+limits `BLOT_REFINEMENT_BUDGET` or `BLOT_PREDICATE_BUDGET`, respectively; it
+does not establish a source type error. Unsupported predicate forms and
+disproved array bounds remain source diagnostics.
+
 The implemented checker does not currently prove:
 
 - range-refining arithmetic — `@int.add n 1` widens to `Int` whatever `n` was,
@@ -2753,7 +2766,7 @@ wrapper locally. No `Slice` module, binding, or field name is recognized by the
 checker. Unknown and host-supplied functions retain the conservative ordinary
 call rule.
 
-Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 3
+Regions and rejoin witnesses are compiler-private values. Blot Core Wasm ABI 4
 has no encoding for either and refuses a live one at a public boundary. Internal
 Runtime HIR lowers a Region to private Store-plus-bounds data, erases the
 witness after checking, uses persistent acquisition for shared inputs, and may
@@ -2895,6 +2908,11 @@ or an ambient execution context. A source handler can handle such an operation
 normally; an unhandled host operation requires the resumable caller protocol.
 The complete normalized operation contract is part of the generative effect
 identity together with the operation signatures.
+
+Specializing a host operation applies the same type substitution to its input
+and result. The relationship includes array elements, matching constructor
+payloads, and resource payloads. Passing those values to the host preserves the
+checked aggregate type, including every admitted constructor.
 
 Ordinary effects are generative by semantic occurrence. Two written calls of an
 effect-producing function create distinct effect values even when their
@@ -3045,9 +3063,15 @@ transfers source authority to the host, and a linear or affine result transfers
 a fresh obligation back to the program. A conforming host must obey that
 protocol even when the boundary carrier is a scalar with no allocated memory.
 
-A lexical borrow cannot remain in scope across a possibly suspending call.
-Ownership checking rejects both direct suspending operations and calls whose
-effect rows may suspend, including open effect rows. A direct synchronous
+A borrow ends after its last demanded use, including uses through aliases and
+captured closures. A possibly suspending call cannot retain a borrow needed by
+its continuation or by an earlier operand of the expression being evaluated.
+Branch alternatives have separate continuations; an unused lazy declaration does
+not extend a borrow. A loop's recursive continuation retains borrows used in a
+later iteration.
+
+Ownership checking applies this rule to direct suspending operations and calls
+whose effect rows may suspend, including open effect rows. A direct synchronous
 operation remains allowed even when its effect declares other suspending
 operations. Move owned state into resumable computations; a borrow does not
 acquire a longer lifetime because a host copies its canonical arguments.
@@ -3204,6 +3228,7 @@ Everything not listed here belongs in source, normally the prelude.
 | `@text.join`                                | concatenate an array of text in one allocation       |
 | `@text.len`                                 | count Unicode code points                            |
 | `@text.scalar_at`                           | read one validated Unicode scalar                    |
+| `@text.next_byte`                           | step one UTF-8 scalar from a byte boundary           |
 | `@text.slice`                               | slice at validated Unicode scalar bounds             |
 | `@text.find_from`                           | find a substring from a Unicode scalar offset        |
 | `@text.cmp`                                 | compare text and return an ordering constructor      |
@@ -3965,7 +3990,7 @@ root. Constructor matching loads the target before inspecting its tag, while a
 recursive edge copies only the indirect word. The representation is entirely
 compiler-owned: source programs do not name boxes, pointers, regions, or
 lifetimes. A recursive value may be used internally to produce an ABI-supported
-result, but the indirect root itself cannot cross Blot Core Wasm ABI 3. A
+result, but the indirect root itself cannot cross Blot Core Wasm ABI 4. A
 self-only result equation with no constructor case is refused rather than given
 an invented inhabitant.
 
@@ -4026,6 +4051,14 @@ time, the ordinary dynamic-shape refusal still applies.
 
 ### 15.1 Core WebAssembly ABI
 
+Runtime HIR represents execution as an owned continuation graph. Each
+continuation names its parameters and live captures, executes its instructions,
+and transfers through an explicit jump, branch, switch, call, return, or trap. A
+call names its closed signature and the successor receiving its result.
+Suspension preserves only the successor's live state and resumes it once,
+without replaying earlier effects. This representation adds no source syntax,
+ambient execution context, or alternative typing judgment.
+
 `blot build` validates Blot Runtime HIR, constructs the ABI adapters specified
 here, and emits the resulting plan through the checked Rust/WebAssembly emitter.
 The compiler parses through Baba 9's CPU frontend and materializes its compact
@@ -4034,7 +4067,7 @@ literal policy, Blot re-ingests those already-identified token spans with
 offset-preserving zero spellings and materializes the original I64 text; no
 tokenization rule is duplicated. The external conformance tools may exercise
 alternate frontends or evaluators, but they are not compiler targets. Generated
-modules implement Blot Core Wasm ABI 3.0. Backend-private values and heap
+modules implement Blot Core Wasm ABI 4.0. Backend-private values and heap
 objects never cross the generated adapters, which expose canonical memory32,
 UTF-8 values. Synchronous exports execute directly. Exports that reach an
 unhandled suspending host operation use Rust-emitted resumable frames; direct
@@ -4045,10 +4078,10 @@ release, and caller allocation lifetimes. This protocol requires no JSPI.
 Each runtime field of a record module result is exported as `blot:<field>`. A
 module whose result is not a record has one export, `blot:default`, which is
 that result. Host effects import their operations from `blot:host/<capability>`.
-The module exports `memory`, `cabi_realloc`, and immutable `blot:abi-major` and
-`blot:abi-minor` globals. An indirect result also exports
-`cabi_post_blot:<field>`, which the caller must invoke exactly once after
-reading the result.
+The module exports `memory`, `cabi_enter`, `cabi_leave`, `cabi_realloc`, and
+immutable `blot:abi-major` and `blot:abi-minor` globals. An indirect result also
+exports `cabi_post_blot:<field>`, which the caller must invoke exactly once
+after reading the result.
 
 The boundary representations are:
 
@@ -4066,11 +4099,23 @@ The boundary representations are:
 `F32x4` and `F32x4Mask` stay private to the compiled artifact. Publishing either
 is `BLOT_VECTOR_AT_BOUNDARY`; extract lanes or select a vector before exporting.
 
-At most 16 flat parameters and one flat result are used. Larger parameter lists
-and results use canonical record memory. Parameters are borrowed. Indirect
-results and their nested buffers are owned until the declared post-return call.
-Malformed UTF-8, booleans, discriminants, lengths, pointers, and alignments
-trap.
+ABI 4 calls carry an explicit instance-local allocation-scope token before their
+source parameters. `cabi_enter()` creates one token per invocation;
+reallocation, exports, synchronous imports, post-return, and resumable controls
+use that token. The host drains admitted work and releases its context before
+`cabi_leave(scope)`. Each invocation's allocations retire independently of
+suspended siblings.
+
+At most 16 flat source-parameter lanes and one flat result are used. Larger
+parameter lists and results use canonical record memory. Entry validates and
+copies canonical parameters into private values, then releases their temporary
+buffers. Indirect results and nested buffers remain readable until post-return.
+Private values use last-use reference transfers and reusable backing
+allocations; interior Text slices and nested arrays retain their owners. Scope
+exit also reclaims remaining guest memory after cancellation or a trap. This
+allocation lifetime does not replace source ownership or the host's resource
+cleanup. Malformed UTF-8, booleans, discriminants, lengths, pointers, and
+alignments trap.
 
 `@branch.likely condition` and `@branch.unlikely condition` are boolean
 identities. In an `if` condition they additionally emit WebAssembly branch-hint
@@ -4079,8 +4124,8 @@ custom section observe identical semantics. The prelude exports them as `likely`
 and `unlikely`.
 
 Text primitives are module-local Wasm operations, not host imports. Public
-indices are Unicode scalar positions. `Text.scalar_at`, `Text.slice`, and
-`Text.find_from` return `Option` for invalid bounds or a missing substring;
+indexed operations use Unicode scalar positions. `Text.scalar_at`, `Text.slice`,
+and `Text.find_from` return `Option` for invalid bounds or a missing substring;
 their checked prelude paths guard the lower-level scalar-at, slice, and search
 operations. Runtime and compile-time evaluation use the same scalar semantics.
 `Text.split`, `Text.lines`, `Text.trim`, `Text.scalars`, starts/ends-with, and
@@ -4088,6 +4133,21 @@ operations. Runtime and compile-time evaluation use the same scalar semantics.
 `Text.replace` collects source slices and replacements in an affine Scratch
 builder, then calls `@text.join` once; it does not repeatedly copy the growing
 prefix.
+
+`Text.Cursor` is the ordinary tagged type `#TextCursor (Text, Int)`.
+`Text.cursor text` starts at the beginning of that Text. `Text.next cursor`
+returns `#Some (scalar, next_cursor)` or `#None` at the end; the original cursor
+remains usable. Its integer carrier is a UTF-8 byte position, while the existing
+indexed Text APIs continue to use Unicode scalar positions. A forged cursor with
+a negative, oversized, or continuation-byte position traps.
+
+The curried `@text.next_byte text byte` primitive returns
+`#Some (scalar, next_byte)` from a valid boundary before the end and `#None` at
+the end. An invalid byte boundary fails with `BLOT_TEXT_BYTE_BOUNDS` during
+evaluation and traps in emitted Wasm. `Text.scalars` uses `Text.cursor` and
+`Text.next`. `Text.trim` scans that iterator once and removes only leading and
+trailing space, tab, carriage return, and line feed; other Unicode whitespace
+and interior whitespace remain unchanged.
 
 The backend retains UTF-8 internally: scalar count and offset helpers scan lead
 bytes, while substring matching scans bytes only after both input texts and the
@@ -4097,7 +4157,7 @@ continuation byte and returned indices remain scalar positions.
 The JSON sidecar and the `blot:abi` custom section contain identical bytes. The
 manifest is the authoritative structural contract for exports, imports,
 operation input and result ownership, record fields, variant cases, and seals.
-ABI 3 layout and meaning are stable within major version 3; an incompatible
+ABI 4 layout and meaning are stable within major version 4; an incompatible
 change requires another major. The byte-level layouts and host calling example
 are in [docs/abi.md](docs/abi.md).
 
@@ -4168,7 +4228,7 @@ boundary. An invocation can use its own or an ancestor's leases; a child-owned
 lease cannot escape to its parent or a sibling. Revoked identities are never
 reused.
 
-The host adapter consumes the versioned ABI 3.0 manifest and emitted Wasm; it
+The host adapter consumes the versioned ABI 4.0 manifest and emitted Wasm; it
 does not introduce source types or reinterpret effect rows. It exposes `call`
 for direct exports and `callAsync` for either execution contract, with copied
 canonical arguments and results and explicit host operation maps. Each host
@@ -4184,12 +4244,12 @@ with any primary failure. This host cleanup does not execute arbitrary Blot
 finalizers after a trap. Promise results require a checked suspending operation.
 Missing/extra capabilities, reentrant calls, and sidecar/embedded manifest
 disagreement are refused. `callAsync` accepts an optional caller cancellation
-signal; cancellation is observed between Wasm blocks and after host completion.
-`close` cancels and drains active calls. The adapter admits affine transfers of
-canonical values and refuses linear host transfers without registered scope
-cleanup. It never silently discards an owned host result. `blot pack` uses the
-existing package semantics, and `blot explain` displays existing Rust compiler
-facts; neither adds an alternative semantic compiler.
+signal; cancellation is observed at continuation checkpoints and after host
+completion. `close` cancels and drains active calls. The adapter admits affine
+transfers of canonical values and refuses linear host transfers without
+registered scope cleanup. It never silently discards an owned host result.
+`blot pack` uses the existing package semantics, and `blot explain` displays
+existing Rust compiler facts; neither adds an alternative semantic compiler.
 
 A host operation may accept a checked strict source closure. Specialization
 compiles its entry and runtime captures with the artifact. Calling the host
@@ -4206,6 +4266,11 @@ ordinary `@forall` value, for example
 Those effects remain visible to the caller even when the executor performs the
 callback later. There is no implicit execution capability or effect discharge
 from merely passing a closure.
+
+A callback's free signature variables and open effect-row tails must be resolved
+before compilation. Variables bound by `@forall` inside the operations of a
+nominal effect are local to those operations; they do not make a concrete
+callback signature open or erase its checked input and result types.
 
 The host may instantiate an already compiled `WebAssembly.Module` together with
 its matching manifest. Manifest/import validation is unchanged. Its checked
@@ -4232,12 +4297,17 @@ supplies an executor in an explicit record such as `io.executor`.
 `Spark.child_scope parent
 body` creates a nested lifetime.
 `Spark.spawn scope (?work)` consumes a strict `Unit -> result` closure and
-schedules it once; `Spark.join job` suspends until its result is available.
-Scope return joins required jobs. A failed job cancels the scope and its
-siblings. `Spark.cancel job` cancels and drains that job; `Spark.yield scope`
-yields to the host. Jobs cannot escape their scope, and callbacks cannot escape
-their defining artifact. There is no ambient executor. The function's effect row
-still includes `Spark.Effect` and the effects of its body and jobs.
+schedules it once and returns an affine job. `Spark.join job` consumes that job
+and suspends until its result and cleanup are available. `Spark.cancel job` also
+consumes it, requests cancellation, and drains the admitted work. Neither
+operation can use the same job twice. Completed work releases its submitted
+callback and execution lifetime; an unconsumed handle retains its result or
+failure until consumption or scope exit. Consumption retires the job before the
+operation returns. Scope return joins required jobs. A failed job cancels the
+scope and its siblings. `Spark.yield scope` yields to the host. Jobs cannot
+escape their scope, and callbacks cannot escape their execution authority. There
+is no ambient executor. The function's effect row still includes `Spark.Effect`
+and the effects of its body and jobs.
 
 Development runtimes can supply the same checked host capabilities and invoke
 async exports with `callAsync`. Preparing an activation validates and
@@ -4249,18 +4319,24 @@ must await. Cleanup failures are aggregated and reported after the drained
 replacement is published. Precompiled callbacks can remain inside a development
 unit and call pure or suspending providers. Linked calls retain the caller's
 logical scope and cancellation authority while executing the provider's compiled
-code. A provider can register cleanup in that scope. Callback values themselves
-still require an additional adapter to cross a unit link and are currently
-refused.
+code. A provider can register cleanup in that scope. A callback crossing a link
+transfers its environment to the compiler-checked entry in the receiving unit;
+the host consumes the intermediate callback handle once.
 
-Worker callbacks capture the precompiled transitive unit bundle active when the
-callback is created. A bundle's identity includes each dependency module, so
-retaining the consumer cannot accidentally reuse an old provider after reload.
-Workers instantiate those modules directly and use the same canonical
-development-link bridge as the main host. Each worker retains at most sixteen
-recently used program instances; eviction drains cleanup before another job
-starts. Host-side development bundle identities are also bounded. A trapped
-bundle is discarded as a whole; its required job is never replayed.
+Local and worker callbacks capture the same precompiled transitive unit bundle
+active when the callback is created. Nested direct and suspending links use that
+snapshot throughout the callback. Replaced instances remain alive while
+callbacks pin them; consuming or releasing the last callback disposes the
+retired instance. Aborting preparation leaves existing snapshots intact. Closing
+the runtime revokes uncalled callbacks and drains their scopes.
+
+Worker callbacks execute that captured bundle. A bundle's identity includes each
+dependency module, so retaining the consumer cannot accidentally reuse an old
+provider after reload. Workers instantiate those modules directly and use the
+same canonical development-link bridge as the main host. Each worker retains at
+most sixteen recently used program instances; eviction drains cleanup before
+another job starts. Host-side development bundle identities are also bounded. A
+trapped bundle is discarded as a whole; its required job is never replayed.
 
 `Spark.parallel scope (?work)` schedules a required pure `Unit -> result`
 callback on the scope executor's worker pool. A host configures that pool
@@ -4279,16 +4355,23 @@ may leave it queued; `Spark.join spark` demands its result and promotes it to
 required work without replay. A speculative failure is buffered until demand.
 Scope return cancels and drains undemanded speculation, including divergent
 work, before cleanup. Required jobs take queue priority, and the pool reserves
-one worker for required progress. Existing affine deferred parameters can defer
-the expression `Spark.join spark`; the worker itself receives a strict compiled
-callback, with no escaping source thunk or new lazy heap.
+one worker for required work. Waiting jobs use FIFO order within each priority;
+promoting a queued speculative job appends it to the required queue. Promoting
+running work changes its priority without restarting it. Queue insertion,
+dispatch, promotion, and cancellation remove or move each job in constant time.
+Existing affine deferred parameters can defer the expression `Spark.join spark`;
+the worker itself receives a strict compiled callback, with no escaping source
+thunk or new lazy heap.
 
-`Spark.map_parallel scope transform values` is source composition of required
-parallel jobs and joins. It consumes the array into an immutable traversal,
-submits one pure callback per element, and returns results in input order. An
-empty array submits no jobs. Its memory use is proportional to the finite input;
-the executor bounds simultaneous worker execution. The transform must have a
-checked strict signature whose argument and result close at specialization.
+`Spark.map_parallel scope concurrency transform values` is source composition of
+required parallel jobs and consuming joins. `concurrency` must be positive,
+including for an empty input; an invalid bound traps before admitting work. It
+freezes the input for immutable traversal, keeps at most `concurrency`
+unconsumed jobs, joins in input order, and replenishes the bounded queue as jobs
+retire. Results retain input order. Input and output storage are proportional to
+the finite input; outstanding job storage is bounded by the explicit
+concurrency. The transform must have a checked strict signature whose argument
+and result close at specialization.
 
 `Spark.on_exit scope (?cleanup)` consumes a strict `Unit -> Unit` closure and
 registers it before returning. Scope exit stops admission, drains child work and
@@ -4392,6 +4475,32 @@ discards queued messages and releases the subscription; pending waits cancel
 with their call. An event source's host registration must return its disposer
 transactionally. Blot does not expose browser event objects or shared mutable
 actor state.
+
+`import "blot:select"` provides `Select.Arm message`, `Select.Outcome message`,
+`Select.Selection message`, and `Select.Effect`. Build arms with
+`Select.channel receiver`, `Select.events subscription`, and
+`Select.after clock milliseconds`. The timer requires an explicitly granted
+`Io.Clock.Capability`; durations are integers from zero through 2147483647.
+`Select.wait arms` consumes a nonempty array of arms and suspends until one
+commits. Every channel and subscription in that array has the same message type.
+Timer-only arrays can declare their message type with `[Select.Arm Int]`. The
+result is `{ .index = index; .outcome = outcome; }`, where the zero-based index
+identifies the chosen arm and the outcome is `#Message (Option message)` or
+`#Timeout`. The result owns any received message.
+
+At admission, the lowest source index among ready receive arms wins. Clock arms
+become ready when the granted clock's sleep completes, including for duration
+zero. After admission, the first readiness that commits wins. A closed and
+drained channel or subscription is ready with `#Message #None`; a failed source
+rejects the wait. Selection takes exactly one message or rendezvous send. Losing
+buffered messages and blocked sends remain available, and losing receive
+registrations are removed. An event subscription's explicit latest/queue policy
+continues to apply independently of selection. Losing timers are cancelled and
+all admitted timer work drains before the selection returns or rejects. Caller
+cancellation removes registrations and drains timers without receiving a
+message. Selection does not close its channels or subscriptions. No timer
+authority is ambient, and an ungranted or revoked clock is rejected before any
+arm is admitted.
 
 A `struct` constructor checks field names on the specialized source record and
 rejects extra, missing, or wrongly typed fields. Evaluating an attached

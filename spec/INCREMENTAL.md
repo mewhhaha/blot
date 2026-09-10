@@ -400,19 +400,20 @@ dependency-boundary invalidation removes the entry before another request. This
 cache skips checking and Runtime-HIR reconstruction for a no-op request; it does
 not change staging, specialization, or source meaning.
 
-### 8.1 Development scalar graph memos
+### 8.1 Development continuation graph memos
 
 After source and ownership checking, development specialization may reuse a
-completed scalar call graph at a configured root boundary. The graph includes
-ordinary helpers, closed generic instances, and recursive calls. It carries no
-checked source interface and cannot install one. Admission requires scalar
-parameters/results, an empty effect row, no runtime captures, and plain
-ownership. Captured effects, module closures, live state, Regions, Scratch, and
-continuations decline memoization. Captured source bodies reject effect
-creation, dynamic imports, handlers, and continuation primitives. Unused source
-methods may contain local storage primitives; the completed graph must contain
-only scalar operations and completion must not change the effect generation or
-operator attachment stamp. Other valid programs specialize normally.
+completed continuation graph at a configured root boundary. It includes ordinary
+helpers, closed generic instances, runtime capture parameters, aggregates, and
+complete recursive function components. It carries no checked source interface
+and cannot install one. Admission requires an empty effect row, closed runtime
+representations, and the finite scalar, product, sum, Store, indirection, and
+Text instruction contracts. Captures become formal slots; their runtime values
+and ownership authority never enter the cache. Region, Scratch, Resource,
+callback, mutable evaluator state, and continuations decline memoization.
+Captured source bodies reject effect creation, dynamic imports, handlers, and
+continuation primitives. Completion must preserve the effect-generation and
+attachment stamp. Other valid programs specialize normally.
 
 The exact key retains the source signature, checked argument and result
 evidence, free values and their signatures, captured closure graphs, static
@@ -440,23 +441,45 @@ span, and closed argument/result representations also participate. Runtime
 dependencies currently retain source dependencies; an unchanged interface alone
 cannot authorize consumer reuse.
 
-Version 1 retains exact type, type-name, and signature arena prefixes and the
-root's freshly established signature. Reuse requires the same function
-allocation position and matching prefixes. Referenced earlier functions must
-match their complete encoded bodies. Changed demands, allocation order, or
-representations miss instead of relocating an unproved reference. Restoration
-appends completed functions and representations, without restoring checking
-facts, active frames, capabilities, ownership authority, or project/browser
-baselines. Call operations retain the caller's source file; definitions retain
-their own origins.
+Version 2 stores checked continuation functions, local representation and
+signature tables, pooled constants, the root's result-reuse witness, and
+complete strongly connected components. The reachable dependency closure is
+captured as one graph; an unfinished component declines publication. Function
+references, types, signatures, and pooled constants use local slots. Root
+parameter/result layouts and their aliases must match the fresh demand before
+restoration. Product and sum display names do not distinguish portable layouts.
+Runtime captures contribute their ordered slots, layouts, alias relationships,
+and ownership/reuse meanings to the portable key. Arena positions do not enter
+that identity.
 
-Rust owns the MessagePack format. Decoding validates its schema, arena
-references, scalar operation vocabulary and operand types, closed call
-signatures, unique SSA definitions, dominance, branch arguments, entry
-parameters, and returns. Runtime words decode through a finite compiler
-vocabulary. Current source and closure inputs must still match at use. This is a
-local compiler-output cache, never a package/certificate import path: a checksum
-detects corruption and does not grant source-interface authority.
+Restoration binds root layouts to the fresh checked representations and
+relocates remaining local references. The staging builder emits ordinary
+function references while cached bodies remain checked continuation graphs in a
+private collection. Shared type/signature normalization and function partition
+refinement handle fresh and cached functions together; final assembly produces
+contiguous function slots and validates the complete graph. No graph is replayed
+as instruction blocks. Source origins, graph captures, edge bindings, suspension
+facts, and result-reuse evidence remain explicit. No checking facts, active
+frames, capabilities, runtime ownership, or project/browser baselines are
+restored.
+
+Rust owns the MessagePack format. Before recursive decoding, the snapshot wire
+preflight bounds each entry to 32 MiB, 128 nesting levels, 1,048,576 structural
+nodes, and 64 MiB estimated allocation. Decoding validates the schema, closed
+runtime-word vocabulary, representation and signature references, graph entry
+parameters, unique definitions, exact captures and edge bindings, call
+contracts, instruction operand layouts and metadata, static constants, component
+membership, and result-reuse witness shape. Current source and closure inputs
+must still match at use. This is a local compiler-output cache, never a
+package/certificate import path: a checksum detects corruption and grants no
+source-interface authority.
+
+Development work observations include a finite `graphCache` counter map: `hit`,
+`miss`, `representation-changed`, `unsupported-identity`,
+`incomplete-component`, `unsupported-operation`, `live-authority`,
+`generative-change`, and `budget`. These explain reuse and declined candidates
+without changing checking, semantic identity, or publication. The Node boundary
+validates their vocabulary and counts; it does not decide eligibility.
 
 The resident graph cache uses a 64 MiB encoded-size budget and access-order
 eviction; object/container overhead is additional. Pending persistence
@@ -476,7 +499,7 @@ caching. Cache paths are Git-ignored and excluded from source watches.
 `memory`, or `disk` graph memoization. Disabling it leaves existing source and
 artifact invalidation intact. A fresh project returns every unit and a fresh
 browser instantiates every unit. Emission remains resident-only: restart may
-skip scalar body specialization and still emits its initial Wasm units. Cache
+skip closed body specialization and still emits its initial Wasm units. Cache
 writes never commit a project or runtime revision.
 
 ### 8.2 Development artifact transactions
@@ -492,14 +515,17 @@ impact cone and whose exact function/link partition is unchanged skips
 unit-module construction, identity serialization, ABI closure, and emission. The
 splitter still traces calls and reload edges so a changed cross-unit demand
 rebuilds both sides of that boundary. Checked units are rebuilt and compared by
-their complete canonical Runtime HIR; this conservative step is required because
-an imported compile-time value can change generated code without changing
-consumer source. Preparation does not insert or prune committed entries. A
-failed preparation therefore publishes nothing. Commit accepts only the current
-identity, applies all staged replacements and exact-key pruning in one mutation,
-then consumes the identity. A stale, duplicate, or missing identity changes
-nothing. An abandoned reduced unit set cannot prune committed units, and
-replacing a configured root prunes the exact former key only when its
+their complete canonical Runtime HIR. Unit-local function slots follow a stable
+traversal from named exports through calls and callback layout dependencies;
+unreachable original bodies behind cloned link exports are removed. Fresh and
+restored graph allocation order cannot alter that identity. This comparison is
+required because an imported compile-time value can change generated code
+without changing consumer source. Preparation does not insert or prune committed
+entries. A failed preparation therefore publishes nothing. Commit accepts only
+the current identity, applies all staged replacements and exact-key pruning in
+one mutation, then consumes the identity. A stale, duplicate, or missing
+identity changes nothing. An abandoned reduced unit set cannot prune committed
+units, and replacing a configured root prunes the exact former key only when its
 replacement commits.
 
 The host copies and hashes every compiled unit, resolves identity-only cache
@@ -515,6 +541,23 @@ including one reconstructed by an HTTP host. Its structural validation, digest
 checks, canonical revision check, and retained-unit checks run before preparing
 instances. Only the pending activation returned by that runtime is a commit
 capability; the project build's private brand is not a transport requirement.
+
+Callback layouts contribute their specialized entry, signature, and capture
+graph to each unit's dependency closure, including callbacks mentioned only in a
+link parameter or result. Canonical callback entry names are local to a unit;
+link identity covers the defining function and complete checked callback layout.
+Each provider publishes one export per demanded target even with multiple
+consumers.
+
+A local callback and its worker payload retain the same transitive provider
+snapshot. Both direct imports and suspending requests inherit that snapshot,
+including calls made by a provider. A replaced instance is retired while a
+callback pins it. Callback consumption or scope release removes its pin and
+reclaims retired instances after admitted work drains. The snapshot registry is
+weak, pin and retirement maps delete released entries, and consumed callback
+state drops its invocation, compiled payload, executor, and shared loan. Failed
+preparation cannot mutate an existing snapshot. Scope closure revokes unused
+callbacks and drains pending invocations; it does not wait for a timeout.
 
 ## 9. Prelude and package snapshots
 

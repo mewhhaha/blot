@@ -153,12 +153,12 @@ return { .run = run; .direct = direct; }
       );
     };
     const memory = instance.exports.memory as WebAssembly.Memory;
-    invoke("cabi_enter");
-    const frame = invoke(manifest.callbacks[0].name, 50000n);
+    const scope = invoke("cabi_enter");
+    const frame = invoke(manifest.callbacks[0].name, scope, 50000n);
     const initialBytes = memory.buffer.byteLength;
     let yields = 0;
     for (;;) {
-      const status = invoke("blot:poll", frame, 1024);
+      const status = invoke("blot:poll", scope, frame, 1024);
       if (status === 4) {
         yields += 1;
         continue;
@@ -173,8 +173,8 @@ return { .run = run; .direct = direct; }
     }
     assert.ok(yields > 10);
     assert.equal(memory.buffer.byteLength, initialBytes);
-    invoke("blot:release", frame);
-    invoke("cabi_leave");
+    invoke("blot:release", scope, frame);
+    invoke("cabi_leave", scope);
     const run: HostOperation = (_context, work) => {
       assert.ok(isHostCallback(work));
       return work.call();

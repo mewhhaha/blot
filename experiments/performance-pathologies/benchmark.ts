@@ -1,3 +1,4 @@
+import { requiredFunction } from "../../src/abi_values.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -56,13 +57,24 @@ try {
       assert.ok(memory instanceof WebAssembly.Memory);
       assert.equal(typeof nested, "function");
       assert.equal(typeof postReturn, "function");
-      const pointer = (nested as (input: bigint) => number)(41n);
+      const scope = Number(requiredFunction(instance, "cabi_enter")());
       try {
-        const view: DataView = new DataView(memory.buffer);
-        assert.equal(view.getBigInt64(pointer, true), 41n);
-        assert.equal(view.getBigInt64(pointer + 8, true), 42n);
+        const pointer = (nested as (scope: number, input: bigint) => number)(
+          scope,
+          41n,
+        );
+        try {
+          const view: DataView = new DataView(memory.buffer);
+          assert.equal(view.getBigInt64(pointer, true), 41n);
+          assert.equal(view.getBigInt64(pointer + 8, true), 42n);
+        } finally {
+          (postReturn as (scope: number, pointer: number) => void)(
+            scope,
+            pointer,
+          );
+        }
       } finally {
-        (postReturn as (pointer: number) => void)(pointer);
+        requiredFunction(instance, "cabi_leave")(scope);
       }
     }
     compilation.push({

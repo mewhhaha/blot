@@ -5,6 +5,8 @@ import { SparkRuntime } from "../../src/spark.ts";
 import { createWebWorkerExecutor } from "../../src/web_worker_executor.ts";
 import { IoRuntime } from "../../src/io.ts";
 import { EventRuntime } from "../../src/events.ts";
+import { ChannelRuntime } from "../../src/channel.ts";
+import { SelectRuntime } from "../../src/select.ts";
 
 const root = new HostScope();
 const workers = createWebWorkerExecutor(root, {
@@ -14,14 +16,22 @@ const workers = createWebWorkerExecutor(root, {
 const sparks = new SparkRuntime(root, { workers });
 const services = new IoRuntime(root);
 const eventRuntime = new EventRuntime(root, sparks);
+const channels = new ChannelRuntime(root, sparks);
+const selection = new SelectRuntime(channels, eventRuntime, services);
 const views = root.resource("Demo.View");
 const operations = new Map([
   ["show", (_context, request) => {
     views.get(request.fields.get("0"));
     result.textContent = String(request.fields.get("1"));
+    recordActivity(`Published ${result.textContent}`);
     document.querySelector("#received").textContent = String(
       request.fields.get("2"),
     );
+    return null;
+  }],
+  ["activity", (_context, request) => {
+    views.get(request.fields.get("0"));
+    recordActivity(request.fields.get("1"));
     return null;
   }],
   ["message", (_context, request) => {
@@ -32,6 +42,7 @@ const operations = new Map([
   }],
   ["stopped", (_context, view) => {
     views.get(view);
+    recordActivity("Stopped and cleaned up");
     stopped += 1;
     document.querySelector("#stopped").textContent = String(stopped);
     return null;
@@ -44,6 +55,8 @@ const runtime = new DevelopmentRuntime(undefined, {
       ...sparks.capabilitiesFor(artifact),
       ...services.capabilitiesFor(artifact),
       ...eventRuntime.capabilitiesFor(artifact),
+      ...channels.capabilitiesFor(artifact),
+      ...selection.capabilitiesFor(artifact),
     ]);
     const selected = new Map();
     for (const imported of decodeManifest(artifact.manifestBytes).imports) {
@@ -58,6 +71,7 @@ const runtime = new DevelopmentRuntime(undefined, {
 let activeUnits = new Map();
 let requested = false;
 let refreshing = false;
+let activating = false;
 let generation = -1;
 const quantity = document.querySelector("#quantity");
 const result = document.querySelector("#result");
@@ -92,14 +106,39 @@ const io = {
   ]),
 };
 
+function recordActivity(message) {
+  document.querySelector("#activity").textContent = message;
+  const history = document.querySelector("#history");
+  const entry = document.createElement("li");
+  entry.textContent = `${new Date().toLocaleTimeString()} · ${message}`;
+  history.prepend(entry);
+  while (history.children.length > 40) history.lastElementChild.remove();
+}
+
+setInterval(() => {
+  const jobs = sparks.statistics;
+  document.querySelector("#active-jobs").textContent = String(jobs.jobsActive);
+  document.querySelector("#retained-jobs").textContent = String(
+    jobs.jobsRetained,
+  );
+  document.querySelector("#worker-jobs").textContent = String(
+    workers.statistics.jobsCompleted,
+  );
+}, 100);
+
 function renderScore() {
   quantity.setCustomValidity("");
   if (!quantity.reportValidity() || currentSink === undefined) return;
-  currentSink.emit(BigInt(quantity.value));
+  const value = quantity.valueAsNumber;
+  if (!Number.isSafeInteger(value)) return;
+  currentSink.emit(BigInt(value));
 }
 
 function ensureActor() {
-  if (actor !== undefined || paused || runtime.revision === undefined) return;
+  if (
+    actor !== undefined || paused || activating ||
+    runtime.revision === undefined
+  ) return;
   actorController = new AbortController();
   const pending = runtime.callAsync("run", [io], {
     signal: actorController.signal,
@@ -124,7 +163,8 @@ document.querySelector("#toggle").addEventListener("click", async () => {
   if (paused) {
     actorController?.abort(new DOMException("actor paused", "AbortError"));
     await actor;
-  } else ensureActor();
+  }
+  ensureActor();
 });
 
 async function refresh() {
@@ -187,7 +227,17 @@ async function refresh() {
           edges: snapshot.edges,
           durationMilliseconds: snapshot.durationMilliseconds,
         });
-        await runtime.commitActivation(activation);
+        activating = true;
+        try {
+          await runtime.commitActivation(activation);
+        } finally {
+          activating = false;
+        }
+      }
+      if (changedUnits.length > 0) {
+        recordActivity(
+          `Activated ${changedUnits.map((unit) => unit.name).join(", ")}`,
+        );
       }
       activeUnits = next;
       generation = snapshot.generation;

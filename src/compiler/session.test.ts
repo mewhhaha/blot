@@ -1,3 +1,5 @@
+import { instantiateArtifact } from "../host.ts";
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -83,9 +85,10 @@ test("present optional integer arm returns its bound runtime value", async () =>
     const instantiated = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm) as BufferSource,
     );
-    const dynamicOffset = instantiated.instance.exports[
-      "blot:dynamic_offset"
-    ];
+    const dynamicOffset = scalarExport(
+      instantiated.instance,
+      "blot:dynamic_offset",
+    );
     assert.equal(typeof dynamicOffset, "function");
     if (typeof dynamicOffset !== "function") {
       throw new Error(
@@ -107,7 +110,10 @@ test("nested runtime closure preserves its unit argument", async () => {
     const instantiated = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm) as BufferSource,
     );
-    const capturedUnit = instantiated.instance.exports["blot:captured_unit"];
+    const capturedUnit = scalarExport(
+      instantiated.instance,
+      "blot:captured_unit",
+    );
     assert.equal(typeof capturedUnit, "function");
     if (typeof capturedUnit !== "function") {
       throw new Error("residual closure artifact omitted blot:captured_unit");
@@ -127,8 +133,10 @@ test("nested runtime closure accepts a representation-free empty array", async (
     const instantiated = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm) as BufferSource,
     );
-    const capturedEmptyChildren =
-      instantiated.instance.exports["blot:captured_empty_children"];
+    const capturedEmptyChildren = scalarExport(
+      instantiated.instance,
+      "blot:captured_empty_children",
+    );
     assert.equal(typeof capturedEmptyChildren, "function");
     if (typeof capturedEmptyChildren !== "function") {
       throw new Error(
@@ -153,8 +161,10 @@ test("runtime fold residualizes a recursive step with a concrete argument", asyn
     const instantiated = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm) as BufferSource,
     );
-    const foldedProjectValue =
-      instantiated.instance.exports["blot:folded_project_value"];
+    const foldedProjectValue = scalarExport(
+      instantiated.instance,
+      "blot:folded_project_value",
+    );
     assert.equal(typeof foldedProjectValue, "function");
     if (typeof foldedProjectValue !== "function") {
       throw new Error(
@@ -178,7 +188,7 @@ test("static Boolean argument crosses residual iteration", async () => {
       Uint8Array.from(artifact.wasm) as BufferSource,
       {
         "blot:host/Host": {
-          observe(value: bigint, done: number) {
+          observe(_scope: number, value: bigint, done: number) {
             observations.push([value, done]);
           },
           value() {
@@ -187,7 +197,7 @@ test("static Boolean argument crosses residual iteration", async () => {
         },
       },
     );
-    const run = instantiated.instance.exports["blot:default"];
+    const run = scalarExport(instantiated.instance, "blot:default");
     assert.equal(typeof run, "function");
     if (typeof run !== "function") {
       throw new Error("residual Boolean artifact omitted blot:default");
@@ -472,7 +482,7 @@ test("an abandoned low-level preparation recompiles before cache commit", async 
   }
 });
 
-test("host effect contracts reach Runtime HIR and Core Wasm ABI 3", async () => {
+test("host effect contracts reach Runtime HIR and Core Wasm ABI 4", async () => {
   const compiler = await Compiler.create();
   try {
     const runtime = await compiler.prepare(
@@ -515,7 +525,7 @@ test("host effect contracts reach Runtime HIR and Core Wasm ABI 3", async () => 
     const manifest = JSON.parse(
       new TextDecoder().decode(artifact.manifestBytes),
     );
-    assert.equal(manifest.abi.major, 3);
+    assert.equal(manifest.abi.major, 4);
     assert.deepEqual(
       manifest.imports.map((imported: { contract: unknown }) =>
         imported.contract
@@ -538,18 +548,18 @@ test("host effect contracts reach Runtime HIR and Core Wasm ABI 3", async () => 
     let released: bigint | undefined;
     const instance = await WebAssembly.instantiate(module, {
       "blot:host/Jobs": {
-        acquire(value: bigint): bigint {
+        acquire(_scope: number, value: bigint): bigint {
           return value;
         },
-        release(value: bigint): void {
+        release(_scope: number, value: bigint): void {
           released = value;
         },
       },
     });
     const abiMajor = instance.exports["blot:abi-major"];
     assert(abiMajor instanceof WebAssembly.Global);
-    assert.equal(abiMajor.value, 3);
-    const run = instance.exports["blot:default"];
+    assert.equal(abiMajor.value, 4);
+    const run = scalarExport(instance, "blot:default");
     assert.equal(typeof run, "function");
     assert.equal((run as () => bigint)(), 42n);
     assert.equal(released, 41n);
@@ -572,7 +582,7 @@ test("runtime SIMD arrays execute through private Store memory", async () => {
         },
       },
     );
-    const run = instantiated.instance.exports["blot:default"];
+    const run = scalarExport(instantiated.instance, "blot:default");
     assert.equal(typeof run, "function");
     assert.equal((run as () => bigint)(), 7n);
   } finally {
@@ -593,7 +603,7 @@ test("residual float and integer SIMD examples execute", async () => {
       const instantiated = await WebAssembly.instantiate(
         Uint8Array.from(artifact.wasm) as BufferSource,
       );
-      const run = instantiated.instance.exports["blot:default"];
+      const run = scalarExport(instantiated.instance, "blot:default");
       assert.equal(typeof run, "function");
       assert.equal((run as (input: bigint) => bigint)(input), expected);
     }
@@ -658,15 +668,25 @@ test("Unicode-scalar Text operations agree in evaluation and emitted Wasm", asyn
       "examples/lib/text_processing.blot",
     );
     const operations = runtime.functions.flatMap((function_) =>
-      function_.blocks.flatMap((block) => block.operations)
+      function_.continuations.flatMap((continuation) =>
+        continuation.instructions
+      )
     );
     assert.ok(
-      operations.some((operation) => operation.kind === "text.length"),
+      operations.some((instruction) =>
+        instruction.operation.kind === "text.length"
+      ),
     );
     assert.ok(
-      operations.some((operation) => operation.kind === "text.find-from"),
+      operations.some((instruction) =>
+        instruction.operation.kind === "text.find-from"
+      ),
     );
-    assert.ok(operations.some((operation) => operation.kind === "text.slice"));
+    assert.ok(
+      operations.some((instruction) =>
+        instruction.operation.kind === "text.slice"
+      ),
+    );
 
     const artifact = await compiler.compile(
       "examples/lib/text_processing.blot",
@@ -679,24 +699,12 @@ test("Unicode-scalar Text operations agree in evaluation and emitted Wasm", asyn
     const scalarArtifact = await compiler.compile(
       "examples/lib/text_scalar_runtime.blot",
     );
-    const instance = await WebAssembly.instantiate(
-      Uint8Array.from(scalarArtifact.wasm) as BufferSource,
-    );
-    const memory = instance.instance.exports.memory as WebAssembly.Memory;
-    const realloc = instance.instance.exports.cabi_realloc as (
-      oldPointer: number,
-      oldSize: number,
-      alignment: number,
-      newSize: number,
-    ) => number;
-    const run = instance.instance.exports["blot:default"] as (
-      pointer: number,
-      length: number,
-    ) => bigint;
-    const input = new TextEncoder().encode("🙂αβ");
-    const pointer = realloc(0, 0, 1, input.byteLength);
-    new Uint8Array(memory.buffer, pointer, input.byteLength).set(input);
-    assert.equal(run(pointer, input.byteLength), 5n);
+    const hosted = await instantiateArtifact(scalarArtifact);
+    try {
+      assert.equal(hosted.call("default", ["🙂αβ"]), 5n);
+    } finally {
+      await hosted.close();
+    }
   } finally {
     compiler.destroy();
   }
@@ -714,42 +722,57 @@ test("reuse assertion tags publish only discharged Store updates", async () => {
       "examples/lib/reuse_quicksort.blot",
     );
     const writingFunctions = quicksort.functions.filter((function_) =>
-      function_.blocks.some((block) =>
-        block.operations.some((operation) => operation.kind === "store.write")
+      function_.continuations.some((continuation) =>
+        continuation.instructions.some((instruction) =>
+          instruction.operation.kind === "store.write"
+        )
       )
     );
     assert.ok(writingFunctions.length >= 1);
     for (const function_ of writingFunctions) {
       assert.equal(function_.reuse, "checked");
       for (
-        const operation of function_.blocks.flatMap((block) => block.operations)
+        const instruction of function_.continuations.flatMap((continuation) =>
+          continuation.instructions
+        )
       ) {
         if (
-          operation.kind === "store.write" || operation.kind === "store.grow"
+          instruction.operation.kind === "store.write" ||
+          instruction.operation.kind === "store.grow"
         ) {
-          assert.equal(operation.update, "owned-reuse");
+          assert.equal(instruction.operation.update, "owned-reuse");
         }
       }
     }
     const operations = quicksort.functions.flatMap((function_) =>
-      function_.blocks.flatMap((block) => block.operations)
+      function_.continuations.flatMap((continuation) =>
+        continuation.instructions
+      )
     );
     assert.ok(
-      operations.some((operation) => operation.kind === "call.direct"),
+      quicksort.functions.some((function_) =>
+        function_.continuations.some((continuation) =>
+          continuation.transition.kind === "call" &&
+          continuation.transition.target.kind === "function"
+        )
+      ),
       "runtime quicksort lost its direct recursive call",
     );
     assert.ok(
       quicksort.functions.some((function_) =>
-        function_.blocks.some((block) =>
-          block.terminator.kind === "branch" &&
-          block.terminator.target === function_.entryBlock
+        function_.continuations.some((continuation) =>
+          continuation.transition.kind === "jump" &&
+          continuation.transition.edge.target === function_.entry
         )
       ),
       "runtime quicksort lost its tail-recursive back-edge",
     );
-    for (const operation of operations) {
-      if (operation.kind === "store.write" || operation.kind === "store.grow") {
-        assert.equal(operation.update, "owned-reuse");
+    for (const instruction of operations) {
+      if (
+        instruction.operation.kind === "store.write" ||
+        instruction.operation.kind === "store.grow"
+      ) {
+        assert.equal(instruction.operation.update, "owned-reuse");
       }
     }
 
@@ -767,13 +790,13 @@ test("reuse assertion tags publish only discharged Store updates", async () => {
     const instantiate = async (direction: bigint): Promise<() => bigint> => {
       const instance = await WebAssembly.instantiate(module, {
         "blot:host/Source": {
-          value(input: bigint) {
+          value(_scope: number, input: bigint) {
             if (input === 0n) return 4n;
             return direction;
           },
         },
       });
-      const run = instance.exports["blot:default"];
+      const run = scalarExport(instance, "blot:default");
       assert.equal(typeof run, "function");
       return run as () => bigint;
     };

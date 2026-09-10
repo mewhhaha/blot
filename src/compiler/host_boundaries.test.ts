@@ -25,15 +25,17 @@ test("prepared HIR snapshots cannot mutate the resident validated module", async
     const first = await compiler.prepare(path);
     const expected = await fresh.prepare(path);
     assert.deepEqual(first, expected);
-    const operation = first.functions[0].blocks[0].operations[0];
-    assert.equal(operation.kind, "constant");
-    if (operation.kind !== "constant") throw new Error("expected a constant");
-    assert.equal(operation.value, 42n);
+    const instruction = first.functions[0].continuations[0].instructions[0];
+    assert.equal(instruction.operation.kind, "constant");
+    if (instruction.operation.kind !== "constant") {
+      throw new Error("expected a constant");
+    }
+    assert.equal(instruction.operation.value, 42n);
 
     // JavaScript consumers are not constrained by TypeScript's readonly types.
     Reflect.set(first, "schemaVersion", -1);
-    Reflect.set(operation, "value", 9007199254740993n);
-    Reflect.set(operation.span, "file", "forged.blot");
+    Reflect.set(instruction.operation, "value", 9007199254740993n);
+    Reflect.set(instruction.definition.span, "file", "forged.blot");
     Reflect.set(first.signatures[0].parameters, 0, 999);
     Reflect.set(first.exports[0], "sourceName", "forged");
     const second = await compiler.prepare(path);
@@ -43,7 +45,7 @@ test("prepared HIR snapshots cannot mutate the resident validated module", async
 
     // A cache hit must also detach its result; copying only the miss is unsafe.
     Reflect.set(second.types[0], "kind", "text");
-    Reflect.set(second.functions[0].blocks[0].operations, "length", 0);
+    Reflect.set(second.functions[0].continuations[0].instructions, "length", 0);
     assert.deepEqual(await compiler.prepare(path), expected);
     assert.equal(await runArtifact(await compiler.compile(path)), "42");
     assert.equal(

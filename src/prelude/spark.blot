@@ -20,21 +20,31 @@ const SparkRuntime = @effect.host {
   .spawn = {
     .signature = @forall (fn e => @forall (fn result => ((SparkScope, (Unit -> result) ~ [e]) -> SparkJob result) ~ [e]));
     .input = (#Unrestricted, #Affine);
+    .result = #Affine;
+    .suspends = True;
+  };
+  .join = {
+    .signature = @forall (fn result => SparkJob result -> result);
+    .input = #Affine;
     .result = #Unrestricted;
     .suspends = True;
   };
-  .join = Effect.suspends (@forall (fn result => SparkJob result -> result));
   .parallel = {
     .signature = @forall (fn result => (SparkScope, Unit -> result) -> SparkJob result);
     .input = (#Unrestricted, #Affine);
+    .result = #Affine;
+    .suspends = True;
+  };
+  .cancel = {
+    .signature = @forall (fn result => SparkJob result -> Unit);
+    .input = #Affine;
     .result = #Unrestricted;
     .suspends = True;
   };
-  .cancel = Effect.suspends (@forall (fn result => SparkJob result -> Unit));
   .speculate = {
     .signature = @forall (fn result => (SparkScope, Unit -> result) -> SparkJob result);
     .input = (#Unrestricted, #Affine);
-    .result = #Unrestricted;
+    .result = #Affine;
     .suspends = True;
   };
   .yield = Effect.suspends (SparkScope -> Unit);
@@ -46,26 +56,43 @@ const SparkRuntime = @effect.host {
   };
 }
 
-const map_parallel = fn scope => fn transform => fn values => do:
-  let iterator = Iter.items values
-  return case iterator.step iterator.state of
+const map_parallel = fn scope => fn concurrency => fn transform => fn values => do:
+  if concurrency < 1:
+    return @panic "Spark.map_parallel requires positive concurrency"
+
+  let shared = @linear.freeze values
+  let length = Array.length shared
+  return case Array.get (shared, 0) of
     #None => []
-    #Some (first, remaining) => do:
+    #Some first => do:
       let ?work = fn () => transform first
       use initial <- SparkRuntime.parallel (scope, ?work)
-      let jobs = [initial]
-      for value in { ...iterator; .state = remaining; }:
-        let ?work = fn () => transform value
-        use job <- SparkRuntime.parallel (scope, ?work)
-        jobs := @array.push jobs job
+      let rec fill = fn (index, ?jobs) => do:
+        let pending = Array.length (&jobs)
+        let can_spawn = case index < length of
+          #True => pending < concurrency
+          #False => False
+        if can_spawn:
+          let value = Array.expect_get (shared, index)
+          let ?work = fn () => transform value
+          use job <- SparkRuntime.parallel (scope, ?work)
+          return fill (index + 1, @array.push (?jobs) (?job))
+        else:
+          return (index, ?jobs)
+      let rec advance = fn (index, ?jobs, ?results) => do:
+        use (next, pending) <- fill (index, ?jobs)
+        return case Array.uncons (?pending) of
+          #None => ?results
+          #Some (job, remaining) => do:
+            use value <- SparkRuntime.join (?job)
+            return advance (next, ?remaining, @array.push (?results) value)
 
-      use first_result <- SparkRuntime.join initial
-      let results = [first_result]
-      for job in Iter.slice (jobs, 1, Array.length jobs):
-        use value <- SparkRuntime.join job
-        results := @array.push results value
-
-      return results
+      use (next, pending) <- fill (1, [?initial])
+      return case Array.uncons (?pending) of
+        #None => @panic "Spark.map_parallel lost its first job"
+        #Some (job, remaining) => do:
+          use value <- SparkRuntime.join (?job)
+          return advance (next, ?remaining, [value])
 
 return {
   .Executor = SparkExecutor;

@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -602,15 +603,17 @@ function hirNodeCount(
 ): number {
   let count = hir.functions.length;
   for (const function_ of hir.functions) {
-    count += function_.blocks.length;
-    for (const block of function_.blocks) count += block.operations.length;
+    count += function_.continuations.length;
+    for (const continuation of function_.continuations) {
+      count += continuation.instructions.length;
+    }
   }
   return count;
 }
 
 async function runDefault(wasm: Uint8Array): Promise<bigint> {
   const instantiated = await WebAssembly.instantiate(Uint8Array.from(wasm));
-  const exported: unknown = instantiated.instance.exports["blot:default"];
+  const exported: unknown = scalarExport(instantiated.instance, "blot:default");
   if (typeof exported !== "function") {
     throw new Error("generated scaling case has no default export");
   }

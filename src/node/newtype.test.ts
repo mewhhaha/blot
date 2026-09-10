@@ -1,3 +1,4 @@
+import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ return add
     const { instance } = await WebAssembly.instantiate(
       Uint8Array.from(artifact.wasm),
     );
-    const add = instance.exports["blot:default"];
+    const add = scalarExport(instance, "blot:default");
     if (typeof add !== "function") throw new Error("missing newtype export");
     for (
       const [left, right, expected] of [
