@@ -13,8 +13,8 @@ that has not been implemented are four different claims about the language.
 
 ## Effect and type abstractions
 
-These examples build APIs from ordinary type values and interpret computations
-with ordinary handler records. Each runs with
+These examples build APIs from ordinary type values. Effect-oriented examples
+interpret computations with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
 | Example                                                      | Abstraction                                                                                                       | Observations                                                 |
@@ -23,6 +23,7 @@ with ordinary handler records. Each runs with
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`       |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -38,10 +39,17 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
+The lens example treats a path as a pair of ordinary functions plus the type
+relationship between its whole and focused part. Composition reuses the same
+middle type on both sides, so a non-adjacent path is rejected statically while
+`Shape.update` preserves fields outside each local focus.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/typed_lenses.test.ts` checks the lens principal type,
+emitted-Wasm result, and rejection of non-adjacent composition.
+`deno task verify:showcase` includes all five examples.
 
 ## Everyday programs
 
