@@ -16,6 +16,10 @@ const Parsed = fn value => {
 
 const Parser = fn value => Text.Cursor -> Result (Parsed value, ParseError)
 
+const cursor_text :: Text.Cursor -> Text
+const cursor_text = fn cursor => case cursor of
+  #TextCursor (text, _) => text
+
 const cursor_offset :: Text.Cursor -> Int
 const cursor_offset = fn cursor => case cursor of
   #TextCursor (_, offset) => offset
@@ -76,25 +80,31 @@ const literal = fn expected => fn input => do:
 
 const take_while1 :: (Text, (Text -> Bool)) -> Parser Text
 const take_while1 = fn (expected, accepts) => fn input => do:
-  let rec visit :: (Text.Cursor, [Text]) -> Result (Parsed Text, ParseError)
-  let rec visit = fn (cursor, scalars) => do:
+  let text = cursor_text input
+  let start = cursor_offset input
+  let rec visit :: Text.Cursor -> Result (Parsed Text, ParseError)
+  let rec visit = fn cursor => do:
     if let #Some (scalar, next) = Text.next cursor else:
-      if Array.length (&scalars) == 0:
+      if cursor_offset cursor == start:
         return #Error (error_at (cursor, expected))
 
-      return #Ok { .value = @text.join scalars; .rest = cursor; }
+      return #Ok {
+        .value = @text.slice_bytes text start (cursor_offset cursor);
+        .rest = cursor;
+      }
 
     if accepts scalar:
-      return visit (next, @array.push scalars scalar)
+      return visit next
 
-    if Array.length (&scalars) == 0:
+    if cursor_offset cursor == start:
       return #Error (error_at (cursor, expected))
 
-    return #Ok { .value = @text.join scalars; .rest = cursor; }
+    return #Ok {
+      .value = @text.slice_bytes text start (cursor_offset cursor);
+      .rest = cursor;
+    }
 
-  let scalars :: [Text]
-  let scalars = []
-  return visit (input, scalars)
+  return visit input
 
 const run :: @forall (fn Value => (Parser Value, Text) -> Result (Value, ParseError))
 const run = fn (parser, text) => case parser (Text.cursor text) of
