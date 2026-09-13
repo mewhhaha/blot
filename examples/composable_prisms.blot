@@ -1,0 +1,61 @@
+open import "blot:prelude"
+const P = import "./lib/prism.blot"
+
+const UserEvent = #Registered Text | #AgeChanged Int | #Deleted
+const AuditEvent = #User UserEvent | #System Text
+
+// Each concrete prism is one exhaustive description of a constructor. The
+// reusable composition layer does not know the constructor names at all.
+const user :: P.Prism (AuditEvent, UserEvent)
+const user = {
+  .preview = fn event => case event of
+    #User nested => #Some nested
+    #System _ => #None
+  ;
+  .review = fn nested => #User nested;
+}
+
+const age_changed :: P.Prism (UserEvent, Int)
+const age_changed = {
+  .preview = fn event => case event of
+    #Registered _ => #None
+    #AgeChanged age => #Some age
+    #Deleted => #None
+  ;
+  .review = fn age => #AgeChanged age;
+}
+
+const registered :: P.Prism (UserEvent, Text)
+const registered = {
+  .preview = fn event => case event of
+    #Registered name => #Some name
+    #AgeChanged _ => #None
+    #Deleted => #None
+  ;
+  .review = fn name => #Registered name;
+}
+
+const audit_age :: P.Prism (AuditEvent, Int)
+const audit_age = P.compose (user, age_changed)
+const audit_registration :: P.Prism (AuditEvent, Text)
+const audit_registration = P.compose (user, registered)
+
+const original_age :: AuditEvent
+const original_age = #User (#AgeChanged 41)
+const system_event :: AuditEvent
+const system_event = #System "deploy"
+
+// Pain point: constructor knowledge is intentionally concrete. Generic Prism
+// composition is elegant, but defining a prism for a closed variant still needs
+// one exhaustive `case`; constructor labels are not row-polymorphic values.
+return {
+  .default = {
+    .matched_age = audit_age.preview original_age;
+    .matched_name = audit_registration.preview (#User (#Registered "Ada"));
+    .wrong_user_case = audit_age.preview (#User (#Registered "Ada"));
+    .system_miss = audit_age.preview system_event;
+    .incremented = P.over (audit_age, original_age, fn age => age + 1);
+    .unchanged = P.over (audit_age, system_event, fn age => age + 1);
+    .reviewed = audit_registration.review "Grace";
+  };
+}
