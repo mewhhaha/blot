@@ -7,15 +7,18 @@ import { runArtifact } from "./run.ts";
 
 const examplePath = "examples/composable_prisms.blot";
 const libraryPath = "examples/lib/prism.blot";
+const mismatchPath = "src/node/fixtures/prism_composition_mismatch.blot";
+
+const principalType =
+  "{ .default = { .matched_age = #None | #Some Int; .matched_name = #None | #Some Text; .wrong_user_case = #None | #Some Int; .system_miss = #None | #Some Int; .incremented = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text; .unchanged = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text; .reviewed = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text } }";
 
 test("composable prisms preserve types and both executions", async () => {
   const compiler = await Compiler.create();
   try {
-    const checked = await compiler.check(examplePath);
-    assert.equal(checked.effects, "");
-    assert.match(checked.type, /matched_age = #None \| #Some Int/);
-    assert.match(checked.type, /matched_name = #None \| #Some Text/);
-    assert.match(checked.type, /incremented = #System Text \| #User/);
+    assert.deepEqual(await compiler.check(examplePath), {
+      type: principalType,
+      effects: "",
+    });
 
     const evaluated = await compiler.evaluate(examplePath);
     assert.deepEqual(evaluated.writes, []);
@@ -34,7 +37,7 @@ test("composable prisms preserve types and both executions", async () => {
       wasmExpected.trim(),
     );
 
-    for (const path of [libraryPath, examplePath]) {
+    for (const path of [libraryPath, examplePath, mismatchPath]) {
       const source = await readFile(path, "utf8");
       const formatted = await formatSource(source);
       assert.equal(formatted.ok, true);
@@ -50,8 +53,8 @@ test("prism composition rejects non-adjacent focuses", async () => {
   const compiler = await Compiler.create();
   try {
     await assert.rejects(
-      () => compiler.check("src/node/fixtures/prism_composition_mismatch.blot"),
-      /BLOT_TYPE_ERROR/,
+      () => compiler.check(mismatchPath),
+      /BLOT_TYPE_ERROR: Text does not flow into Int/,
     );
   } finally {
     compiler.destroy();
