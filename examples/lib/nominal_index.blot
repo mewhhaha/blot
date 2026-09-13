@@ -1,67 +1,33 @@
 open import "blot:prelude"
 
-// A keyspace turns one ordinary Int carrier into a nominal identity domain.
-// The descriptor keeps the type value and the operations that know how to
-// construct, inspect, and compare that domain together.
-const Keyspace = fn name => do:
-  const Key = seal (name, Int)
-
-  let of :: Int -> Key
-  let of = fn value => seal (name, value)
-
-  let value :: Key -> Int
-  let value = fn key => unseal key
-
-  let equal :: Key -> Key -> Bool
-  let equal = fn left => fn right => Int.eq (value left) (value right)
-
-  return {
-    .type = Key;
-    .of = of;
-    .value = value;
-    .equal = equal;
-  }
-
+// A keyed index is structural. The Key parameter appears in both stored entries
+// and the equality dictionary, so lookup can only accept the same key domain.
 const Entry = fn (key, value) => {
   .key = key;
   .value = value;
 }
 
-// The key type is part of the index type. Two indexes may both use Int at
-// runtime while remaining statically incompatible when their keyspaces differ.
 const Index = fn (key, value) => {
   .entries = [Entry (key, value)];
   .equal = key -> key -> Bool;
 }
 
 const from_entries :: @forall (fn Key => @forall (fn Value => (Key -> Key -> Bool, [Entry (Key, Value)]) -> Index (Key, Value)))
-const from_entries = fn (equal, entries) => {
-  .entries = entries;
-  .equal = equal;
-}
+const from_entries = fn (equal, entries) => { .entries = entries; .equal = equal; }
 
 const lookup :: @forall (fn Key => @forall (fn Value => (Index (Key, Value), Key) -> Option Value))
-const lookup = fn (index, key) => do:
-  let found = Array.find (index.entries, fn entry => index.equal entry.key key)
-  return Option.map (fn entry => entry.value) found
+const lookup = fn (index, key) => Option.map (fn entry => entry.value) (Array.find (index.entries, fn entry => index.equal entry.key key))
 
 const map_values :: @forall (fn Key => @forall (fn Input => @forall (fn Output => (Index (Key, Input), (Input -> Output)) -> Index (Key, Output))))
-const map_values = fn (index, transform) => {
-  .entries = Array.map (
-    index.entries,
-    fn entry => {
-      .key = entry.key;
-      .value = transform entry.value;
-    }
-  );
-  .equal = index.equal;
-}
+const map_values = fn (index, transform) => { .entries = Array.map (index.entries, fn entry => { .key = entry.key; .value = transform entry.value; }); .equal = index.equal; }
 
+// Pain point: attached type namespaces are intentionally invisible through a
+// generic type parameter, so the index carries equality as an explicit ordinary
+// dictionary instead of attempting to project `Key.equal` inside these helpers.
 return {
-  .Keyspace = Keyspace;
   .Entry = Entry;
   .Index = Index;
   .from_entries = from_entries;
   .lookup = lookup;
   .map_values = map_values;
-}
+  }
