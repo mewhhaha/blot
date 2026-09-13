@@ -49,8 +49,8 @@ database durability or isolation.
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
 transactions. `src/node/typed_nonempty.test.ts` checks evaluator/Wasm agreement,
-canonical source, and the nonempty/Monoid rejections. `deno task verify:showcase`
-includes all five examples.
+canonical source, and the nonempty/Monoid rejections.
+`deno task verify:showcase` includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
