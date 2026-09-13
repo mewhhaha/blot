@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const quantities = import "../../../examples/lib/quantity.blot"
+
+const Meters = quantities.Quantity ("Meters", "m")
+const Seconds = quantities.Quantity ("Seconds", "s")
+
+let distance :: Meters.type
+let distance = Meters.add (Meters.of 10) (Seconds.of 5)
+
+return distance
