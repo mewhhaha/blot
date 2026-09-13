@@ -29,9 +29,17 @@ const algorithmExamples = [
   "topological_sort.blot",
 ] as const;
 
+const abstractionExamples = [
+  "nonempty_effect_stream.blot",
+  "typed_effect_pipeline.blot",
+  "schema_effects.blot",
+  "linear_transaction.blot",
+] as const;
+
 let selectedExamples: readonly string[] = [
   ...everydayExamples,
   ...algorithmExamples,
+  ...abstractionExamples,
 ];
 if (Deno.args.length > 0) {
   if (Deno.args.length !== 1 || Deno.args[0] !== "--algorithms") {

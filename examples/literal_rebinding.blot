@@ -1,0 +1,16 @@
+open import "blot:prelude"
+
+let total = 0
+total := 7
+
+const replace :: Int -> Int
+const replace = fn input => do:
+  let value = input
+  value := 7
+  return value
+
+let original = 0
+let captured = fn () => original
+original := 7
+
+return [total, replace 5, captured (), original]

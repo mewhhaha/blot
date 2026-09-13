@@ -1,10 +1,10 @@
 {
   "protocol": {
-    "compilerHostAbi": 7,
-    "checkedModuleCertificate": 20,
+    "compilerHostAbi": 9,
+    "checkedModuleCertificate": 23,
     "moduleSnapshotSchema": 3,
     "valueCapsuleSchema": 5,
-    "runtimeHir": 13
+    "runtimeHir": 14
   },
   "operators": [
     {
@@ -188,6 +188,7 @@
     "BLOT_BAD_REBINDING_TARGET",
     "BLOT_BAD_TEST",
     "BLOT_BINDING_MISMATCH",
+    "BLOT_BORROW",
     "BLOT_BORROW_",
     "BLOT_BORROW_ACROSS_SUSPENSION",
     "BLOT_BORROW_ARGUMENT_ESCAPES",
@@ -225,6 +226,7 @@
     "BLOT_FILTERING_LOOP_WITHOUT_PATTERN",
     "BLOT_FORWARD_REFERENCE",
     "BLOT_FRAME_TEST_DIRECTORY",
+    "BLOT_FUNCTION_RESULT_ARROW",
     "BLOT_GUARD_MAY_CONTINUE",
     "BLOT_HANDLER_RESUME_NOT_AFFINE",
     "BLOT_HIGHER_ORDER_OWNERSHIP_CONTRACT",
@@ -250,7 +252,6 @@
     "BLOT_LINEAR_CONSUMED_TWICE",
     "BLOT_LINEAR_FREEZE",
     "BLOT_LINEAR_HANDLER_MAY_ABORT",
-    "BLOT_LINEAR_HANDLER_UNKNOWN",
     "BLOT_LINEAR_NOT_CONSUMED",
     "BLOT_LINEAR_PARTIAL_MOVE",
     "BLOT_LINEAR_PARTIAL_REUSE",
@@ -303,8 +304,10 @@
     "BLOT_OPEN_RECORD_SPREAD",
     "BLOT_OUT_OF_BOUNDS",
     "BLOT_PANIC",
+    "BLOT_PATTERN_ANNOTATION_CONTEXT",
     "BLOT_PREDICATE_BUDGET",
     "BLOT_REBINDING_FRAME",
+    "BLOT_RECORD_SHORTHAND",
     "BLOT_RECURSIVE_OWNERSHIP_RESULT",
     "BLOT_RECURSIVE_OWNERSHIP_UNPROVED",
     "BLOT_REFINEMENT_BUDGET",
@@ -571,9 +574,11 @@
     "@shape.has",
     "@shape.names",
     "@shape.remove",
+    "@text.byte_len",
     "@text.cmp",
     "@text.concat",
     "@text.contains",
+    "@text.find_byte_from",
     "@text.find_from",
     "@text.join",
     "@text.len",
@@ -581,6 +586,7 @@
     "@text.of_int",
     "@text.scalar_at",
     "@text.slice",
+    "@text.slice_bytes",
     "@type.arrow",
     "@type.attach",
     "@type.deferred_arrow",
@@ -751,59 +757,59 @@
   "hotspots": [
     {
       "path": "compiler/src/typecheck.rs",
-      "lines": 17172
+      "lines": 17379
     },
     {
       "path": "compiler/src/hir.rs",
-      "lines": 15805
+      "lines": 15872
     },
     {
       "path": "compiler/src/session.rs",
-      "lines": 11170
+      "lines": 11721
     },
     {
       "path": "compiler/src/backend.rs",
-      "lines": 7927
+      "lines": 8117
     },
     {
       "path": "compiler/src/eval.rs",
-      "lines": 7372
+      "lines": 7405
     },
     {
       "path": "compiler/src/ownership.rs",
-      "lines": 7281
+      "lines": 7231
     },
     {
       "path": "compiler/src/lower.rs",
-      "lines": 4635
+      "lines": 4906
     },
     {
       "path": "compiler/src/frontend_plan.rs",
-      "lines": 3673
-    },
-    {
-      "path": "src/prelude/prelude.blot",
-      "lines": 3505
+      "lines": 3727
     },
     {
       "path": "compiler/src/value_capsule.rs",
-      "lines": 3403
+      "lines": 3598
     },
     {
       "path": "src/syntax/lower.ts",
-      "lines": 3361
+      "lines": 3551
+    },
+    {
+      "path": "src/prelude/prelude.blot",
+      "lines": 3550
     },
     {
       "path": "compiler/src/primitives.rs",
-      "lines": 2424
-    },
-    {
-      "path": "compiler/src/qcore.rs",
-      "lines": 2302
+      "lines": 2464
     },
     {
       "path": "compiler/src/value.rs",
-      "lines": 2253
+      "lines": 2454
+    },
+    {
+      "path": "compiler/src/qcore.rs",
+      "lines": 2303
     },
     {
       "path": "src/development_runtime.ts",

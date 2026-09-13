@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const double = fn (value :: Int) -> Int => do:
+  return value + value
+
+const add = fn (left :: Int, right :: Int) -> Int => do:
+  return left + right
+
+const apply = fn (value, transform) => transform value
+
+const left = fn (a :: Int, b) => a
+const right = fn (a, b :: Int) => b
+const result = fn (a, b) -> Int => a
+
+return [
+  double 21,
+  add (20, 22),
+  apply (41, fn (value :: Int) -> Int => value + 1),
+  left (42, "ignored"),
+  right (True, 42),
+  result (42, ())
+  ]

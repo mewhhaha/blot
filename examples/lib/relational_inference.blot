@@ -1,0 +1,66 @@
+open import "blot:prelude"
+
+const increment :: Int -> Int
+const increment = fn value => value + 1
+
+const nonnegative :: Int -> Int
+const nonnegative = fn value => case value < 0 of
+  #True => 0
+  #False => value
+
+const next_at :: ([Int], Int) -> Int
+const next_at = fn (values, index) => do:
+  if index >= 0 && index < Array.length values - 1:
+    let next = increment index
+    return @array.get values next
+
+  return -1
+
+const clamped_at :: ([Int], Int) -> Int
+const clamped_at = fn (values, index) => do:
+  let clamped = nonnegative index
+  if clamped < Array.length values:
+    return @array.get values clamped
+
+  return -1
+
+const bounded :: (Int, Int) -> Option Int
+const bounded = fn (index, length) => do:
+  if index >= 0 && index < length:
+    return #Some index
+
+  return #None
+
+const optional_at :: ([Int], Int) -> Int
+const optional_at = fn (values, index) => do:
+  let selected = bounded (index, Array.length values)
+  return case selected of
+    #Some found => @array.get values found
+    #None => -1
+
+const sum :: [Int] -> Int
+const sum = fn values => do:
+  let rec visit = fn (index, total) => do:
+    if index >= Array.length values:
+      return total
+
+    let value = @array.get values index
+    return visit (index + 1, total + value)
+
+  return visit (0, 0)
+
+const sum_loop :: [Int] -> Int
+const sum_loop = fn values => do:
+  let index = 0
+  let total = 0
+  for _ in ever:
+    if index >= Array.length values:
+      break
+
+    total := total + @array.get values index
+    index := index + 1
+
+  return total
+
+return
+  { .increment = increment; .nonnegative = nonnegative; .next_at = next_at; .clamped_at = clamped_at; .optional_at = optional_at; .sum = sum; .sum_loop = sum_loop; }

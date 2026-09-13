@@ -251,3 +251,27 @@ fn member_upper_evidence_does_not_default_cycles_or_project_container_elements()
         .unwrap();
     assert!(checker.member_lookup_subject(&subject).is_none());
 }
+
+#[test]
+fn specialized_forwarded_numeric_evidence_preserves_unknown_alternatives() {
+    let checker = Checker::new(Rc::new(Context::default()));
+    let producer = checker.fresh();
+    let receiver = checker.fresh();
+    let span = Span { start: 1, end: 2 };
+    checker
+        .constrain(producer.clone(), int_type(), span)
+        .unwrap();
+    checker.constrain(producer, receiver.clone(), span).unwrap();
+    assert!(checker.member_lookup_subject(&receiver).is_none());
+    checker.specialization_depth.set(1);
+    assert!(matches!(
+        checker.member_lookup_subject(&receiver),
+        Some(Type::Range {
+            domain: Domain::Int,
+            ..
+        })
+    ));
+    let unknown = checker.fresh();
+    checker.constrain(unknown, receiver.clone(), span).unwrap();
+    assert!(checker.member_lookup_subject(&receiver).is_none());
+}

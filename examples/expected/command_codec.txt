@@ -1,0 +1,1 @@
+[#Ok #Reset, #Ok #Move { .x = 12; .y = -4; }, #Error "invalid move coordinates", #Error "invalid move coordinates"]

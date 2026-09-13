@@ -1,21 +1,15 @@
 // A familiar loop written as an ordinary Blot program.
 //
 // The labels are text values, and the array grows through rebinding rather
-// than assignment. `Int.rem` is a prelude function, not a built-in operator.
+// than assignment. `%` resolves through the ordinary prelude.
 
 open import "blot:prelude"
 
-let label = fn value => do:
-  if Int.rem value 15 == 0:
-    return "fizzbuzz"
-  else:
-    if Int.rem value 3 == 0:
-      return "fizz"
-    else:
-      if Int.rem value 5 == 0:
-        return "buzz"
-      else:
-        return Text.of_int value
+let label = fn value => case value of
+  n if n % 15 == 0 => "fizzbuzz"
+  n if n % 3 == 0 => "fizz"
+  n if n % 5 == 0 => "buzz"
+  n => Text.of_int n
 
 let output = []
 for value in Iter.range (1, 16):

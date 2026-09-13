@@ -7,12 +7,12 @@
 | Frontend | `baba-general-cpu-hosted-by-rust-wasm` |
 | Production backend | `direct-rust` |
 | Emitter | `rust-wasm-encoder` |
-| Compiler-host ABI | 7 |
-| Checked-module certificate | 20 |
+| Compiler-host ABI | 9 |
+| Checked-module certificate | 23 |
 | Module snapshot | 3 |
 | Value capsule | 5 |
-| Runtime HIR | 13 |
-| Public ABI | 3.0 |
+| Runtime HIR | 14 |
+| Public ABI | 4.0 |
 
 ## Supported public values
 
@@ -34,7 +34,7 @@
 - Scratch and private Region values cannot cross the public ABI
 - deferred functions must be eliminated before the public ABI
 - public values must have closed first-order layouts
-- suspending artifacts with owned host transfers require scoped cleanup
+- suspending artifacts with linear host transfers are not supported
 
 ## Editor features
 

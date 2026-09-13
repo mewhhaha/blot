@@ -1,0 +1,7 @@
+// F64.cmp deliberately traps on NaN. Use blot:float's partial_cmp when the
+// caller needs to handle #Unordered as an ordinary result.
+
+open import "blot:prelude"
+
+let nan = F64.div 0.0 0.0
+return F64.cmp nan 1.0

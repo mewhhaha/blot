@@ -443,6 +443,18 @@
         "boundary": {
           "kind": "root"
         }
+      },
+      {
+        "rule": "annotated_pattern",
+        "boundary": {
+          "kind": "root"
+        }
+      },
+      {
+        "rule": "lambda_result",
+        "boundary": {
+          "kind": "root"
+        }
       }
     ],
     "semantics": {
@@ -520,10 +532,14 @@
         },
         {
           "node": "TYPE_IDENT",
-          "capture": "type"
+          "capture": "variable"
         },
         {
           "node": "INTEGER",
+          "capture": "number"
+        },
+        {
+          "node": "FLOAT",
           "capture": "number"
         },
         {
@@ -537,8 +553,193 @@
         {
           "node": "OPERATOR",
           "capture": "operator"
+        },
+        {
+          "node": "ANGLE_LEFT",
+          "capture": "operator"
+        },
+        {
+          "node": "ANGLE_RIGHT",
+          "capture": "operator"
+        },
+        {
+          "node": "QUESTION",
+          "capture": "operator"
+        },
+        {
+          "node": "COMMENT",
+          "capture": "comment"
+        },
+        {
+          "node": "ELSE_IF",
+          "capture": "keyword"
+        },
+        {
+          "parent": "module_header",
+          "literal": "module",
+          "capture": "keyword"
+        },
+        {
+          "parent": "module_header",
+          "literal": "with",
+          "capture": "keyword"
+        },
+        {
+          "parent": "fixity_declaration",
+          "literal": "infix",
+          "capture": "keyword"
+        },
+        {
+          "parent": "fixity_declaration",
+          "literal": "infixl",
+          "capture": "keyword"
+        },
+        {
+          "parent": "fixity_declaration",
+          "literal": "infixr",
+          "capture": "keyword"
+        },
+        {
+          "parent": "fixity_declaration",
+          "literal": "prefix",
+          "capture": "keyword"
+        },
+        {
+          "parent": "binding",
+          "literal": "const",
+          "capture": "keyword"
+        },
+        {
+          "parent": "binding",
+          "literal": "let",
+          "capture": "keyword"
+        },
+        {
+          "parent": "binding",
+          "literal": "rec",
+          "capture": "keyword"
+        },
+        {
+          "parent": "signature",
+          "literal": "const",
+          "capture": "keyword"
+        },
+        {
+          "parent": "signature",
+          "literal": "let",
+          "capture": "keyword"
+        },
+        {
+          "parent": "signature",
+          "literal": "rec",
+          "capture": "keyword"
+        },
+        {
+          "parent": "lambda_parameter",
+          "literal": "fn",
+          "capture": "keyword"
+        },
+        {
+          "parent": "result",
+          "literal": "return",
+          "capture": "keyword"
+        },
+        {
+          "parent": "sequencing",
+          "literal": "use",
+          "capture": "keyword"
+        },
+        {
+          "parent": "opening",
+          "literal": "open",
+          "capture": "keyword"
+        },
+        {
+          "parent": "iteration",
+          "literal": "for",
+          "capture": "keyword"
+        },
+        {
+          "parent": "iteration",
+          "literal": "case",
+          "capture": "keyword"
+        },
+        {
+          "parent": "iteration_source",
+          "literal": "in",
+          "capture": "keyword"
+        },
+        {
+          "parent": "breaking",
+          "literal": "break",
+          "capture": "keyword"
+        },
+        {
+          "parent": "continuing",
+          "literal": "continue",
+          "capture": "keyword"
+        },
+        {
+          "parent": "import_expression",
+          "literal": "import",
+          "capture": "keyword"
+        },
+        {
+          "parent": "import_expression",
+          "literal": "with",
+          "capture": "keyword"
+        },
+        {
+          "parent": "conditional_statement",
+          "literal": "if",
+          "capture": "keyword"
+        },
+        {
+          "parent": "conditional_statement_guard",
+          "literal": "let",
+          "capture": "keyword"
+        },
+        {
+          "parent": "conditional_statement_guard",
+          "literal": "else",
+          "capture": "keyword"
+        },
+        {
+          "parent": "conditional_statement_else_clause",
+          "literal": "else",
+          "capture": "keyword"
+        },
+        {
+          "parent": "case_expression",
+          "literal": "case",
+          "capture": "keyword"
+        },
+        {
+          "parent": "case_expression",
+          "literal": "of",
+          "capture": "keyword"
+        },
+        {
+          "parent": "case_guard",
+          "literal": "if",
+          "capture": "keyword"
+        },
+        {
+          "parent": "do_block",
+          "literal": "do",
+          "capture": "keyword"
+        },
+        {
+          "node": "field_name",
+          "capture": "variable.other.member"
+        },
+        {
+          "pattern": "(binding pattern: (binding_pattern value: (pattern_core [(IDENT) (TYPE_IDENT)] @function)) value: (value (lambda)))"
         }
-      ]
+      ],
+      "defaults": {
+        "mode": "minimal"
+      }
     },
     "rainbows": {
       "scopes": [

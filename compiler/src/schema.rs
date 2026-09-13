@@ -93,6 +93,8 @@ pub(crate) const RULE_NAMES: &[&str] = &[
     "bounded_lambda",
     "computed_shape_field",
     "continuing",
+    "annotated_pattern",
+    "lambda_result",
 ];
 
 pub(crate) const FIELD_NAMES: &[&str] = &[
@@ -184,6 +186,8 @@ pub(crate) const NAMED_TOKEN_KINDS: &[&str] = &[
 ];
 
 pub(crate) const REPEATED_FIELDS: &[(&str, &str)] = &[
+    ("annotated_pattern", "annotation"),
+    ("shape_field", "value"),
     ("array", "elements"),
     ("array_pattern", "elements"),
     ("binding", "tags"),

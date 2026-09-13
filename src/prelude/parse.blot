@@ -1,0 +1,79 @@
+// Strict integer parsing. Whitespace belongs to the caller's input policy.
+open import "blot:prelude"
+
+const IntegerError =
+  (
+    #EmptyInput |
+    #InvalidRadix Int |
+    #InvalidDigit { .position = Int; .scalar = Text; } |
+    #IntegerOverflow { .position = Int; }
+  )
+
+const digit_value = fn scalar => case Text.find_from (
+  "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  scalar,
+  0
+) of
+  #None => -1
+  #Some index => do:
+    if index >= 36:
+      return index - 26
+    else:
+      return index
+
+const integer_radix :: (Text, Int) -> Result (Int, IntegerError)
+const integer_radix = fn (text, radix) => do:
+  if radix < 2 || radix > 36:
+    return #Error (#InvalidRadix radix)
+
+  let rec visit ::
+    (Text.Cursor, Int, Int, Int, Bool) -> Result (Int, IntegerError)
+  let rec visit =
+    fn (
+      cursor,
+      position,
+      digits,
+      accumulated,
+      negative
+    ) => case Text.next cursor of
+      #None => do:
+        if digits == 0:
+          return #Error #EmptyInput
+
+        if negative:
+          return #Ok accumulated
+
+        return #Ok (-accumulated)
+
+      #Some (scalar, next) => do:
+        if position == 0 && (scalar == "+" || scalar == "-"):
+          return visit (next, 1, 0, 0, scalar == "-")
+
+        let digit = digit_value scalar
+        if digit < 0 || digit >= radix:
+          return #Error (#InvalidDigit { .position; .scalar; })
+
+        // Negative accumulation includes Int's asymmetric minimum. Each guard
+        // establishes the range of the arithmetic that follows it.
+        let limit = case negative of
+          #True => -9223372036854775808
+          #False => -9223372036854775807
+        if accumulated < limit / radix:
+          return #Error (#IntegerOverflow { .position; })
+
+        let product = accumulated * radix
+        if product < limit + digit:
+          return #Error (#IntegerOverflow { .position; })
+
+        return visit (next, position + 1, digits + 1, product - digit, negative)
+
+  return visit (Text.cursor text, 0, 0, 0, False)
+
+const integer :: Text -> Result (Int, IntegerError)
+const integer = fn text => integer_radix (text, 10)
+
+return {
+  .IntegerError
+  .integer
+  .integer_radix
+}

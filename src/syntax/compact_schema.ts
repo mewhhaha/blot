@@ -95,6 +95,8 @@ export const compactRuleNames = [
   "bounded_lambda",
   "computed_shape_field",
   "continuing",
+  "annotated_pattern",
+  "lambda_result",
 ] as const;
 
 // Stable field identifiers. Retired names remain here so compiler snapshots do
@@ -209,6 +211,7 @@ export const currentCompactFieldNames = [
   "qualifier",
   "recursive",
   "rest",
+  "result",
   "right",
   "root",
   "source",
@@ -243,6 +246,8 @@ export const compactNamedTokenKinds = [
 ] as const;
 
 export const compactRepeatedFields = [
+  "annotated_pattern.annotation",
+  "shape_field.value",
   "array.elements",
   "array_pattern.elements",
   "binding.tags",

@@ -1,0 +1,4 @@
+open import "blot:prelude"
+const Search = import "./lib/inferred_search.blot"
+
+return [Search.run [], Search.run [0, 1, 2], Search.run [0, 3, 4]]

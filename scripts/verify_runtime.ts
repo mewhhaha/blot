@@ -1,8 +1,12 @@
 import { Compiler } from "../src/compiler/session.ts";
-import { runArtifact } from "../src/node/run.ts";
+import { observeArtifact } from "../src/node/run.ts";
+import { evaluationObservation } from "../src/runtime_observation.ts";
+import { deepStrictEqual } from "node:assert";
 
 const cases = [
   "examples/minimal.blot",
+  "examples/relational_observations.blot",
+  "examples/literal_rebinding.blot",
   "examples/dynamic_numeric_observations.blot",
   "examples/control_transformers.blot",
   "examples/suspension.blot",
@@ -15,6 +19,16 @@ const cases = [
   "examples/nested_case_joins.blot",
   "examples/collection_effects.blot",
   "examples/text_cursor.blot",
+  "examples/value_observations.blot",
+  "examples/typed_parameters.blot",
+  "examples/record_fields.blot",
+  "examples/collection_adapters.blot",
+  "examples/effectful_iterator.blot",
+  "examples/inferred_search.blot",
+  "examples/float_formatting.blot",
+  "examples/parse_integer.blot",
+  "examples/command_codec.blot",
+  "examples/module_input_contract.blot",
   "examples/spark_parallel.blot",
   "examples/row_preserving_wrapper.blot",
   "examples/region_round_trip.blot",
@@ -35,13 +49,13 @@ try {
         `${path}: conformance case unexpectedly writes to its host`,
       );
     }
-    const emitted = await runArtifact(await compiler.compile(path));
-    if (emitted !== evaluated.display) {
-      throw new Error(
-        `${path}: evaluator returned ${evaluated.display}, emitted Wasm returned ${emitted}`,
-      );
-    }
-    console.log(`${path}: evaluator and emitted Wasm agree on ${emitted}`);
+    const emitted = await observeArtifact(await compiler.compile(path));
+    deepStrictEqual(
+      emitted.value,
+      evaluationObservation(evaluated.value, emitted.type),
+      `${path}: evaluator and emitted Wasm differ`,
+    );
+    console.log(`${path}: evaluator and emitted Wasm observations agree`);
   }
 } finally {
   compiler.destroy();

@@ -1,0 +1,11 @@
+open import "blot:prelude"
+
+const relations = import "./lib/relational_inference.blot"
+
+const run :: Int -> Int
+const run = fn index => do:
+  let values = [10, 20, 30]
+  return
+    relations.next_at (values, index) + relations.optional_at (values, index) + relations.sum values + relations.sum_loop values
+
+return { .run = run; }

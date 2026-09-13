@@ -1,4 +1,4 @@
-export const developmentBenchmarkSchema = 3 as const;
+export const developmentBenchmarkSchema = 4 as const;
 export const developmentBenchmarkMaximumRssGrowthBytes = 128 * 1024 * 1024;
 
 export type DevelopmentBenchmarkCompilerProfile =
@@ -88,6 +88,7 @@ export interface DevelopmentBenchmarkReport
     readonly editedProviderBytes: number;
     readonly unitCount: number;
     readonly voxelDeclarations: number;
+    readonly editPattern: "alternating" | "unique";
   };
   readonly initial: {
     readonly buildMilliseconds: number;

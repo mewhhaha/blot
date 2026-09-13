@@ -400,6 +400,20 @@ dependency-boundary invalidation removes the entry before another request. This
 cache skips checking and Runtime-HIR reconstruction for a no-op request; it does
 not change staging, specialization, or source meaning.
 
+Development compilation releases its transient checker state before returning,
+including on failure. Durable interfaces, analysis facts, runtime type
+resolvers, and pending artifacts outlive that cleanup; request-local solver
+variables do not. Cleanup belongs to the current build's edit-to-ready duration,
+including the initial build, and must not be deferred to the next edit.
+
+A resident checked interface is admitted once against its immutable type arena
+and complete root set. Its private construction paths validate either the fresh
+checked interface or the incoming certificate before publishing it. Cloning,
+public-boundary sealing, and inflation retain that admission and share the
+expression/signature indexes. Inflation still creates request-local rigid names;
+it cannot reuse solver variables from a previous request. External certificate
+admission retains all structural and source-reference checks.
+
 ### 8.1 Development continuation graph memos
 
 After source and ownership checking, development specialization may reuse a
@@ -426,20 +440,33 @@ instead of embedding the prelude repeatedly. The complete evidence uses a tagged
 MessagePack encoding hashed with SHA-256; shared immutable scope paths are
 encoded once per key and contribute their digest plus source dependencies.
 Resident pointer identity only avoids repeated encoding and never enters the
-portable digest. The checked operator registry's evidence is shared within one
-semantic request, and an effect-generation or attachment-stamp change discards
-it. Every request clears this memo before checking or invalidation. Its
-canonical type-variable map seeds each call's encoding, preserving aliases
-between registry and call evidence. The pinned `sha2` dependency supplies this
-compiler-owned digest without a host semantic callback or an independent parser.
-Occurrence addresses retain the expression/declaration and compiler steps plus
-each scope owner's exact local AST and configuration. Only this non-generative
-cache normalizes a revision nonce to that address; `ModuleRevision` has no
-portable serialization. Each scope is limited to 32 levels and 256 sites/steps;
-excessive provenance declines reuse. Configured reload roots, caller source
-span, and closed argument/result representations also participate. Runtime
-dependencies currently retain source dependencies; an unchanged interface alone
-cannot authorize consumer reuse.
+portable digest. A resident memo may retain those immutable encodings across
+requests, bounded to 1,024 entries and 1 MiB of accounted evidence storage. Weak
+scope owners prevent address reuse without retaining retired revisions; expired
+owners are pruned under capacity pressure. Ineligible provenance is subject to
+the same depth and work limits with or without memoization. Source revision
+digests are read afresh for every key, so cached path encodings cannot authorize
+reuse after a dependency changes. Repeated strings and provenance digests are
+interned by exact content in separate first-occurrence dictionaries. The digest
+dictionary is a binary string of consecutive 32-byte SHA-256 values. Each
+evidence atom is a MessagePack tuple with an explicit numeric kind tag; scalar
+numeric payloads remain inline, and byte payloads use binary strings. The
+ordered atom sequence retains every tag and payload. This encoding is lossless
+and independent of resident allocation sharing; the trace-local structural key
+and function deduplication stay unchanged. The checked operator registry's
+evidence is shared within one semantic request, and an effect-generation or
+attachment-stamp change discards it. Every request clears this memo before
+checking or invalidation. Its canonical type-variable map seeds each call's
+encoding, preserving aliases between registry and call evidence. The pinned
+`sha2` dependency supplies this compiler-owned digest without a host semantic
+callback or an independent parser. Occurrence addresses retain the
+expression/declaration and compiler steps plus each scope owner's exact local
+AST and configuration. Only this non-generative cache normalizes a revision
+nonce to that address; `ModuleRevision` has no portable serialization. Each
+scope is limited to 32 levels and 256 sites/steps; excessive provenance declines
+reuse. Configured reload roots, caller source span, and closed argument/result
+representations also participate. Runtime dependencies currently retain source
+dependencies; an unchanged interface alone cannot authorize consumer reuse.
 
 Version 2 stores checked continuation functions, local representation and
 signature tables, pooled constants, the root's result-reuse witness, and
@@ -670,6 +697,30 @@ revision. Template decoding prepends the importing runtime's complete
 module-instance and effect-scope stacks to every reconstructed closure; source
 or configuration invalidation removes the template before renewing the revision.
 
+Capsule reconstruction shares a source closure/recursive-group index only while
+the exact immutable source AST remains installed. Source replacement creates a
+new index; a configuration revision may share the index because it contains no
+imports, effect identities, or solver facts. Capsule graph and closure-reference
+validation still runs against that source index. Occurrence and effect
+provenance remain part of every reconstructed environment's identity. Operator
+attachment registration resolves the module's declared names through the
+captured root's index, then registers values in the original declaration order.
+This must preserve ordinary name, recursive binding, shadowing, and tracked
+`open` lookup behavior.
+
+After all capsule frames and recursive groups have been reconstructed, the root
+environment may index visible names to their owning frames. Indexing captures
+the complete ancestor chain so subsequent declarations use child scopes. The
+index contains weak frame references, never closure values, and does not mark
+opened fields as used until lookup actually reads them. Unknown names and child
+shadowing retain ordinary behavior. Closures with an empty encoded
+module-instance suffix share the current reconstruction's immutable occurrence
+prefix and module path; a different reconstruction receives its own prefix. No
+occurrence or effect identity is removed by that sharing. Closure signatures use
+immutable shared values; reconstruction resolves each closure body's signature
+once within that reconstruction. The signature cache does not outlive
+reconstruction or retain request-local solver facts across requests.
+
 The compiler host seeds the resolved graph's prelude leaf from the validated
 snapshot AST and pins that leaf to the compiler instance. It does not reparse a
 source twin merely to rediscover the snapshot's dependency-free graph.
@@ -752,3 +803,23 @@ Tests compare invalidation sets, ordered diagnostics, settled interfaces,
 certificates, staged values, Runtime HIR, manifest bytes, WebAssembly bytes, and
 source/Wasm observations. A timing improvement without fresh-result equivalence
 is not a valid incremental optimization.
+
+### Relational inference and restoration
+
+Compiler-host ABI 8 and checked-module certificate 21 add relational proof
+observations to cached analysis. The existing complete checked-source and
+capture/dependency identity remains the cache boundary. No pointer identity is
+serialized in relational evidence: it contains source expression identifiers and
+request-local symbolic integer identifiers. Imported evidence is checked for
+bounded, valid inequalities and matching source expression forms, and is used
+only for explanation. Source helper relationships are derived again from their
+resolved closure and environment when a caller requires them, so changing a
+capture, body, or dependency cannot preserve an old caller assumption through an
+observation cache. Guest ABI 4 and Runtime HIR 13 are unchanged.
+
+Checked-module certificate 22 also requires handler ownership validation through
+the selected clauses' defining-module function contracts. Capsule restoration
+retains those contracts and source identities; an imported builder is checked
+under the same rules as a literal handler. Caller-local clause selections are
+transient and rebuilt by checking after invalidation, not persisted as live
+closure values.

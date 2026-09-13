@@ -7,9 +7,9 @@ open import "blot:prelude"
 
 let rec evaluate = fn expression => case expression of
   #Literal value => value
-  #Add operands => evaluate operands.0 + evaluate operands.1
-  #Multiply operands => evaluate operands.0 * evaluate operands.1
-  #Negate operand => 0 - evaluate operand
+  #Add (left, right) => evaluate left + evaluate right
+  #Multiply (left, right) => evaluate left * evaluate right
+  #Negate operand => -evaluate operand
 
 let expression =
   #Add (

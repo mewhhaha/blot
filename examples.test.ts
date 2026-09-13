@@ -104,7 +104,6 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "compared_names": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
-  "compared_lengths": { code: "BLOT_UNPROVEN_INDEX", stage: "check" },
   // The one bounds failure the checker can already decide: both the index and
   // the array's length are written out in the source. It is the same code the
   // evaluator raises, and it has migrated from `run` to `check`.
@@ -303,7 +302,6 @@ const REJECTIONS: Record<
     stage: "check",
   },
   "shadowed_accumulator": { code: "BLOT_SHADOWED_ACCUMULATOR", stage: "check" },
-  "float_unordered": { code: "BLOT_UNORDERED", stage: "run" },
   "unbounded_case": { code: "BLOT_INCOMPLETE_CASE", stage: "check" },
   "unconstrained_case": {
     code: "BLOT_INCOMPLETE_CASE",
@@ -412,6 +410,7 @@ const REJECTIONS: Record<
 const TRAPS: Record<string, string> = {
   "division_by_zero": "BLOT_DIVIDE_BY_ZERO",
   "integer_overflow": "BLOT_INTEGER_OVERFLOW",
+  "float_unordered": "BLOT_UNORDERED",
 };
 
 /**
@@ -423,18 +422,7 @@ const PENDING: Record<
   string,
   | { code: string; stage: "check" | "run" }
   | { type: string; stage: "type" }
-> = {
-  "collect_principal_type": {
-    type: "([(Int | 0)] | ['a])",
-    stage: "type",
-  },
-  "affine_index_rebinding": {
-    code: "BLOT_UNPROVEN_INDEX",
-    stage: "check",
-  },
-  "total_float_ordering": { code: "BLOT_UNORDERED", stage: "run" },
-  "text_codepoints": { code: "BLOT_TYPE_ERROR", stage: "check" },
-};
+> = {};
 
 async function blotFiles(directory: string): Promise<string[]> {
   const found: string[] = [];
@@ -550,7 +538,15 @@ for (const name of await blotFiles("examples/traps")) {
   });
 }
 
-for (const name of await blotFiles("examples/pending")) {
+const pendingFiles = await blotFiles("examples/pending");
+Deno.test("pending inventory exactly matches its executable probes", () => {
+  assertEquals(
+    pendingFiles.map((name) => basename(name, ".blot")).sort(),
+    Object.keys(PENDING).sort(),
+  );
+});
+
+for (const name of pendingFiles) {
   const stem = basename(name, ".blot");
   const expected = PENDING[stem];
   const label = expected === undefined

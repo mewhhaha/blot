@@ -46,6 +46,14 @@ These terms are logical work. A fused implementation measures a combined term
 and may subdivide it with internal counters. Serialization, copying, module
 instantiation, and host/guest transfer are reported separately when present.
 
+Evaluator records retain ordered entries and copy-on-write identity. Records of
+at most eight fields use a bounded linear lookup without a separate name index.
+Larger records maintain a name-to-position index; growth and removal keep it
+synchronized with entry order. This is private evaluator storage, not another
+field-order or source-identity rule, and does not change capsule bytes or the
+caller ABI. Measure reconstruction and invalidation together: avoiding index
+allocation must not merely shift its destruction to the following edit.
+
 ## 2. Benchmark classes
 
 The following boundaries are not interchangeable:
@@ -92,23 +100,24 @@ execution environment. A startup report is invalid when its phase matrix is
 incomplete or a distribution cannot be recomputed exactly from its raw samples.
 
 The development edit-through-activation report applies the same stable-capture
-rule outside its warm samples. Schema 3 identifies the repository commit and the
-bytes or deletion state of every tracked and relevant untracked worktree input,
-plus the complete measured Deno host harness, including every local file in the
-resolved module graph and the installed dependency bytes it executes. It
-separately identifies the compiler artifact, manifest, compiler inputs, prelude,
-compiler source commit/tree, and Rust toolchain. Its environment records
-Deno/V8, platform, architecture, CPU models/count, and hashes of the Deno
-executable and exact invocation. A changed capture rejects the run. Compiler
-profiling measurements and feature status remain explicit report facts. The
-selected production or development-profile distribution supplies one adjacent
-manifest, Wasm artifact, and prelude snapshot; those exact validated bytes feed
-the measured project and both provenance captures. An absent optional profile on
-every build identifies a production compiler; a present profile identifies a
-development-profile compiler and contributes every initial and sample memory
-checkpoint, including solver cardinalities. Mixed observations or disagreement
-with the manifest profile reject the report rather than infer feature status
-from binary contents.
+rule outside its warm samples. Schema 4 records whether edits alternate two
+source versions or introduce a unique provider body each time, and identifies
+the repository commit and the bytes or deletion state of every tracked and
+relevant untracked worktree input, plus the complete measured Deno host harness,
+including every local file in the resolved module graph and the installed
+dependency bytes it executes. It separately identifies the compiler artifact,
+manifest, compiler inputs, prelude, compiler source commit/tree, and Rust
+toolchain. Its environment records Deno/V8, platform, architecture, CPU
+models/count, and hashes of the Deno executable and exact invocation. A changed
+capture rejects the run. Compiler profiling measurements and feature status
+remain explicit report facts. The selected production or development-profile
+distribution supplies one adjacent manifest, Wasm artifact, and prelude
+snapshot; those exact validated bytes feed the measured project and both
+provenance captures. An absent optional profile on every build identifies a
+production compiler; a present profile identifies a development-profile compiler
+and contributes every initial and sample memory checkpoint, including solver
+cardinalities. Mixed observations or disagreement with the manifest profile
+reject the report rather than infer feature status from binary contents.
 
 The development committed boundary begins before the provider write and ends
 when transactional project activation resolves. The activation-only boundary
@@ -116,6 +125,17 @@ subtracts the build's nested duration from that same outer activation interval.
 RSS is captured at resolution. Changed-unit classification is part of the build
 and committed boundaries. The assertion over that classification and the runtime
 observation remain mandatory parity checks after both clocks and the RSS sample.
+
+The paired active-graph comparison retains two independently validated compiler
+distributions and two runtime instances. Both receive the same source paths and
+twenty unique provider edits; execution order alternates for each pair. The
+single source-write duration is charged to both observations, followed by each
+compiler's invalidation-through-activation interval. Runtime values and the
+changed-unit set must agree with the workload after every observation. Its
+schema-1 report identifies the baseline distribution and the current worktree,
+compiler, and harness, with stable current provenance across the run. Two
+resident compilers change the memory boundary, so this comparison cannot satisfy
+the single-compiler RSS or absolute-latency gates.
 
 Generated-code execution is a separate boundary from every compiler class above.
 A warm generated-execution measurement starts with validated and compiled
@@ -213,6 +233,33 @@ Private editor type strings are rendered on demand from frozen analysis facts.
 Ordinary compilation does not pay to print every expression's expanded qualified
 signature. Public boundary identity likewise visits public roots only; a
 complete portable certificate remains subject to its unchanged total budget.
+
+Resident interface admission and expression/signature index construction are
+charged once per immutable checked interface, rather than per inflation. Source
+closure indexing for value capsules is charged once per resident AST. Resolving
+the declared names used for operator registration uses the captured root's
+index, preserving lexical precedence and declaration order. Development
+edit-to-ready measurements include transient solver destruction on success and
+failure; initial-build destruction cannot be charged to the first edit. These
+bounds do not eliminate ordinary rechecking or occurrence-sensitive capsule
+reconstruction.
+
+Decoded root environments build their visible-name index once, after all frames
+are complete. Reads through that root use the index instead of repeating an
+ancestor-chain search for every field in a module export record. Empty encoded
+closure-instance suffixes share one immutable occurrence prefix within a
+reconstruction, avoiding a prefix copy for every closure. Closure copies share
+immutable signature values, and each body signature is resolved at most once per
+reconstruction. Reconstruction budgets remain conservative and retain their
+existing source refusal behavior.
+
+Portable residual-key serialization records repeated strings and provenance
+digests once in first-occurrence dictionaries. Numeric kind tags and inline
+numeric payloads avoid hash-table lookups for small scalar atoms; byte payloads
+use binary strings. The structural key retains its original evidence and
+equality. Cache identity still covers the complete ordered sequence and source
+dependencies without repeatedly serializing long source paths or textual variant
+names.
 
 The type-mechanics scaling experiment varies one source dimension `N` at a time.
 An ordinary declaration chain, one wide structural requirement, `N` independent
@@ -548,6 +595,18 @@ linear scans. A series of separate `find_from` calls may rescan prefixes through
 those adapters; this contract does not claim every composite text operation is
 linear.
 
+`Text.split`, `Text.lines`, and `Text.replace` avoid these scalar adapters.
+Their monotone byte positions pass through constant-work boundary validation (at
+most one byte load, no loop or allocation). Slicing retains the input owner
+without copying its prefix, and byte length reads the stored length. Successive
+searches consume disjoint prefixes and advance by the nonempty query length.
+Repeated query preprocessing is therefore bounded by consumed input; the final
+failed search adds at most one query length. With amortized builder growth and
+one replacement join, the emitted operations take `O(n + m + output)` work.
+Source semantics for empty queries and separators are unchanged. The reference
+evaluator has the same values and boundaries; its generic persistent-array
+implementation does not promise the emitted Store allocation cost.
+
 Deterministic regression checks count layout visits and execute the emitted
 search instructions with bounded byte loads. Integration tests also compile
 nested public records and execute actual generated Wasm on repetitive, periodic,
@@ -596,3 +655,35 @@ allocator, canonical adapters, and reference functions. Rebaselining these
 representation budgets requires a recorded old/new artifact comparison; it does
 not change unchanged-module semantic-work gates or steady-state allocation
 bounds.
+
+### Bounded relational inference
+
+Direct array proofs run before normal-return inference. A successful direct
+proof does not expand helper bodies or search for recursive invariants. A module
+with an unresolved index obligation receives the bounded symbolic pass described
+in `SAFETY.md`; each request permits 65,536 transfer visits and at most 256
+retained candidate inequalities per recursive component. Candidate enumeration
+also consumes transfer visits. Fixed-point iteration deletes candidates, so it
+can change the candidate set at most 256 times before replay or refusal.
+
+Each proof graph admits at most 512 terms and 2,048 edges. Difference-constraint
+queries use the existing shortest-path kernel; arbitrary-precision integer
+arithmetic retains its bit-width cost. These are compiler resource bounds, not
+claims of constant-time evaluation or termination of the source program.
+
+Retaining identities through captured closure graphs visits each distinct
+closure once per query. Shared captures must not be expanded once per incoming
+path: a 100-level shared closure diamond is covered by the refinement regression
+gate. Serialized observations carry integer and source-expression identifiers;
+request-local closure pointers are used only while checking a live graph.
+
+### Source float presentation measurements
+
+The optional float-format benchmark measures checking and compilation after
+compiler creation, with guest instantiation outside the compile clock. Runtime
+samples are batch means over 100 canonical calls, including output assertions,
+after three warmup calls per value. Seven samples per value retain their raw
+durations; emitted Wasm size, artifact provenance and host versions accompany
+them. Ordinary values and each precision's smallest subnormal are separate
+workloads. These measurements do not promise constant-time source formatting,
+zero allocation, or parity with a native host formatting routine.

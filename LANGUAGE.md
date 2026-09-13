@@ -361,6 +361,10 @@ its current source inputs have been checked. Live authority and generative
 identities are not persistent cache entries. Restarting a development server
 does not restore a browser's live module state.
 
+A development build finishes transient compiler cleanup before returning its
+result. Reusing immutable compiler metadata preserves lexical lookup precedence
+and the ordinary occurrence identities of imports and effects.
+
 Each unit has independent runtime memory and module state. Activating a changed
 unit creates a fresh instance, so its state resets. An unchanged unit retains
 its existing instance. Values passed over a link are copied according to the
@@ -447,31 +451,33 @@ above the reader or the two belong in one recursive group.
 Physical line breaks terminate declarations. A continuation may be indented, but
 indentation opens a statement suite only after a suite introducer. The
 introducers are `=`, `=>`, `<-`, `of`, and `:`. `do:` is the explicit
-value-producing statement scope. A `const` binding, rather than a second block
-keyword, requires its complete value to resolve at compile time. Parentheses
-only group values or form tuples; they never introduce a statement suite. A
-suite may use any indentation width, but every line at that depth must agree; a
-dedent must return to an active suite width or to the introducer's width. Other
-indentation is expression continuation and does not silently create a scope. A
-closing delimiter does not select a suite width, so its indentation is ignored
-and canonicalized by the formatter. The formatter writes the accepted structure
-with two-space indentation and expands lines toward an 80-column limit. When a
-binding, signature, or `return` line is too wide, its value moves as a whole to
-the following line at one additional indentation level. That continuation does
-not introduce a scope. A delimited value that is already multiline likewise
-moves as a whole. A vertical delimiter indents its contents one level and closes
-at the indentation of the expression that opened it; `<-` does not add another
-delimiter level. The formatter writes a conditional vertically, giving each
-branch a block whose explicit `return` supplies the value that branch
-contributes. When the conditional is itself the terminal result of a scope, the
-formatter omits the redundant outer `return` and lets those branch returns
-target the scope directly. Arrays use one line when they fit within their value
-scope and otherwise place one element on each line. A signature and its binding
-have no empty line between them. Recursive-group members are likewise
-contiguous, followed by one empty line when another declaration follows. After a
-standalone `if` or `for` suite, or a multiline `case` arm, closes before another
-statement or arm, the formatter writes one empty line to make the dedent
-visible. It never separates an `else` from its `if`.
+value-producing statement scope. A layout introducer does not by itself make a
+statement sequence an expression: a function's statement body requires `=> do:`.
+A `const` binding, rather than a second block keyword, requires its complete
+value to resolve at compile time. Parentheses only group values or form tuples;
+they never introduce a statement suite. A suite may use any indentation width,
+but every line at that depth must agree; a dedent must return to an active suite
+width or to the introducer's width. Other indentation is expression continuation
+and does not silently create a scope. A closing delimiter does not select a
+suite width, so its indentation is ignored and canonicalized by the formatter.
+The formatter writes the accepted structure with two-space indentation and
+expands lines toward an 80-column limit. When a binding, signature, or `return`
+line is too wide, its value moves as a whole to the following line at one
+additional indentation level. That continuation does not introduce a scope. A
+delimited value that is already multiline likewise moves as a whole. A vertical
+delimiter indents its contents one level and closes at the indentation of the
+expression that opened it; `<-` does not add another delimiter level. The
+formatter writes a conditional vertically, giving each branch a block whose
+explicit `return` supplies the value that branch contributes. When the
+conditional is itself the terminal result of a scope, the formatter omits the
+redundant outer `return` and lets those branch returns target the scope
+directly. Arrays use one line when they fit within their value scope and
+otherwise place one element on each line. A signature and its binding have no
+empty line between them. Recursive-group members are likewise contiguous,
+followed by one empty line when another declaration follows. After a standalone
+`if` or `for` suite, or a multiline `case` arm, closes before another statement
+or arm, the formatter writes one empty line to make the dedent visible. It never
+separates an `else` from its `if`.
 
 ### 4.1 Runtime and compile-time bindings
 
@@ -492,11 +498,10 @@ let descriptive_pattern =
   value
 ```
 
-The indented continuation accepts a lambda or ordinary expression. An `if`
-immediately after the newline begins the binding's existing block form, where it
-is a statement conditional whose branches `return` the value the binding takes.
-`case` is what selects a value in place (§8.1); there is no spelling that makes
-the `if` itself the value. The continuation changes layout only and does not
+The indented continuation accepts a lambda or ordinary expression. A statement
+sequence used as the binding's value requires an explicit `do:` block, including
+one that begins with an `if`. `case` selects a value in place (§8.1); `if` is a
+statement conditional. Expression continuation changes layout only and does not
 introduce another scope.
 
 `let` defines a value in the current phase, matches its pattern when demanded,
@@ -524,10 +529,11 @@ dispatch: each `const` bound from it is typed against the branch that ran, and
 the branch that did not run contributes nothing to it.
 
 ```blot
-const measuring = fn T => if refines (T, Text):
-  return fn x => Text.length x
-else:
-  return fn x => x + 0
+const measuring = fn T => do:
+  if refines (T, Text):
+    return fn x => Text.length x
+  else:
+    return fn x => x + 0
 
 const measure_text = measuring Text   // Text -> Int, not joined with the other arm
 ```
@@ -678,7 +684,10 @@ The following binding constrains the hole exactly as it constrains an explicitly
 written signature type. Separate `_` occurrences are independent, so a function
 may leave only its parameter, only its result, or both for inference. A
 signature hole is confined to that signature evaluation; it introduces neither a
-value binding nor an implicit type namespace.
+value binding nor an implicit type namespace. Its inference variables belong to
+the following binding's generalization level, rather than the surrounding scope.
+A closed empty effect contribution resolves an inferred row to purity; an open
+row with no checked producer remains unknown.
 
 In an expression, `_` is an editor hole. Rust gives the occurrence a fresh
 inference variable and lets surrounding signatures and uses constrain it. An
@@ -706,7 +715,10 @@ lineage, so its target must have been introduced by a binder in the current
 **rebinding frame**. A module or closure owns a frame; an explicit `do` value
 and each value-producing `case` arm own a new frame as well. Statement control
 flow (`if`, `if let`, and `for`) keeps the surrounding frame, which is why its
-`:=` rebindings can be merged or threaded deterministically.
+`:=` rebindings can be merged or threaded deterministically. Checking
+establishes the lineage before liveness removes unused values. Rebinding to a
+value that does not read the previous value still advances that lineage;
+closures created earlier retain their original captured value.
 
 A captured binding from an enclosing frame may be read but cannot be advanced.
 Start a local lineage explicitly when that is what is intended:
@@ -796,7 +808,7 @@ values, conventionally a property record followed by an array of nullary child
 computations:
 
 ```blot
-let component = fn properties => fn children =>
+let component = fn properties => fn children => do:
   for child in Iter.items children:
     use child
 
@@ -808,13 +820,13 @@ wanted. Construction, storage, reordering, and execution then use the same
 function, record, array, and effect rules as the rest of the language:
 
 ```blot
-let label = fn () =>
+let label = fn () => do:
   use text "Count: "
 
-let button = fn () =>
+let button = fn () => do:
   use Button { .label = "Save"; .disabled = (); } []
 
-let view = fn () =>
+let view = fn () => do:
   use div { .class = "counter"; } [label, button]
 ```
 
@@ -868,9 +880,9 @@ the same line or in an indented continuation. `return` exits the nearest
 enclosing module or explicit `do` block with that value. Statement conditionals
 and `for` bodies do not establish return scopes, so a return crosses them. A
 `case` expression is a separate result scope and does not inherit that
-surrounding target. Its branches are values, so an indented branch may contain
-statements; a return in that block supplies the branch, and therefore the
-expression, rather than escaping farther.
+surrounding target. Its branches are values; a branch containing statements
+requires an explicit `do:` block. A return in that block supplies the branch,
+and therefore the expression, rather than escaping farther.
 
 ### 4.9 One control discipline
 
@@ -1165,6 +1177,21 @@ payload fields are represented by one tuple or shape payload.
 Constructors are structurally grouped into variant types by their names and
 payload types. There is no separate constructor declaration.
 
+Record values allow `.name;` as shorthand for `.name = name;`. Lookup, staging,
+duplicate-field checks, and ownership are identical to the explicit form. An
+optional field still requires an explicit type value. Renamed and computed
+fields keep their explicit values.
+
+In a multiline record whose first field begins on its own line, a new `.` or
+`...` at that field indentation terminates the previous field. A closing brace
+on a later line terminates the final field. Layout inserts ordinary semicolons
+after closing any nested suites, so `do:` field bodies need no orphan separator.
+More-indented member access continues the current value. Nested delimiters,
+comments, spreads, computed fields, and record patterns obey the same boundary
+rule. Fields sharing a line still require explicit semicolons. An inline first
+field needs explicit separators before further fields; putting the first field
+on its own line establishes the indentation for implicit boundaries.
+
 ### 6.3 Functions and application
 
 A function is written with `fn` and has one parameter pattern:
@@ -1173,8 +1200,59 @@ A function is written with `fn` and has one parameter pattern:
 fn parameter => body
 ```
 
+Function headers may place ordinary type values next to parameter patterns:
+
+```blot
+const add = fn (left :: Int, right :: Int) -> Int => do:
+  return left + right
+```
+
+The parentheses still describe one parameter: `(value :: Int)` groups a single
+pattern and `(left :: Int, right :: Int)` describes a tuple. Qualifiers precede
+the name, for example `(!value :: Int)` or `(&values :: [Int])`;
+`(~value :: Int)` retains deferred application. A whole destructuring pattern
+may be annotated inside parentheses. Unannotated tuple components remain
+inferred. Each parameter annotation and the result annotation is independently
+optional. For example:
+
+```blot
+const first = fn (a :: Int, b) => a
+const second = fn (a, b :: Int) => b
+const integer = fn (a, b) -> Int => a
+const mixed = fn (a :: Int, b) -> Int => a
+```
+
+Omitted components use binding-local inference holes and are generalized with
+the function. Separate calls can instantiate an omitted parameter differently; a
+written parameter or result type constrains every call. An omitted result
+annotation infers both result and effects. A written `-> Result` is a pure
+contract; `-> Result ~ { Console }` admits the named effects. Ordinary
+parentheses group function-valued or compound result types. Named row tails have
+signature-local scope and must occur at least twice in that header.
+
+These annotations elaborate to ordinary signature declarations, with existing
+inference holes for unspecified components. Named and recursive bindings keep
+ordinary lambda/Rec bodies; anonymous annotated functions use a local signed
+binding. A separate whole-binding signature and a function-header signature both
+constrain the same function. Matching adjacent signatures are cumulative; a
+conflicting annotation is an error. This adds no type namespace, runtime cast,
+calling convention, or implicit statement block. Patterns outside function
+headers do not acquire annotations through this syntax.
+
 Every lambda contains `fn`; its parameter is an ordinary binding pattern, so
 qualifiers, tuples, shapes, arrays, and constructor patterns are admitted there.
+
+A function's body is an expression. A body containing statements must use an
+explicit `do:` block, including when its first statement is `if` or `for`:
+
+```blot
+fn value => do:
+  let doubled = value + value
+  return doubled
+```
+
+Indentation after `=>` does not provide an implicit block. Expression bodies
+such as `fn value => value + value` need no `do:`.
 
 A declaration may ask the compiler to validate its Store-update cost contract
 with the ordinary `assert.reuse` tag:
@@ -1277,16 +1355,18 @@ runtime value or the public ABI is refused with `BLOT_DEFERRED_AT_RUNTIME`.
 ### 6.4 Blocks
 
 ```blot
-let result =
+let result = do:
   declarations
   return value
 ```
 
-Indentation after `=`, `=>`, `<-`, `of`, or a colon opens a suite. `do:` is the
-explicit value-producing statement scope. A block evaluates its statements in a
-nested scope. Falling through returns `()`; `return value` exits that block with
-`value`. It may leave from a nested statement conditional, guard, or loop. The
-block is the nearest return scope.
+`do:` opens an explicit value-producing statement scope. Indentation determines
+the extent of its suite; it does not replace `do:` after `=`, `=>`, or `<-`.
+Statement suites belonging to `if` and `for` are parts of those forms, not
+standalone block values. A block evaluates its statements in a nested scope.
+Falling through returns `()`; `return value` exits that block with `value`. It
+may leave from a nested statement conditional, guard, or loop. The block is the
+nearest return scope.
 
 A bare trailing expression is not permitted. The explicit `return` keeps a
 result beginning with a name distinct from `name := value`, and it keeps every
@@ -1305,10 +1385,11 @@ so neither alone makes a following statement unreachable.
 function body:
 
 ```blot
-const rec factorial = fn n => if n < 2:
-  return 1
-else:
-  return n * factorial (n - 1)
+const rec factorial = fn n => do:
+  if n < 2:
+    return 1
+  else:
+    return n * factorial (n - 1)
 ```
 
 The modifier is syntactically unavailable outside a binding. A recursive binding
@@ -1326,14 +1407,16 @@ A run of adjacent `let rec` or `const rec` bindings of the same kind is one
 body:
 
 ```blot
-let rec is_even = fn n => if n == 0:
-  return True
-else:
-  return is_odd (n - 1)
-let rec is_odd = fn n => if n == 0:
-  return False
-else:
-  return is_even (n - 1)
+let rec is_even = fn n => do:
+  if n == 0:
+    return True
+  else:
+    return is_odd (n - 1)
+let rec is_odd = fn n => do:
+  if n == 0:
+    return False
+  else:
+    return is_even (n - 1)
 ```
 
 A group of one is ordinary self-recursion, so this states the existing rule for
@@ -1490,7 +1573,11 @@ establish the container's own numeric domain. Ordinary nonrecursive helpers
 without an outlineable interface may remain staged at a known application until
 their concrete arguments resolve the operations. This does not create a runtime
 dictionary, bypass checking, or permit an unresolved recursive or development
-boundary to be emitted.
+boundary to be emitted. During specialization, a forwarded receiver can also
+resolve from the checked numeric carriers of all its possible producers. Every
+producer must supply compatible numeric evidence; an unknown alternative or a
+container element supplies none. Ordinary generic inference keeps its qualified
+scheme instead of choosing a numeric default.
 
 A module's fixity header maps each operator form and spelling to one precedence
 and one target, with an associativity for infix entries. Prefix and infix forms
@@ -1530,12 +1617,24 @@ A statement conditional's `else` is optional. Its branches are lexical binding
 scopes but not return or loop boundaries, so `return` and `break` retain their
 surrounding targets.
 
+A `for` sequences the iterator's `step` in the surrounding computation,
+including when its body performs no effects. Iterator effects are inferred and
+must be handled like other effects. Ordinary declarations and `:=` in the body
+still require pure values; `use` and `return` admit effects as elsewhere. An
+effectful iterator does not change those rules. This elaborates into ordinary
+recursive calls, cases, and bindings, with no loop-specific typing or runtime
+node.
+
 A branch is a scope for `let` but not for `:=`. A name a branch rebinds with
 `:=` is rebound for the statements that follow the conditional: the name was
 already in scope and keeps its type, so every path agrees on what it holds —
 including a missing `else`, which passes the name through unchanged. A `let`
 inside a branch stays local to that branch, shadowing any outer binding of that
 name for the rest of the branch and escaping with nothing.
+
+Rebindings carried out of a nested loop also pass through the enclosing
+statement conditional. Loop-pattern bindings and names declared inside that loop
+stay local.
 
 The suite ends at the first dedent. `else` aligns with its `if`.
 
@@ -1826,7 +1925,7 @@ set that the condition allows.
 
 ```blot
 let name :: 1 | 2 | 3 -> Text
-let name = fn n =>
+let name = fn n => do:
   if n == 1:
     return case n of
       1 => "one"
@@ -1875,7 +1974,7 @@ in the integer's type:
 
 ```blot
 let at :: [Int] -> Int -> Int
-let at = fn xs => fn n =>
+let at = fn xs => fn n => do:
   if n >= 0:
     if n < @array.len xs:
       return @array.get xs n
@@ -1897,6 +1996,35 @@ wrapper. For example, `fn _ => fn xs => Array.length xs - 1` summarizes the
 second parameter. The spelling `Array.length` is not privileged: aliases keep
 the verified summary, while a shadowed function with that name proves nothing.
 The summary is erased and does not change the function's ordinary arrow type.
+
+When these direct relationships do not discharge an array obligation, bounded
+normal-return inference also follows source helpers through integer addition and
+subtraction by constants, immutable bindings, records, tuples, and cases. For
+example, `fn value => value + 1` returns `result = value + 1`, and a helper
+returning zero for a negative argument can establish `0 <= result`. Facts common
+to every normal return survive a join. Constructor-specific facts stay attached
+to that constructor: a helper returning `#Some index` only after checking bounds
+can justify an access in its caller's `#Some` arm, but contributes no index fact
+in the `#None` arm. Resolved closure values and primitive behavior establish
+these facts; helper and operator names do not.
+
+A directly called local self-tail-recursive closure can additionally infer
+integer and length inequalities for its accumulator. Each retained candidate
+must hold for the actual entry and every recursive transition. The checker
+replays the body with the final invariant set before using it to check accesses.
+Every direct entry is checked; an escaping recursive closure must pass the
+ordinary parameter-only check. This applies to the ordinary recursion produced
+by `for` elaboration as well as explicit `rec`. It adds no loop typing form.
+Non-tail recursion, mutual recursion, unknown callbacks, and nonlinear
+arithmetic do not establish new relational guarantees.
+
+These are guarantees on normal returns. They neither infer requirements that
+callers must satisfy nor remove overflow traps or prove termination. The
+ordinary function types, ownership rules, runtime representation, and guest ABI
+stay the same. Inference has finite candidate and transfer budgets; when
+exhaustion prevents a required proof, the compiler reports
+`BLOT_REFINEMENT_BUDGET` as a compiler limit. No provisional invariant is
+accepted.
 
 A length is keyed to the immutable array value a binding denotes. blot has no
 assignment and arrays are immutable, so that identity denotes one length for its
@@ -2651,10 +2779,11 @@ the next invocation; a base branch must consume a linear capture exactly once
 under the ordinary branch rules:
 
 ```blot
-let rec go = fn n => if n < 1:
-  return consume (!token)
-else:
-  return go (n - 1)
+let rec go = fn n => do:
+  if n < 1:
+    return consume (!token)
+  else:
+    return go (n - 1)
 return go 3
 ```
 
@@ -2945,7 +3074,7 @@ WebAssembly imports and therefore constitute part of the module interface.
 
 ```blot
 let logging = {
-  .write = fn (message, ?resume) =>
+  .write = fn (message, ?resume) => do:
     use rest <- resume ()
     return message <> rest
   ;
@@ -2965,6 +3094,13 @@ let logging = {
   resource; and
 - an optional `.return` clause transforms the computation's normal result.
 
+Handler records may be constructed by ordinary source functions, imported,
+aliased, and passed directly to `@handle`. Each selected clause retains the
+module that defined its parameter pattern and its checked ownership contract.
+The same continuation, operation-input, and operation-result rules apply to
+literal and constructed handlers. Importing a handler does not weaken its affine
+or linear obligations.
+
 The operation argument pattern must exactly match the operation's input
 ownership summary. A handler may pass a fresh unrestricted value to `resume`; if
 it explicitly hands an owned value to `resume`, that value must match the
@@ -2980,7 +3116,7 @@ continuation:
 
 ```blot
 let cancelling = {
-  .write = fn (_, !resume) =>
+  .write = fn (_, !resume) => do:
     use Continuation.cancel resume
     return replacement
   ;
@@ -3071,10 +3207,12 @@ not extend a borrow. A loop's recursive continuation retains borrows used in a
 later iteration.
 
 Ownership checking applies this rule to direct suspending operations and calls
-whose effect rows may suspend, including open effect rows. A direct synchronous
-operation remains allowed even when its effect declares other suspending
-operations. Move owned state into resumable computations; a borrow does not
-acquire a longer lifetime because a host copies its canonical arguments.
+whose effect rows may suspend, including unresolved open effect rows. A row
+whose tail settles to a closed synchronous row is synchronous. A direct
+synchronous operation remains allowed even when its effect declares other
+suspending operations. Move owned state into resumable computations; a borrow
+does not acquire a longer lifetime because a host copies its canonical
+arguments.
 
 ### 12.4 Written effect rows
 
@@ -3087,7 +3225,7 @@ const Console = @effect { .write = Text -> Unit; }
 let map_logged ::
   (Int -> Int ~ { ..e }) ->
   Int -> Int ~ { Console, ..e }
-let map_logged = fn callback => fn value =>
+let map_logged = fn callback => fn value => do:
   use Console.write "call"
   return callback value
 ```
@@ -3227,6 +3365,9 @@ Everything not listed here belongs in source, normally the prelude.
 | `@text.concat`                              | concatenate text                                     |
 | `@text.join`                                | concatenate an array of text in one allocation       |
 | `@text.len`                                 | count Unicode code points                            |
+| `@text.byte_len`                            | count UTF-8 bytes without scanning                   |
+| `@text.slice_bytes`                         | slice at ordered, validated UTF-8 byte boundaries    |
+| `@text.find_byte_from`                      | search from a UTF-8 byte boundary; byte index or -1  |
 | `@text.scalar_at`                           | read one validated Unicode scalar                    |
 | `@text.next_byte`                           | step one UTF-8 scalar from a byte boundary           |
 | `@text.slice`                               | slice at validated Unicode scalar bounds             |
@@ -3567,15 +3708,15 @@ canonical requirement as representation evidence, so an empty array refined to
 
 ```blot
 // Canonical requirements refine unknowns and grant the operations they name.
-let name_of = fn value =>
+let name_of = fn value => do:
   let named = @satisfies value { .name = Text; }
   return named.name
 
 let int_store = fn values => @satisfies values [Int]
 
 const Console = @effect { .write = Text -> Unit; }
-let command = fn callback =>
-  @satisfies callback (Text -> Unit ~ { Console })
+let command = fn callback => do:
+  return @satisfies callback (Text -> Unit ~ { Console })
 
 // Predicates compose over a closed inferred type.
 const is_shape = fn type => case reflect type of
@@ -3876,8 +4017,26 @@ last, so `value |> Option.map transform` works with ordinary application:
   returns an `#Ok` payload directly. All callbacks retain their effects.
 
 The existing tuple-taking `unwrap_or` is eager. `blot:pipeline` provides the
-data-last `map_with`, `filter_with`, and `fold_with` adapters for borrowed
-arrays.
+data-last `map_with`, `filter_with`, and `fold_with` adapters for arrays.
+
+`Fn.apply` (`$`) and `Fn.pipe` (`|>`) retain their callback's effect row.
+Supplying the first argument is pure; the final application performs that row.
+Sequencing an effectful pipeline with `use` therefore has the same suspension
+and borrow restrictions as calling its final function directly. Supplying a pure
+callback preserves a pure result.
+
+`Array.find (values, predicate)` retains the array and predicate by value,
+visits in index order, and returns the first `#Some value` whose predicate is
+true, or `#None`. It stops immediately after that match; predicate effects
+propagate. Shared immutable arrays remain usable by the caller. Owned arguments
+retain their ordinary transfer requirements; retaining traversal state across a
+suspending callback does not make a borrowed argument admissible.
+`Iter.map (iterator, transform)` returns an ordinary state/step iterator.
+Creating it runs neither the source step nor the transform. Each requested step
+advances its source once and transforms only a present element; source and
+callback effects propagate. It retains one step closure, with no per-element
+closure or intermediate array. The usual ownership rules govern captures and
+replay.
 
 Changing the prelude's public record is a language-library change and must
 update this specification.
@@ -3888,25 +4047,58 @@ These modules require explicit imports. They are ordinary Blot source, not
 implicit prelude bindings, new primitives, or alternate semantic authorities.
 
 `import "blot:float"` exports `PartialOrdering` and extended `F64` and `F32`
-namespaces. Each namespace provides `partial_cmp` and `cmp_exn`. For its own
-precision, `partial_cmp` takes two values and returns
+namespaces. Each namespace provides `partial_cmp`, `cmp_exn`, and `to_text`.
+`F64.to_text :: F64 -> Text` and `F32.to_text :: F32 -> Text` are pure source
+functions. Each returns a shortest decimal that rounds back to the input in its
+own precision under round-to-nearest, ties-to-even. Among shortest candidates,
+choose the nearest decimal; an exact decimal tie chooses the even last digit.
+Fixed notation is used for decimal exponents from -6 through 20, and scientific
+notation otherwise, with lowercase `e` and an explicit `+` for nonnegative
+exponents. Trailing fractional zeroes are omitted. Signed zero prints as `0` or
+`-0`; nonfinite values print as `nan`, `inf`, or `-inf`. This is presentation,
+not NaN-payload serialization. Binary32 formatting does not print the longer
+binary64 expansion of a widened input. The implementation uses existing source
+arithmetic, arrays, and text operations and needs no host effect or new
+primitive.
+
+Each namespace's comparison functions retain their existing contracts. For its
+own precision, `partial_cmp` takes two values and returns
 `#Equal | #Greater | #Less | #Unordered`. Either NaN yields `#Unordered`; equal
 signed zeroes and equal infinities yield `#Equal`. This reports a partial order,
 not a total ordering of all floating-point values. `cmp_exn` is an alias for the
 existing comparison that traps on NaN. The module does not change the base
 comparison or implicitly convert already-bound numeric values.
 
-`import "blot:pipeline"` exports pure, configuration-first, data-last adapters:
+`import "blot:pipeline"` exports configuration-first, data-last adapters:
 
-- `map_with`: `(T -> U) -> [T] -> [U]`;
-- `filter_with`: `(T -> Bool) -> [T] -> [T]`;
-- `fold_with`: `((S, T) -> S) -> S -> [T] -> S`.
+- `map_with`: `((T -> U) ~ [e]) -> (([T] -> [U]) ~ [e])`;
+- `filter_with`: `((T -> Bool) ~ [e]) -> (([T] -> [T]) ~ [e])`;
+- `fold_with`: `(((S, T) -> S) ~ [e]) -> S -> (([T] -> S) ~ [e])`.
 
 The type parameters are independently universally quantified. The final array
-argument is borrowed, as in the corresponding tuple-taking prelude operations.
-Callbacks must be pure. These are ordinary functions used with ordinary `|>`;
-they do not alter application, saturation, or effect handling. The original
-prelude operations remain available.
+argument is retained by value through traversal, allowing suspending callbacks
+without retaining a borrow. Shared immutable inputs remain reusable; owned
+inputs require their ordinary transfer. Borrowed-only inputs must be explicitly
+converted to an admissible value before calling these adapters. Callbacks retain
+their effect row and run in traversal order. Handler aborts stop traversal
+immediately. These are ordinary functions used with ordinary `|>`; they do not
+alter application, saturation, or effect handling. The original prelude
+operations remain available.
+
+`import "blot:parse"` exports `integer`, `integer_radix`, and `IntegerError`.
+`integer text` uses radix 10; `integer_radix (text, radix)` accepts radix 2–36.
+Both accept an optional leading ASCII `+` or `-`, followed by at least one ASCII
+digit; letters are case-insensitive digits 10–35. They consume the entire input,
+with no prefixes, separators, or implicit whitespace trimming. Call `Text.trim`
+explicitly when that is the input policy. Success is `#Ok Int`; errors are
+`#Error` carrying `#EmptyInput`, `#InvalidRadix radix`,
+`#InvalidDigit { .position; .scalar; }`, or `#IntegerOverflow { .position; }`.
+Positions count Unicode scalars from zero, including the sign. An invalid radix
+is checked first; subsequent errors identify the first invalid or overflowing
+digit. Negative accumulation checks bounds before multiplication and
+subtraction, accepts exactly signed i64's full range, and never wraps or traps
+for malformed text. This parser is source code over existing Text traversal and
+numeric operations.
 
 `import "blot:derive"` exports the restricted `fields` and `integer_record`
 operations. `fields` requires a structural record schema whose fields are
@@ -4096,6 +4288,10 @@ The boundary representations are:
 - seals as their transparent carrier, while retaining their nominal source name
   in the manifest.
 
+Variant payloads may mix integers, text, floats, records, arrays, and nested
+variants. Their physical joined lanes preserve payload bits, including signed
+zero; constructor selection determines how those bits are interpreted.
+
 `F32x4` and `F32x4Mask` stay private to the compiled artifact. Publishing either
 is `BLOT_VECTOR_AT_BOUNDARY`; extract lanes or select a vector before exporting.
 
@@ -4133,6 +4329,17 @@ operations. Runtime and compile-time evaluation use the same scalar semantics.
 `Text.replace` collects source slices and replacements in an affine Scratch
 builder, then calls `@text.join` once; it does not repeatedly copy the growing
 prefix.
+
+`Text.split`, `Text.lines`, and `Text.replace` retain byte positions internally
+using `@text.byte_len`, `@text.slice_bytes`, and `@text.find_byte_from`. These
+curried primitives use UTF-8 byte positions, validate boundaries (including the
+end), and reject invalid positions with `BLOT_TEXT_BYTE_BOUNDS` during
+evaluation or a trap in emitted Wasm. Slices also require start <= end. Empty
+searches match at the supplied start; a missing match returns -1. The public
+indexed APIs still use scalar positions. Composite traversal takes linear work
+in input plus output bytes and the query, including dense delimiters. Empty
+separators still produce one part containing the original text; replacement with
+an empty query returns the original text.
 
 `Text.Cursor` is the ordinary tagged type `#TextCursor (Text, Int)`.
 `Text.cursor text` starts at the beginning of that Text. `Text.next cursor`
@@ -4184,7 +4391,7 @@ for ever:
   if attempts >= 3:
     break
 
-let report = fn () =>
+let report = fn () => do:
   let text = describe #Ready <> Text.of_int attempts
   use Console.write text
   return text

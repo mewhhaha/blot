@@ -23,7 +23,7 @@ runtime observation happen after the clocks and RSS sample.
 pnpm benchmark:development
 ```
 
-Schema 3 retains every raw sample, build and activation durations, transferred
+Schema 4 retains every raw sample, build and activation durations, transferred
 bytes, changed and retained units, RSS, and maximum RSS growth. Its provenance
 names the repository commit and a content identity for every tracked or
 non-ignored untracked worktree file, including missing markers for tracked
@@ -36,6 +36,12 @@ Rust toolchain identities; Deno/V8 versions; exact Deno executable and
 invocation identities; and platform, architecture, CPU models, and logical CPU
 count. Provenance is captured before and after the warm samples, and any drift
 rejects the run.
+
+The workload records its edit pattern. The default alternates two provider
+versions; `--unique-edits` uses a new provider body for every sample to measure
+fresh work instead of repeated content hits. Inspect the first raw sample
+separately from the p95: twenty-sample nearest-rank p95 excludes the maximum.
+Both modes include compiler cleanup in the current build's duration.
 
 `compilerProfile` comes from the selected artifact's adjacent manifest. The
 production command validates
@@ -127,3 +133,33 @@ On 2026-09-01, the production artifact identified by SHA-256
 edited unit was transferred; maximum post-activation RSS growth was 6,660,096
 bytes. The first warm sample was the 319.6 ms maximum and does not enter the
 nearest-rank p95 for 20 samples.
+
+The active-call-graph worker can also run under the transport/CPU trace. Its
+final argument selects the separate named compiler distribution; it is intended
+for profiling, not the production latency gate:
+
+```sh
+mkdir -p /tmp/blot-active-profile
+BLOT_RELOAD_WORKLOAD=active BLOT_RELOAD_CPU_PROFILE=/tmp/blot-active.cpuprofile \
+  deno run --allow-read --allow-write --allow-env --allow-sys \
+  --allow-run=cat,deno,git experiments/development-bench/trace.ts \
+  /tmp/blot-active-profile 10 memory initial development-profile
+python3 experiments/development-bench/summarize_profile.py /tmp/blot-active.cpuprofile
+```
+
+For a paired comparison, retain an earlier compatible production distribution
+(`compiler.wasm`, `compiler-artifact.json`, and `prelude.snapshot`) in another
+directory, then run:
+
+```sh
+deno run --allow-read --allow-write --allow-env --allow-sys=cpus \
+  --allow-run=cat,deno,git experiments/development-bench/compare_active.ts \
+  /tmp/baseline-compiler 10 > /tmp/blot-active-comparison.json
+```
+
+Both compilers receive the same twenty unique edits at identical source paths.
+Each pair alternates execution order, validates the activated integer and float
+results, and requires only `unit-0` to change. The report records both artifact
+identities and every raw observation. Both compiler instances remain resident,
+so use this to compare latency under changing machine load; the ordinary
+single-compiler runs retain the memory and absolute-latency gates.

@@ -1,0 +1,24 @@
+open import "blot:prelude"
+const Parse = import "blot:parse"
+
+const Command = #Reset | #Move { .x = Int; .y = Int; }
+
+const encode :: Command -> Text
+const encode = fn command => case command of
+  #Reset => "reset"
+  #Move { .x; .y; } => @text.join ["move ", Text.of_int x, " ", Text.of_int y]
+
+const decode :: Text -> Result (Command, Text)
+const decode = fn text => case Text.split (text, " ") of
+  ["reset"] => #Ok #Reset
+  ["move", x, y] => case Parse.integer x, Parse.integer y of
+    #Ok x, #Ok y => #Ok (#Move { .x; .y; })
+    _, _ => #Error "invalid move coordinates"
+
+  _ => #Error "expected reset or move followed by two integers"
+
+return {
+  .Command
+  .encode
+  .decode
+}

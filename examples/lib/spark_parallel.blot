@@ -10,15 +10,11 @@ const sum :: Int -> Int = fn count => do:
 
 let run :: { .executor = Spark.Executor; } -> Int -> Int ~ { Spark.Effect }
 let run = fn io => fn count => do:
-  let body :: Spark.Scope -> Int ~ { Spark.Effect }
-  let body = fn scope => do:
-    let ?left :: Unit -> Int = fn () => sum count
-    let ?right :: Unit -> Int = fn () => sum (count + 1)
-    use first <- Spark.parallel scope (?left)
-    use second <- Spark.parallel scope (?right)
+  return Spark.scope io.executor $ fn scope => do:
+    use first <- Spark.parallel scope (fn () => sum count)
+    use second <- Spark.parallel scope (fn () => sum (count + 1))
     use a <- Spark.join first
     use b <- Spark.join second
     return a + b
-  return Spark.scope io.executor body
 
 return { .run = run; .kernel = sum; }

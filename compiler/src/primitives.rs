@@ -86,6 +86,7 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@int.neg"
         | "@text.join"
         | "@text.len"
+        | "@text.byte_len"
         | "@text.of_int"
         | "@linear.own"
         | "@linear.maybe"
@@ -174,6 +175,8 @@ pub fn primitive_arity(name: &str) -> Option<usize> {
         | "@region.swap"
         | "@region.join"
         | "@text.slice"
+        | "@text.slice_bytes"
+        | "@text.find_byte_from"
         | "@text.find_from"
         | "@f32x4.select" => 3,
         "@f32x4.of" => 4,
@@ -782,6 +785,43 @@ pub fn run_primitive(
         "@text.len" => Ok(Value::Int(BigInt::from(
             text(&arguments[0], span, name)?.chars().count(),
         ))),
+        "@text.byte_len" => Ok(Value::Int(BigInt::from(
+            text(&arguments[0], span, name)?.len(),
+        ))),
+        "@text.slice_bytes" => {
+            let source = text(&arguments[0], span, name)?;
+            let start = integer(&arguments[1], span, name)?.to_usize();
+            let end = integer(&arguments[2], span, name)?.to_usize();
+            let slice = start
+                .zip(end)
+                .and_then(|(start, end)| source.get(start..end))
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TEXT_BYTE_BOUNDS",
+                        "Text byte slices require ordered UTF-8 boundaries within the text.",
+                        span,
+                    )
+                })?;
+            Ok(Value::Text(slice.into()))
+        }
+        "@text.find_byte_from" => {
+            let source = text(&arguments[0], span, name)?;
+            let query = text(&arguments[1], span, name)?;
+            let (start, suffix) = integer(&arguments[2], span, name)?
+                .to_usize()
+                .and_then(|start| source.get(start..).map(|suffix| (start, suffix)))
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        "BLOT_TEXT_BYTE_BOUNDS",
+                        "Text byte search requires a UTF-8 boundary within the text.",
+                        span,
+                    )
+                })?;
+            let found = suffix.find(query).map(|relative| start + relative);
+            Ok(Value::Int(
+                found.map(BigInt::from).unwrap_or_else(|| BigInt::from(-1)),
+            ))
+        }
         "@text.scalar_at" => {
             let source = text(&arguments[0], span, name)?;
             let index = text_index(&arguments[1], span, name)?;

@@ -1010,6 +1010,13 @@ impl CompilerSession {
         entry_unit: &str,
         units: &BTreeMap<String, String>,
     ) -> Result<CompiledDevelopmentProgram, Diagnostic> {
+        struct SolverCleanup<'a>(&'a Checker);
+        impl Drop for SolverCleanup<'_> {
+            fn drop(&mut self) {
+                self.0.finish_request();
+            }
+        }
+        let solver_cleanup = SolverCleanup(&self.checker);
         *self.context.development_work.borrow_mut() = Default::default();
         self.pending_development_artifacts.borrow_mut().take();
         #[cfg(feature = "development-profile")]
@@ -1181,6 +1188,7 @@ impl CompilerSession {
             active_keys,
             replacements,
         });
+        drop(solver_cleanup);
         #[cfg(feature = "development-profile")]
         memory_profile.checkpoint("complete");
         Ok(CompiledDevelopmentProgram {
@@ -1966,8 +1974,12 @@ fn json_value(value: &Value) -> serde_json::Value {
     match value {
         Value::Deferred { .. } => serde_json::json!({ "tag": "deferred" }),
         Value::Int(value) => serde_json::json!({ "tag": "int", "value": value.to_string() }),
-        Value::Float(value) => serde_json::json!({ "tag": "float", "value": value }),
-        Value::Float32(value) => serde_json::json!({ "tag": "float32", "value": value }),
+        Value::Float(value) => serde_json::json!({
+            "tag": "float", "value": value, "bits": format!("{:016x}", value.to_bits()),
+        }),
+        Value::Float32(value) => serde_json::json!({
+            "tag": "float32", "value": value, "bits": format!("{:08x}", value.to_bits()),
+        }),
         Value::Vector(lanes) => serde_json::json!({ "tag": "vector", "lanes": lanes }),
         Value::VectorMask(lanes) => serde_json::json!({ "tag": "vector-mask", "lanes": lanes }),
         Value::IntegerVector { bits, lanes } => {
@@ -5874,6 +5886,7 @@ mod tests {
             .compile_development_program(ENTRY, "game", &units)
             .expect("initial program should compile");
 
+        assert_eq!(session.checker.solver_cardinality(), (0, 0));
         let mut cardinalities = Vec::new();
         for increment in [2, 1, 2] {
             session
@@ -5885,8 +5898,23 @@ mod tests {
             cardinalities.push(session.checker.solver_cardinality());
         }
 
-        assert_eq!(cardinalities[0], cardinalities[1]);
-        assert_eq!(cardinalities[1], cardinalities[2]);
+        assert_eq!(cardinalities, vec![(0, 0); 3]);
+        session
+            .add_source(PROVIDER.to_owned(), source("return unknown_name"))
+            .expect("invalid source parses");
+        assert!(
+            session
+                .compile_development_program(ENTRY, "game", &units)
+                .is_err()
+        );
+        assert_eq!(session.checker.solver_cardinality(), (0, 0));
+        session
+            .add_source(PROVIDER.to_owned(), provider_source(3))
+            .expect("corrected provider parses");
+        session
+            .compile_development_program(ENTRY, "game", &units)
+            .expect("recovery compiles");
+        assert_eq!(session.checker.solver_cardinality(), (0, 0));
     }
 
     #[test]
@@ -6149,15 +6177,24 @@ mod tests {
             session
                 .install_trusted_module_snapshot("prelude.blot", &snapshot)
                 .unwrap();
+            let mut library = "open import \"blot:prelude\"\n".to_owned();
+            for index in 0..32 {
+                let previous = if index == 0 {
+                    "value + 3".to_owned()
+                } else {
+                    format!("step{} value", index - 1)
+                };
+                library.push_str(&format!(
+                    "const step{index} :: Int -> Int\nconst step{index} = fn value => {previous}\n"
+                ));
+            }
+            library.push_str("return { .run = step31; }\n");
             for (path, text) in [
                 (
                     "app.blot",
                     "open import \"blot:prelude\"\nconst lib = import \"lib\"\nconst run :: Int -> Int\nconst run = fn value => lib.run value\nreturn { .run = run; }\n",
                 ),
-                (
-                    "lib.blot",
-                    "open import \"blot:prelude\"\nconst step :: Int -> Int\nconst step = fn value => value + 3\nconst run :: Int -> Int\nconst run = fn value => step value\nreturn { .run = run; }\n",
-                ),
+                ("lib.blot", library.as_str()),
             ] {
                 session.add_source(path.to_owned(), source(text)).unwrap();
             }
@@ -7244,6 +7281,386 @@ mod tests {
         );
     }
 
+    #[test]
+    fn typed_function_headers_check_and_emit_existing_core_forms() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            for (program, succeeds) in [
+                (
+                    "const add = fn (a :: Int, b :: Int) -> Int => do:\n  return a + b\nreturn add (20, 22)\n",
+                    true,
+                ),
+                (
+                    "const identity = fn (x :: Int) => x\nreturn identity 42\n",
+                    true,
+                ),
+                (
+                    "const same = fn (x :: Int, y) => y\nreturn same (1, 42)\n",
+                    true,
+                ),
+                (
+                    "const rec count = fn (n :: Int) -> Int => do:\n  if n == 0:\n    return 42\n  else:\n    return count (n - 1)\nreturn count 4\n",
+                    true,
+                ),
+                (
+                    "const consume = fn (!x :: Int) -> Int => x + 1\nlet !token = 41\nreturn consume (!token)\n",
+                    true,
+                ),
+                (
+                    "const collect = fn (&values :: [Int]) -> Int => Array.length (&values)\nreturn collect [1, 2]\n",
+                    true,
+                ),
+                (
+                    "const apply = fn (f :: Int -> Int) -> Int => f 41\nreturn apply (fn (x :: Int) -> Int => x + 1)\n",
+                    true,
+                ),
+                (
+                    "const f :: Int -> Int\nconst f = fn (x :: Int) -> Int => x\nreturn f 42\n",
+                    true,
+                ),
+                (
+                    "const f :: Int -> Text\nconst f = fn (x :: Int) -> Int => x\nreturn f 42\n",
+                    false,
+                ),
+                ("const f = fn (x :: Int) -> Text => x\nreturn f 42\n", false),
+                (
+                    "const f = fn (x :: Int) -> Int => x\nreturn f \"wrong\"\n",
+                    false,
+                ),
+                (
+                    "const f = fn (x :: Int) -> Int => x\nreturn { .f; }\n",
+                    true,
+                ),
+                (
+                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x :: Int) -> Int ~ { Ask } => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
+                    true,
+                ),
+                (
+                    "const Ask = @effect { .ask = Unit -> Int; }\nconst f = fn (x :: Int) => do:\n  use y <- Ask.ask ()\n  return x + y\nreturn 42\n",
+                    true,
+                ),
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                    .unwrap();
+                let text = format!("open import \"blot:prelude\"\n{program}");
+                session
+                    .add_source("main.blot".to_owned(), source(&text))
+                    .unwrap();
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], succeeds, "{program}\n{checked}");
+                if succeeds {
+                    let evaluated = session.evaluate_module("main.blot");
+                    assert_eq!(evaluated["ok"], true, "{program}\n{evaluated}");
+                    session
+                        .compile_module("main.blot")
+                        .unwrap_or_else(|error| panic!("{program}\n{error:?}"));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn concrete_library_followups_check_and_emit() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut failures = Vec::new();
+            for (name, program) in [
+                (
+                    "compare",
+                    "open import \"blot:prelude\"\nconst run = fn (limit :: Int, y :: Int) -> Int => do:\n  for x in Iter.range (0, limit):\n    if x < y:\n      return -1\n    if x > y:\n      return 1\n  return 0\nreturn { .run; }\n",
+                ),
+                ("sweep", include_str!("../../examples/lib/float_sweep.blot")),
+                (
+                    "recursive",
+                    include_str!("../../examples/lib/inferred_search.blot"),
+                ),
+                (
+                    "iterator",
+                    include_str!("../../examples/lib/effectful_iterator.blot"),
+                ),
+                (
+                    "inferred_iterator",
+                    "open import \"blot:prelude\"\nconst Visit = @effect.host { .value = Effect.suspends (Int -> Int); }\nconst run = fn limit => do:\n  let total = 0\n  for value in Iter.map (Iter.range (0, limit), fn value => Visit.value value):\n    total := total + value\n  return total\nreturn { .run; }\n",
+                ),
+                (
+                    "format",
+                    "const Float = import \"blot:float\"\nreturn { .f64 = Float.F64.to_text; .f32 = Float.F32.to_text; }\n",
+                ),
+                (
+                    "partial",
+                    "open import \"blot:prelude\"\nconst choose = fn (a :: Int, b) => b\nreturn (choose (42, \"text\"), choose (42, True))\n",
+                ),
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                    .unwrap();
+                if name == "format" {
+                    session
+                        .add_source(
+                            "float.blot".to_owned(),
+                            source(include_str!("../../src/prelude/float.blot")),
+                        )
+                        .unwrap();
+                    session
+                        .configure_module(
+                            "float.blot",
+                            BTreeMap::from([
+                                ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                                (
+                                    "./float_format.blot".to_owned(),
+                                    "float_format.blot".to_owned(),
+                                ),
+                            ]),
+                            BTreeMap::new(),
+                        )
+                        .unwrap();
+                    session
+                        .add_source(
+                            "float_format.blot".to_owned(),
+                            source(include_str!("../../src/prelude/float_format.blot")),
+                        )
+                        .unwrap();
+                    session
+                        .configure_module(
+                            "float_format.blot",
+                            BTreeMap::from([(
+                                "blot:prelude".to_owned(),
+                                "prelude.blot".to_owned(),
+                            )]),
+                            BTreeMap::new(),
+                        )
+                        .unwrap();
+                }
+                session
+                    .add_source("main.blot".to_owned(), source(program))
+                    .unwrap();
+                let mut imports =
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
+                if name == "format" {
+                    imports.insert("blot:float".to_owned(), "float.blot".to_owned());
+                }
+                session
+                    .configure_module("main.blot", imports, BTreeMap::new())
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                if checked["ok"] != true {
+                    failures.push(format!("{name}: {checked}"));
+                    continue;
+                }
+                if let Err(error) = session.compile_module("main.blot") {
+                    failures.push(format!("{name}: {error:?}"));
+                }
+            }
+            assert!(failures.is_empty(), "{}", failures.join("\n"));
+        });
+    }
+
+    #[test]
+    fn source_collection_and_parse_libraries_evaluate_and_emit() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut failures = Vec::new();
+            for (path, program) in [
+                (
+                    "dynamic-collections.blot",
+                    include_str!("../../examples/lib/collection_libraries.blot"),
+                ),
+                (
+                    "dynamic-variants.blot",
+                    include_str!("../../examples/lib/variant_lanes.blot"),
+                ),
+                (
+                    "dynamic-parser.blot",
+                    "const Parse = import \"blot:parse\"\nreturn { .integer = Parse.integer; .radix = Parse.integer_radix; }\n",
+                ),
+                (
+                    "typed.blot",
+                    include_str!("../../examples/typed_parameters.blot"),
+                ),
+                (
+                    "records.blot",
+                    include_str!("../../examples/record_fields.blot"),
+                ),
+                (
+                    "adapters.blot",
+                    include_str!("../../examples/collection_adapters.blot"),
+                ),
+                (
+                    "integers.blot",
+                    include_str!("../../examples/parse_integer.blot"),
+                ),
+                (
+                    "codec.blot",
+                    include_str!("../../examples/command_codec.blot"),
+                ),
+                (
+                    "module-input.blot",
+                    include_str!("../../examples/module_input_contract.blot"),
+                ),
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                    .unwrap();
+                let imports = BTreeMap::from([
+                    (
+                        "./lib/command_codec.blot".to_owned(),
+                        "command_codec.blot".to_owned(),
+                    ),
+                    (
+                        "./lib/checked_module_input.blot".to_owned(),
+                        "checked_module_input.blot".to_owned(),
+                    ),
+                    ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                    ("blot:pipeline".to_owned(), "pipeline.blot".to_owned()),
+                    ("blot:parse".to_owned(), "parse.blot".to_owned()),
+                ]);
+                for (module, text) in [
+                    (
+                        "command_codec.blot",
+                        include_str!("../../examples/lib/command_codec.blot"),
+                    ),
+                    (
+                        "checked_module_input.blot",
+                        include_str!("../../examples/lib/checked_module_input.blot"),
+                    ),
+                    (
+                        "pipeline.blot",
+                        include_str!("../../src/prelude/pipeline.blot"),
+                    ),
+                    ("parse.blot", include_str!("../../src/prelude/parse.blot")),
+                    (path, program),
+                ] {
+                    session
+                        .add_source(module.to_owned(), source(text))
+                        .unwrap_or_else(|error| panic!("{path} -> {module}: {error:?}"));
+                    session
+                        .configure_module(
+                            module,
+                            imports
+                                .iter()
+                                .filter(|(specifier, _)| text.contains(&format!("\"{specifier}\"")))
+                                .map(|(specifier, path)| (specifier.clone(), path.clone()))
+                                .collect(),
+                            BTreeMap::new(),
+                        )
+                        .unwrap();
+                }
+                let checked = session.check_module(path);
+                assert_eq!(checked["ok"], true, "{path}: {checked}");
+                let evaluated = session.evaluate_module(path);
+                assert_eq!(evaluated["ok"], true, "{path}: {evaluated}");
+                if let Err(error) = session.compile_module(path) {
+                    failures.push(format!("{path}: {error:?}"));
+                }
+                if path == "dynamic-parser.blot" {
+                    let program = session.close_program(path).unwrap();
+                    let mut recursive_calls = 0;
+                    for function in &program.runtime().functions {
+                        if function.name != "blot$residual$visit" {
+                            continue;
+                        }
+                        for continuation in &function.continuations {
+                            if matches!(&continuation.transition,
+                                crate::continuation::Transition::Jump { edge }
+                                if edge.target == function.entry && continuation.id != function.entry)
+                            {
+                                recursive_calls += 1;
+                            }
+                            if let crate::continuation::Transition::Call {
+                                target:
+                                    crate::continuation::CallTarget::Function { function: target },
+                                next,
+                                ..
+                            } = &continuation.transition
+                            {
+                                if *target == function.id {
+                                    recursive_calls += 1;
+                                    assert!(
+                                        function.returns_call_result(next),
+                                        "parser recursion must remain in tail position"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    assert!(
+                        recursive_calls > 0,
+                        "parser recursion must have a tail call or entry back edge"
+                    );
+                }
+            }
+            assert!(failures.is_empty(), "{}", failures.join("\n"));
+        });
+    }
+
+    #[test]
+    fn imported_handler_builders_preserve_dynamic_continuation_values() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "support.blot".to_owned(),
+                    source(include_str!(
+                        "../../experiments/next-feature/effect_stream_support.blot"
+                    )),
+                )
+                .unwrap();
+            session
+                .configure_module("support.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../experiments/next-feature/effect_stream_combinators.blot"
+                    )),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".to_owned(), "prelude.blot".to_owned()),
+                        (
+                            "./effect_stream_support.blot".to_owned(),
+                            "support.blot".to_owned(),
+                        ),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            assert_eq!(session.check_module("main.blot")["ok"], true);
+            session.compile_module("main.blot").unwrap();
+        });
+    }
+
     fn prepared(text: &str) -> (CompilerSession, serde_json::Value) {
         let mut session = CompilerSession::default();
         session
@@ -7697,6 +8114,124 @@ return F32.add (-1) 2.5
                 session.compile_module("main.blot").is_ok(),
                 "filled hole compiles without stale facts"
             );
+        });
+    }
+
+    #[test]
+    fn literal_rebinding_and_dynamic_nested_loops_execute() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            for (source_text, expected) in [
+                (
+                    include_str!("../../examples/literal_rebinding.blot").to_owned(),
+                    "[7, 7, 0, 7]",
+                ),
+                (
+                    include_str!("../../examples/dynamic_nested_loop_accumulator.blot")
+                        .replace("return run\n", "return [run 0, run 2, run 20]\n"),
+                    "[100, 110, 200]",
+                ),
+            ] {
+                session
+                    .add_source("main.blot".to_owned(), source(&source_text))
+                    .unwrap();
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], true, "{checked}");
+                let evaluated = session.evaluate_module("main.blot");
+                assert_eq!(evaluated["display"], expected, "{evaluated}");
+                session.compile_module("main.blot").unwrap();
+            }
+            let nested = include_str!("../../examples/dynamic_nested_loop_accumulator.blot");
+            session
+                .add_source("main.blot".to_owned(), source(nested))
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session.compile_module("main.blot").unwrap();
+        });
+    }
+
+    #[test]
+    fn nested_loops_carry_rebindings_through_enclosing_control() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            for (body, expected) in [
+                (
+                    include_str!("../../examples/affine_index_rebinding.blot").to_owned(),
+                    "{ .empty = 0; .one = 5; .many = 21; }",
+                ),
+                (
+                    concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let total = 0\n",
+                        "let value = 100\n",
+                        "for outer in Iter.range (0, 2):\n",
+                        "  if outer >= 0:\n",
+                        "    for value in Iter.items [1, 2]:\n",
+                        "      value := value + 1\n",
+                        "      total := total + value\n",
+                        "return (total, value)\n",
+                    )
+                    .to_owned(),
+                    "(10, 100)",
+                ),
+                (
+                    concat!(
+                        "open import \"blot:prelude\"\n",
+                        "let total = 0\n",
+                        "total := total + 7\n",
+                        "if True:\n",
+                        "  for _ in Iter.range (0, 2):\n",
+                        "    let total = 0\n",
+                        "    total := total + 1\n",
+                        "return total\n",
+                    )
+                    .to_owned(),
+                    "7",
+                ),
+            ] {
+                session
+                    .add_source("main.blot".to_owned(), source(&body))
+                    .unwrap();
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], true, "{checked}");
+                let evaluated = session.evaluate_module("main.blot");
+                assert_eq!(evaluated["display"], expected, "{evaluated}");
+                session.compile_module("main.blot").unwrap();
+            }
         });
     }
 
@@ -8777,7 +9312,9 @@ return F32.add (-1) 2.5
                         "let replace :: (Text, Text, Text) -> Text\n",
                         "let replace = fn (text, query, replacement) => ",
                         "Text.replace (text, query, replacement)\n",
-                        "return replace\n",
+                        "const split :: (Text, Text) -> [Text]\n",
+                        "const split = fn (text, separator) => Text.split (text, separator)\n",
+                        "return { .replace = replace; .split = split; }\n",
                     )),
                 )
                 .expect("source should load");
@@ -8810,6 +9347,20 @@ return F32.add (-1) 2.5
                 .filter(|operation| operation["operation"]["kind"] == "text.join")
                 .count();
             assert_eq!(joins, 1, "{prepared}");
+            let operations = serde_json::to_string(&prepared["module"]).unwrap();
+            for kind in [
+                "text.length",
+                "text.slice",
+                "text.find-from",
+                "text.scalar-at",
+            ] {
+                assert!(
+                    !operations.contains(&format!("\"{kind}\"")),
+                    "composite traversal rescans scalar prefixes: {kind}"
+                );
+            }
+            assert!(operations.contains("text.find-byte-from"));
+            assert!(operations.contains("text.slice-bytes"));
             session
                 .compile_module("main.blot")
                 .expect("runtime Text.replace should emit Wasm");

@@ -1,0 +1,40 @@
+// A map handler translates one effect into another. Both emitted elements and
+// the final element change type, preserving the stream's nonempty contract.
+open import "blot:prelude"
+
+const Yield = fn T => @effect { .emit = T -> Unit; }
+const Amounts = Yield Int
+const Labels = Yield Text
+
+let prices :: Unit -> Int ~ { Amounts }
+let prices = fn () => do:
+  use Amounts.emit 10
+  use Amounts.emit 20
+  return 12
+
+const map_into = fn (emit, transform) => {
+  .emit = fn (value, ?resume) => do:
+    use emit (transform value)
+    use rest <- resume ()
+    return rest
+  ;
+  .return = transform;
+}
+
+const label = map_into (Labels.emit, fn amount => "$" <> Text.of_int amount)
+const join =
+  {
+    .emit = fn (label, ?resume) => do:
+      use rest <- resume ()
+      return label <> " + " <> rest
+    ;
+    .return = fn label => label;
+  }
+
+let formatted =
+  prices
+    |> @handle (Amounts, label)
+    |> @handle (Labels, join)
+
+use result <- formatted
+return result

@@ -51,6 +51,37 @@ struct LayoutFrame {
 #[derive(Default)]
 struct Delimiters {
     brackets: usize,
+    records: Vec<RecordLayout>,
+}
+
+struct RecordLayout {
+    depth: usize,
+    opening_end: usize,
+    field_indent: Option<usize>,
+    field_started: bool,
+    decided: bool,
+}
+
+fn record_separator(
+    source: &[u16],
+    delimiters: &Delimiters,
+    previous: &Token,
+    token: &Token,
+) -> bool {
+    let Some(record) = delimiters.records.last() else {
+        return false;
+    };
+    if record.depth != delimiters.brackets
+        || !record.field_started
+        || is_text(source, previous, ";")
+    {
+        return false;
+    }
+    if is_text(source, token, "}") {
+        return true;
+    }
+    (is_text(source, token, ".") || is_text(source, token, "..."))
+        && record.field_indent == Some(source_indent_width(source, token.start))
 }
 
 pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>> {
@@ -89,6 +120,7 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
     for token in tokens.iter().skip(1) {
         let gap = &source[previous.end..token.start];
         let newline = last_newline_end(gap);
+        let separator = newline.is_some() && record_separator(source, &delimiters, previous, token);
         let suite_introducer = opens_suite(source, previous);
         let frame = *frames.last().expect("layout always has a root frame");
         let inside_active_suite = frames.len() > 1 && delimiters.brackets == frame.brackets;
@@ -151,11 +183,16 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
                         },
                     )]);
                 }
-                if !closes_layout_expression(source, token) {
+                if !separator && !closes_layout_expression(source, token) {
                     markers.push(LAYOUT_NEWLINE);
                 }
             }
+            if separator {
+                markers.push(';' as u16);
+            }
             insertions.push((token.start, markers));
+        } else if separator {
+            insertions.push((token.start, vec![';' as u16]));
         }
 
         update_delimiters(source, &mut delimiters, token);
@@ -263,17 +300,44 @@ fn closes_layout_expression(source: &[u16], token: &Token) -> bool {
 }
 
 fn update_delimiters(source: &[u16], delimiters: &mut Delimiters, token: &Token) {
+    if let Some(record) = delimiters.records.last_mut()
+        && record.depth == delimiters.brackets
+        && !record.decided
+    {
+        record.decided = true;
+        record.field_started = is_text(source, token, ".") || is_text(source, token, "...");
+        if record.field_started && source[record.opening_end..token.start].contains(&(b'\n' as u16))
+        {
+            record.field_indent = Some(source_indent_width(source, token.start));
+        }
+    }
     if ["(", "[", "{"]
         .iter()
         .any(|text| is_text(source, token, text))
     {
         delimiters.brackets += 1;
+        if is_text(source, token, "{") {
+            delimiters.records.push(RecordLayout {
+                depth: delimiters.brackets,
+                opening_end: token.end,
+                field_indent: None,
+                field_started: false,
+                decided: false,
+            });
+        }
         return;
     }
     if [")", "]", "}"]
         .iter()
         .any(|text| is_text(source, token, text))
     {
+        if delimiters
+            .records
+            .last()
+            .is_some_and(|record| record.depth == delimiters.brackets)
+        {
+            delimiters.records.pop();
+        }
         delimiters.brackets = delimiters.brackets.saturating_sub(1);
     }
 }

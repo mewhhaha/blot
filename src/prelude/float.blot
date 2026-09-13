@@ -1,10 +1,8 @@
 // Non-trapping floating-point comparison. This module extends the ordinary
 // numeric namespaces without changing the meaning of their existing operators.
 open import "blot:prelude"
+const Format = import "./float_format.blot"
 
-// Classify through a closed integer union before constructing the result. This
-// avoids widening nested dynamic sums in the current backend. Constructor arms
-// follow canonical ABI order; callers must consume the variant, not these codes.
 const PartialOrdering = #Equal | #Greater | #Less | #Unordered
 
 const f64_partial_cmp :: F64 -> F64 -> PartialOrdering
@@ -50,9 +48,11 @@ return {
   .F64 = F64 <+ {
     .partial_cmp = f64_partial_cmp;
     .cmp_exn = F64.cmp;
+    .to_text = Format.binary64;
   };
   .F32 = F32 <+ {
     .partial_cmp = f32_partial_cmp;
     .cmp_exn = F32.cmp;
+    .to_text = Format.binary32;
   };
   }

@@ -1,0 +1,1 @@
+[#Ok 42, #Ok -9223372036854775808, #Ok 255, #Error #IntegerOverflow { .position = 18; }, #Error #InvalidDigit { .position = 2; .scalar = "🐱"; }, #Error #InvalidDigit { .position = 0; .scalar = " "; }, #Error #EmptyInput]

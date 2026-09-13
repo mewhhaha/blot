@@ -1,0 +1,6 @@
+const configured =
+  import "./lib/checked_module_input.blot" with {
+    .prefix = "count="
+    .count = 42
+  }
+return configured.render ()

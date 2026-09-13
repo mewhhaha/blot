@@ -232,7 +232,7 @@ function statementsContainReturn(cursors: readonly Cursor[]): boolean {
 function statementsContainEffect(cursors: readonly Cursor[]): boolean {
   for (const cursor of cursors) {
     const rule = statementRule(cursor);
-    if (rule.name === "sequencing") {
+    if (rule.name === "sequencing" || rule.name === "iteration") {
       return true;
     }
     for (const nested of nestedStatementLists(rule)) {
@@ -949,7 +949,6 @@ function desugarLoop(
   binder: Pattern | null,
   source: Expr,
   body: LoopBody,
-  effectful: boolean,
   filtering: boolean,
   completion:
     | { readonly tag: "iterate" }
@@ -1160,29 +1159,6 @@ function desugarLoop(
     ],
     span,
   };
-  const sequencedResult = "loopResult$";
-  let goBody: Expr = goResult;
-  if (effectful) {
-    goBody = {
-      tag: "block",
-      declarations: [{
-        tag: "binding",
-        kind: "effect",
-        tags: [],
-        pattern: {
-          tag: "name",
-          name: sequencedResult,
-          qualifier: "none",
-          span,
-        },
-        value: goResult,
-        span,
-      }],
-      result: name(sequencedResult),
-      resultEffects: "ambient",
-      span,
-    };
-  }
   const go: Expr = {
     tag: "rec",
     lambda: {
@@ -1195,7 +1171,7 @@ function desugarLoop(
         ],
         span,
       },
-      body: goBody,
+      body: goResult,
       span,
     },
     span,
@@ -1435,7 +1411,6 @@ function lowerControlLoop(
       continues,
       breaks,
     },
-    statementsContainEffect(statements),
     loopFiltering(rule, binder),
     { tag: "control" },
     rule.span,
@@ -1487,7 +1462,13 @@ function effectRowTailUses(cursor: Cursor): readonly EffectRowTailUse[] {
       }
       return;
     }
-    for (const child of current.children()) visit(child);
+    for (const child of current.children()) {
+      if (
+        (current.name === "lambda" || current.name === "bounded_lambda") &&
+        child.type === "rule" && child.name === "lambda_parameter"
+      ) continue;
+      visit(child);
+    }
   };
   visit(cursor);
   return [...uses].map(([name, use]) => ({ name, ...use }));
@@ -1522,12 +1503,16 @@ function quantifyEffectRowTails(
 }
 
 function lowerDecls(rule: Rule, context: Context): Decl[] {
-  const declaration = lowerDecl(rule, context);
+  const [declaration, lambdaSignature] = hoistLambdaSignature(
+    lowerDecl(rule, context),
+  );
+  const declarations: Decl[] = [];
+  if (lambdaSignature !== null) declarations.push(lambdaSignature);
   if (rule.name !== "binding" && rule.name !== "sequencing") {
     return [declaration];
   }
   const annotation = fieldList(rule, "annotation");
-  if (annotation.length === 0) return [declaration];
+  if (annotation.length === 0) return [...declarations, declaration];
   expect(
     declaration.tag === "binding",
     "annotated declaration did not lower to a binding",
@@ -1554,7 +1539,7 @@ function lowerDecls(rule: Rule, context: Context): Decl[] {
   if (rowTails.length > 0) {
     value = quantifyEffectRowTails(value, rowTails, rule.span);
   }
-  return [{
+  return [...declarations, {
     tag: "signature",
     kind: declaration.kind,
     recursive: declaration.value.tag === "rec",
@@ -1646,8 +1631,7 @@ function lowerDecl(rule: Rule, context: Context): Decl {
   }
   if (rule.name === "iteration") {
     const statements = statementSuite(rule, "body");
-    let kind: "let" | "effect" = "let";
-    if (statementsContainEffect(statements)) kind = "effect";
+    const kind = "effect";
     if (statementsNeedControlLowering(statements)) {
       const loop = lowerControlLoop(rule, context);
       expect(!loop.returns, "a local control loop contains a return");
@@ -1695,15 +1679,14 @@ function lowerDecl(rule: Rule, context: Context): Decl {
     let localNames: readonly string[] = [];
     if (binder !== null) localNames = patternNames(binder);
     const carried = carriedNames(statements, context, localNames);
-    const body = statements.map((statement) => {
+    const body = statements.flatMap((statement) => {
       const inner = asRule(unwrap(statement), "statement");
-      return lowerDecl(inner, { ...context, loop: null });
+      return lowerDecls(inner, { ...context, loop: null });
     });
     const loop = desugarLoop(
       binder,
       source,
       { tag: "plain", declarations: body, carried },
-      kind === "effect",
       loopFiltering(rule, binder),
       { tag: "iterate" },
       rule.span,
@@ -1980,6 +1963,23 @@ function readQualifier(text: string, span: Span): Qualifier {
 }
 
 function lowerPattern(rule: Rule): Pattern {
+  return lowerPatternInner(rule, false);
+}
+
+function lowerPatternInner(rule: Rule, typed: boolean): Pattern {
+  if (rule.name === "annotated_pattern") {
+    if (!typed && fieldList(rule, "annotation").length > 0) {
+      fail(
+        "BLOT_PATTERN_ANNOTATION_CONTEXT",
+        "Parameter annotations belong in a function header.",
+        rule.span,
+      );
+    }
+    return lowerPatternInner(
+      asRule(required(rule, "pattern"), "pattern"),
+      typed,
+    );
+  }
   expect(
     rule.name === "binding_pattern",
     `expected binding_pattern, got ${rule.name}`,
@@ -2060,10 +2060,14 @@ function lowerPattern(rule: Rule): Pattern {
   if (core.name === "unit_pattern") return { tag: "unit", span: rule.span };
 
   if (core.name === "tuple_pattern") {
-    const first = lowerPattern(asRule(field(core, "first"), "first"));
-    const rest = fieldList(core, "rest").map((c) =>
-      lowerPattern(asRule(c, "rest"))
+    const first = lowerPatternInner(
+      asRule(field(core, "first"), "first"),
+      typed,
     );
+    const rest = fieldList(core, "rest").map((c) =>
+      lowerPatternInner(asRule(c, "rest"), typed)
+    );
+    if (rest.length === 0) return first;
     return { tag: "tuple", elements: [first, ...rest], span: rule.span };
   }
 
@@ -2071,7 +2075,7 @@ function lowerPattern(rule: Rule): Pattern {
     return {
       tag: "array",
       elements: fieldList(core, "elements").map((c) =>
-        lowerPattern(asRule(c, "element"))
+        lowerPatternInner(asRule(c, "element"), typed)
       ),
       span: rule.span,
     };
@@ -2084,7 +2088,7 @@ function lowerPattern(rule: Rule): Pattern {
       name: tokenOf(required(core, "constructor")).text,
       payload: payloadCursor === null
         ? null
-        : lowerPattern(asRule(payloadCursor, "payload")),
+        : lowerPatternInner(asRule(payloadCursor, "payload"), typed),
       span: rule.span,
     };
   }
@@ -2236,13 +2240,182 @@ function lowerValue(rule: Rule, context: Context): Expr {
 // after the first becomes a lambda whose body is what follows it, so the AST
 // has only one-parameter lambdas and the rest of the compiler never learns that
 // currying has a spelling.
+function parameterType(cursor: Cursor, context: Context): Expr | null {
+  const rule = asRule(cursor, "parameter");
+  if (rule.name === "annotated_pattern") {
+    const annotation = fieldList(rule, "annotation").at(-1);
+    if (annotation !== undefined) {
+      return lowerValue(asRule(annotation, "annotation"), context);
+    }
+    return parameterType(required(rule, "pattern"), context);
+  }
+  const core = unwrap(asRule(required(rule, "value"), "pattern_core"));
+  if (core.type !== "rule" || core.name !== "tuple_pattern") return null;
+  const types = [required(core, "first"), ...fieldList(core, "rest")].map((
+    cursor,
+  ) => parameterType(cursor, context));
+  if (types.every((type) => type === null)) return null;
+  const elements = types.map((type): Expr => {
+    if (type !== null) return type;
+    return { tag: "var", name: "_", span: rule.span };
+  });
+  if (elements.length === 1) return elements[0];
+  return { tag: "tuple", elements, span: rule.span };
+}
+
+function lambdaBindingPattern(pattern: Rule): Rule {
+  let current = pattern;
+  while (true) {
+    const core = unwrap(asRule(required(current, "value"), "pattern_core"));
+    if (
+      core.type !== "rule" || core.name !== "tuple_pattern" ||
+      fieldList(core, "rest").length !== 0
+    ) return current;
+    current = asRule(
+      required(asRule(required(core, "first"), "annotated_pattern"), "pattern"),
+      "binding_pattern",
+    );
+  }
+}
+
+function applyTypePrimitive(
+  name: string,
+  first: Expr,
+  second: Expr,
+  span: Span,
+): Expr {
+  return {
+    tag: "apply",
+    fn: {
+      tag: "apply",
+      fn: { tag: "intrinsic", name, span },
+      arg: first,
+      span,
+    },
+    arg: second,
+    span,
+  };
+}
+
+function annotateLambda(
+  parameter: Rule,
+  lambda: Expr,
+  deferred: boolean,
+  context: Context,
+): Expr {
+  let input = parameterType(required(parameter, "pattern"), context);
+  const result = field(parameter, "result");
+  if (input === null && result === null) return lambda;
+  const span = lambda.span;
+  if (input === null) input = { tag: "var", name: "_", span };
+  let effects: Expr | null = null;
+  let output: Expr;
+  if (result !== null) {
+    const rule = asRule(result, "lambda_result");
+    if (tokenOf(required(rule, "operator")).text !== "->") {
+      fail(
+        "BLOT_FUNCTION_RESULT_ARROW",
+        "A result annotation begins with `->`.",
+        rule.span,
+      );
+    }
+    output = lowerExpression(
+      asRule(required(rule, "value"), "result"),
+      context,
+    );
+    if (
+      output.tag === "apply" && output.fn.tag === "apply" &&
+      output.fn.fn.tag === "intrinsic" && output.fn.fn.name === "@type.performs"
+    ) {
+      effects = output.arg;
+      output = output.fn.arg;
+    }
+  } else {
+    effects = {
+      tag: "array",
+      elements: [{ spread: false, value: { tag: "var", name: "_", span } }],
+      span,
+    };
+    output = { tag: "var", name: "_", span };
+  }
+  let primitive = "@type.arrow";
+  if (deferred) primitive = "@type.deferred_arrow";
+  let signature = applyTypePrimitive(primitive, input, output, span);
+  if (effects !== null) {
+    signature = applyTypePrimitive("@type.performs", signature, effects, span);
+  }
+  const tails = effectRowTailUses(parameter);
+  const unconstrained = tails.find((tail) => tail.count < 2);
+  if (unconstrained !== undefined) {
+    fail(
+      "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED",
+      `Effect-row tail \`..${unconstrained.name}\` must occur at least twice in one signature.`,
+      unconstrained.span,
+    );
+  }
+  signature = quantifyEffectRowTails(signature, tails, span);
+  const name = "$blot$function";
+  return {
+    tag: "block",
+    declarations: [
+      {
+        tag: "signature",
+        kind: "let",
+        recursive: false,
+        name,
+        value: signature,
+        span,
+      },
+      {
+        tag: "binding",
+        kind: "let",
+        tags: [],
+        pattern: { tag: "name", name, qualifier: "none", span },
+        value: lambda,
+        span,
+      },
+    ],
+    result: { tag: "var", name, span },
+    resultEffects: "pure",
+    span,
+  };
+}
+
+function hoistLambdaSignature(declaration: Decl): readonly [Decl, Decl | null] {
+  if (declaration.tag !== "binding" || declaration.pattern.tag !== "name") {
+    return [declaration, null];
+  }
+  let expression = declaration.value;
+  if (expression.tag === "rec") expression = expression.lambda;
+  if (expression.tag !== "block" || expression.declarations.length !== 2) {
+    return [declaration, null];
+  }
+  const [signature, binding] = expression.declarations;
+  if (signature.tag !== "signature" || signature.name !== "$blot$function") {
+    return [declaration, null];
+  }
+  expect(binding.tag === "binding", "typed lambda signature has a binding");
+  let value = binding.value;
+  if (declaration.value.tag === "rec") {
+    value = { ...declaration.value, lambda: value };
+  }
+  return [{ ...declaration, value }, {
+    ...signature,
+    name: declaration.pattern.name,
+    kind: declaration.kind,
+    recursive: declaration.value.tag === "rec",
+  }];
+}
+
 function lowerLambdaParameter(
   parameter: Rule,
 ): { readonly pattern: Pattern; readonly deferred: boolean } {
-  const pattern = asRule(field(parameter, "pattern"), "pattern");
+  const pattern = lambdaBindingPattern(
+    asRule(field(parameter, "pattern"), "pattern"),
+  );
   const qualifierCursor = field(pattern, "qualifier");
   if (qualifierCursor === null || tokenOf(qualifierCursor).text !== "~") {
-    return { pattern: lowerPattern(pattern), deferred: false };
+    return { pattern: lowerPatternInner(pattern, true), deferred: false };
   }
   const core = unwrap(asRule(field(pattern, "value"), "pattern_core"));
   if (
@@ -2308,6 +2481,7 @@ function lowerLambda(rule: Rule, context: Context): Expr {
       body: result,
       span: { start: parameter.span.start, end: rule.span.end },
     };
+    result = annotateLambda(parameter, result, lowered.deferred, context);
   }
   return result;
 }
@@ -2595,10 +2769,26 @@ function lowerPrimary(cursor: Cursor, context: Context): Expr {
           context,
         );
       }
-      let value = lowerValue(
-        asRule(field(member, "value"), "value"),
-        context,
-      );
+      let valueCursor: Cursor | undefined;
+      if (computedName !== null) valueCursor = required(member, "value");
+      else valueCursor = fieldList(member, "value").at(-1);
+      let value: Expr;
+      if (valueCursor !== undefined) {
+        value = lowerValue(asRule(valueCursor, "value"), context);
+      } else {
+        if (field(member, "optional") !== null) {
+          fail(
+            "BLOT_RECORD_SHORTHAND",
+            "An optional field needs an explicit type value.",
+            member.span,
+          );
+        }
+        value = {
+          tag: "var",
+          name: tokenOf(required(member, "name")).text,
+          span: member.span,
+        };
+      }
       if (field(member, "optional") !== null) {
         const applied: Expr = {
           tag: "apply",

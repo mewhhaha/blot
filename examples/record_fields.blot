@@ -1,0 +1,14 @@
+open import "blot:prelude"
+
+const title = "Blot"
+const count = 42
+const record =
+  {
+    .title
+    .count
+    .read = fn () => do:
+      return count
+    .["quoted"] = "a field name"
+  }
+
+return (record.title, record.count, record.read (), record.quoted)

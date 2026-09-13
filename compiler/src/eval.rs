@@ -58,6 +58,8 @@ pub struct LoadedModule {
     pub(crate) expression_addresses: Rc<std::cell::OnceCell<HashMap<ExpressionId, String>>>,
     pub(crate) scalar_cache_bodies: Rc<RefCell<HashMap<ExpressionId, bool>>>,
     pub(crate) scalar_cache_source_digest: Rc<std::cell::OnceCell<[u8; 32]>>,
+    pub(crate) capsule_source_index:
+        Rc<std::cell::OnceCell<Rc<crate::value_capsule::CapsuleSourceIndex>>>,
 }
 
 impl LoadedModule {
@@ -75,6 +77,7 @@ impl LoadedModule {
             expression_addresses: Rc::new(std::cell::OnceCell::new()),
             scalar_cache_bodies: Rc::new(RefCell::new(HashMap::new())),
             scalar_cache_source_digest: Rc::new(std::cell::OnceCell::new()),
+            capsule_source_index: Rc::new(std::cell::OnceCell::new()),
         }
     }
 
@@ -609,7 +612,7 @@ enum ResidentOperatorMember {
         environment: Environment,
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
-        signature: Option<Box<Value>>,
+        signature: Option<Rc<Value>>,
         reuse_assertion: Option<Span>,
         deferred: bool,
     },
@@ -818,6 +821,7 @@ pub struct Context {
     effect_values: RefCell<BTreeMap<u32, ResidentEffectValue>>,
     operator_extensions: RefCell<Vec<ResidentOperatorExtension>>,
     next_type_variable: Cell<u32>,
+    pub(crate) representation_holes: std::cell::OnceCell<Rc<Cell<u32>>>,
 }
 
 impl Context {
@@ -1869,6 +1873,7 @@ pub struct Runtime {
     effect_scope: Rc<EffectScope>,
     module_instances: Rc<ModuleInstanceScope>,
     instance_facts: Vec<Rc<crate::typecheck::ResidualInstanceFacts>>,
+    result_context: Option<Value>,
     checked_arguments: Rc<RefCell<HashMap<ApplicationSite, Value>>>,
     comptime_call_results: Rc<RefCell<HashMap<ComptimeCallKey, Value>>>,
 }
@@ -1937,6 +1942,7 @@ impl Runtime {
             effect_scope: Rc::new(Vec::new()),
             module_instances: Rc::new(Vec::new()),
             instance_facts: Vec::new(),
+            result_context: None,
             checked_arguments: Rc::new(RefCell::new(HashMap::new())),
             comptime_call_results: Rc::new(RefCell::new(HashMap::new())),
         }
@@ -1973,6 +1979,7 @@ impl Runtime {
             effect_scope: self.effect_scope.clone(),
             module_instances: self.module_instances.clone(),
             instance_facts: self.instance_facts.clone(),
+            result_context: None,
             checked_arguments: self.checked_arguments.clone(),
             comptime_call_results: self.comptime_call_results.clone(),
         }
@@ -2429,8 +2436,9 @@ pub fn evaluate_expression(
     module_path: Rc<String>,
     expression_id: ExpressionId,
     environment: Environment,
-    runtime: Runtime,
+    mut runtime: Runtime,
 ) -> Computation {
+    let result_context = runtime.result_context.take();
     let remaining = runtime.fuel.get() - 1;
     runtime.fuel.set(remaining);
     let loaded_module = match module(&context, &module_path) {
@@ -2591,7 +2599,7 @@ pub fn evaluate_expression(
                     && signature.is_none()
                     && let Some(inferred) = lookup_signature(&environment, name)
                 {
-                    *signature = Some(Box::new(inferred));
+                    *signature = Some(Rc::new(inferred));
                 }
                 Computation::value(value)
             }
@@ -2613,9 +2621,11 @@ pub fn evaluate_expression(
                 Ok(application) => application,
                 Err(error) => return Computation::error(error),
             };
-            let expected_result = runtime
-                .expression_type(&context, module_path.as_str(), expression_id)
-                .map(|type_| substitute_signature(&type_, &environment));
+            let expected_result = result_context.or_else(|| {
+                runtime
+                    .expression_type(&context, module_path.as_str(), expression_id)
+                    .map(|type_| substitute_signature(&type_, &environment))
+            });
             let function = *function;
             let argument = *argument;
             let inferred_argument = runtime
@@ -2764,7 +2774,7 @@ pub fn evaluate_expression(
             capture_env(&environment);
             let signature = runtime
                 .closure_signature(&context, module_path.as_str(), *body)
-                .map(|signature| Box::new(substitute_signature(&signature, &environment)));
+                .map(|signature| Rc::new(substitute_signature(&signature, &environment)));
             Computation::value(Value::Closure {
                 module: module_path,
                 module_instances: runtime.module_instances.clone(),
@@ -2818,23 +2828,27 @@ pub fn evaluate_expression(
         ),
         Expression::If {
             branches, fallback, ..
-        } => evaluate_if(
-            context,
-            module_path,
-            environment,
-            runtime,
-            BranchProgress {
-                branches: branches.clone(),
-                fallback: *fallback,
-                index: 0,
-                span,
-            },
-        ),
+        } => {
+            runtime.result_context = result_context;
+            evaluate_if(
+                context,
+                module_path,
+                environment,
+                runtime,
+                BranchProgress {
+                    branches: branches.clone(),
+                    fallback: *fallback,
+                    index: 0,
+                    span,
+                },
+            )
+        }
         Expression::Case { target, arms, .. } => {
             let target_context = context.clone();
             let target_module = module_path.clone();
             let target_environment = environment.clone();
-            let target_runtime = runtime.clone();
+            let mut target_runtime = runtime.clone();
+            target_runtime.result_context = result_context;
             let arms = arms.clone();
             let case_checked_representation = checked_representation.clone();
             evaluate_expression(context, module_path, *target, environment, runtime).and_then(
@@ -2882,6 +2896,7 @@ pub fn evaluate_expression(
             result,
             ..
         } => {
+            runtime.result_context = result_context;
             let scope = child_env(Some(environment));
             let module = match module(&context, &module_path) {
                 Ok(module) => module,
@@ -3906,7 +3921,7 @@ fn evaluate_if(
     context: Rc<Context>,
     module_path: Rc<String>,
     environment: Environment,
-    runtime: Runtime,
+    mut runtime: Runtime,
     progress: BranchProgress,
 ) -> Computation {
     let Some(branch) = progress.branches.get(progress.index).cloned() else {
@@ -3925,6 +3940,7 @@ fn evaluate_if(
     let next_module = module_path.clone();
     let next_environment = environment.clone();
     let next_runtime = runtime.clone();
+    runtime.result_context = None;
     evaluate_expression(context, module_path, branch.condition, environment, runtime).and_then(
         move |condition| match &condition {
             Value::Runtime(condition) => evaluate_dynamic_if(
@@ -4095,7 +4111,7 @@ fn evaluate_declarations(
     module_path: Rc<String>,
     progress: DeclarationProgress,
     environment: Environment,
-    runtime: Runtime,
+    mut runtime: Runtime,
     tail: DeclarationTail,
 ) -> Computation {
     let DeclarationProgress {
@@ -4118,6 +4134,7 @@ fn evaluate_declarations(
     let next_context = context.clone();
     let next_module = module_path.clone();
     let next_runtime = runtime.clone();
+    runtime.result_context = None;
     let continue_with = move |next_environment, next_recursive_bindings| {
         evaluate_declarations(
             next_context,
@@ -4311,13 +4328,7 @@ fn evaluate_declarations(
             })
         }
         Declaration::Shadow { name, value, .. } => {
-            if lookup(&environment, &name).is_none() {
-                return Computation::error(Diagnostic::new(
-                    "BLOT_UNBOUND",
-                    format!("`{name} := ...` cannot shadow a name that is not in scope."),
-                    span,
-                ));
-            }
+            // Checking establishes the lineage; liveness may discard its old value.
             let declaration_environment = environment.clone();
             evaluate_expression(context, module_path, value, environment, runtime).and_then(
                 move |value| {
@@ -4748,10 +4759,10 @@ fn apply_with_expected(
             let inferred_signature =
                 runtime.closure_signature(&context, closure_module.as_str(), body);
             let signature = signature
-                .or_else(|| recursive_signature.map(Box::new))
-                .or_else(|| inferred_signature.map(Box::new));
+                .or_else(|| recursive_signature.map(Rc::new))
+                .or_else(|| inferred_signature.map(Rc::new));
             let mut signature =
-                signature.map(|signature| Box::new(substitute_signature(&signature, &environment)));
+                signature.map(|signature| Rc::new(substitute_signature(&signature, &environment)));
 
             let memoized_closure = (runtime.residual.is_none()
                 && memoizable_comptime_signature(signature.as_deref()))
@@ -4787,9 +4798,15 @@ fn apply_with_expected(
                         effect_scope: &creation_scope,
                         signature: signature.as_deref(),
                         reuse: reuse_assertion.is_some(),
+                        // A handler's thunk finishes only after its clauses
+                        // have run. Outlining the raw thunk would pop its SSA
+                        // frame before a post-resume clause uses request values.
                         root_application: matches!(
                             application.compiler_steps.last(),
-                            Some(CompilerApplication::RuntimeExportParameter(_))
+                            Some(
+                                CompilerApplication::RuntimeExportParameter(_)
+                                    | CompilerApplication::HandleThunk
+                            )
                         ),
                         host_callback: matches!(
                             application.compiler_steps.last(),
@@ -4824,7 +4841,7 @@ fn apply_with_expected(
                     Ok(crate::hir::ResidualFunctionCall::Compile(compilation)) => {
                         instance_facts = compilation.instance_facts.clone();
                         if let Some(facts) = &instance_facts {
-                            signature = Some(Box::new(facts.signature.clone()));
+                            signature = Some(Rc::new(facts.signature.clone()));
                         }
                         argument = compilation.argument.clone();
                         environment = compilation.environment.clone();
@@ -4931,6 +4948,22 @@ fn apply_with_expected(
             let mut closure_runtime = runtime;
             if let Some(facts) = instance_facts {
                 closure_runtime.instance_facts.push(facts);
+            }
+            // Carry the checked result only along value-producing positions.
+            // A cached expression scheme has its own quantified identities, so
+            // it cannot recover this application's generic result by itself.
+            if closure_runtime.residual.is_some() {
+                closure_runtime.result_context = expected_result
+                    .filter(|expected| !contains_type_variables(expected))
+                    .or_else(|| {
+                        let Value::Arrow { codomain, .. } =
+                            signature.as_deref().map(signature_body)?
+                        else {
+                            return None;
+                        };
+                        let result = substitute_signature(codomain, &scope);
+                        (!contains_type_variables(&result)).then_some(result)
+                    });
             }
             let comptime_call_results = closure_runtime.comptime_call_results.clone();
             closure_runtime.module = closure_module.clone();

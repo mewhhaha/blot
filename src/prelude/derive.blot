@@ -17,9 +17,8 @@ const fields = fn schema => case Reflect.of schema of
     let descriptors = @shape.empty
     for name in Iter.items (@shape.names shape):
       let field_type = readable_scalar (@shape.get shape name)
-      // Keep field-name evidence staged. Residual closures with different static
-      // capture values are not yet reliably distinguished by the backend cache.
-      // A deferred getter is not a general first-class runtime projection.
+      // Keep checked field-name evidence staged. A deferred getter is not a
+      // general first-class runtime projection or authority to copy owned fields.
       let read = fn ~value => @satisfies (@shape.get (@satisfies value schema) name) field_type
       descriptors := {
         ...descriptors;

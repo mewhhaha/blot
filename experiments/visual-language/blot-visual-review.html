@@ -1,0 +1,258 @@
+<div id="blot-visual-review">
+  <div class="viz-controls">
+    <label class="form-label" for="blot-example">Example
+      <select class="form-select" id="blot-example">
+        <option value="fizzbuzz">FizzBuzz</option>
+        <option value="interpreter">Expression interpreter</option>
+        <option value="arithmetic">Floating point arithmetic</option>
+        <option value="spark">Parallel Sparks</option>
+        <option value="parameters" selected>Typed parameters · implemented</option>
+        <option value="record">Record shorthand · implemented</option>
+        <option value="layout">Multiline fields · implemented</option>
+      </select>
+    </label>
+    <label class="form-check">
+      <input class="form-check-input" type="checkbox" id="blot-color" checked>
+      <span class="form-check-label">Syntax colors</span>
+    </label>
+  </div>
+  <div id="blot-comparison" aria-live="polite"></div>
+  <template id="blot-sample-fizzbuzz">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">examples/fizzbuzz.blot</span></figcaption>
+        <pre><code><span class="keyword">let</span> label = <span class="keyword">fn</span> value <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">if</span> <span class="reference">Int</span>.rem value <span class="number">15</span> == <span class="number">0</span>:
+    <span class="keyword">return</span> <span class="string">&quot;fizzbuzz&quot;</span>
+  <span class="keyword">else</span>:
+    <span class="keyword">if</span> <span class="reference">Int</span>.rem value <span class="number">3</span> == <span class="number">0</span>:
+      <span class="keyword">return</span> <span class="string">&quot;fizz&quot;</span>
+    <span class="keyword">else</span>:
+      <span class="keyword">if</span> <span class="reference">Int</span>.rem value <span class="number">5</span> == <span class="number">0</span>:
+        <span class="keyword">return</span> <span class="string">&quot;buzz&quot;</span>
+      <span class="keyword">else</span>:
+        <span class="keyword">return</span> <span class="reference">Text</span>.of_int value</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>Rewritten · current Blot</strong></figcaption>
+        <pre><code><span class="keyword">let</span> label = <span class="keyword">fn</span> value <span class="flow">=&gt;</span> <span class="keyword">case</span> value <span class="keyword">of</span>
+  n <span class="keyword">if</span> n % <span class="number">15</span> == <span class="number">0</span> <span class="flow">=&gt;</span> <span class="string">&quot;fizzbuzz&quot;</span>
+  n <span class="keyword">if</span> n % <span class="number">3</span> == <span class="number">0</span> <span class="flow">=&gt;</span> <span class="string">&quot;fizz&quot;</span>
+  n <span class="keyword">if</span> n % <span class="number">5</span> == <span class="number">0</span> <span class="flow">=&gt;</span> <span class="string">&quot;buzz&quot;</span>
+  n <span class="flow">=&gt;</span> <span class="reference">Text</span>.of_int n</code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-interpreter">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">examples/expression_interpreter.blot</span></figcaption>
+        <pre><code><span class="keyword">let</span> <span class="keyword">rec</span> evaluate = <span class="keyword">fn</span> expression <span class="flow">=&gt;</span> <span class="keyword">case</span> expression <span class="keyword">of</span>
+  #<span class="reference">Literal</span> value <span class="flow">=&gt;</span> value
+  #<span class="reference">Add</span> operands <span class="flow">=&gt;</span> evaluate operands.<span class="number">0</span> + evaluate operands.<span class="number">1</span>
+  #<span class="reference">Multiply</span> operands <span class="flow">=&gt;</span> evaluate operands.<span class="number">0</span> * evaluate operands.<span class="number">1</span>
+  #<span class="reference">Negate</span> operand <span class="flow">=&gt;</span> <span class="number">0</span> - evaluate operand</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>Rewritten · current Blot</strong></figcaption>
+        <pre><code><span class="keyword">let</span> <span class="keyword">rec</span> evaluate = <span class="keyword">fn</span> expression <span class="flow">=&gt;</span> <span class="keyword">case</span> expression <span class="keyword">of</span>
+  #<span class="reference">Literal</span> value <span class="flow">=&gt;</span> value
+  #<span class="reference">Add</span> (left, right) <span class="flow">=&gt;</span> evaluate left + evaluate right
+  #<span class="reference">Multiply</span> (left, right) <span class="flow">=&gt;</span> evaluate left * evaluate right
+  #<span class="reference">Negate</span> operand <span class="flow">=&gt;</span> -evaluate operand</code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-arithmetic">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">case-studies/engine/lib/math.blot</span></figcaption>
+        <pre><code><span class="keyword">const</span> sin_quarter = <span class="keyword">fn</span> k <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">let</span> x = <span class="reference">F64</span>.mul (<span class="reference">F64</span>.of_int k) (<span class="reference">F64</span>.div <span class="reference">HALF_PI</span> (<span class="reference">F64</span>.of_int <span class="reference">QUARTER</span>))
+  <span class="keyword">let</span> x2 = <span class="reference">F64</span>.mul x x
+  <span class="keyword">let</span> x3 = <span class="reference">F64</span>.mul x2 x
+  <span class="keyword">let</span> x5 = <span class="reference">F64</span>.mul x3 x2
+  <span class="keyword">let</span> x7 = <span class="reference">F64</span>.mul x5 x2
+  <span class="keyword">let</span> x9 = <span class="reference">F64</span>.mul x7 x2
+  <span class="keyword">let</span> x11 = <span class="reference">F64</span>.mul x9 x2
+  <span class="keyword">let</span> x13 = <span class="reference">F64</span>.mul x11 x2
+  <span class="keyword">return</span> <span class="reference">F64</span>.add
+    (<span class="reference">F64</span>.sub
+    (<span class="reference">F64</span>.add
+    (<span class="reference">F64</span>.sub
+    (<span class="reference">F64</span>.add
+    (<span class="reference">F64</span>.sub x (<span class="reference">F64</span>.div x3 <span class="number">6.0</span>))
+    (<span class="reference">F64</span>.div x5 <span class="number">120.0</span>))
+    (<span class="reference">F64</span>.div x7 <span class="number">5040.0</span>))
+    (<span class="reference">F64</span>.div x9 <span class="number">362880.0</span>))
+    (<span class="reference">F64</span>.div x11 <span class="number">39916800.0</span>))
+    (<span class="reference">F64</span>.div x13 <span class="number">6227020800.0</span>)</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>Rewritten · current Blot</strong></figcaption>
+        <pre><code><span class="keyword">const</span> sin_quarter = <span class="keyword">fn</span> k <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">let</span> x = <span class="reference">F64</span>.of_int k * (<span class="reference">HALF_PI</span> / <span class="reference">F64</span>.of_int <span class="reference">QUARTER</span>)
+  <span class="keyword">let</span> x2 = x * x
+  <span class="keyword">let</span> x3 = x2 * x
+  <span class="keyword">let</span> x5 = x3 * x2
+  <span class="keyword">let</span> x7 = x5 * x2
+  <span class="keyword">let</span> x9 = x7 * x2
+  <span class="keyword">let</span> x11 = x9 * x2
+  <span class="keyword">let</span> x13 = x11 * x2
+  <span class="keyword">return</span> x
+    - x3 / <span class="number">6.0</span>
+    + x5 / <span class="number">120.0</span>
+    - x7 / <span class="number">5040.0</span>
+    + x9 / <span class="number">362880.0</span>
+    - x11 / <span class="number">39916800.0</span>
+    + x13 / <span class="number">6227020800.0</span></code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-spark">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">examples/lib/spark_parallel.blot</span></figcaption>
+        <pre><code><span class="keyword">let</span> run :: { .executor = <span class="reference">Spark</span>.<span class="reference">Executor</span>; } -&gt; <span class="reference">Int</span> -&gt; <span class="reference">Int</span> ~ { <span class="reference">Spark</span>.<span class="reference">Effect</span> }
+<span class="keyword">let</span> run = <span class="keyword">fn</span> io <span class="flow">=&gt;</span> <span class="keyword">fn</span> count <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">let</span> body :: <span class="reference">Spark</span>.<span class="reference">Scope</span> -&gt; <span class="reference">Int</span> ~ { <span class="reference">Spark</span>.<span class="reference">Effect</span> }
+  <span class="keyword">let</span> body = <span class="keyword">fn</span> scope <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+    <span class="keyword">let</span> ?left :: <span class="reference">Unit</span> -&gt; <span class="reference">Int</span> = <span class="keyword">fn</span> () <span class="flow">=&gt;</span> sum count
+    <span class="keyword">let</span> ?right :: <span class="reference">Unit</span> -&gt; <span class="reference">Int</span> = <span class="keyword">fn</span> () <span class="flow">=&gt;</span> sum (count + <span class="number">1</span>)
+    <span class="keyword">use</span> first <span class="flow">&lt;-</span> <span class="reference">Spark</span>.parallel scope (?left)
+    <span class="keyword">use</span> second <span class="flow">&lt;-</span> <span class="reference">Spark</span>.parallel scope (?right)
+    <span class="keyword">use</span> a <span class="flow">&lt;-</span> <span class="reference">Spark</span>.join first
+    <span class="keyword">use</span> b <span class="flow">&lt;-</span> <span class="reference">Spark</span>.join second
+    <span class="keyword">return</span> a + b
+  <span class="keyword">return</span> <span class="reference">Spark</span>.scope io.executor body</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>Rewritten · current Blot</strong></figcaption>
+        <pre><code><span class="keyword">let</span> run :: { .executor = <span class="reference">Spark</span>.<span class="reference">Executor</span>; } -&gt; <span class="reference">Int</span> -&gt; <span class="reference">Int</span> ~ { <span class="reference">Spark</span>.<span class="reference">Effect</span> }
+<span class="keyword">let</span> run = <span class="keyword">fn</span> io <span class="flow">=&gt;</span> <span class="keyword">fn</span> count <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">return</span> <span class="reference">Spark</span>.scope io.executor $ <span class="keyword">fn</span> scope <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+    <span class="keyword">use</span> first <span class="flow">&lt;-</span> <span class="reference">Spark</span>.parallel scope (<span class="keyword">fn</span> () <span class="flow">=&gt;</span> sum count)
+    <span class="keyword">use</span> second <span class="flow">&lt;-</span> <span class="reference">Spark</span>.parallel scope (<span class="keyword">fn</span> () <span class="flow">=&gt;</span> sum (count + <span class="number">1</span>))
+    <span class="keyword">use</span> a <span class="flow">&lt;-</span> <span class="reference">Spark</span>.join first
+    <span class="keyword">use</span> b <span class="flow">&lt;-</span> <span class="reference">Spark</span>.join second
+    <span class="keyword">return</span> a + b</code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-parameters">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before · separate signature</strong></figcaption>
+        <pre><code><span class="keyword">const</span> double :: <span class="reference">Int</span> -&gt; <span class="reference">Int</span>
+<span class="keyword">const</span> double = <span class="keyword">fn</span> a <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">return</span> a + a</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>After · implemented</strong></figcaption>
+        <pre><code><span class="keyword">const</span> double = <span class="keyword">fn</span> (a :: <span class="reference">Int</span>) -&gt; <span class="reference">Int</span> <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+  <span class="keyword">return</span> a + a</code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-record">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">examples/lib/spark_parallel.blot</span></figcaption>
+        <pre><code><span class="keyword">return</span> { .run = run; .kernel = sum; }</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>After · implemented</strong></figcaption>
+        <pre><code><span class="keyword">return</span> { .run; .kernel = sum; }</code></pre>
+      </figure>
+    </div>
+  </template>
+  <template id="blot-sample-layout">
+    <div class="comparison">
+      <figure>
+        <figcaption><strong>Before</strong><span class="source-path text-small">examples/effects.blot · collecting handler</span></figcaption>
+        <pre><code><span class="keyword">let</span> collecting =
+  {
+    .write = <span class="keyword">fn</span> (message, ?resume) <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+      <span class="keyword">use</span> rest <span class="flow">&lt;-</span> resume ()
+      <span class="keyword">return</span> <span class="reference">@text.concat</span> (<span class="reference">@text.concat</span> message <span class="string">&quot;|&quot;</span>) rest
+    ;
+    .return = <span class="keyword">fn</span> value <span class="flow">=&gt;</span> value;
+  }</code></pre>
+      </figure>
+      <figure>
+        <figcaption><strong>After · implemented layout</strong></figcaption>
+        <pre><code><span class="keyword">let</span> collecting = {
+  .write = <span class="keyword">fn</span> (message, ?resume) <span class="flow">=&gt;</span> <span class="keyword">do</span>:
+    <span class="keyword">use</span> rest <span class="flow">&lt;-</span> resume ()
+    <span class="keyword">return</span> <span class="reference">@text.concat</span> (<span class="reference">@text.concat</span> message <span class="string">&quot;|&quot;</span>) rest
+  .return = <span class="keyword">fn</span> value <span class="flow">=&gt;</span> value
+}</code></pre>
+      </figure>
+    </div>
+  </template>
+</div>
+<style>
+#blot-visual-review .comparison {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+}
+#blot-visual-review figure {
+  margin: 0;
+  min-width: 0;
+}
+#blot-visual-review figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .4rem 1rem;
+}
+#blot-visual-review .source-path {
+  overflow-wrap: anywhere;
+}
+#blot-visual-review pre {
+  margin: .75rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+#blot-visual-review pre code {
+  font-family: inherit;
+}
+#blot-visual-review .keyword,
+#blot-visual-review .flow {
+  color: color-mix(in srgb, var(--purple) 65%, var(--foreground));
+}
+#blot-visual-review .reference {
+  color: var(--foreground);
+}
+#blot-visual-review .number {
+  color: color-mix(in srgb, var(--orange) 60%, var(--foreground));
+}
+#blot-visual-review .string {
+  color: color-mix(in srgb, var(--green) 60%, var(--foreground));
+}
+#blot-visual-review .comment {
+  color: var(--muted-foreground);
+}
+#blot-visual-review.monochrome pre span {
+  color: var(--foreground);
+}
+</style>
+<script>
+(() => {
+  const root = document.getElementById("blot-visual-review");
+  const selection = root.querySelector("#blot-example");
+  const color = root.querySelector("#blot-color");
+  const comparison = root.querySelector("#blot-comparison");
+  function showExample() {
+    const sample = root.querySelector(`#blot-sample-${selection.value}`);
+    comparison.replaceChildren(sample.content.cloneNode(true));
+  }
+  selection.addEventListener("change", showExample);
+  color.addEventListener("change", () => {
+    root.classList.toggle("monochrome", !color.checked);
+  });
+  showExample();
+})();
+</script>

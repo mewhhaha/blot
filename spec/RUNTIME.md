@@ -19,6 +19,18 @@ compiler accepts. Cross-document corrections are in
 
 ## WebAssembly target profile
 
+Runtime-HIR schema 14 adds `text.byte-length`, `text.slice-bytes`, and
+`text.find-byte-from`. Byte length returns `Int`; byte slice takes
+`(Text, Int,
+Int)` and returns an owner-retaining Text view; byte search takes
+`(Text, Text,
+Int)` and returns an absolute byte index or -1. Both positional
+operations validate UTF-8 boundaries, including the end; slicing also checks
+ordered bounds. Invalid boundaries trap. Inputs have already passed Text
+validity checks. The constant-work boundary helper must not scan a scalar
+prefix. These private operations do not change the public ABI or indexed Text
+APIs.
+
 The production default emits standard WebAssembly 3.0 instructions and is
 continuously exercised on V8. The public ABI remains memory32; adopting the Wasm
 3.0 specification does not silently change pointer width, canonical layouts, or
@@ -537,6 +549,15 @@ offsets. A type used only through an indirect representation remains
 unflattened. Function emission indexes validated SSA value types once.
 Projection, assignment, direct-call, and local-allocation emission consume these
 indexes rather than rescanning earlier product fields or function definitions.
+
+Closed scalar sum payloads join their physical lanes by position: equal lanes
+remain unchanged, mixed 32-bit lanes use `i32`, and mixed 32/64-bit lanes use
+`i64`. Construction and projection reinterpret float bits and extend or truncate
+integer bit containers; they never numerically convert payloads. Unused lanes
+are zero. Nested sums retain the enclosing joined lane types through private
+memory reads/writes, canonical adapters, suspension, and ownership traversal.
+Public variant case order and canonical memory layout remain ABI 4. A lane
+shared between a SIMD payload and a scalar payload remains a target refusal.
 
 Store and Scratch elements use a private memory layout distinct from public ABI
 layout. Fixed-width SIMD vectors and masks occupy 16-byte-aligned, 16-byte slots

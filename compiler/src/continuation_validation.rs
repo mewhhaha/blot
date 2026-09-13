@@ -361,7 +361,7 @@ fn instruction_matches(
             *result == RuntimeType::Text
                 && matches!(types.as_slice(), [RuntimeType::Store { element_type }] if module.types[*element_type] == RuntimeType::Text)
         }
-        "text.length" => {
+        "text.length" | "text.byte-length" => {
             *result == RuntimeType::SignedInteger64
                 && matches!(types.as_slice(), [RuntimeType::Text])
         }
@@ -391,7 +391,7 @@ fn instruction_matches(
             }
             matches!(&module.types[cases[1].payload_type], RuntimeType::Product { fields, .. } if fields.len() == 2 && fields[0].name == "0" && fields[1].name == "1" && module.types[fields[0].type_id] == RuntimeType::Text && module.types[fields[1].type_id] == RuntimeType::SignedInteger64)
         }
-        "text.slice" => {
+        "text.slice" | "text.slice-bytes" => {
             *result == RuntimeType::Text
                 && matches!(
                     types.as_slice(),
@@ -402,7 +402,7 @@ fn instruction_matches(
                     ]
                 )
         }
-        "text.find-from" => {
+        "text.find-from" | "text.find-byte-from" => {
             *result == RuntimeType::SignedInteger64
                 && matches!(
                     types.as_slice(),

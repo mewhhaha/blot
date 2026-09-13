@@ -1,0 +1,42 @@
+// The operation contract produces a linear pending transaction. Each exit
+// consumes it and returns a different state; the old transaction cannot be
+// committed twice or silently abandoned. These handlers simulate the protocol.
+open import "blot:prelude"
+
+const Pending = #Pending Text
+const Receipt = #Committed Text | #RolledBack Text
+const Decision = #Commit | #Rollback
+const Transaction =
+  @effect {
+    .begin = Effect.produces (Text -> Pending);
+    .commit = Effect.consumes (Pending -> Receipt);
+    .rollback = Effect.consumes (Pending -> Receipt);
+  }
+
+const simulated =
+  {
+    .begin = fn (name, ?resume) => resume (#Pending name);
+    .commit = fn (!pending, ?resume) => case pending of
+      #Pending name => resume (#Committed name)
+    ;
+    .rollback = fn (!pending, ?resume) => case pending of
+      #Pending name => resume (#RolledBack name)
+    ;
+  }
+
+let settle :: Decision -> Receipt
+let settle = fn decision => do:
+  let work = fn () => do:
+    use pending <- Transaction.begin "order-42"
+    return case decision of
+      #Commit => Transaction.commit (!pending)
+      #Rollback => Transaction.rollback (!pending)
+
+  return @handle (Transaction, work, simulated)
+
+return {
+  .default = {
+    .committed = settle #Commit;
+    .rolled_back = settle #Rollback;
+  };
+  }

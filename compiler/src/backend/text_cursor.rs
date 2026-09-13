@@ -1,5 +1,46 @@
 use wasm_encoder::{BlockType, Function, MemArg, ValType};
 
+pub(super) fn byte_offset_function() -> Function {
+    let mut function = Function::new([]);
+    function
+        .instructions()
+        .local_get(2)
+        .local_get(1)
+        .i64_extend_i32_u()
+        .i64_gt_u()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .local_get(2)
+        .local_get(1)
+        .i64_extend_i32_u()
+        .i64_eq()
+        .if_(BlockType::Empty)
+        .local_get(1)
+        .return_()
+        .end()
+        .local_get(0)
+        .local_get(2)
+        .i32_wrap_i64()
+        .i32_add()
+        .i32_load8_u(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        })
+        .i32_const(0xc0)
+        .i32_and()
+        .i32_const(0x80)
+        .i32_eq()
+        .if_(BlockType::Empty)
+        .unreachable()
+        .end()
+        .local_get(2)
+        .i32_wrap_i64()
+        .end();
+    function
+}
+
 pub(super) fn next_byte_function() -> Function {
     let mut function = Function::new([(2, ValType::I32)]);
     let pointer = 0;
@@ -79,37 +120,39 @@ mod tests {
 
     #[test]
     fn text_cursor_step_has_one_byte_load_and_no_loop_call_or_write() {
-        let body = next_byte_function().into_raw_body();
-        let operators = FunctionBody::new(BinaryReader::new(&body, 0))
-            .get_operators_reader()
-            .expect("cursor helper instructions should decode");
-        let mut loads = 0;
-        for operator in operators {
-            match operator.expect("cursor instruction should decode") {
-                Operator::I32Load8U { .. } => loads += 1,
-                Operator::LocalGet { .. }
-                | Operator::LocalSet { .. }
-                | Operator::LocalTee { .. }
-                | Operator::I32Const { .. }
-                | Operator::I64Const { .. }
-                | Operator::I32Add
-                | Operator::I32And
-                | Operator::I32Eq
-                | Operator::I32GeU
-                | Operator::I64GtU
-                | Operator::I64Eq
-                | Operator::I64Add
-                | Operator::I64ExtendI32U
-                | Operator::I32WrapI64
-                | Operator::If { .. }
-                | Operator::Unreachable
-                | Operator::Return
-                | Operator::End => {}
-                unsupported => {
-                    panic!("cursor helper exceeds its instruction contract: {unsupported:?}")
+        for function in [next_byte_function(), byte_offset_function()] {
+            let body = function.into_raw_body();
+            let operators = FunctionBody::new(BinaryReader::new(&body, 0))
+                .get_operators_reader()
+                .expect("cursor helper instructions should decode");
+            let mut loads = 0;
+            for operator in operators {
+                match operator.expect("cursor instruction should decode") {
+                    Operator::I32Load8U { .. } => loads += 1,
+                    Operator::LocalGet { .. }
+                    | Operator::LocalSet { .. }
+                    | Operator::LocalTee { .. }
+                    | Operator::I32Const { .. }
+                    | Operator::I64Const { .. }
+                    | Operator::I32Add
+                    | Operator::I32And
+                    | Operator::I32Eq
+                    | Operator::I32GeU
+                    | Operator::I64GtU
+                    | Operator::I64Eq
+                    | Operator::I64Add
+                    | Operator::I64ExtendI32U
+                    | Operator::I32WrapI64
+                    | Operator::If { .. }
+                    | Operator::Unreachable
+                    | Operator::Return
+                    | Operator::End => {}
+                    unsupported => {
+                        panic!("cursor helper exceeds its instruction contract: {unsupported:?}")
+                    }
                 }
             }
+            assert_eq!(loads, 1);
         }
-        assert_eq!(loads, 1);
     }
 }

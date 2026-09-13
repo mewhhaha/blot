@@ -246,10 +246,14 @@ unit_pattern = ("(" ")") ;
 
 tuple_pattern = (
   "("
-  first:binding_pattern
-  ","
-  rest:(binding_pattern % ",")
+  first:annotated_pattern
+  tail:("," rest:(annotated_pattern % ","))?
   ")"
+) ;
+
+annotated_pattern = (
+  pattern:binding_pattern
+  annotation:("::" value)?
 ) ;
 
 array_pattern = (
@@ -496,8 +500,7 @@ shape_field = (
   "."
   name:field_name
   optional:QUESTION?
-  "="
-  value:value
+  value:("=" value)?
   ";"
 ) ;
 
@@ -531,7 +534,13 @@ lambda = (
 lambda_parameter = (
   "fn"
   pattern:binding_pattern
+  result:lambda_result?
   "=>"
+) ;
+
+lambda_result = (
+  operator:operator_token
+  value:expression
 ) ;
 
 

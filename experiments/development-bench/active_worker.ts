@@ -3,16 +3,19 @@ import { DevelopmentProject } from "../../src/development.ts";
 import { DevelopmentRuntime } from "../../src/development_runtime.ts";
 import { writeActiveDevelopmentWorkload } from "./active_workload.ts";
 
-const [directory, providerCount, mode, phase] = Deno.args;
+import { captureDevelopmentBenchmarkProvenance } from "./provenance.ts";
+
+const [directory, providerCount, mode, phase, profile] = Deno.args;
 const unitCount = Number(providerCount);
 if (
   directory === undefined || !Number.isSafeInteger(unitCount) ||
   unitCount < 1 ||
   (mode !== "disabled" && mode !== "memory" && mode !== "disk") ||
-  (phase !== "initial" && phase !== "restart")
+  (phase !== "initial" && phase !== "restart") ||
+  (profile !== undefined && profile !== "development-profile")
 ) {
   throw new Error(
-    "usage: active_worker.ts <directory> <provider-count> <disabled|memory|disk> <initial|restart>",
+    "usage: active_worker.ts <directory> <provider-count> <disabled|memory|disk> <initial|restart> [development-profile]",
   );
 }
 const workload = await writeActiveDevelopmentWorkload({
@@ -31,8 +34,14 @@ if (phase === "restart") {
 }
 {
   const opening = performance.now();
+  let compiler;
+  if (profile === "development-profile") {
+    compiler =
+      (await captureDevelopmentBenchmarkProvenance(profile)).compilerOptions;
+  }
   const project = await DevelopmentProject.create(workload.manifestPath, {
     cache: { mode },
+    compiler,
   });
   const startupMilliseconds = performance.now() - opening;
   const runtime = new DevelopmentRuntime(() => ({}));

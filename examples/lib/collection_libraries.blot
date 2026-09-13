@@ -1,0 +1,36 @@
+open import "blot:prelude"
+const Pipeline = import "blot:pipeline"
+const Visit = @effect.host { .value = Effect.suspends (Int -> Int); }
+const map :: [Int] -> [Int] ~ { Visit }
+const map =
+  fn values => values |> Pipeline.map_with (fn value => Visit.value value)
+const keep = fn value => do:
+  use seen <- Visit.value value
+  return seen > 3
+const filter :: [Int] -> [Int] ~ { Visit }
+const filter = fn values => values |> Pipeline.filter_with keep
+const fold :: [Int] -> Int ~ { Visit }
+const fold = fn values => values |> Pipeline.fold_with (fn (state, value) => do:
+  use seen <- Visit.value value
+  return state + seen
+) 0
+const find :: [Int] -> Option Int ~ { Visit }
+const find = fn values => Array.find (values, keep)
+const first :: Int -> Int ~ { Visit }
+const first = fn limit => do:
+  let iterator =
+    {
+      .state = 0
+      .step = fn state => do:
+        if state >= limit:
+          return #None
+
+        use seen <- Visit.value state
+        return #Some (seen, state + 1)
+    }
+  let mapped = Iter.map (iterator, fn value => Visit.value (value + 10))
+  use next <- mapped.step mapped.state
+  return case next of
+    #None => -1
+    #Some (value, _) => value
+return { .map; .filter; .fold; .find; .first; }

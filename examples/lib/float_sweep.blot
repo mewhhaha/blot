@@ -1,0 +1,39 @@
+open import "blot:prelude"
+const Point = { .x = F32; .y = F32; }
+const MapWidth = 10
+const SweepStep :: F32
+const SweepStep = 0.025
+const wall_occupied = fn (point :: Point) -> Bool => point.x > F32.of_float 2.0
+const figure_at =
+  fn (point :: Point) -> Int => case point.y > F32.of_float 2.0 of
+    #True => 1
+    #False => -1
+
+const Travel = { .position = Point; .speaker = Int; }
+
+const sweep :: (Point, Point) -> Travel
+const sweep = fn (position, displacement) => do:
+  let distance = F32.abs displacement.x + F32.abs displacement.y
+  let subdivisions = F32.truncate (distance / SweepStep) + 1
+  let accepted = position
+  for index in Iter.range (0, MapWidth * 40 + 1):
+    let fraction = F32.of_int (index + 1) / F32.of_int subdivisions
+    let candidate =
+      {
+        .x = position.x + displacement.x * fraction;
+        .y = position.y + displacement.y * fraction;
+      }
+    if wall_occupied candidate:
+      return { .position = accepted; .speaker = -1; }
+
+    let speaker = figure_at candidate
+    if speaker >= 0:
+      return { .position = accepted; .speaker = speaker; }
+
+    accepted := candidate
+    if index + 1 >= subdivisions:
+      return { .position = accepted; .speaker = -1; }
+
+  return { .position = accepted; .speaker = -1; }
+
+return { .sweep; }

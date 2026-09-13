@@ -1,0 +1,1 @@
+{ .default = { .sum = 42; .text = "10, 20, 12"; .first = 10; .singleton_text = "7"; .singleton_first = 7; }; }

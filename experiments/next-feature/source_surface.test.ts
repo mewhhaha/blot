@@ -1,7 +1,7 @@
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { fromFileUrl } from "@std/path";
 import { Compiler } from "../../src/compiler.ts";
-import { BlotError } from "../../src/diagnostic.ts";
+import { instantiateArtifact } from "../../src/host.ts";
 import { evaluateFile } from "../../src/run.ts";
 
 const effectStream = fromFileUrl(
@@ -30,18 +30,16 @@ Deno.test("comptime reflection derives statically named accessors", async () => 
   });
 });
 
-Deno.test("imported handler builders lose continuation qualifier provenance", async () => {
+Deno.test("imported handler builders retain continuation qualifier provenance", async () => {
   const compiler = await Compiler.create();
   try {
+    const guest = await instantiateArtifact(
+      await compiler.compile(effectStreamCombinators),
+    );
     try {
-      await compiler.check(effectStreamCombinators);
-      throw new Error("expected imported handler clauses to be rejected");
-    } catch (error) {
-      assert(error instanceof BlotError);
-      assertEquals(
-        error.diagnostic.code,
-        "BLOT_HANDLER_RESUME_NOT_AFFINE",
-      );
+      assertEquals(await guest.callAsync("run", [3n]), 30n);
+    } finally {
+      await guest.close();
     }
   } finally {
     compiler.destroy();

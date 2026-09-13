@@ -32,6 +32,15 @@ ABI shape.
 
 ## 2. Compile-time authority
 
+When a checked type or branch join requests a closed variant whose constructor
+names and payload representations already exist, staging reuses that sum
+representation regardless of the type value's enumeration order. It keeps the
+existing runtime discriminants. Manufacturing another case order would insert
+identity conversions after recursive calls and destroy tail position; arrays
+would also acquire incompatible element representations for equal checked
+variants. Constructor tables that explicitly define discriminants retain their
+own order. This reuse neither adds cases nor narrows payloads.
+
 Compile-time evaluation has no ambient host authority. It may observe only:
 
 - compile-time bindings in `Delta`;
@@ -47,6 +56,13 @@ explicit revisioned input before evaluation begins.
 Operator spelling and precedence are not staged values. They are collected from
 the source syntax prelude and the module's bounded fixity header before
 elaboration.
+
+The source checker validates a rebinding's lexical lineage and stable type
+before liveness selects declarations to evaluate. A `Shadow` declaration
+consumes its right-hand side and introduces the next binding; it does not demand
+the previous value merely to repeat a scope check. Earlier closures retain their
+captured binding, and their free-name dependencies keep any required initializer
+live.
 
 ## 3. Checked bridges
 
@@ -255,6 +271,12 @@ Known deferred calls are normalized into ordinary residual control. Runtime HIR
 has no general thunk value merely because the source used a deferred parameter.
 An unresolved deferred closure that escapes known application is a stated target
 refusal, not an implicit new ABI object.
+
+A source handler's raw computation stays in its enclosing residual function
+while the handler's clauses and continuations are staged. Outlining that raw
+thunk before the clauses finish would retire its SSA frame while a resumed
+clause still holds values from it. Imported handler builders use the same
+boundary and retain their defining-module ownership contracts.
 
 An ordinary nonrecursive source helper whose checked interface is not yet
 reifiable may stay in the existing staged evaluator at a known application. This
@@ -482,3 +504,26 @@ constructor/integer field probes are lowered to the existing scalar decision
 matrix; runtime fields are not treated as failed compile-time matches. This
 normalization does not flatten arbitrary product values or add support for new
 payload-pattern forms. Sum dispatch includes catch-all rows in source order.
+
+### Contextual finite recursive results
+
+Residual calls consume the closed checked result for the current application,
+using its caller context or its substituted closure signature. Staging carries
+that contract through a block's result, `if` consequences, and `case` arms to
+tail applications. Conditions, case subjects, declaration values, and call
+arguments do not inherit it; entering another function establishes that
+function's own result context. Cached expression schemes have independent
+quantified identities and cannot replace the enclosing application's concrete
+contract. This propagation uses checked types and performs no inference.
+
+A recursive search whose body returns `None`, `Some T`, or its recursive result
+can consequently specialize directly to the closed `Option T` representation,
+including imported generic functions and suspended predicates. True recursive
+payloads still use the private indirect representation and self-only equations
+still require a finite constructor case.
+
+A checked union at an export boundary is representable when all of its inhabited
+members have a shared runtime representation under the existing representation
+join. In particular, integer singleton bounds and `Int` share the signed-i64
+carrier. This does not authorize an untagged integer/float union, invent a tag,
+or change any canonical ABI layout.

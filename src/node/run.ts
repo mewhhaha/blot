@@ -1,9 +1,24 @@
 import { instantiateArtifact } from "../host.ts";
-import type { BlotAbiManifest } from "../compiler/backend/runtime/abi.ts";
+import type {
+  BlotAbiManifest,
+  BlotAbiType,
+} from "../compiler/backend/runtime/abi.ts";
 import type { CompilerArtifact } from "../compiler/session.ts";
-import { decodeManifest, formatValue } from "../abi_values.ts";
+import {
+  decodeManifest,
+  formatValue,
+  type RuntimeValue,
+} from "../abi_values.ts";
 
 export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
+  const observation = await observeArtifact(artifact);
+  return formatValue(observation.value);
+}
+
+export async function observeArtifact(artifact: CompilerArtifact): Promise<{
+  readonly type: BlotAbiType;
+  readonly value: RuntimeValue;
+}> {
   const manifest = decodeManifest(artifact.manifestBytes);
   const exported = selectExport(manifest);
   if (manifest.imports.length > 0) {
@@ -24,7 +39,10 @@ export async function runArtifact(artifact: CompilerArtifact): Promise<string> {
   }
   const hosted = await instantiateArtifact(artifact);
   try {
-    return formatValue(await hosted.callAsync(exported.sourceName));
+    return {
+      type: exported.function.result,
+      value: await hosted.callAsync(exported.sourceName),
+    };
   } finally {
     await hosted.close();
   }

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
@@ -583,9 +584,46 @@ struct CapsuleEncoder {
 
 struct CapsuleDecodeProvenance<'a> {
     effect_scopes: &'a [Rc<EffectScope>],
-    module_instances: &'a ModuleInstanceScope,
+    module_path: Rc<String>,
+    module_instances: Rc<ModuleInstanceScope>,
     module_revision: &'a ModuleRevision,
     source_closures: &'a HashSet<CapsuleClosureIdentity>,
+    signatures: RefCell<HashMap<ExpressionId, Option<Rc<Value>>>>,
+}
+
+pub(crate) struct CapsuleSourceIndex {
+    closures: HashSet<CapsuleClosureIdentity>,
+    recursive_groups: Vec<BTreeMap<String, CapsuleClosureIdentity>>,
+}
+
+impl CapsuleSourceIndex {
+    fn new(module: &Module) -> Self {
+        Self {
+            closures: module
+                .arena
+                .expressions
+                .iter()
+                .filter_map(|expression| {
+                    if let Expression::Lambda {
+                        parameter,
+                        body,
+                        deferred,
+                        ..
+                    } = expression
+                    {
+                        Some(CapsuleClosureIdentity {
+                            parameter: *parameter,
+                            body: *body,
+                            deferred: *deferred,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            recursive_groups: source_recursive_groups(module),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -714,31 +752,26 @@ impl ValueCapsule {
             module_revision,
             base_effect_scope,
         )?;
-        let source_closures = module
-            .arena
-            .expressions
-            .iter()
-            .filter_map(|expression| match expression {
-                Expression::Lambda {
-                    parameter,
-                    body,
-                    deferred,
-                    ..
-                } => Some(CapsuleClosureIdentity {
-                    parameter: *parameter,
-                    body: *body,
-                    deferred: *deferred,
-                }),
-                _ => None,
+        let source_index = context
+            .modules
+            .borrow()
+            .get(module_path)
+            .filter(|loaded| std::ptr::eq(loaded.module.as_ref(), module))
+            .map(|loaded| {
+                loaded
+                    .capsule_source_index
+                    .get_or_init(|| Rc::new(CapsuleSourceIndex::new(module)))
+                    .clone()
             })
-            .collect::<HashSet<_>>();
-        let source_recursive_groups = source_recursive_groups(module);
-        self.validate_recursive_groups(module_path, &source_recursive_groups)?;
+            .unwrap_or_else(|| Rc::new(CapsuleSourceIndex::new(module)));
+        self.validate_recursive_groups(module_path, &source_index.recursive_groups)?;
         let provenance = CapsuleDecodeProvenance {
             effect_scopes: &effect_scopes,
-            module_instances: base_module_instances,
+            module_path: Rc::new(module_path.to_owned()),
+            module_instances: Rc::new(base_module_instances.clone()),
             module_revision,
-            source_closures: &source_closures,
+            source_closures: &source_index.closures,
+            signatures: RefCell::new(HashMap::new()),
         };
         let environment_identities = context.decoded_environment_identities(
             module_revision,
@@ -842,10 +875,12 @@ impl ValueCapsule {
                 })
                 .collect::<Result<_, String>>()?;
         }
-        environments
+        let environment = environments
             .get(self.root as usize)
             .cloned()
-            .ok_or_else(|| format!("value capsule has missing root environment {}", self.root))
+            .ok_or_else(|| format!("value capsule has missing root environment {}", self.root))?;
+        crate::value::index_environment_names(&environment);
+        Ok(environment)
     }
 
     fn validate_schema(&self) -> Result<(), String> {
@@ -2054,8 +2089,11 @@ fn decode_module_instances(
     module_path: &str,
     module: &Module,
     module_revision: &ModuleRevision,
-    base_module_instances: &ModuleInstanceScope,
-) -> Result<ModuleInstanceScope, String> {
+    base_module_instances: &Rc<ModuleInstanceScope>,
+) -> Result<Rc<ModuleInstanceScope>, String> {
+    if encoded.is_empty() {
+        return Ok(base_module_instances.clone());
+    }
     let mut module_instances = Vec::with_capacity(base_module_instances.len() + encoded.len());
     module_instances.extend(base_module_instances.iter().cloned());
     for site in encoded {
@@ -2069,7 +2107,7 @@ fn decode_module_instances(
             imported: module_revision.clone(),
         });
     }
-    Ok(module_instances)
+    Ok(Rc::new(module_instances))
 }
 
 fn decode_application_site(
@@ -2353,7 +2391,7 @@ fn decode_value(
         CapsuleValue::ModuleClosure {
             module: encoded_module,
         } => Value::ModuleClosure {
-            module: decode_module(encoded_module, module_path)?,
+            module: decode_module(encoded_module, module_path)?.to_owned(),
         },
         CapsuleValue::IndexedStep { elements } => Value::IndexedStep {
             elements: decode_values(
@@ -2514,15 +2552,25 @@ fn decode_closure(
         closure.deferred,
     )?;
     capture_env(&environment);
+    let signature = provenance
+        .signatures
+        .borrow_mut()
+        .entry(closure.body)
+        .or_insert_with(|| {
+            context
+                .closure_signature(closure_module, closure.body)
+                .map(Rc::new)
+        })
+        .clone();
     Ok(Value::Closure {
-        module: Rc::new(closure_module.clone()),
-        module_instances: Rc::new(decode_module_instances(
+        module: provenance.module_path.clone(),
+        module_instances: decode_module_instances(
             &closure.module_instances,
             module_path,
             module,
             provenance.module_revision,
-            provenance.module_instances,
-        )?),
+            &provenance.module_instances,
+        )?,
         effect_scope: provenance
             .effect_scopes
             .get(closure.effect_scope as usize)
@@ -2538,17 +2586,15 @@ fn decode_closure(
         environment,
         self_name: closure.self_name.clone(),
         imports: closure.imports.clone(),
-        signature: context
-            .closure_signature(&closure_module, closure.body)
-            .map(Box::new),
+        signature,
         reuse_assertion: closure.reuse_assertion,
         deferred: closure.deferred,
     })
 }
 
-fn decode_module(module: &CapsuleModule, module_path: &str) -> Result<String, String> {
+fn decode_module<'a>(module: &CapsuleModule, module_path: &'a str) -> Result<&'a str, String> {
     match module {
-        CapsuleModule::Local => Ok(module_path.to_owned()),
+        CapsuleModule::Local => Ok(module_path),
         CapsuleModule::External(module) => Err(format!(
             "value capsule for dependency-free module {module_path} references external module {module}"
         )),
@@ -2658,6 +2704,155 @@ mod tests {
             opens: Vec::new(),
             type_substitutions: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn capsule_source_indexes_follow_the_resident_ast() {
+        const PATH: &str = "indexed-capsule.blot";
+        let (mut module, _) = test_module(PATH);
+        let parameter = module
+            .arena
+            .pattern(Pattern::Wildcard { span: module.span });
+        module.arena.expression(Expression::Lambda {
+            parameter,
+            body: module.result,
+            deferred: false,
+            span: module.span,
+        });
+        let module = Rc::new(module);
+        let loaded =
+            crate::eval::LoadedModule::new(PATH, module.clone(), BTreeMap::new(), BTreeMap::new());
+        let mut root = environment(None);
+        root.names.insert("run".to_owned(), closure(1));
+        root.names.insert("again".to_owned(), closure(1));
+        let capsule = ValueCapsule {
+            schema: VALUE_CAPSULE_SCHEMA,
+            environments: vec![root, environment(None)],
+            effect_scopes: vec![Vec::new()],
+            root: 0,
+        };
+        let context = Context::default();
+        context
+            .modules
+            .borrow_mut()
+            .insert(PATH.to_owned(), loaded.clone());
+        context.closure_signatures.borrow_mut().insert(
+            PATH.to_owned(),
+            module.result,
+            Value::Arrow {
+                deferred: false,
+                domain: Box::new(Value::Unit),
+                codomain: Box::new(Value::Unit),
+                effects: Vec::new(),
+                effect_tail: None,
+            },
+        );
+        let first = capsule
+            .decode(
+                PATH,
+                &module,
+                &loaded.revision(),
+                &context,
+                &Vec::new(),
+                &Rc::new(Vec::new()),
+            )
+            .expect("matching source closure decodes");
+        let index = loaded
+            .capsule_source_index
+            .get()
+            .expect("resident source is indexed")
+            .clone();
+        let second = capsule
+            .decode(
+                PATH,
+                &module,
+                &loaded.revision(),
+                &context,
+                &Vec::new(),
+                &Rc::new(Vec::new()),
+            )
+            .expect("repeated closure decodes");
+        assert!(Rc::ptr_eq(
+            &index,
+            loaded.capsule_source_index.get().unwrap()
+        ));
+        assert!(crate::value::lookup(&first, "run").is_some());
+        assert!(crate::value::lookup(&second, "run").is_some());
+        let first_closure = crate::value::lookup(&first, "run").unwrap();
+        let sibling_closure = crate::value::lookup(&first, "again").unwrap();
+        if let (
+            Value::Closure {
+                module: first_module,
+                module_instances: first_scope,
+                signature: Some(first_signature),
+                ..
+            },
+            Value::Closure {
+                module: sibling_module,
+                module_instances: sibling_scope,
+                signature: Some(sibling_signature),
+                ..
+            },
+        ) = (&first_closure, &sibling_closure)
+        {
+            assert!(Rc::ptr_eq(first_module, sibling_module));
+            assert!(Rc::ptr_eq(first_scope, sibling_scope));
+            assert!(Rc::ptr_eq(first_signature, sibling_signature));
+        } else {
+            panic!("decoded names must contain closures");
+        }
+        let occurrence = vec![ModuleInstanceSite {
+            application: application(&loaded.revision(), module.result),
+            imported: loaded.revision(),
+        }];
+        let imported = capsule
+            .decode(
+                PATH,
+                &module,
+                &loaded.revision(),
+                &context,
+                &occurrence,
+                &Rc::new(Vec::new()),
+            )
+            .expect("a distinct import occurrence decodes");
+        let Value::Closure {
+            module_instances, ..
+        } = crate::value::lookup(&imported, "run").unwrap()
+        else {
+            panic!("imported name must contain a closure");
+        };
+        assert!(
+            *module_instances == occurrence,
+            "decoded closure lost its import occurrence"
+        );
+
+        let (replacement, _) = test_module(PATH);
+        let replacement = Rc::new(replacement);
+        let loaded = crate::eval::LoadedModule::new(
+            PATH,
+            replacement.clone(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        context
+            .modules
+            .borrow_mut()
+            .insert(PATH.to_owned(), loaded.clone());
+        let error = capsule
+            .decode(
+                PATH,
+                &replacement,
+                &loaded.revision(),
+                &context,
+                &Vec::new(),
+                &Rc::new(Vec::new()),
+            )
+            .expect_err("replaced source cannot inherit the old closure index");
+        assert!(error.contains("no matching source lambda"), "{error}");
+        assert!(!Rc::ptr_eq(
+            &index,
+            loaded.capsule_source_index.get().unwrap()
+        ));
     }
 
     #[test]

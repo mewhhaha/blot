@@ -23,6 +23,32 @@ interface SourceInsertion {
 
 interface Delimiters {
   brackets: number;
+  records: RecordLayout[];
+}
+
+interface RecordLayout {
+  readonly depth: number;
+  readonly openingEnd: number;
+  fieldIndent: number | null;
+  fieldStarted: boolean;
+  decided: boolean;
+}
+
+function recordSeparator(
+  source: string,
+  delimiters: Delimiters,
+  previous: Token,
+  token: Token,
+): boolean {
+  const record = delimiters.records.at(-1);
+  if (
+    record === undefined || record.depth !== delimiters.brackets ||
+    !record.fieldStarted || previous.text === ";"
+  ) return false;
+  if (token.text === "}") return true;
+  return (token.text === "." || token.text === "...") &&
+    record.fieldIndent !== null &&
+    sourceIndentWidth(source, token.span.start) === record.fieldIndent;
 }
 
 interface LayoutFrame {
@@ -76,9 +102,9 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     closeIndent: 0,
     brackets: 0,
   }];
-  const delimiters: Delimiters = { brackets: 0 };
+  const delimiters: Delimiters = { brackets: 0, records: [] };
   let previous = tokens[0];
-  updateDelimiters(delimiters, previous);
+  updateDelimiters(source, delimiters, previous);
 
   for (let tokenIndex = 1; tokenIndex < tokens.length; tokenIndex += 1) {
     const token = tokens[tokenIndex];
@@ -87,6 +113,8 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     }
     const gap = source.slice(previous.span.end, token.span.start);
     const newline = lastNewlineEnd(gap);
+    const separator = newline >= 0 &&
+      recordSeparator(source, delimiters, previous, token);
     const suiteIntroducer = opensSuite(previous);
     const frame = frames[frames.length - 1];
     const insideActiveSuite = frames.length > 1 &&
@@ -104,7 +132,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       let markers = layoutNewline;
       if (indent > current) {
         if (!suiteIntroducer) {
-          updateDelimiters(delimiters, token);
+          updateDelimiters(source, delimiters, token);
           previous = token;
           continue;
         }
@@ -141,13 +169,16 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
             }],
           };
         }
-        if (!closesLayoutExpression(token)) {
+        if (!separator && !closesLayoutExpression(token)) {
           markers += layoutNewline;
         }
       }
+      if (separator) markers += ";";
       insertions.push({ offset: token.span.start, text: markers });
+    } else if (separator) {
+      insertions.push({ offset: token.span.start, text: ";" });
     }
-    updateDelimiters(delimiters, token);
+    updateDelimiters(source, delimiters, token);
     previous = token;
   }
 
@@ -279,19 +310,44 @@ function opensSuite(token: Token): boolean {
 }
 
 function updateDelimiters(
+  source: string,
   delimiters: Delimiters,
   token: Token,
 ): void {
+  const record = delimiters.records.at(-1);
+  if (
+    record !== undefined && record.depth === delimiters.brackets &&
+    !record.decided
+  ) {
+    record.decided = true;
+    record.fieldStarted = token.text === "." || token.text === "...";
+    if (
+      record.fieldStarted &&
+      source.slice(record.openingEnd, token.span.start).includes("\n")
+    ) record.fieldIndent = sourceIndentWidth(source, token.span.start);
+  }
   if (token.type !== "literal") return;
   if (
     token.literal === "(" || token.literal === "[" || token.literal === "{"
   ) {
     delimiters.brackets += 1;
+    if (token.literal === "{") {
+      delimiters.records.push({
+        depth: delimiters.brackets,
+        openingEnd: token.span.end,
+        fieldIndent: null,
+        fieldStarted: false,
+        decided: false,
+      });
+    }
     return;
   }
   if (
     token.literal === ")" || token.literal === "]" || token.literal === "}"
   ) {
+    if (record !== undefined && record.depth === delimiters.brackets) {
+      delimiters.records.pop();
+    }
     delimiters.brackets -= 1;
     if (delimiters.brackets < 0) delimiters.brackets = 0;
   }

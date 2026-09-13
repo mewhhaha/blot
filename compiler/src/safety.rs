@@ -12,18 +12,17 @@ use crate::ast::{
 use crate::diagnostic::Diagnostic;
 use crate::eval::Context;
 use crate::recognise::{self, Junction, Ordering};
+use crate::refinement_evidence::RefinementFact;
+use crate::relational::inference::{self, Inference, Operand, State};
+use crate::relational::proof::*;
 use crate::relational::{Measure, RelationshipTransform, Summaries};
 use crate::value::{Environment, Value, lookup};
+use std::rc::Rc;
 
-type Identity = u32;
-
-const REFINEMENT_TERM_BUDGET: Identity = 512;
-const REFINEMENT_EDGE_BUDGET: usize = 2_048;
-
-#[derive(Clone, Debug)]
-enum Term {
-    Literal(BigInt),
-    Variable { identity: Identity, offset: BigInt },
+#[derive(Default)]
+pub(crate) struct Report {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) facts: Vec<RefinementFact>,
 }
 
 #[derive(Clone)]
@@ -35,21 +34,9 @@ enum Relation {
     Choice(BTreeMap<String, Option<Relation>>),
 }
 
-#[derive(Clone, Debug)]
-struct Constraint {
-    left: Node,
-    right: Node,
-    bound: BigInt,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum Node {
-    Zero,
-    Variable(Identity),
-}
-
 #[derive(Clone, Default)]
 struct Scope {
+    inferred: BTreeMap<String, Operand>,
     identities: HashMap<String, Identity>,
     projections: HashMap<(Identity, String), Identity>,
     affines: HashMap<String, Term>,
@@ -61,24 +48,59 @@ struct Scope {
 }
 
 struct Analysis<'a> {
+    infer_relations: bool,
     module: &'a Module,
+    inference_module: Rc<Module>,
     context: &'a std::rc::Rc<Context>,
     values: &'a Environment,
     next_identity: Identity,
     summaries: Summaries,
+    parameter_types: &'a HashMap<ExpressionId, Value>,
+    recursive: HashMap<ExpressionId, (ExpressionId, Scope)>,
+    active_recursion: HashSet<ExpressionId>,
+    checked_recursion: HashSet<ExpressionId>,
+    exhausted: bool,
+    facts: Vec<RefinementFact>,
 }
 
 pub fn check(
     module: &Module,
     context: &std::rc::Rc<Context>,
     values: &Environment,
-) -> Vec<Diagnostic> {
+    parameter_types: &HashMap<ExpressionId, Value>,
+) -> Report {
+    let baseline = check_with_relations(module, context, values, parameter_types, false);
+    if baseline
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "BLOT_UNPROVEN_INDEX")
+    {
+        return check_with_relations(module, context, values, parameter_types, true);
+    }
+    baseline
+}
+
+fn check_with_relations(
+    module: &Module,
+    context: &Rc<Context>,
+    values: &Environment,
+    parameter_types: &HashMap<ExpressionId, Value>,
+    infer_relations: bool,
+) -> Report {
     let mut analysis = Analysis {
+        infer_relations,
         module,
+        inference_module: Rc::new(module.clone()),
         context,
         values,
         next_identity: 0,
         summaries: Summaries::default(),
+        parameter_types,
+        recursive: HashMap::new(),
+        active_recursion: HashSet::new(),
+        checked_recursion: HashSet::new(),
+        exhausted: false,
+        facts: Vec::new(),
     };
     let mut scope = Scope {
         top_level: true,
@@ -89,11 +111,35 @@ pub fn check(
     }
     match analysis.walk_declarations(&module.declarations, &mut scope) {
         Ok(()) => {}
-        Err(diagnostic) => return vec![diagnostic],
+        Err(diagnostic) => {
+            return Report {
+                diagnostics: vec![diagnostic],
+                ..Report::default()
+            };
+        }
     }
     match analysis.walk(module.result, &mut scope, false) {
-        Ok(()) => Vec::new(),
-        Err(diagnostic) => vec![diagnostic],
+        Ok(()) => {
+            let pending = analysis.recursive.clone();
+            for (body, (lambda, mut scope)) in pending {
+                if !analysis.checked_recursion.contains(&body)
+                    && let Err(diagnostic) = analysis.walk(lambda, &mut scope, false)
+                {
+                    return Report {
+                        diagnostics: vec![diagnostic],
+                        ..Report::default()
+                    };
+                }
+            }
+            Report {
+                diagnostics: Vec::new(),
+                facts: analysis.facts,
+            }
+        }
+        Err(diagnostic) => Report {
+            diagnostics: vec![diagnostic],
+            ..Report::default()
+        },
     }
 }
 
@@ -108,6 +154,7 @@ impl Analysis<'_> {
             Pattern::Name { name, .. } => {
                 let identity = self.identity();
                 scope.identities.insert(name.clone(), identity);
+                scope.inferred.insert(name.clone(), Operand::default());
                 scope.affines.remove(name);
                 scope.lengths.remove(name);
                 scope.relations.remove(name);
@@ -194,6 +241,9 @@ impl Analysis<'_> {
         match &self.module.arena.patterns[pattern.0 as usize] {
             Pattern::Name { name, .. } if lookup(self.values, name).is_some() => {
                 scope.shadowed.remove(name);
+                if let Some(value) = lookup(self.values, name) {
+                    scope.inferred.insert(name.clone(), inference::known(value));
+                }
             }
             Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
                 for pattern in elements {
@@ -225,7 +275,32 @@ impl Analysis<'_> {
                     self.walk(value, scope, false)?;
                 }
                 Declaration::Binding { pattern, value, .. } => {
-                    self.walk(value, scope, false)?;
+                    let recursive = match (
+                        &self.module.arena.expressions[value.0 as usize],
+                        &self.module.arena.patterns[pattern.0 as usize],
+                    ) {
+                        (Expression::Rec { lambda, .. }, Pattern::Name { name, .. })
+                            if self.infer_relations && !scope.top_level =>
+                        {
+                            let Expression::Lambda { body, .. } =
+                                self.module.arena.expressions[lambda.0 as usize]
+                            else {
+                                unreachable!()
+                            };
+                            self.recursive.insert(body, (*lambda, scope.clone()));
+                            Some(name.clone())
+                        }
+                        _ => {
+                            self.walk(value, scope, false)?;
+                            None
+                        }
+                    };
+                    let mut inferred = self.infer_value(value, scope);
+                    if let (Some(name), Some(outcome)) = (recursive, &mut inferred)
+                        && let Some(closure) = &mut outcome.value.closure
+                    {
+                        Rc::make_mut(closure).recursive = Some(name);
+                    }
                     let affine = self.term(value, scope);
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
@@ -272,9 +347,15 @@ impl Analysis<'_> {
                         }
                     }
                     self.bind_relation(pattern, relation, scope);
+                    if let Some(inferred) = inferred {
+                        scope.constraints.extend(inferred.state.constraints.edges);
+                        inference::bind(self.module, pattern, &inferred.value, &mut scope.inferred);
+                        self.bind_inferred_scalars(pattern, &inferred.value, scope);
+                    }
                 }
                 Declaration::Shadow { name, value, .. } => {
                     self.walk(value, scope, false)?;
+                    let inferred = self.infer_value(value, scope);
                     let affine = self.term(value, scope);
                     let length = self.array_length(value, scope);
                     let relation = self.relation(value, scope);
@@ -284,6 +365,7 @@ impl Analysis<'_> {
                     scope.lengths.remove(&name);
                     scope.relations.remove(&name);
                     scope.shadowed.insert(name.clone());
+                    scope.inferred.remove(&name);
                     if scope.top_level && lookup(self.values, &name).is_some() {
                         scope.shadowed.remove(&name);
                     }
@@ -301,7 +383,20 @@ impl Analysis<'_> {
                         scope.lengths.insert(name.clone(), length);
                     }
                     if let Some(relation) = relation {
-                        scope.relations.insert(name, relation);
+                        scope.relations.insert(name.clone(), relation);
+                    }
+                    if let Some(inferred) = inferred {
+                        scope.constraints.extend(inferred.state.constraints.edges);
+                        if let Some(term) = &inferred.value.scalar {
+                            scope.constraints.extend(constraints_equal(
+                                &Term::Variable {
+                                    identity,
+                                    offset: 0.into(),
+                                },
+                                term,
+                            ));
+                        }
+                        scope.inferred.insert(name.clone(), inferred.value);
                     }
                     if let Some(previous) = previous
                         && !identity_referenced(scope, previous)
@@ -362,11 +457,36 @@ impl Analysis<'_> {
                     for argument in &arguments {
                         self.walk(*argument, scope, false)?;
                     }
-                    self.require_proven_index(arguments[0], arguments[1], scope, span)?;
+                    self.require_proven_index(expression, arguments[0], arguments[1], scope, span)?;
                     return Ok(());
                 }
                 self.walk(function, scope, true)?;
                 self.walk(argument, scope, false)?;
+                if self.infer_relations
+                    && let Some(closure) = self
+                        .inferred_operand(function, scope)
+                        .and_then(|value| value.closure)
+                    && Rc::ptr_eq(&closure.module, &self.inference_module)
+                    && closure.recursive.is_some()
+                    && !self.active_recursion.contains(&closure.body)
+                {
+                    self.check_recursive_call(expression, &closure, scope)?;
+                }
+            }
+            Expression::Var { .. } if !applied => {
+                if let Some(closure) = self
+                    .inferred_operand(expression, scope)
+                    .and_then(|value| value.closure)
+                    && Rc::ptr_eq(&closure.module, &self.inference_module)
+                    && closure.recursive.is_some()
+                    && !self.active_recursion.contains(&closure.body)
+                    && let Some((lambda, mut captured)) = self.recursive.get(&closure.body).cloned()
+                {
+                    self.active_recursion.insert(closure.body);
+                    let checked = self.walk(lambda, &mut captured, false);
+                    self.active_recursion.remove(&closure.body);
+                    checked?;
+                }
             }
             Expression::Field { target, .. } => self.walk(target, scope, false)?,
             Expression::Lambda {
@@ -375,6 +495,11 @@ impl Analysis<'_> {
                 let mut inner = scope.clone();
                 inner.top_level = false;
                 self.bind_pattern(parameter, &mut inner);
+                if self.infer_relations
+                    && let Some(parameter_type) = self.parameter_types.get(&body)
+                {
+                    self.seed_parameter(parameter, parameter_type, &mut inner);
+                }
                 self.walk(body, &mut inner, false)?;
             }
             Expression::Array { elements, .. } => {
@@ -406,8 +531,7 @@ impl Analysis<'_> {
                 let mut remaining = scope.clone();
                 for branch in branches {
                     self.walk(branch.condition, &mut remaining, false)?;
-                    let (taken, untaken) =
-                        self.comparison_constraints(branch.condition, &remaining);
+                    let (taken, untaken) = self.branch_constraints(branch.condition, &remaining);
                     let mut consequence = remaining.clone();
                     consequence.constraints.extend(taken);
                     self.walk(branch.consequence, &mut consequence, false)?;
@@ -420,11 +544,55 @@ impl Analysis<'_> {
             Expression::Case { target, arms, .. } => {
                 self.walk(target, scope, false)?;
                 let relation = self.relation(target, scope);
+                let mut engine = Inference::new(self.context, self.next_identity);
+                let outcomes = if self.infer_relations {
+                    engine.evaluate(
+                        &self.inference_module,
+                        self.values,
+                        target,
+                        State {
+                            bindings: scope.inferred.clone(),
+                            constraints: scope.constraints.clone(),
+                        },
+                    )
+                } else {
+                    Err(inference::Refusal::Unsupported)
+                };
+                self.next_identity = engine.next_identity;
+                self.exhausted |= matches!(outcomes, Err(inference::Refusal::Budget));
                 for arm in arms {
                     let mut inner = scope.clone();
                     inner.top_level = false;
                     self.bind_pattern(arm.pattern, &mut inner);
                     self.bind_relation(arm.pattern, relation.clone(), &mut inner);
+                    if let Ok(outcomes) = &outcomes {
+                        let matching = outcomes
+                            .iter()
+                            .filter(|outcome| {
+                                inference::matches_pattern(self.module, arm.pattern, &outcome.value)
+                                    != Some(false)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if matching.is_empty() {
+                            continue;
+                        }
+                        let mut join = Inference::new(self.context, self.next_identity);
+                        let joined =
+                            join.join(&matching, self.module.arena.expression_span(target));
+                        self.exhausted |= matches!(joined, Err(inference::Refusal::Budget));
+                        if let Ok(Some(outcome)) = joined {
+                            inner.constraints.extend(outcome.state.constraints.edges);
+                            inference::bind(
+                                self.module,
+                                arm.pattern,
+                                &outcome.value,
+                                &mut inner.inferred,
+                            );
+                            self.bind_inferred_scalars(arm.pattern, &outcome.value, &mut inner);
+                        }
+                        self.next_identity = join.next_identity;
+                    }
                     self.walk(arm.body, &mut inner, false)?;
                 }
             }
@@ -445,19 +613,39 @@ impl Analysis<'_> {
     }
 
     fn require_proven_index(
-        &self,
+        &mut self,
+        expression: ExpressionId,
         array: ExpressionId,
         index: ExpressionId,
         scope: &Scope,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let Some(length) = self.array_length(array, scope) else {
+        let mut constraints = std::borrow::Cow::Borrowed(&scope.constraints);
+        let length = self.array_length(array, scope).or_else(|| {
+            let inferred = self.infer_value(array, scope)?;
+            constraints
+                .to_mut()
+                .extend(inferred.state.constraints.edges);
+            inferred.value.length
+        });
+        let index = self.term(index, scope).or_else(|| {
+            let inferred = self.infer_value(index, scope)?;
+            constraints
+                .to_mut()
+                .extend(inferred.state.constraints.edges);
+            inferred.value.scalar
+        });
+        let (Some(length), Some(index)) = (length, index) else {
+            if self.exhausted {
+                return Err(Diagnostic::new(
+                    "BLOT_REFINEMENT_BUDGET",
+                    "Relational inference exhausted its budget before deriving this array access's operands.",
+                    span,
+                ));
+            }
             return Err(unproven(span));
         };
-        let Some(index) = self.term(index, scope) else {
-            return Err(unproven(span));
-        };
-        let constraints = scope.constraints.proof(&index, &length, span)?;
+        let constraints = constraints.proof(&index, &length, span)?;
         if term_at_least(&index, &length, &constraints) {
             return Err(Diagnostic::new(
                 "BLOT_OUT_OF_BOUNDS",
@@ -467,7 +655,20 @@ impl Analysis<'_> {
         }
         if term_at_least_zero(&index, &constraints) && term_less_than(&index, &length, &constraints)
         {
+            self.facts.push(RefinementFact::ArrayIndex {
+                expression,
+                index,
+                length,
+                premises: constraints,
+            });
             return Ok(());
+        }
+        if self.exhausted {
+            return Err(Diagnostic::new(
+                "BLOT_REFINEMENT_BUDGET",
+                "Relational inference exhausted its finite candidate or transfer budget before proving this array access.",
+                span,
+            ));
         }
         Err(unproven(span))
     }
@@ -538,11 +739,15 @@ impl Analysis<'_> {
         };
         let left_witness = self.witness(arguments[0], scope);
         let right_witness = self.witness(arguments[1], scope);
-        if left_witness.is_none() && right_witness.is_none() {
+        let integer_operands = arguments
+            .iter()
+            .all(|argument| self.integer_operand(*argument, scope));
+        if left_witness.is_none() && right_witness.is_none() && !integer_operands {
             return (Vec::new(), Vec::new());
         }
         if matches!(left_witness, Some(Term::Variable { .. }))
             && matches!(right_witness, Some(Term::Variable { .. }))
+            && !integer_operands
         {
             return (Vec::new(), Vec::new());
         }
@@ -603,6 +808,11 @@ impl Analysis<'_> {
     }
 
     fn term(&self, expression: ExpressionId, scope: &Scope) -> Option<Term> {
+        if let Some(value) = self.inferred_operand(expression, scope)
+            && value.scalar.is_some()
+        {
+            return value.scalar;
+        }
         match &self.module.arena.expressions[expression.0 as usize] {
             Expression::Int { value, .. } => Some(Term::Literal(value.clone())),
             Expression::Var { name, .. } => {
@@ -699,6 +909,11 @@ impl Analysis<'_> {
     }
 
     fn array_length(&self, expression: ExpressionId, scope: &Scope) -> Option<Term> {
+        if let Some(value) = self.inferred_operand(expression, scope)
+            && value.length.is_some()
+        {
+            return value.length;
+        }
         match &self.module.arena.expressions[expression.0 as usize] {
             Expression::Array { elements, .. }
                 if elements.iter().all(|element| !element.spread) =>
@@ -1066,88 +1281,6 @@ impl Analysis<'_> {
     }
 }
 
-#[derive(Clone, Default)]
-struct Constraints {
-    edges: Vec<Constraint>,
-    incident: HashMap<Node, Vec<usize>>,
-}
-
-impl Constraints {
-    fn push(&mut self, constraint: Constraint) {
-        let index = self.edges.len();
-        for node in [constraint.left, constraint.right] {
-            if node != Node::Zero {
-                self.incident.entry(node).or_default().push(index);
-            }
-        }
-        self.edges.push(constraint);
-    }
-
-    fn extend(&mut self, constraints: impl IntoIterator<Item = Constraint>) {
-        for constraint in constraints {
-            self.push(constraint);
-        }
-    }
-
-    fn forget(&mut self, identity: Identity) {
-        let mut edges = std::mem::take(&mut self.edges);
-        forget_identity(&mut edges, identity);
-        self.incident.clear();
-        for edge in edges {
-            self.push(edge);
-        }
-    }
-
-    fn proof(
-        &self,
-        index: &Term,
-        length: &Term,
-        span: Span,
-    ) -> Result<Vec<Constraint>, Diagnostic> {
-        let mut nodes = HashSet::from([Node::Zero]);
-        let mut pending = Vec::new();
-        for term in [index, length] {
-            let (node, _) = term_node(term);
-            if nodes.insert(node) {
-                pending.push(node);
-            }
-        }
-        let mut edges = HashSet::new();
-        while let Some(node) = pending.pop() {
-            for &index in self.incident.get(&node).into_iter().flatten() {
-                if !edges.insert(index) {
-                    continue;
-                }
-                let edge = &self.edges[index];
-                for next in [edge.left, edge.right] {
-                    // Zero terminates a dependency path: unrelated literal bounds
-                    // must not join every variable into the same proof graph.
-                    if nodes.insert(next) {
-                        pending.push(next);
-                    }
-                }
-                if nodes.len() > REFINEMENT_TERM_BUDGET as usize
-                    || edges.len() > REFINEMENT_EDGE_BUDGET
-                {
-                    return Err(Diagnostic::new(
-                        "BLOT_REFINEMENT_BUDGET",
-                        format!(
-                            "The array-index proof exceeded its bounded affine refinement budget (maximum {REFINEMENT_TERM_BUDGET} terms and {REFINEMENT_EDGE_BUDGET} edges per proof). Split the relevant relation into a verified helper."
-                        ),
-                        span,
-                    ));
-                }
-            }
-        }
-        let mut edges = edges.into_iter().collect::<Vec<_>>();
-        edges.sort_unstable();
-        Ok(edges
-            .into_iter()
-            .map(|index| self.edges[index].clone())
-            .collect())
-    }
-}
-
 fn existing_identity(module: &Module, expression: ExpressionId, scope: &Scope) -> Option<Identity> {
     match &module.arena.expressions[expression.0 as usize] {
         Expression::Var { name, .. } => scope.identities.get(name).copied(),
@@ -1176,123 +1309,12 @@ fn application_spine(
     (callee, arguments)
 }
 
-fn shift(term: Term, offset: BigInt) -> Term {
-    match term {
-        Term::Literal(value) => Term::Literal(value + offset),
-        Term::Variable {
-            identity,
-            offset: current,
-        } => Term::Variable {
-            identity,
-            offset: current + offset,
-        },
-    }
-}
-
-fn constraints_less_than(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(left, right, BigInt::from(-1))
-}
-
-fn constraints_at_least(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(right, left, BigInt::from(0))
-}
-
-fn constraints_at_most(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(left, right, BigInt::from(0))
-}
-
-fn constraints_greater_than(left: &Term, right: &Term) -> Vec<Constraint> {
-    constraints_difference(right, left, BigInt::from(-1))
-}
-
-fn constraints_equal(left: &Term, right: &Term) -> Vec<Constraint> {
-    let mut constraints = constraints_difference(left, right, BigInt::from(0));
-    constraints.extend(constraints_difference(right, left, BigInt::from(0)));
-    constraints
-}
-
-fn constraints_difference(left: &Term, right: &Term, delta: BigInt) -> Vec<Constraint> {
-    let (left_node, left_offset) = term_node(left);
-    let (right_node, right_offset) = term_node(right);
-    vec![Constraint {
-        left: left_node,
-        right: right_node,
-        bound: right_offset - left_offset + delta,
-    }]
-}
-
-fn term_node(term: &Term) -> (Node, BigInt) {
-    match term {
-        Term::Literal(value) => (Node::Zero, value.clone()),
-        Term::Variable { identity, offset } => (Node::Variable(*identity), offset.clone()),
-    }
-}
-
-fn term_at_least_zero(term: &Term, constraints: &[Constraint]) -> bool {
-    term_at_least(term, &Term::Literal(BigInt::from(0)), constraints)
-}
-
-fn term_less_than(left: &Term, right: &Term, constraints: &[Constraint]) -> bool {
-    entails(&constraints_less_than(left, right), constraints)
-}
-
-fn term_at_least(left: &Term, right: &Term, constraints: &[Constraint]) -> bool {
-    entails(&constraints_at_least(left, right), constraints)
-}
-
-fn entails(required: &[Constraint], constraints: &[Constraint]) -> bool {
-    let node_count = constraints
-        .iter()
-        .flat_map(|constraint| [constraint.left, constraint.right])
-        .chain(std::iter::once(Node::Zero))
-        .collect::<HashSet<_>>()
-        .len();
-    let mut distances = HashMap::<Node, HashMap<Node, BigInt>>::new();
-    for required in required {
-        let from = distances
-            .entry(required.right)
-            .or_insert_with(|| shortest_paths_from(required.right, constraints, node_count));
-        if !from
-            .get(&required.left)
-            .is_some_and(|distance| distance <= &required.bound)
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn shortest_paths_from(
-    source: Node,
-    constraints: &[Constraint],
-    node_count: usize,
-) -> HashMap<Node, BigInt> {
-    let mut distances = HashMap::from([(source, BigInt::from(0))]);
-    for _ in 0..node_count {
-        let mut changed = false;
-        for constraint in constraints {
-            let Some(right) = distances.get(&constraint.right).cloned() else {
-                continue;
-            };
-            let candidate = right + &constraint.bound;
-            if distances
-                .get(&constraint.left)
-                .is_some_and(|current| current <= &candidate)
-            {
-                continue;
-            }
-            distances.insert(constraint.left, candidate);
-            changed = true;
-        }
-        if !changed {
-            break;
-        }
-    }
-    distances
-}
-
 fn identity_referenced(scope: &Scope, identity: Identity) -> bool {
-    scope.identities.values().any(|found| *found == identity)
+    scope
+        .inferred
+        .values()
+        .any(|operand| inference::references(operand, identity))
+        || scope.identities.values().any(|found| *found == identity)
         || scope
             .affines
             .values()
@@ -1400,74 +1422,6 @@ fn instantiate_relationship(
                 .then_some(Relation::Choice(cases))
         }
     }
-}
-
-fn forget_identity(constraints: &mut Vec<Constraint>, identity: Identity) {
-    let dead = Node::Variable(identity);
-    if !constraints
-        .iter()
-        .any(|constraint| constraint.left == dead || constraint.right == dead)
-    {
-        return;
-    }
-    let mut into_dead = BTreeMap::<Node, BigInt>::new();
-    let mut from_dead = BTreeMap::<Node, BigInt>::new();
-    let mut projected = BTreeMap::<(Node, Node), BigInt>::new();
-    for constraint in constraints.iter() {
-        if constraint.left == dead && constraint.right != dead {
-            into_dead
-                .entry(constraint.right)
-                .and_modify(|bound| {
-                    if constraint.bound < *bound {
-                        *bound = constraint.bound.clone();
-                    }
-                })
-                .or_insert_with(|| constraint.bound.clone());
-            continue;
-        }
-        if constraint.right == dead && constraint.left != dead {
-            from_dead
-                .entry(constraint.left)
-                .and_modify(|bound| {
-                    if constraint.bound < *bound {
-                        *bound = constraint.bound.clone();
-                    }
-                })
-                .or_insert_with(|| constraint.bound.clone());
-            continue;
-        }
-        if constraint.left == dead || constraint.right == dead {
-            continue;
-        }
-        projected
-            .entry((constraint.left, constraint.right))
-            .and_modify(|bound| {
-                if constraint.bound < *bound {
-                    *bound = constraint.bound.clone();
-                }
-            })
-            .or_insert_with(|| constraint.bound.clone());
-    }
-    for (right, into_bound) in into_dead {
-        for (left, from_bound) in &from_dead {
-            if *left == right {
-                continue;
-            }
-            let bound = &into_bound + from_bound;
-            projected
-                .entry((*left, right))
-                .and_modify(|current| {
-                    if bound < *current {
-                        *current = bound.clone();
-                    }
-                })
-                .or_insert(bound);
-        }
-    }
-    *constraints = projected
-        .into_iter()
-        .map(|((left, right), bound)| Constraint { left, right, bound })
-        .collect();
 }
 
 fn unproven(span: Span) -> Diagnostic {
@@ -1629,5 +1583,285 @@ mod tests {
             }],
             &constraints,
         ));
+    }
+}
+
+impl Analysis<'_> {
+    fn branch_constraints(
+        &mut self,
+        expression: ExpressionId,
+        scope: &Scope,
+    ) -> (Vec<Constraint>, Vec<Constraint>) {
+        let legacy = self.comparison_constraints(expression, scope);
+        if !self.infer_relations {
+            return legacy;
+        }
+        let mut inference = Inference::new(self.context, self.next_identity);
+        let state = State {
+            bindings: scope.inferred.clone(),
+            constraints: scope.constraints.clone(),
+        };
+        let result = inference.evaluate(&self.inference_module, self.values, expression, state);
+        self.next_identity = inference.next_identity;
+        let Ok(outcomes) = result else {
+            self.exhausted |= matches!(result, Err(inference::Refusal::Budget));
+            return legacy;
+        };
+        let mut branches = [legacy.0, legacy.1];
+        for (index, tag) in ["True", "False"].iter().enumerate() {
+            let outcomes = outcomes
+                .iter()
+                .filter(|outcome| {
+                    outcome
+                        .value
+                        .constructor
+                        .as_deref()
+                        .is_none_or(|name| name == *tag)
+                })
+                .collect::<Vec<_>>();
+            let Some(first) = outcomes.first() else {
+                continue;
+            };
+            for constraint in &first.state.constraints.edges {
+                if scope.constraints.edges.contains(constraint) {
+                    continue;
+                }
+                if outcomes.iter().all(|outcome| {
+                    entails(
+                        std::slice::from_ref(constraint),
+                        &outcome.state.constraints.edges,
+                    )
+                }) {
+                    branches[index].push(constraint.clone());
+                }
+            }
+        }
+        let [positive, negative] = branches;
+        (positive, negative)
+    }
+
+    fn integer_operand(&self, expression: ExpressionId, scope: &Scope) -> bool {
+        if self
+            .inferred_operand(expression, scope)
+            .is_some_and(|operand| operand.scalar.is_some())
+        {
+            return true;
+        }
+        let (callee, arguments) = application_spine(expression, self.module);
+        if let Expression::Intrinsic { name, .. } =
+            &self.module.arena.expressions[callee.0 as usize]
+            && matches!(name.as_str(), "@array.len" | "@region.length")
+        {
+            return arguments.len() == 1;
+        }
+        self.callee_value(callee, scope)
+            .is_some_and(|callee| self.summaries.derive(&callee, self.context).is_some())
+    }
+
+    fn inferred_operand(&self, expression: ExpressionId, scope: &Scope) -> Option<Operand> {
+        if !self.infer_relations {
+            return None;
+        }
+        match &self.module.arena.expressions[expression.0 as usize] {
+            Expression::Var { name, .. } => scope.inferred.get(name).cloned(),
+            Expression::Int { value, .. } => Some(inference::integer(value.clone())),
+            Expression::Field { target, name, .. } => {
+                inference::project(&self.inferred_operand(*target, scope)?, name)
+            }
+            _ => None,
+        }
+    }
+
+    fn infer_value(
+        &mut self,
+        expression: ExpressionId,
+        scope: &Scope,
+    ) -> Option<inference::Outcome> {
+        if !self.infer_relations || scope.top_level {
+            return None;
+        }
+        let mut inference = Inference::new(self.context, self.next_identity);
+        let state = State {
+            bindings: scope.inferred.clone(),
+            constraints: scope.constraints.clone(),
+        };
+        let module = self.inference_module.clone();
+        let outcomes = inference.evaluate(&module, self.values, expression, state);
+        let result = outcomes.and_then(|outcomes| {
+            inference.join(&outcomes, self.module.arena.expression_span(expression))
+        });
+        self.next_identity = inference.next_identity;
+        self.exhausted |= matches!(result, Err(inference::Refusal::Budget));
+        let mut result = result.ok().flatten()?;
+        let existing = scope.constraints.edges.iter().collect::<HashSet<_>>();
+        let constraints = result
+            .state
+            .constraints
+            .edges
+            .into_iter()
+            .filter(|edge| !existing.contains(edge))
+            .collect::<Vec<_>>();
+        result.state.constraints = Constraints::default();
+        result.state.constraints.extend(constraints);
+        Some(result)
+    }
+
+    fn seed_parameter(&mut self, pattern: PatternId, type_: &Value, scope: &mut Scope) {
+        let value = self.typed_operand(type_);
+        inference::bind(self.module, pattern, &value, &mut scope.inferred);
+        self.bind_inferred_scalars(pattern, &value, scope);
+    }
+
+    fn typed_operand(&mut self, type_: &Value) -> Operand {
+        match type_ {
+            Value::Extended { inner, .. } => {
+                let mut operand = self.typed_operand(inner);
+                operand.type_value = Some(type_.clone());
+                operand
+            }
+            Value::Forall { body: inner, .. } => self.typed_operand(inner),
+            Value::Range {
+                domain: Some(crate::value::Domain::Int),
+                ..
+            }
+            | Value::Int(_) => Operand {
+                scalar: Some(Term::Variable {
+                    identity: self.identity(),
+                    offset: 0.into(),
+                }),
+                ..Operand::default()
+            },
+            Value::Array(_) | Value::RegionType(_) => Operand {
+                length: Some(Term::Variable {
+                    identity: self.identity(),
+                    offset: 0.into(),
+                }),
+                ..Operand::default()
+            },
+            Value::Shape(fields) => Operand {
+                fields: fields
+                    .iter()
+                    .map(|(name, type_)| (name.clone(), self.typed_operand(type_)))
+                    .collect(),
+                ..Operand::default()
+            },
+            _ => Operand::default(),
+        }
+    }
+
+    fn bind_inferred_scalars(&self, pattern: PatternId, value: &Operand, scope: &mut Scope) {
+        match &self.module.arena.patterns[pattern.0 as usize] {
+            Pattern::Name { name, .. } => {
+                if let Some(term) = &value.scalar {
+                    let identity = scope.identities[name];
+                    scope.constraints.extend(constraints_equal(
+                        &Term::Variable {
+                            identity,
+                            offset: 0.into(),
+                        },
+                        term,
+                    ));
+                }
+                if let Some(length) = &value.length {
+                    scope.lengths.insert(name.clone(), length.clone());
+                }
+            }
+            Pattern::Tuple { elements, .. } | Pattern::Array { elements, .. } => {
+                for (index, pattern) in elements.iter().enumerate() {
+                    if let Some(field) = value.fields.get(&index.to_string()) {
+                        self.bind_inferred_scalars(*pattern, field, scope);
+                    }
+                }
+            }
+            Pattern::Shape { fields, .. } => {
+                for field in fields {
+                    if let Some(value) = value.fields.get(&field.name) {
+                        self.bind_inferred_scalars(field.pattern, value, scope);
+                    }
+                }
+            }
+            Pattern::Constructor {
+                payload: Some(payload),
+                ..
+            } => {
+                if let Some(value) = &value.payload {
+                    self.bind_inferred_scalars(*payload, value, scope);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Analysis<'_> {
+    fn check_recursive_call(
+        &mut self,
+        expression: ExpressionId,
+        closure: &Rc<inference::Closure>,
+        scope: &Scope,
+    ) -> Result<(), Diagnostic> {
+        let Some((lambda, captured)) = self.recursive.get(&closure.body).cloned() else {
+            return Ok(());
+        };
+        let mut engine = Inference::new(self.context, self.next_identity);
+        let result = engine.evaluate(
+            &self.inference_module,
+            self.values,
+            expression,
+            State {
+                bindings: scope.inferred.clone(),
+                constraints: scope.constraints.clone(),
+            },
+        );
+        self.next_identity = engine.next_identity;
+        self.exhausted |= matches!(result, Err(inference::Refusal::Budget));
+        let proof = if result.is_ok() {
+            engine
+                .loop_proofs
+                .into_iter()
+                .find(|proof| Rc::ptr_eq(&proof.closure, closure))
+        } else {
+            None
+        };
+        let mut inner = captured;
+        inner.top_level = false;
+        self.active_recursion.insert(closure.body);
+        let checked = if let Some(proof) = proof {
+            self.facts.push(RefinementFact::RecursiveInvariant {
+                expression: closure.body,
+                invariants: proof.invariants.clone(),
+                entry: proof.entry.clone(),
+                context: proof.context.edges.clone(),
+                transitions: proof.transitions.clone(),
+            });
+            self.bind_pattern(closure.parameter, &mut inner);
+            inner.inferred = proof.closure.bindings.clone();
+            inference::bind(
+                self.module,
+                closure.parameter,
+                &proof.argument,
+                &mut inner.inferred,
+            );
+            inner.inferred.insert(
+                closure
+                    .recursive
+                    .clone()
+                    .expect("recursive closure has a name"),
+                Operand {
+                    closure: Some(closure.clone()),
+                    ..Operand::default()
+                },
+            );
+            inner.constraints = proof.context;
+            inner.constraints.extend(proof.invariants);
+            self.bind_inferred_scalars(closure.parameter, &proof.argument, &mut inner);
+            self.walk(closure.body, &mut inner, false)
+        } else {
+            self.walk(lambda, &mut inner, false)
+        };
+        self.active_recursion.remove(&closure.body);
+        checked?;
+        self.checked_recursion.insert(closure.body);
+        Ok(())
     }
 }

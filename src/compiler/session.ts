@@ -1,3 +1,4 @@
+import type { CompilerRefinementFact } from "./wasm.ts";
 import { readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "@std/path";
 import { BlotError, type Diagnostic, diagnosticCode } from "../diagnostic.ts";
@@ -178,13 +179,19 @@ export interface CompilerAnalysis extends CheckedModule {
   readonly specializations: readonly CompilerSpecializationFact[];
   readonly simplifications: readonly CompilerSimplificationFact[];
   readonly readability: readonly CompilerReadabilityFact[];
+  readonly refinements: readonly CompilerRefinementFact[];
   readonly work: CompilerWork | null;
   readonly invalidation: CompilerInvalidationTelemetry;
   readonly targetPreflight: CompilerTargetPreflight;
 }
 
 export interface CompilerExplanation {
-  readonly kind: "type" | "ownership" | "specialization" | "target";
+  readonly kind:
+    | "type"
+    | "ownership"
+    | "specialization"
+    | "refinement"
+    | "target";
   readonly span: { readonly start: number; readonly end: number };
   readonly summary: string;
   readonly reasons: readonly string[];
@@ -1086,6 +1093,7 @@ export class Compiler implements CompilerHost {
       specializations: result.specializations.slice(),
       simplifications: result.simplifications.slice(),
       readability: result.readability.slice(),
+      refinements: result.refinements.slice(),
       work: result.work,
       invalidation: result.invalidation,
       targetPreflight: result.targetPreflight,
@@ -1290,6 +1298,17 @@ export function explanationAt(
   analysis: CompilerAnalysis,
   offset: number,
 ): CompilerExplanation | null {
+  const refinement = analysis.refinements
+    .filter((fact) => containsOffset(fact.span, offset))
+    .sort((left, right) => spanWidth(left.span) - spanWidth(right.span))[0];
+  if (refinement !== undefined) {
+    return {
+      kind: "refinement",
+      span: refinement.span,
+      summary: refinement.summary,
+      reasons: refinement.reasons,
+    };
+  }
   const specialization = analysis.specializations
     .filter((fact) => containsOffset(fact.binding.span, offset))
     .sort((left, right) =>

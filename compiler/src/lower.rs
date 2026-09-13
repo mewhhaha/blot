@@ -463,6 +463,11 @@ fn effect_row_tail_uses(
             return Ok(());
         }
         for child in cst.children(rule)? {
+            if matches!(name, "lambda" | "bounded_lambda")
+                && matches!(child, Cursor::Rule(child) if cst.rule_name(child)? == "lambda_parameter")
+            {
+                continue;
+            }
             visit(cst, child, uses)?;
         }
         Ok(())
@@ -504,6 +509,58 @@ fn quantify_effect_row_tails(
     value
 }
 
+fn hoist_lambda_signature(
+    declaration: DeclarationId,
+    arena: &mut AstArena,
+) -> Option<DeclarationId> {
+    let Declaration::Binding {
+        kind,
+        pattern,
+        value,
+        ..
+    } = arena.declarations[declaration.0 as usize].clone()
+    else {
+        return None;
+    };
+    let Pattern::Name { name, .. } = arena.patterns[pattern.0 as usize].clone() else {
+        return None;
+    };
+    let (expression, recursive) = match arena.expressions[value.0 as usize] {
+        Expression::Rec { lambda, .. } => (lambda, true),
+        _ => (value, false),
+    };
+    let Expression::Block { declarations, .. } = arena.expressions[expression.0 as usize].clone()
+    else {
+        return None;
+    };
+    let [signature, binding] = declarations.as_slice() else {
+        return None;
+    };
+    let Declaration::Signature {
+        name: marker,
+        value: annotation,
+        span,
+        ..
+    } = arena.declarations[signature.0 as usize].clone()
+    else {
+        return None;
+    };
+    if marker != "$blot$function" {
+        return None;
+    }
+    let Declaration::Binding { value: lambda, .. } = arena.declarations[binding.0 as usize] else {
+        unreachable!("typed lambda signature has a binding");
+    };
+    arena.expressions[expression.0 as usize] = arena.expressions[lambda.0 as usize].clone();
+    Some(arena.declaration(Declaration::Signature {
+        kind,
+        recursive,
+        name,
+        value: annotation,
+        span,
+    }))
+}
+
 fn lower_declarations(
     cst: &CompactCst<'_>,
     rule: u32,
@@ -514,9 +571,13 @@ fn lower_declarations(
     if !matches!(cst.rule_name(rule)?, "binding" | "sequencing") {
         return Ok(vec![declaration]);
     }
+    let mut declarations = hoist_lambda_signature(declaration, arena)
+        .into_iter()
+        .collect::<Vec<_>>();
     let annotation = cst.field_list(rule, "annotation")?;
     if annotation.is_empty() {
-        return Ok(vec![declaration]);
+        declarations.push(declaration);
+        return Ok(declarations);
     }
     let Declaration::Binding {
         kind,
@@ -556,7 +617,9 @@ fn lower_declarations(
         value,
         span,
     });
-    Ok(vec![signature, declaration])
+    declarations.push(signature);
+    declarations.push(declaration);
+    Ok(declarations)
 }
 
 fn lower_declaration(
@@ -1498,7 +1561,6 @@ fn lower_control_loop(
             breaks,
         }),
         LoopMode {
-            effectful: statements_contain_effect(cst, &statements)?,
             filtering,
             completion: LoopCompletion::Control,
         },
@@ -1540,18 +1602,13 @@ fn lower_iteration(
             span,
         });
         return Ok(arena.declaration(Declaration::Binding {
-            kind: if statements_contain_effect(cst, &statements)? {
-                DeclarationKind::Effect
-            } else {
-                DeclarationKind::Let
-            },
+            kind: DeclarationKind::Effect,
             tags: Vec::new(),
             pattern: loop_result.pattern,
             value,
             span,
         }));
     }
-    let effectful = statements_contain_effect(cst, &statements)?;
     let drawn = cst.field(rule, "drawn")?;
     let mut head_context = context.clone();
     head_context.pattern_head = drawn.is_some();
@@ -1584,7 +1641,6 @@ fn lower_iteration(
             carried,
         },
         LoopMode {
-            effectful,
             filtering,
             completion: LoopCompletion::Iterate,
         },
@@ -1592,11 +1648,7 @@ fn lower_iteration(
         arena,
     )?;
     Ok(arena.declaration(Declaration::Binding {
-        kind: if effectful {
-            DeclarationKind::Effect
-        } else {
-            DeclarationKind::Let
-        },
+        kind: DeclarationKind::Effect,
         tags: Vec::new(),
         pattern,
         value,
@@ -1629,7 +1681,6 @@ enum LoopCompletion {
 }
 
 struct LoopMode {
-    effectful: bool,
     filtering: bool,
     completion: LoopCompletion,
 }
@@ -1784,29 +1835,6 @@ fn desugar_loop(
         ],
         span,
     });
-    let go_body = if mode.effectful {
-        let result_pattern = arena.pattern(Pattern::Name {
-            name: "loopResult$".to_owned(),
-            qualifier: Qualifier::None,
-            span,
-        });
-        let result_binding = arena.declaration(Declaration::Binding {
-            kind: DeclarationKind::Effect,
-            tags: Vec::new(),
-            pattern: result_pattern,
-            value: go_result,
-            span,
-        });
-        let result = variable("loopResult$", span, arena);
-        arena.expression(Expression::Block {
-            declarations: vec![result_binding],
-            result,
-            result_effects: ResultEffects::Ambient,
-            span,
-        })
-    } else {
-        go_result
-    };
     let state_parameter = arena.pattern(Pattern::Name {
         name: state_in.to_owned(),
         qualifier: Qualifier::None,
@@ -1823,7 +1851,7 @@ fn desugar_loop(
     });
     let lambda = arena.expression(Expression::Lambda {
         parameter: go_parameter,
-        body: go_body,
+        body: go_result,
         deferred: false,
         span,
     });
@@ -2414,7 +2442,7 @@ fn collect_unreachable_statements(
 fn statements_contain_effect(cst: &CompactCst<'_>, statements: &[Cursor]) -> Result<bool, String> {
     for statement in statements {
         let statement = statement_rule(cst, *statement)?;
-        if cst.rule_name(statement)? == "sequencing" {
+        if matches!(cst.rule_name(statement)?, "sequencing" | "iteration") {
             return Ok(true);
         }
         for nested in nested_statement_lists(cst, statement)? {
@@ -2496,9 +2524,27 @@ fn collect_rebound_names(
             shadowed.extend(names);
             continue;
         }
-        if cst.rule_name(statement)? != "iteration" {
-            for nested in nested_statement_lists(cst, statement)? {
-                collect_rebound_names(cst, &nested, &shadowed, rebound, context)?;
+        let mut nested_shadowed = shadowed.clone();
+        if cst.rule_name(statement)? == "iteration" && cst.field(statement, "drawn")?.is_some() {
+            let mut pattern_context = context.clone();
+            pattern_context.pattern_head = true;
+            let mut patterns = AstArena::default();
+            let head = lower_value(
+                cst,
+                required(cst, statement, "head")?,
+                &pattern_context,
+                &mut patterns,
+            )?;
+            let pattern = pattern_from_expression(head, &mut patterns)?;
+            pattern_names(pattern, &patterns, &mut nested_shadowed);
+        }
+        for nested in nested_statement_lists(cst, statement)? {
+            let mut nested_rebound = Vec::new();
+            collect_rebound_names(cst, &nested, &nested_shadowed, &mut nested_rebound, context)?;
+            for name in nested_rebound {
+                if !rebound.contains(&name) {
+                    rebound.push(name);
+                }
             }
         }
         if cst.rule_name(statement)? != "binding" {
@@ -2548,6 +2594,9 @@ fn pattern_names_from_cst(
     names: &mut Vec<String>,
 ) -> Result<(), String> {
     let rule = as_rule(cursor)?;
+    if cst.rule_name(rule)? == "annotated_pattern" {
+        return pattern_names_from_cst(cst, required(cst, rule, "pattern")?, names);
+    }
     let qualifier = match cst.field(rule, "qualifier")? {
         Some(qualifier) => Some(token_text(cst, qualifier)?),
         None => None,
@@ -2632,7 +2681,22 @@ fn lower_pattern(
     cursor: Cursor,
     arena: &mut AstArena,
 ) -> Result<PatternId, String> {
+    lower_pattern_inner(cst, cursor, arena, false)
+}
+
+fn lower_pattern_inner(
+    cst: &CompactCst<'_>,
+    cursor: Cursor,
+    arena: &mut AstArena,
+    typed: bool,
+) -> Result<PatternId, String> {
     let rule = as_rule(cursor)?;
+    if cst.rule_name(rule)? == "annotated_pattern" {
+        if !typed && !cst.field_list(rule, "annotation")?.is_empty() {
+            return Err("BLOT_PATTERN_ANNOTATION_CONTEXT: Parameter annotations belong in a function header.".to_owned());
+        }
+        return lower_pattern_inner(cst, required(cst, rule, "pattern")?, arena, typed);
+    }
     require_rule(cst, rule, "binding_pattern")?;
     let span = cst.span(Cursor::Rule(rule))?;
     let qualifier_text = cst
@@ -2705,7 +2769,7 @@ fn lower_pattern(
         "tuple_pattern" | "array_pattern" => {
             let mut elements = Vec::new();
             if let Some(first) = cst.field(core, "first")? {
-                elements.push(lower_pattern(cst, first, arena)?);
+                elements.push(lower_pattern_inner(cst, first, arena, typed)?);
             }
             for element in cst.field_list(
                 core,
@@ -2715,9 +2779,12 @@ fn lower_pattern(
                     "elements"
                 },
             )? {
-                elements.push(lower_pattern(cst, element, arena)?);
+                elements.push(lower_pattern_inner(cst, element, arena, typed)?);
             }
             if cst.rule_name(core)? == "tuple_pattern" {
+                if elements.len() == 1 {
+                    return Ok(elements[0]);
+                }
                 Ok(arena.pattern(Pattern::Tuple { elements, span }))
             } else {
                 Ok(arena.pattern(Pattern::Array { elements, span }))
@@ -2726,7 +2793,7 @@ fn lower_pattern(
         "constructor_pattern" => {
             let payload = cst
                 .field(core, "payload")?
-                .map(|payload| lower_pattern(cst, payload, arena))
+                .map(|payload| lower_pattern_inner(cst, payload, arena, typed))
                 .transpose()?;
             let name = token_text(cst, required(cst, core, "constructor")?)?;
             Ok(arena.pattern(Pattern::Constructor {
@@ -2742,7 +2809,7 @@ fn lower_pattern(
                 let name = token_text(cst, required(cst, field, "name")?)?;
                 let values = cst.field_list(field, "value")?;
                 let pattern = match values.last().copied() {
-                    Some(pattern) => lower_pattern(cst, pattern, arena)?,
+                    Some(pattern) => lower_pattern_inner(cst, pattern, arena, typed)?,
                     None => arena.pattern(Pattern::Name {
                         name: name.clone(),
                         qualifier: Qualifier::None,
@@ -2787,6 +2854,190 @@ fn lower_value(
         .map_err(|error| format!("while lowering value rule {name}: {error}"))
 }
 
+fn parameter_type(
+    cst: &CompactCst<'_>,
+    cursor: Cursor,
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<Option<ExpressionId>, String> {
+    let rule = as_rule(cursor)?;
+    if cst.rule_name(rule)? == "annotated_pattern" {
+        let annotation = cst.field_list(rule, "annotation")?;
+        if let Some(value) = annotation.last() {
+            return lower_value(cst, *value, context, arena).map(Some);
+        }
+        return parameter_type(cst, required(cst, rule, "pattern")?, context, arena);
+    }
+    let core = cst.unwrap(required(cst, rule, "value")?)?;
+    let Cursor::Rule(core) = core else {
+        return Ok(None);
+    };
+    if cst.rule_name(core)? != "tuple_pattern" {
+        return Ok(None);
+    }
+    let mut cursors = vec![required(cst, core, "first")?];
+    cursors.extend(cst.field_list(core, "rest")?);
+    let types = cursors
+        .into_iter()
+        .map(|cursor| parameter_type(cst, cursor, context, arena))
+        .collect::<Result<Vec<_>, _>>()?;
+    if types.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let span = cst.span(Cursor::Rule(rule))?;
+    let mut elements = types
+        .into_iter()
+        .map(|type_| type_.unwrap_or_else(|| variable("_", span, arena)))
+        .collect::<Vec<_>>();
+    if elements.len() == 1 {
+        return Ok(elements.pop());
+    }
+    Ok(Some(arena.expression(Expression::Tuple { elements, span })))
+}
+
+fn lambda_binding_pattern(cst: &CompactCst<'_>, mut cursor: Cursor) -> Result<Cursor, String> {
+    loop {
+        let rule = as_rule(cursor)?;
+        let core = cst.unwrap(required(cst, rule, "value")?)?;
+        let Cursor::Rule(core) = core else {
+            return Ok(cursor);
+        };
+        if cst.rule_name(core)? != "tuple_pattern" || !cst.field_list(core, "rest")?.is_empty() {
+            return Ok(cursor);
+        }
+        let first = as_rule(required(cst, core, "first")?)?;
+        cursor = required(cst, first, "pattern")?;
+    }
+}
+
+fn apply_type_primitive(
+    name: &str,
+    first: ExpressionId,
+    second: ExpressionId,
+    span: Span,
+    arena: &mut AstArena,
+) -> ExpressionId {
+    let function = arena.expression(Expression::Intrinsic {
+        name: name.to_owned(),
+        span,
+    });
+    let function = arena.expression(Expression::Apply {
+        function,
+        argument: first,
+        span,
+    });
+    arena.expression(Expression::Apply {
+        function,
+        argument: second,
+        span,
+    })
+}
+
+fn annotate_lambda(
+    cst: &CompactCst<'_>,
+    parameter: u32,
+    pattern: Cursor,
+    lambda: ExpressionId,
+    deferred: bool,
+    context: &LoweringContext<'_>,
+    arena: &mut AstArena,
+) -> Result<ExpressionId, String> {
+    let input = parameter_type(cst, pattern, context, arena)?;
+    let result = cst.field(parameter, "result")?;
+    if input.is_none() && result.is_none() {
+        return Ok(lambda);
+    }
+    let span = arena.expression_span(lambda);
+    let input = input.unwrap_or_else(|| variable("_", span, arena));
+    let mut effects = None;
+    let output = if let Some(result) = result {
+        let result = as_rule(result)?;
+        if token_text(cst, required(cst, result, "operator")?)? != "->" {
+            return Err(
+                "BLOT_FUNCTION_RESULT_ARROW: A result annotation begins with `->`.".to_owned(),
+            );
+        }
+        let output = lower_expression(
+            cst,
+            as_rule(required(cst, result, "value")?)?,
+            context,
+            arena,
+        )?;
+        // `~` belongs to the annotated arrow, just as in a whole-binding signature.
+        if let Expression::Apply {
+            function,
+            argument: row,
+            ..
+        } = arena.expressions[output.0 as usize].clone()
+            && let Expression::Apply {
+                function,
+                argument: output,
+                ..
+            } = arena.expressions[function.0 as usize].clone()
+            && matches!(&arena.expressions[function.0 as usize], Expression::Intrinsic { name, .. } if name == "@type.performs")
+        {
+            effects = Some(row);
+            output
+        } else {
+            output
+        }
+    } else {
+        let hole = variable("_", span, arena);
+        effects = Some(arena.expression(Expression::Array {
+            elements: vec![ArrayElement {
+                spread: false,
+                value: hole,
+            }],
+            span,
+        }));
+        variable("_", span, arena)
+    };
+    let primitive = if deferred {
+        "@type.deferred_arrow"
+    } else {
+        "@type.arrow"
+    };
+    let mut signature = apply_type_primitive(primitive, input, output, span, arena);
+    if let Some(effects) = effects {
+        signature = apply_type_primitive("@type.performs", signature, effects, span, arena);
+    }
+    let tails = effect_row_tail_uses(cst, Cursor::Rule(parameter))?;
+    if let Some(tail) = tails.iter().find(|tail| tail.count < 2) {
+        return Err(format!(
+            "BLOT_EFFECT_ROW_TAIL_UNCONSTRAINED: effect-row tail `..{}` must occur at least twice in one signature",
+            tail.name
+        ));
+    }
+    signature = quantify_effect_row_tails(signature, &tails, span, arena);
+    let name = "$blot$function".to_owned();
+    let signature = arena.declaration(Declaration::Signature {
+        kind: DeclarationKind::Let,
+        recursive: false,
+        name: name.clone(),
+        value: signature,
+        span,
+    });
+    let pattern = arena.pattern(Pattern::Name {
+        name: name.clone(),
+        qualifier: Qualifier::None,
+        span,
+    });
+    let binding = arena.declaration(Declaration::Binding {
+        kind: DeclarationKind::Let,
+        tags: Vec::new(),
+        pattern,
+        value: lambda,
+        span,
+    });
+    let result = variable(&name, span, arena);
+    Ok(arena.expression(Expression::Block {
+        declarations: vec![signature, binding],
+        result,
+        result_effects: ResultEffects::Pure,
+        span,
+    }))
+}
+
 fn lower_lambda(
     cst: &CompactCst<'_>,
     rule: u32,
@@ -2821,8 +3072,9 @@ fn lower_lambda(
                 cst.text(pattern_cursor)?
             ));
         }
-        let deferred = deferred_parameter(cst, as_rule(pattern_cursor)?)?;
-        let pattern = lower_lambda_pattern(cst, pattern_cursor, deferred, arena)
+        let binding_pattern = lambda_binding_pattern(cst, pattern_cursor)?;
+        let deferred = deferred_parameter(cst, as_rule(binding_pattern)?)?;
+        let pattern = lower_lambda_pattern(cst, binding_pattern, deferred, arena)
             .map_err(|error| format!("while lowering lambda parameter: {error}"))?;
         let span = Span {
             start: cst.span(Cursor::Rule(parameter))?.start,
@@ -2834,6 +3086,15 @@ fn lower_lambda(
             deferred,
             span,
         });
+        result = annotate_lambda(
+            cst,
+            parameter,
+            pattern_cursor,
+            result,
+            deferred,
+            context,
+            arena,
+        )?;
     }
     Ok(result)
 }
@@ -2860,7 +3121,7 @@ fn lower_lambda_pattern(
     arena: &mut AstArena,
 ) -> Result<PatternId, String> {
     if !deferred {
-        return lower_pattern(cst, pattern, arena);
+        return lower_pattern_inner(cst, pattern, arena, true);
     }
     let rule = as_rule(pattern)?;
     let span = cst.span(Cursor::Rule(rule))?;
@@ -3216,8 +3477,18 @@ fn lower_primary(
                 } else {
                     None
                 };
-                let mut value = lower_value(cst, required(cst, member, "value")?, context, arena)
-                    .map_err(|error| match &field_name {
+                let values = cst.field_list(member, "value")?;
+                let value = if let Some(value) = values.last() {
+                    lower_value(cst, *value, context, arena)
+                } else if let Some(name) = &field_name {
+                    if cst.field(member, "optional")?.is_some() {
+                        return Err("BLOT_RECORD_SHORTHAND: An optional field needs an explicit type value.".to_owned());
+                    }
+                    Ok(variable(name, cst.span(Cursor::Rule(member))?, arena))
+                } else {
+                    Err("a computed field has no value".to_owned())
+                };
+                let mut value = value.map_err(|error| match &field_name {
                     Some(name) => format!("while lowering field `{name}`: {error}"),
                     None => format!("while lowering computed field: {error}"),
                 })?;

@@ -1,18 +1,62 @@
-// Configuration first, data last. These are ordinary curried adapters, not new
-// saturation rules. The data argument retains the underlying library's borrow.
+// Configuration first, values last. Shared traversal state survives suspension;
+// an owned input is transferred before traversal begins.
 open import "blot:prelude"
 
-const map_with :: @forall (fn T => @forall (fn U => (T -> U) -> [T] -> [U]))
-const map_with = fn transform => fn &values => map ((&values), transform)
-const filter_with :: @forall (fn T => (T -> Bool) -> [T] -> [T])
-const filter_with = fn keep => fn &values => filter ((&values), keep)
+const map_with ::
+  @forall (fn e => @forall (fn T => @forall (fn U => do:
+    return ((T -> U) ~ [e]) -> (([T] -> [U]) ~ [e])
+  )))
+const map_with = fn transform => fn values => do:
+  let shared = @linear.freeze values
+  return case Array.get (shared, 0) of
+    #None => []
+    #Some first => do:
+      use first_mapped <- transform first
+      let rec visit = fn (index, ?output) => case Array.get (shared, index) of
+        #None => output
+        #Some value => do:
+          use mapped <- transform value
+          return visit (index + 1, @array.push output mapped)
+
+      return visit (1, [first_mapped])
+
+const filter_with ::
+  @forall (fn e => @forall (fn T => do:
+    return ((T -> Bool) ~ [e]) -> (([T] -> [T]) ~ [e])
+  ))
+const filter_with = fn keep => fn values => do:
+  let shared = @linear.freeze values
+  return case Array.get (shared, 0) of
+    #None => []
+    #Some first => do:
+      let (_, output) = @array.take [first] 0
+      let rec visit = fn (index, ?current) => case Array.get (shared, index) of
+        #None => current
+        #Some value => do:
+          use accepted <- keep value
+          if accepted:
+            return visit (index + 1, @array.push current value)
+          else:
+            return visit (index + 1, @linear.own current)
+
+      return visit (0, output)
+
 const fold_with ::
-  @forall (fn T => @forall (fn S => ((S, T) -> S) -> S -> [T] -> S))
-const fold_with =
-  fn step => fn state => fn &values => fold ((&values), state, step)
+  @forall (fn e => @forall (fn T => @forall (fn S => do:
+    return (((S, T) -> S) ~ [e]) -> S -> (([T] -> S) ~ [e])
+  )))
+const fold_with = fn step => fn initial => fn values => do:
+  let shared = @linear.freeze values
+  let rec visit = fn (index, state) => case Array.get (shared, index) of
+    #None => state
+    #Some value => do:
+      use next <- step (state, value)
+      return visit (index + 1, next)
+
+  return visit (0, initial)
 
 return {
-  .map_with = map_with;
-  .filter_with = filter_with;
-  .fold_with = fold_with;
+  .map_with
+  .filter_with
+  .fold_with
   }

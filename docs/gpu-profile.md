@@ -20,20 +20,30 @@ in a benchmark months later.
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
 | `lexerStates`               |     125 | direct multiplier in the parallel DFA summary pass |
-| `maxCandidateMultiplicity`  |      24 | worst-case island candidates allocated per token   |
-| `islandCount`               |      69 | one island for every grammar rule                  |
-| `islandStates`              |     419 |                                                    |
-| `islandTransitions`         |     435 |                                                    |
+| `maxCandidateMultiplicity`  |      25 | worst-case island candidates allocated per token   |
+| `islandCount`               |      71 | one island for every grammar rule                  |
+| `islandStates`              |     427 |                                                    |
+| `islandTransitions`         |     445 |                                                    |
 | `contractionRounds`         |      33 | fixed dispatch bound                               |
-| `denseTransitionBytes`      | 633,528 | immutable device table                             |
-| `packedBytes`               | 494,517 | version-3 runtime section                          |
+| `denseTransitionBytes`      | 655,872 | immutable device table                             |
+| `packedBytes`               | 511,019 | version-3 runtime section                          |
 | `scratch.summaries`         |      24 | summaries retained per scratch region              |
 | `rootLoopIsland`            |    null | no root loop proof in the current general plan     |
 | `parallelLongRegionIslands` |       7 | islands admitted to parallel long-region execution |
 
+Typed parameter/result headers add two islands, eight island states, ten
+transitions, 22,344 dense-transition bytes, and 16,502 packed bytes. Candidate
+multiplicity rises from 24 to 25. Record value shorthand reuses its field
+island; multiline field boundaries are layout elaboration. Lexer states, 33
+contraction rounds, 24 summary factors, and seven parallel long-region islands
+remain fixed. All 71 rules are declared as islands; the version-3 general
+profile is accepted without parser resolutions. Highlight queries capture field
+names, rather than whole fields or values; keyword captures name their parent
+syntax context.
+
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,
-and edge arrays directly. Declaring all 69 rules as islands is what preserves
+and edge arrays directly. Declaring all 71 rules as islands is what preserves
 the full CST shape needed by source lowering.
 
 `continue` and numeric separators, hexadecimal integers, and exponent floats add

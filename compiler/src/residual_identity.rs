@@ -16,9 +16,10 @@ use crate::value::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::{Discriminant, discriminant};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 #[derive(Clone, PartialEq)]
 pub(super) struct ResidualEnvironmentKey(Vec<Part>);
@@ -44,21 +45,60 @@ enum Part {
     Ownership(EffectOperationContract),
 }
 
-#[derive(Serialize)]
 enum PortablePart<'a> {
-    Source(&'a str),
-    Body(&'a str, crate::ast::ExpressionId),
-    Value(Rc<str>),
+    Source(usize),
+    Body(usize, crate::ast::ExpressionId),
+    Value(usize),
     Number(u64),
     Variable(usize),
     Integer(Vec<u8>),
-    Text(&'a str),
+    Text(usize),
     Domain(u8),
     Closure(usize),
     Reference(usize),
-    Instances([u8; 32]),
-    Scope([u8; 32]),
+    Instances(usize),
+    Scope(usize),
     Runtime(usize, Vec<u8>, u8, &'a [String]),
+}
+
+impl Serialize for PortablePart<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Source(path) => (0_u8, path).serialize(serializer),
+            Self::Body(path, body) => (1_u8, path, body).serialize(serializer),
+            Self::Value(tag) => (2_u8, tag).serialize(serializer),
+            Self::Number(number) => (3_u8, number).serialize(serializer),
+            Self::Variable(variable) => (4_u8, variable).serialize(serializer),
+            Self::Integer(bytes) => (5_u8, PortableBytes(bytes)).serialize(serializer),
+            Self::Text(text) => (6_u8, text).serialize(serializer),
+            Self::Domain(domain) => (7_u8, domain).serialize(serializer),
+            Self::Closure(index) => (8_u8, index).serialize(serializer),
+            Self::Reference(index) => (9_u8, index).serialize(serializer),
+            Self::Instances(index) => (10_u8, index).serialize(serializer),
+            Self::Scope(index) => (11_u8, index).serialize(serializer),
+            Self::Runtime(slot, representation, meaning, cases) => {
+                (12_u8, slot, PortableBytes(representation), meaning, cases).serialize(serializer)
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct PortableSymbols<'a> {
+    strings: Vec<Cow<'a, str>>,
+    indices: HashMap<Cow<'a, str>, usize>,
+}
+
+impl<'a> PortableSymbols<'a> {
+    fn intern(&mut self, text: Cow<'a, str>) -> usize {
+        if let Some(index) = self.indices.get(&text) {
+            return *index;
+        }
+        let index = self.strings.len();
+        self.strings.push(text.clone());
+        self.indices.insert(text, index);
+        index
+    }
 }
 
 impl ResidualEnvironmentKey {
@@ -137,8 +177,124 @@ pub(super) struct RegistryMemo {
 }
 
 struct PortableEvidence {
+    #[cfg(test)]
+    encoded_bytes: usize,
     digest: [u8; 32],
     variables: HashMap<u32, usize>,
+}
+
+const PROVENANCE_MEMO_ENTRIES: usize = 1024;
+const PROVENANCE_MEMO_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+pub(super) struct ProvenanceMemo {
+    entries: HashMap<(u8, usize), ProvenanceEntry>,
+    bytes: usize,
+    #[cfg(test)]
+    encodings: usize,
+}
+
+struct ProvenanceEvidence {
+    digest: [u8; 32],
+    sources: std::collections::BTreeSet<String>,
+}
+
+enum ProvenanceOwner {
+    Scope(Weak<EffectScope>),
+    Instances(Weak<ModuleInstanceScope>),
+}
+
+impl ProvenanceOwner {
+    fn alive(&self) -> bool {
+        match self {
+            Self::Scope(scope) => scope.strong_count() != 0,
+            Self::Instances(instances) => instances.strong_count() != 0,
+        }
+    }
+}
+
+struct ProvenanceEntry {
+    owner: ProvenanceOwner,
+    evidence: Option<Rc<ProvenanceEvidence>>,
+    bytes: usize,
+}
+
+impl ProvenanceMemo {
+    fn evidence(&mut self, part: &Part) -> Option<Rc<ProvenanceEvidence>> {
+        let key = match part {
+            Part::Scope(scope) => (0, Rc::as_ptr(scope) as usize),
+            Part::Instances(scope) => (1, Rc::as_ptr(scope) as usize),
+            _ => unreachable!("only immutable provenance enters its encoding memo"),
+        };
+        if let Some(entry) = self.entries.get(&key) {
+            return entry.evidence.clone();
+        }
+        let mut sources = std::collections::BTreeSet::new();
+        let mut encoder = PortableProvenance {
+            remaining: 256,
+            sources: &mut sources,
+        };
+        let (encoded, owner) = match part {
+            Part::Scope(scope) => (
+                encoder.scope(scope, 0),
+                ProvenanceOwner::Scope(Rc::downgrade(scope)),
+            ),
+            Part::Instances(scope) => (
+                encoder.instances(scope),
+                ProvenanceOwner::Instances(Rc::downgrade(scope)),
+            ),
+            _ => unreachable!("only immutable provenance enters its encoding memo"),
+        };
+        #[cfg(test)]
+        {
+            self.encodings += 1;
+        }
+        let evidence = encoded.map(|encoded| {
+            Rc::new(ProvenanceEvidence {
+                digest: Sha256::digest(
+                    rmp_serde::to_vec(&encoded).expect("portable provenance serialization"),
+                )
+                .into(),
+                sources,
+            })
+        });
+        let mut bytes = std::mem::size_of::<ProvenanceEntry>() + 64;
+        if let Some(evidence) = &evidence {
+            bytes += std::mem::size_of::<ProvenanceEvidence>();
+            bytes += evidence
+                .sources
+                .iter()
+                .map(|source| source.capacity() + 64)
+                .sum::<usize>();
+        }
+        if bytes > PROVENANCE_MEMO_BYTES {
+            return evidence;
+        }
+        if self.entries.len() >= PROVENANCE_MEMO_ENTRIES
+            || self.bytes + bytes > PROVENANCE_MEMO_BYTES
+        {
+            self.entries.retain(|_, entry| entry.owner.alive());
+            self.bytes = self.entries.values().map(|entry| entry.bytes).sum();
+            if self.entries.len() >= PROVENANCE_MEMO_ENTRIES
+                || self.bytes + bytes > PROVENANCE_MEMO_BYTES
+            {
+                self.entries.clear();
+                self.bytes = 0;
+            }
+        }
+        // Weak owners prevent address reuse without retaining scope contents or
+        // retired module revisions. Encoding is pure; source digests stay fresh.
+        self.entries.insert(
+            key,
+            ProvenanceEntry {
+                owner,
+                evidence: evidence.clone(),
+                bytes,
+            },
+        );
+        self.bytes += bytes;
+        evidence
+    }
 }
 
 fn portable_evidence<'a>(
@@ -150,8 +306,11 @@ fn portable_evidence<'a>(
     let modules = context.modules.borrow();
     let mut sources = std::collections::BTreeSet::new();
     let mut transitive = Vec::new();
+    let mut queued = std::collections::HashSet::new();
     let mut encoded = Vec::new();
-    let mut tags = HashMap::<Discriminant<Value>, Rc<str>>::new();
+    let mut symbols = PortableSymbols::default();
+    let mut digests = HashMap::new();
+    let mut tags = HashMap::new();
     let mut instances = HashMap::new();
     let mut scopes = HashMap::new();
     for part in parts {
@@ -177,17 +336,21 @@ fn portable_evidence<'a>(
                 if !portable {
                     return Ok(None);
                 }
-                transitive.push(module.clone());
-                PortablePart::Body(module, *body)
+                if queued.insert(module.as_str()) {
+                    transitive.push(module.as_str());
+                }
+                PortablePart::Body(symbols.intern(Cow::Borrowed(module)), *body)
             }
             Part::Source(module) => {
-                transitive.push(module.clone());
-                PortablePart::Source(module)
+                if queued.insert(module.as_str()) {
+                    transitive.push(module.as_str());
+                }
+                PortablePart::Source(symbols.intern(Cow::Borrowed(module)))
             }
             Part::Value(tag) => PortablePart::Value(
-                tags.entry(*tag)
-                    .or_insert_with(|| Rc::from(format!("{tag:?}")))
-                    .clone(),
+                *tags
+                    .entry(*tag)
+                    .or_insert_with(|| symbols.intern(Cow::Owned(format!("{tag:?}")))),
             ),
             Part::Number(number) => PortablePart::Number(*number),
             Part::Variable(variable) => {
@@ -196,7 +359,7 @@ fn portable_evidence<'a>(
                 PortablePart::Variable(*index)
             }
             Part::Integer(number) => PortablePart::Integer(number.to_signed_bytes_le()),
-            Part::Text(text) => PortablePart::Text(text),
+            Part::Text(text) => PortablePart::Text(symbols.intern(Cow::Borrowed(text))),
             Part::Domain(domain) => PortablePart::Domain(match domain {
                 None => 0,
                 Some(Domain::Int) => 1,
@@ -208,45 +371,47 @@ fn portable_evidence<'a>(
             Part::Reference(index) => PortablePart::Reference(*index),
             Part::Instances(scope) => {
                 let pointer = Rc::as_ptr(scope);
-                let digest = if let Some(digest) = instances.get(&pointer) {
-                    *digest
+                let index = if let Some(index) = instances.get(&pointer) {
+                    *index
                 } else {
-                    let Some(encoded) = (PortableProvenance {
-                        remaining: 256,
-                        sources: &mut sources,
-                    })
-                    .instances(scope) else {
+                    let Some(evidence) = context
+                        .residual_cache
+                        .borrow_mut()
+                        .provenance
+                        .evidence(part)
+                    else {
                         return Ok(None);
                     };
-                    let digest = Sha256::digest(
-                        rmp_serde::to_vec(&encoded).expect("portable instance serialization"),
-                    )
-                    .into();
-                    instances.insert(pointer, digest);
-                    digest
+                    sources.extend(evidence.sources.iter().cloned());
+                    let digest = evidence.digest;
+                    let next = digests.len();
+                    let index = *digests.entry(digest).or_insert(next);
+                    instances.insert(pointer, index);
+                    index
                 };
-                PortablePart::Instances(digest)
+                PortablePart::Instances(index)
             }
             Part::Scope(scope) => {
                 let pointer = Rc::as_ptr(scope);
-                let digest = if let Some(digest) = scopes.get(&pointer) {
-                    *digest
+                let index = if let Some(index) = scopes.get(&pointer) {
+                    *index
                 } else {
-                    let Some(encoded) = (PortableProvenance {
-                        remaining: 256,
-                        sources: &mut sources,
-                    })
-                    .scope(scope, 0) else {
+                    let Some(evidence) = context
+                        .residual_cache
+                        .borrow_mut()
+                        .provenance
+                        .evidence(part)
+                    else {
                         return Ok(None);
                     };
-                    let digest = Sha256::digest(
-                        rmp_serde::to_vec(&encoded).expect("portable scope serialization"),
-                    )
-                    .into();
-                    scopes.insert(pointer, digest);
-                    digest
+                    sources.extend(evidence.sources.iter().cloned());
+                    let digest = evidence.digest;
+                    let next = digests.len();
+                    let index = *digests.entry(digest).or_insert(next);
+                    scopes.insert(pointer, index);
+                    index
                 };
-                PortablePart::Scope(digest)
+                PortablePart::Scope(index)
             }
             Part::Runtime(slot, type_id, meaning) => {
                 let Some(representation) =
@@ -270,16 +435,16 @@ fn portable_evidence<'a>(
         };
         encoded.push(value);
     }
-    let mut visited = std::collections::HashSet::new();
     while let Some(path) = transitive.pop() {
-        if !visited.insert(path.clone()) {
-            continue;
-        }
         let loaded = modules
-            .get(&path)
+            .get(path)
             .ok_or_else(|| hir_error("A residual cache dependency lost its module."))?;
-        transitive.extend(loaded.imports.values().cloned());
-        sources.insert(path);
+        for dependency in loaded.imports.values() {
+            if queued.insert(dependency.as_str()) {
+                transitive.push(dependency.as_str());
+            }
+        }
+        sources.insert(path.to_owned());
     }
     let sources = sources
         .into_iter()
@@ -318,14 +483,34 @@ fn portable_evidence<'a>(
             (path, *digest)
         })
         .collect::<BTreeMap<_, _>>();
-    rmp_serde::to_vec(&(encoded, sources))
-        .map(|bytes| {
-            Some(PortableEvidence {
-                digest: Sha256::digest(bytes).into(),
-                variables,
-            })
+    let mut ordered_digests = vec![[0; 32]; digests.len()];
+    for (digest, index) in digests {
+        ordered_digests[index] = digest;
+    }
+    let digest_bytes = ordered_digests.into_iter().flatten().collect::<Vec<_>>();
+    rmp_serde::to_vec(&(
+        symbols.strings,
+        PortableBytes(&digest_bytes),
+        encoded,
+        sources,
+    ))
+    .map(|bytes| {
+        Some(PortableEvidence {
+            #[cfg(test)]
+            encoded_bytes: bytes.len(),
+            digest: Sha256::digest(bytes).into(),
+            variables,
         })
-        .map_err(|error| hir_error(&format!("Residual cache key encoding failed: {error}")))
+    })
+    .map_err(|error| hir_error(&format!("Residual cache key encoding failed: {error}")))
+}
+
+struct PortableBytes<'a>(&'a [u8]);
+
+impl Serialize for PortableBytes<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.0)
+    }
 }
 
 // These are administrative addresses only for the non-generative scalar
@@ -908,6 +1093,109 @@ mod tests {
             ("x".into(), Value::Unit),
         ]));
         assert!(key(&first, &[]) != key(&second, &[]));
+    }
+
+    #[test]
+    fn portable_symbols_preserve_order_values_and_variable_aliases() {
+        let context = Rc::new(Context::default());
+        let parts = (0..2048)
+            .map(|index| Part::Text(format!("repeated evidence {}", index % 2)))
+            .collect::<Vec<_>>();
+        let encode = |parts: &[Part]| {
+            portable_evidence(&context, &[], parts.iter(), HashMap::new())
+                .unwrap()
+                .unwrap()
+        };
+        let original = encode(&parts);
+        assert!(
+            original.encoded_bytes < 9000,
+            "repeated strings were serialized in full"
+        );
+        assert_eq!(original.digest, encode(&parts.clone()).digest);
+        let reversed = parts.into_iter().rev().collect::<Vec<_>>();
+        assert_ne!(original.digest, encode(&reversed).digest);
+        assert_ne!(
+            encode(&[Part::Variable(10), Part::Variable(10)]).digest,
+            encode(&[Part::Variable(10), Part::Variable(11)]).digest
+        );
+        assert_eq!(
+            encode(&[Part::Variable(10), Part::Variable(11)]).digest,
+            encode(&[Part::Variable(20), Part::Variable(21)]).digest
+        );
+        assert_ne!(
+            encode(&[Part::Number(0)]).digest,
+            encode(&[Part::Variable(0)]).digest
+        );
+        let tag = discriminant(&Value::Unit);
+        assert_ne!(
+            encode(&[Part::Value(tag)]).digest,
+            encode(&[Part::Text(format!("{tag:?}"))]).digest
+        );
+    }
+
+    #[test]
+    fn portable_scope_evidence_ignores_allocation_sharing() {
+        let context = Rc::new(Context::default());
+        let encode = |parts: &[Part]| {
+            portable_evidence(&context, &[], parts.iter(), HashMap::new())
+                .unwrap()
+                .unwrap()
+        };
+        let scope = Rc::new(Vec::new());
+        let shared = encode(&[Part::Scope(scope.clone()), Part::Scope(scope.clone())]);
+        let separate = encode(&[
+            Part::Scope(Rc::new(Vec::new())),
+            Part::Scope(Rc::new(Vec::new())),
+        ]);
+        assert_eq!(shared.digest, separate.digest);
+        assert_ne!(
+            shared.digest,
+            encode(&[
+                Part::Instances(Rc::new(Vec::new())),
+                Part::Instances(Rc::new(Vec::new())),
+            ])
+            .digest
+        );
+        assert!(encode(&vec![Part::Scope(scope); 2048]).encoded_bytes < 7000);
+    }
+
+    #[test]
+    fn immutable_provenance_memo_preserves_keys_and_releases_revisions() {
+        let context = Rc::new(Context::default());
+        let scope = Rc::new(Vec::new());
+        let part = Part::Scope(scope.clone());
+        let encode = || {
+            portable_evidence(&context, &[], std::iter::once(&part), HashMap::new())
+                .unwrap()
+                .unwrap()
+                .digest
+        };
+        let original = encode();
+        for _ in 0..20 {
+            assert_eq!(original, encode());
+        }
+        assert_eq!(context.residual_cache.borrow().provenance.encodings, 1);
+        assert_eq!(Rc::strong_count(&scope), 2);
+        context.residual_cache.borrow_mut().provenance = ProvenanceMemo::default();
+        assert_eq!(original, encode());
+        let weak = Rc::downgrade(&scope);
+        drop(part);
+        drop(scope);
+        assert!(weak.upgrade().is_none());
+        let instances = (0..PROVENANCE_MEMO_ENTRIES + 1)
+            .map(|_| Rc::new(Vec::new()))
+            .collect::<Vec<_>>();
+        for scope in &instances {
+            context
+                .residual_cache
+                .borrow_mut()
+                .provenance
+                .evidence(&Part::Instances(scope.clone()));
+        }
+        let memo = context.residual_cache.borrow();
+        assert!(memo.provenance.entries.len() <= PROVENANCE_MEMO_ENTRIES);
+        assert!(memo.provenance.bytes <= PROVENANCE_MEMO_BYTES);
+        assert_eq!(Rc::strong_count(&instances[0]), 1);
     }
 
     #[test]

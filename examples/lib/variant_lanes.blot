@@ -1,0 +1,22 @@
+open import "blot:prelude"
+const Number = #Integer Int | #Single F32 | #Double F64 | #Flag Bool
+const Mixed = #Number Number | #Text Text | #Array [Number]
+const Echo = @effect.host { .copy = Effect.suspends (Mixed -> Mixed); }
+const number :: Number -> Number
+const number = fn value => case value of
+  #Integer n => #Integer n
+  #Single n => #Single n
+  #Double n => #Double n
+  #Flag n => #Flag n
+const mixed :: Mixed -> Mixed
+const mixed = fn value => case value of
+  #Number n => #Number (number n)
+  #Text text => #Text (Text.append text "")
+  #Array values => #Array values
+const store :: [Mixed] -> [Mixed]
+const store = fn values => Array.map (values, mixed)
+const echo :: Mixed -> Mixed ~ { Echo }
+const echo = fn value => do:
+  use copied <- Echo.copy (mixed value)
+  return mixed copied
+return { .number; .mixed; .store; .echo; }

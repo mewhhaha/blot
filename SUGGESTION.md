@@ -1,8 +1,10 @@
 # Design suggestions
 
-These are the remaining changes I would pursue after indexed arenas and the
-initial recursive-value representation work. They are suggestions, not accepted
-language rules; `LANGUAGE.md` and `spec/` remain authoritative.
+These suggestions record the frontier after indexed arenas and the initial
+recursive-value representation work. Several have since been implemented. See
+the [2026-09-12 triage](docs/language-triage-2026-09-12.md) for current
+evidence, remaining defects, and recommended priorities. These are suggestions,
+not accepted language rules; `LANGUAGE.md` and `spec/` remain authoritative.
 
 Sections 1 through 6 are representation and compiler work. Sections 7 onward
 came from a review of the language itself — inference, effects, refinement,

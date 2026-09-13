@@ -98,7 +98,7 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 7. Paths are registered once
+The Node-to-compiler transport is compiler-host ABI 9. Paths are registered once
 as UTF-8 and receive stable session-local module identities. A graph update is a
 length-delimited binary frame containing changed UTF-8 source or compact AST
 bytes, direct edges, includes, and removals. A trusted compiler-distributed
@@ -124,6 +124,20 @@ Root export wrappers and fully static applications are outside these body
 counts. Counters describe the current request, including zero work on a
 closed-program cache hit; they are observations, not checked facts or cache
 authority.
+
+ABI 9 includes fixed-width hexadecimal IEEE bits in evaluated Float32 and
+Float64 values. JSON numeric spellings are not the observation authority: they
+cannot carry non-finite values. Conformance decodes those bits and compares
+typed caller values using the emitted ABI, preserving signed zero, Float32
+rounding, Unicode text, record fields, and constructor payloads. NaN
+observations compare as NaN; the language does not promise a particular NaN
+payload. Display printers have independent formatting tests. Unsupported
+observable values fail explicitly, and host writes or other effects require an
+explicit observation fixture rather than being discarded.
+
+The generated current-implementation report checks its public ABI claim against
+a manifest emitted by the authenticated compiler artifact. A manual metadata
+claim alone cannot establish the caller contract.
 
 Host frame construction may use geometrically grown typed storage and bulk
 copies, but a finished frame owns its exact bytes independently of its inputs
@@ -658,17 +672,35 @@ contract for a polymorphic host operation. The host binds its source name once;
 each concrete import marshals against its own checked type. No host performs
 type inference or selects a source specialization.
 
-Checked-module certificate schema 20 records the checking contract with last-use
+Checked-module certificate schema 23 records the checking contract with last-use
 borrow lifetimes and per-proof refinement limits. Borrow liveness uses demanded
 declarations, lexical identities, aliases, closure dependencies, and held
 operands; it does not change type inference or consume source bindings. The
-guest ABI layout and suspension protocol are unchanged at this stage.
-`SUSPENSION.md` owns the planning and lifetime obligations shared by closure,
-emission, and hosts. When an inferred callee has no positive type bounds,
-ownership receives its checked upper function constraint. This preserves the
-open effect row of an unannotated callback instead of treating its bottom
-positive view as proof of synchronous execution. Ownership consumes these
-inference facts without reconstructing a function type.
+guest ABI layout and suspension protocol are unchanged at this stage. Schema 23
+scopes signature holes to their binding, retains closed signatures when attached
+functions become values, and distinguishes a closed empty effect row from an
+unknown producer. Staging carries a closed checked result contract through the
+current application's result positions; independently instantiated cached
+expression schemes do not replace that contract. Nested case patterns preserve
+their payload variables, and rebinding enforces its existing pure-value rule
+directly. The Runtime HIR and guest ABI schemas do not change. `SUSPENSION.md`
+owns the planning and lifetime obligations shared by closure, emission, and
+hosts. When an inferred callee has no positive type bounds, ownership receives
+its checked upper function constraint. This preserves the open effect row of an
+unannotated callback instead of treating its bottom positive view as proof of
+synchronous execution. Ownership consumes these inference facts without
+reconstructing a function type.
+
+Handler checking records each selected clause's defining module, parameter and
+body identities, and the handled operation's ownership contract. These
+request-local selections flow to ownership analysis; foreign pattern IDs never
+index the caller's arena. Ownership validates the selected clause against the
+existing checked function contract keyed by defining module and body, including
+continuation callback requirements. Imported module certificates already carry
+those function contracts. Schema 22 requires these checks for constructed and
+imported handlers as well as literals; old certificates cannot bypass them. The
+transient selections are cleared on request completion and source invalidation.
+They contain no live closure environment or host authority.
 
 Runtime HIR schema 13 replaces blocks and call instructions with typed function,
 continuation, value, representation, and signature references. Each continuation
@@ -1198,3 +1230,12 @@ cleanup. `pnpm test:guest-abi` audits administrative ABI 4 arities across host
 tools, examples, tests, and experiments; source-dependent export signatures
 additionally require execution checks. Neither check substitutes for
 evaluator/Wasm agreement.
+
+### Relational proof observations
+
+Host ABI 8 exposes `refinements` in semantic analysis and a `refinement`
+explanation. Certificate schema 21 stores the corresponding erased observations
+with the checked source artifact. Runtime HIR remains version 13 and guest ABI
+remains version 4. The relational pass contract and finite inference bounds are
+specified in `SAFETY.md`; restored observations do not authorize backend
+rewrites or establish caller assumptions.

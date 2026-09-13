@@ -22,8 +22,8 @@ function sample(hostRssBytes: number): DevelopmentBenchmarkSample {
   };
 }
 
-Deno.test("development benchmark report schema is version 3", () => {
-  assertEquals(developmentBenchmarkSchema, 3);
+Deno.test("development benchmark report schema is version 4", () => {
+  assertEquals(developmentBenchmarkSchema, 4);
 });
 
 Deno.test("development duration summary preserves nearest-rank percentiles", () => {

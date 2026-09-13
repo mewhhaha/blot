@@ -46,8 +46,8 @@
     {
       "id": "unresolved-expression-hole",
       "status": "rejected",
-      "source": "return @hole \"result\"\n",
-      "code": "BLOT_UNKNOWN_PRIMITIVE"
+      "source": "open import \"blot:prelude\"\nlet result :: Int\nlet result = _\nreturn result\n",
+      "code": "BLOT_EXPRESSION_HOLE"
     },
     {
       "id": "affine-continuation-twice",

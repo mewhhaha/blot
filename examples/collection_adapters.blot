@@ -1,0 +1,28 @@
+open import "blot:prelude"
+const Pipeline = import "blot:pipeline"
+
+const Trace = @effect { .visit = Int -> Int; }
+const run = fn () => do:
+  use mapped <- [1, 2, 3] |> Pipeline.map_with (fn value => Trace.visit value)
+  use found <- Array.find (
+    mapped,
+    fn value => do:
+      use seen <- Trace.visit (10 + value)
+      return seen == 12
+  )
+  let lazy = Iter.map (Iter.range (0, 10), fn value => Trace.visit (20 + value))
+  use next <- lazy.step lazy.state
+  return case next of
+    #Some (first, _) => first
+    #None => 0
+
+return @handle (
+  Trace,
+  run,
+  {
+    .visit = fn (value, ?resume) => do:
+      use rest <- resume value
+      return Text.append (Text.of_int value) (Text.append "," rest)
+    .return = fn value => Text.append "result=" (Text.of_int value)
+  }
+  )

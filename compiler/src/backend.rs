@@ -49,6 +49,7 @@ struct DynamicHelpers<'a> {
     text_scalar_count: Option<u32>,
     text_next_byte: Option<u32>,
     text_scalar_offset: Option<u32>,
+    text_byte_offset: Option<u32>,
     text_find_from: Option<u32>,
     canonical_validator: u32,
     i64_to_text: Option<u32>,
@@ -161,22 +162,20 @@ impl RuntimeTypeLayouts {
                     let mut payload = Vec::new();
                     for case_ in cases {
                         let case = self.flattened(module, case_.payload_type)?;
-                        if case.is_empty() {
-                            continue;
-                        }
-                        let (wide, narrow) = if case.len() > payload.len() {
-                            (case, payload.as_slice())
-                        } else {
-                            (payload.as_slice(), case)
-                        };
-                        if wide[..narrow.len()] != narrow[..] {
-                            return Err(format!(
-                                "{}: dynamic sum payloads require different Wasm layouts",
-                                module.source
-                            ));
-                        }
-                        if case.len() > payload.len() {
-                            payload = case.to_vec();
+                        for (index, lane) in case.iter().enumerate() {
+                            if index == payload.len() {
+                                payload.push(*lane);
+                                continue;
+                            }
+                            if payload[index] != *lane
+                                && (payload[index] == ValType::V128 || *lane == ValType::V128)
+                            {
+                                return Err(format!(
+                                    "{}: a sum cannot share a Wasm lane between SIMD and scalar payloads",
+                                    module.source
+                                ));
+                            }
+                            payload[index] = join_flat_types(Some(&payload[index]), Some(lane));
                         }
                     }
                     let mut result = vec![ValType::I32];
@@ -1135,6 +1134,100 @@ fn join_flat_types(left: Option<&ValType>, right: Option<&ValType>) -> ValType {
     }
 }
 
+// A variant lane stores payload bits, not a numeric conversion of the payload.
+fn emit_lane_conversion(
+    instructions: &mut InstructionSink<'_>,
+    from: ValType,
+    to: ValType,
+) -> Result<(), String> {
+    if from == to {
+        return Ok(());
+    }
+    let from_bits = match from {
+        ValType::I32 => ValType::I32,
+        ValType::I64 => ValType::I64,
+        ValType::F32 => {
+            instructions.i32_reinterpret_f32();
+            ValType::I32
+        }
+        ValType::F64 => {
+            instructions.i64_reinterpret_f64();
+            ValType::I64
+        }
+        _ => {
+            return Err(format!(
+                "unsupported variant lane conversion {from:?} to {to:?}"
+            ));
+        }
+    };
+    let to_bits = match to {
+        ValType::I32 | ValType::F32 => ValType::I32,
+        ValType::I64 | ValType::F64 => ValType::I64,
+        _ => {
+            return Err(format!(
+                "unsupported variant lane conversion {from:?} to {to:?}"
+            ));
+        }
+    };
+    if from_bits != to_bits {
+        match to_bits {
+            ValType::I32 => {
+                instructions.i32_wrap_i64();
+            }
+            ValType::I64 => {
+                instructions.i64_extend_i32_u();
+            }
+            _ => unreachable!(),
+        }
+    }
+    match to {
+        ValType::F32 => {
+            instructions.f32_reinterpret_i32();
+        }
+        ValType::F64 => {
+            instructions.f64_reinterpret_i64();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct FlatLocals<'a> {
+    locals: &'a [u32],
+    lanes: &'a [ValType],
+}
+
+impl<'a> FlatLocals<'a> {
+    fn tail(self, start: usize) -> Self {
+        Self {
+            locals: &self.locals[start..],
+            lanes: &self.lanes[start..],
+        }
+    }
+
+    fn get(
+        self,
+        instructions: &mut InstructionSink<'_>,
+        index: usize,
+        lane: ValType,
+    ) -> Result<(), String> {
+        instructions.local_get(self.locals[index]);
+        emit_lane_conversion(instructions, self.lanes[index], lane)
+    }
+
+    fn set(
+        self,
+        instructions: &mut InstructionSink<'_>,
+        index: usize,
+        lane: ValType,
+    ) -> Result<(), String> {
+        emit_lane_conversion(instructions, lane, self.lanes[index])?;
+        instructions.local_set(self.locals[index]);
+        Ok(())
+    }
+}
+
 fn cold_trap_branch_hints(function: &Function) -> Result<Vec<BranchHint>, String> {
     let body = function.clone().into_raw_body();
     let operators = FunctionBody::new(BinaryReader::new(&body, 0))
@@ -1697,6 +1790,19 @@ fn emit_dynamic_module(
     } else {
         None
     };
+    let text_byte_offset_index =
+        if has_operation("text.slice-bytes") || has_operation("text.find-byte-from") {
+            let type_index = types.intern(
+                vec![ValType::I32, ValType::I32, ValType::I64],
+                vec![ValType::I32],
+            );
+            let function_index = imported_function_count + functions.len();
+            functions.function(type_index);
+            code.function(&text_cursor::byte_offset_function());
+            Some(function_index)
+        } else {
+            None
+        };
     let text_scalar_offset_index = if has_operation("text.scalar-at")
         || has_operation("text.slice")
         || has_operation("text.find-from")
@@ -1712,7 +1818,9 @@ fn emit_dynamic_module(
     } else {
         None
     };
-    let text_find_from_index = if has_operation("text.find-from") || has_operation("text.contains")
+    let text_find_from_index = if has_operation("text.find-from")
+        || has_operation("text.contains")
+        || has_operation("text.find-byte-from")
     {
         let type_index = types.intern(
             vec![
@@ -1783,6 +1891,7 @@ fn emit_dynamic_module(
         text_scalar_count: text_scalar_count_index,
         text_next_byte: text_next_byte_index,
         text_scalar_offset: text_scalar_offset_index,
+        text_byte_offset: text_byte_offset_index,
         text_find_from: text_find_from_index,
         canonical_validator: canonical_validator_index,
         i64_to_text: i64_to_text_index,
@@ -2903,6 +3012,46 @@ fn emit_instruction(
                 .local_get(text[2])
                 .local_set(result[2]);
         }
+        "text.byte-length" => {
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            instructions
+                .local_get(text[1])
+                .i64_extend_i32_u()
+                .local_set(result[0]);
+        }
+        "text.find-byte-from" => {
+            let byte_offset = helpers.text_byte_offset.ok_or_else(|| {
+                format!("{}: byte search omitted its boundary helper", module.source)
+            })?;
+            let find_from = helpers.text_find_from.ok_or_else(|| {
+                format!("{}: byte search omitted its search helper", module.source)
+            })?;
+            let text = locals_for(module, value_locals, operation.operands[0])?;
+            let query = locals_for(module, value_locals, operation.operands[1])?;
+            let start = locals_for(module, value_locals, operation.operands[2])?;
+            instructions
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(start[0])
+                .call(byte_offset)
+                .local_set(scratch_index)
+                .local_get(text[0])
+                .local_get(text[1])
+                .local_get(query[0])
+                .local_get(query[1])
+                .local_get(scratch_index)
+                .call(find_from)
+                .local_tee(scratch_pointer)
+                .i32_const(-1)
+                .i32_eq()
+                .if_(BlockType::Result(ValType::I64))
+                .i64_const(-1)
+                .else_()
+                .local_get(scratch_pointer)
+                .i64_extend_i32_u()
+                .end()
+                .local_set(result[0]);
+        }
         "text.next-byte" => {
             let next_byte = helpers.text_next_byte.ok_or_else(|| {
                 format!(
@@ -2927,14 +3076,25 @@ fn emit_instruction(
                 .local_set(result[3])
                 .end();
         }
-        "text.slice" => {
-            let scalar_offset = helpers.text_scalar_offset.ok_or_else(|| {
-                format!("{}: text.slice omitted its runtime helper", module.source)
+        "text.slice" | "text.slice-bytes" => {
+            let offset = if operation.operation.kind == "text.slice-bytes" {
+                helpers.text_byte_offset
+            } else {
+                helpers.text_scalar_offset
+            };
+            let scalar_offset = offset.ok_or_else(|| {
+                format!("{}: text slice omitted its boundary helper", module.source)
             })?;
             let text = locals_for(module, value_locals, operation.operands[0])?;
             let start = locals_for(module, value_locals, operation.operands[1])?;
             let end = locals_for(module, value_locals, operation.operands[2])?;
             instructions
+                .local_get(start[0])
+                .local_get(end[0])
+                .i64_gt_u()
+                .if_(BlockType::Empty)
+                .unreachable()
+                .end()
                 .local_get(text[0])
                 .local_get(text[1])
                 .local_get(start[0])
@@ -3341,10 +3501,17 @@ fn emit_instruction(
                 )
                 .local_set(result[0]);
             let payload = locals_for(module, value_locals, operation.operands[0])?;
-            assign_locals(instructions, &result[1..1 + payload.len()], payload)?;
             let flattened = facts
                 .runtime_layouts
                 .flattened(module, operation.definition.type_id.0)?;
+            let payload_type =
+                runtime_value_type(function, facts.value_types, operation.operands[0])?;
+            let payload_lanes = facts.runtime_layouts.flattened(module, payload_type)?;
+            for (index, local) in payload.iter().enumerate() {
+                instructions.local_get(*local);
+                emit_lane_conversion(instructions, payload_lanes[index], flattened[index + 1])?;
+                instructions.local_set(result[index + 1]);
+            }
             for (local, type_) in result[1 + payload.len()..]
                 .iter()
                 .zip(flattened[1 + payload.len()..].iter())
@@ -3358,7 +3525,16 @@ fn emit_instruction(
         }
         "sum.payload" => {
             let sum = locals_for(module, value_locals, operation.operands[0])?;
-            assign_locals(instructions, result, &sum[1..1 + result.len()])?;
+            let sum_type = runtime_value_type(function, facts.value_types, operation.operands[0])?;
+            let sum_lanes = facts.runtime_layouts.flattened(module, sum_type)?;
+            let payload_lanes = facts
+                .runtime_layouts
+                .flattened(module, operation.definition.type_id.0)?;
+            for (index, local) in result.iter().enumerate() {
+                instructions.local_get(sum[index + 1]);
+                emit_lane_conversion(instructions, sum_lanes[index + 1], payload_lanes[index])?;
+                instructions.local_set(*local);
+            }
         }
         "indirect.make" => {
             let RuntimeType::Indirect { target_type } = module
@@ -5769,100 +5945,86 @@ fn emit_load_canonical_result(
     pointer: u32,
     offset: u32,
 ) -> Result<usize, String> {
+    emit_load_memory_value(
+        instructions,
+        type_,
+        FlatLocals {
+            locals: destination,
+            lanes: &flattened_type(type_),
+        },
+        pointer,
+        offset,
+    )
+}
+
+fn emit_load_memory_value(
+    instructions: &mut InstructionSink<'_>,
+    type_: &AbiType,
+    destination: FlatLocals<'_>,
+    pointer: u32,
+    offset: u32,
+) -> Result<usize, String> {
+    let memory_argument = |offset, align| wasm_encoder::MemArg {
+        offset: u64::from(offset),
+        align,
+        memory_index: 0,
+    };
     match type_ {
         AbiType::Unit => Ok(0),
-        AbiType::InternalPointer => {
-            instructions
-                .local_get(pointer)
-                .i32_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 2,
-                    memory_index: 0,
-                })
-                .local_set(destination[0]);
-            Ok(1)
-        }
-        AbiType::Vector128 => {
-            instructions
-                .local_get(pointer)
-                .v128_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 4,
-                    memory_index: 0,
-                })
-                .local_set(destination[0]);
-            Ok(1)
-        }
-        AbiType::SignedInteger64 | AbiType::Resource { .. } => {
-            instructions
-                .local_get(pointer)
-                .i64_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 3,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[0]);
-            Ok(1)
-        }
-        AbiType::Float32 => {
-            instructions
-                .local_get(pointer)
-                .f32_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 2,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[0]);
-            Ok(1)
-        }
-        AbiType::Float64 => {
-            instructions
-                .local_get(pointer)
-                .f64_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 3,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[0]);
-            Ok(1)
-        }
-        AbiType::Boolean => {
-            instructions
-                .local_get(pointer)
-                .i32_load8_u(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 0,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[0]);
+        AbiType::InternalPointer
+        | AbiType::Vector128
+        | AbiType::SignedInteger64
+        | AbiType::Resource { .. }
+        | AbiType::Float32
+        | AbiType::Float64
+        | AbiType::Boolean => {
+            instructions.local_get(pointer);
+            let lane = match type_ {
+                AbiType::InternalPointer => {
+                    instructions.i32_load(memory_argument(offset, 2));
+                    ValType::I32
+                }
+                AbiType::Vector128 => {
+                    instructions.v128_load(memory_argument(offset, 4));
+                    ValType::V128
+                }
+                AbiType::SignedInteger64 | AbiType::Resource { .. } => {
+                    instructions.i64_load(memory_argument(offset, 3));
+                    ValType::I64
+                }
+                AbiType::Float32 => {
+                    instructions.f32_load(memory_argument(offset, 2));
+                    ValType::F32
+                }
+                AbiType::Float64 => {
+                    instructions.f64_load(memory_argument(offset, 3));
+                    ValType::F64
+                }
+                AbiType::Boolean => {
+                    instructions.i32_load8_u(memory_argument(offset, 0));
+                    ValType::I32
+                }
+                _ => unreachable!(),
+            };
+            destination.set(instructions, 0, lane)?;
             Ok(1)
         }
         AbiType::Text | AbiType::Array { .. } => {
-            instructions
-                .local_get(pointer)
-                .i32_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset),
-                    align: 2,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[0]);
-            instructions
-                .local_get(pointer)
-                .i32_load(wasm_encoder::MemArg {
-                    offset: u64::from(offset + 4),
-                    align: 2,
-                    memory_index: 0,
-                });
-            instructions.local_set(destination[1]);
+            for index in 0..2 {
+                instructions
+                    .local_get(pointer)
+                    .i32_load(memory_argument(offset + 4 * index as u32, 2));
+                destination.set(instructions, index, ValType::I32)?;
+            }
             Ok(2)
         }
         AbiType::Record { fields } => {
             let mut written = 0;
             for field in record_layout(fields) {
-                written += emit_load_canonical_result(
+                written += emit_load_memory_value(
                     instructions,
                     field.type_,
-                    &destination[written..],
+                    destination.tail(written),
                     pointer,
                     offset + field.offset,
                 )?;
@@ -5871,57 +6033,53 @@ fn emit_load_canonical_result(
         }
         AbiType::Variant { cases } => {
             let layout = variant_layout(cases);
-            let tag = destination[0];
             instructions.local_get(pointer);
-            let memory_argument = wasm_encoder::MemArg {
-                offset: u64::from(offset),
-                align: layout.discriminant_size.trailing_zeros(),
-                memory_index: 0,
-            };
+            let argument = memory_argument(offset, layout.discriminant_size.trailing_zeros());
             match layout.discriminant_size {
                 1 => {
-                    instructions.i32_load8_u(memory_argument);
+                    instructions.i32_load8_u(argument);
                 }
                 2 => {
-                    instructions.i32_load16_u(memory_argument);
+                    instructions.i32_load16_u(argument);
                 }
                 4 => {
-                    instructions.i32_load(memory_argument);
+                    instructions.i32_load(argument);
                 }
                 size => return Err(format!("unsupported variant discriminant size {size}")),
             }
-            instructions.local_set(tag);
-            let flattened = flattened_type(type_);
-            for (local, type_) in destination[1..].iter().zip(flattened[1..].iter()) {
-                emit_zero_local(instructions, *type_, *local)?;
+            destination.set(instructions, 0, ValType::I32)?;
+            let width = flattened_type(type_).len();
+            for index in 1..width {
+                emit_zero_local(
+                    instructions,
+                    destination.lanes[index],
+                    destination.locals[index],
+                )?;
             }
-            let mut payload_width = 0;
             for (case_index, case_) in cases.iter().enumerate() {
                 let Some(payload) = &case_.payload else {
                     continue;
                 };
-                let width = flattened_type(payload).len();
-                payload_width = payload_width.max(width);
+                destination.get(instructions, 0, ValType::I32)?;
                 instructions
-                    .local_get(tag)
                     .i32_const(case_index as i32)
                     .i32_eq()
                     .if_(BlockType::Empty);
-                emit_load_canonical_result(
+                emit_load_memory_value(
                     instructions,
                     payload,
-                    &destination[1..1 + width],
+                    destination.tail(1),
                     pointer,
                     offset + layout.payload_offset,
                 )?;
                 instructions.end();
             }
-            Ok(1 + payload_width)
+            Ok(width)
         }
         AbiType::Sealed { inner, .. }
         | AbiType::Callback {
             environment: inner, ..
-        } => emit_load_canonical_result(instructions, inner, destination, pointer, offset),
+        } => emit_load_memory_value(instructions, inner, destination, pointer, offset),
     }
 }
 
@@ -6024,21 +6182,47 @@ fn emit_lower_flat_value(
     source: &[u32],
     destination: &[u32],
 ) -> Result<(), String> {
+    emit_lower_flat_lanes(
+        instructions,
+        module,
+        runtime_layouts,
+        runtime_type_id,
+        public_type,
+        FlatLocals {
+            locals: source,
+            lanes: &flattened_type(public_type),
+        },
+        FlatLocals {
+            locals: destination,
+            lanes: runtime_layouts.flattened(module, runtime_type_id)?,
+        },
+    )
+}
+
+fn emit_lower_flat_lanes(
+    instructions: &mut InstructionSink<'_>,
+    module: &RuntimeModule,
+    runtime_layouts: &RuntimeTypeLayouts,
+    runtime_type_id: usize,
+    public_type: &AbiType,
+    source: FlatLocals<'_>,
+    destination: FlatLocals<'_>,
+) -> Result<(), String> {
     let runtime_type = module
         .types
         .get(runtime_type_id)
         .ok_or_else(|| format!("unknown runtime type {runtime_type_id}"))?;
     match (runtime_type, public_type) {
         (RuntimeType::Boolean, AbiType::Boolean) => {
+            source.get(instructions, 0, ValType::I32)?;
             instructions
-                .local_get(source[0])
                 .i32_const(1)
                 .i32_gt_u()
                 .if_(BlockType::Empty)
                 .unreachable()
-                .end()
-                .local_get(source[0])
-                .local_set(destination[0]);
+                .end();
+            source.get(instructions, 0, ValType::I32)?;
+            destination.set(instructions, 0, ValType::I32)?;
         }
         (
             RuntimeType::Product { fields, .. },
@@ -6059,18 +6243,16 @@ fn emit_lower_flat_value(
                     }
                     public_offset += width;
                 }
-                let (public_field, public_offset, public_width) =
+                let (public_field, public_offset, _public_width) =
                     matched.ok_or_else(|| format!("public record omitted field {}", field.name))?;
-                let source_range = public_offset..public_offset + public_width;
-                let destination_range = runtime_offset..runtime_offset + runtime_width;
-                emit_lower_flat_value(
+                emit_lower_flat_lanes(
                     instructions,
                     module,
                     runtime_layouts,
                     field.type_id,
                     &public_field.type_,
-                    &source[source_range],
-                    &destination[destination_range],
+                    source.tail(public_offset),
+                    destination.tail(runtime_offset),
                 )?;
                 runtime_offset += runtime_width;
             }
@@ -6081,16 +6263,20 @@ fn emit_lower_flat_value(
                 cases: public_cases,
             },
         ) => {
+            source.get(instructions, 0, ValType::I32)?;
             instructions
-                .local_get(source[0])
                 .i32_const(cases.len() as i32)
                 .i32_ge_u()
                 .if_(BlockType::Empty)
                 .unreachable()
                 .end();
             let lane_types = runtime_layouts.flattened(module, runtime_type_id)?;
-            for (local, type_) in destination[1..].iter().zip(&lane_types[1..]) {
-                emit_zero_local(instructions, *type_, *local)?;
+            for index in 1..lane_types.len() {
+                emit_zero_local(
+                    instructions,
+                    destination.lanes[index],
+                    destination.locals[index],
+                )?;
             }
             for (runtime_index, case_) in cases.iter().enumerate() {
                 let public_index = public_cases
@@ -6098,22 +6284,22 @@ fn emit_lower_flat_value(
                     .position(|item| item.name == case_.name)
                     .ok_or_else(|| format!("public variant omitted case {}", case_.name))?;
                 let (from, to) = (public_index, runtime_index);
+                source.get(instructions, 0, ValType::I32)?;
                 instructions
-                    .local_get(source[0])
                     .i32_const(from as i32)
                     .i32_eq()
                     .if_(BlockType::Empty);
-                instructions.i32_const(to as i32).local_set(destination[0]);
+                instructions.i32_const(to as i32);
+                destination.set(instructions, 0, ValType::I32)?;
                 if let Some(payload) = &public_cases[public_index].payload {
-                    let width = flattened_type(payload).len();
-                    emit_lower_flat_value(
+                    emit_lower_flat_lanes(
                         instructions,
                         module,
                         runtime_layouts,
                         case_.payload_type,
                         payload,
-                        &source[1..1 + width],
-                        &destination[1..1 + width],
+                        source.tail(1),
+                        destination.tail(1),
                     )?;
                 }
                 instructions.end();
@@ -6135,7 +6321,7 @@ fn emit_lower_flat_value(
                 environment: inner, ..
             },
         ) => {
-            emit_lower_flat_value(
+            emit_lower_flat_lanes(
                 instructions,
                 module,
                 runtime_layouts,
@@ -6146,11 +6332,15 @@ fn emit_lower_flat_value(
             )?;
         }
         _ => {
-            if source.len() != destination.len() {
+            let public_lanes = flattened_type(public_type);
+            let private_lanes = runtime_layouts.flattened(module, runtime_type_id)?;
+            if public_lanes.len() != private_lanes.len() {
                 return Err("incompatible public flat value width".to_owned());
             }
-            for (from, to) in source.iter().zip(destination) {
-                instructions.local_get(*from).local_set(*to);
+            for (index, lane) in public_lanes.iter().enumerate() {
+                source.get(instructions, index, *lane)?;
+                emit_lane_conversion(instructions, *lane, private_lanes[index])?;
+                destination.set(instructions, index, private_lanes[index])?;
             }
         }
     }
@@ -6164,81 +6354,91 @@ fn emit_store_canonical_result(
     pointer: u32,
     offset: u32,
 ) -> Result<(), String> {
+    *flat_index += emit_store_memory_value(
+        instructions,
+        type_,
+        FlatLocals {
+            locals: &source[*flat_index..],
+            lanes: &flattened_type(type_),
+        },
+        pointer,
+        offset,
+    )?;
+    Ok(())
+}
+
+fn emit_store_memory_value(
+    instructions: &mut InstructionSink<'_>,
+    type_: &AbiType,
+    source: FlatLocals<'_>,
+    pointer: u32,
+    offset: u32,
+) -> Result<usize, String> {
     let memory_argument = |offset, align| wasm_encoder::MemArg {
         offset: u64::from(offset),
         align,
         memory_index: 0,
     };
     match type_ {
-        AbiType::Unit => {}
-        AbiType::InternalPointer => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .i32_store(memory_argument(offset, 2));
-            *flat_index += 1;
-        }
-        AbiType::Vector128 => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .v128_store(memory_argument(offset, 4));
-            *flat_index += 1;
-        }
-        AbiType::SignedInteger64 | AbiType::Resource { .. } => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .i64_store(memory_argument(offset, 3));
-            *flat_index += 1;
-        }
-        AbiType::Float32 => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .f32_store(memory_argument(offset, 2));
-            *flat_index += 1;
-        }
-        AbiType::Float64 => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .f64_store(memory_argument(offset, 3));
-            *flat_index += 1;
-        }
-        AbiType::Boolean => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .i32_store8(memory_argument(offset, 0));
-            *flat_index += 1;
+        AbiType::Unit => Ok(0),
+        AbiType::InternalPointer
+        | AbiType::Vector128
+        | AbiType::SignedInteger64
+        | AbiType::Resource { .. }
+        | AbiType::Float32
+        | AbiType::Float64
+        | AbiType::Boolean => {
+            let lane = flattened_type(type_)[0];
+            instructions.local_get(pointer);
+            source.get(instructions, 0, lane)?;
+            match type_ {
+                AbiType::InternalPointer => {
+                    instructions.i32_store(memory_argument(offset, 2));
+                }
+                AbiType::Vector128 => {
+                    instructions.v128_store(memory_argument(offset, 4));
+                }
+                AbiType::SignedInteger64 | AbiType::Resource { .. } => {
+                    instructions.i64_store(memory_argument(offset, 3));
+                }
+                AbiType::Float32 => {
+                    instructions.f32_store(memory_argument(offset, 2));
+                }
+                AbiType::Float64 => {
+                    instructions.f64_store(memory_argument(offset, 3));
+                }
+                AbiType::Boolean => {
+                    instructions.i32_store8(memory_argument(offset, 0));
+                }
+                _ => unreachable!(),
+            }
+            Ok(1)
         }
         AbiType::Text | AbiType::Array { .. } => {
-            instructions
-                .local_get(pointer)
-                .local_get(source[*flat_index])
-                .i32_store(memory_argument(offset, 2))
-                .local_get(pointer)
-                .local_get(source[*flat_index + 1])
-                .i32_store(memory_argument(offset + 4, 2));
-            *flat_index += 2;
+            for index in 0..2 {
+                instructions.local_get(pointer);
+                source.get(instructions, index, ValType::I32)?;
+                instructions.i32_store(memory_argument(offset + 4 * index as u32, 2));
+            }
+            Ok(2)
         }
         AbiType::Record { fields } => {
+            let mut consumed = 0;
             for field in record_layout(fields) {
-                emit_store_canonical_result(
+                consumed += emit_store_memory_value(
                     instructions,
                     field.type_,
-                    source,
-                    flat_index,
+                    source.tail(consumed),
                     pointer,
                     offset + field.offset,
                 )?;
             }
+            Ok(consumed)
         }
         AbiType::Variant { cases } => {
             let layout = variant_layout(cases);
-            let tag = source[*flat_index];
-            instructions.local_get(pointer).local_get(tag);
+            instructions.local_get(pointer);
+            source.get(instructions, 0, ValType::I32)?;
             match layout.discriminant_size {
                 1 => {
                     instructions.i32_store8(memory_argument(offset, 0));
@@ -6251,41 +6451,31 @@ fn emit_store_canonical_result(
                 }
                 size => return Err(format!("unsupported variant discriminant size {size}")),
             }
-            *flat_index += 1;
-            let payload_start = *flat_index;
-            let mut payload_width = 0;
             for (case_index, case_) in cases.iter().enumerate() {
                 let Some(payload) = &case_.payload else {
                     continue;
                 };
-                let case_width = flattened_type(payload).len();
-                payload_width = payload_width.max(case_width);
+                source.get(instructions, 0, ValType::I32)?;
                 instructions
-                    .local_get(tag)
                     .i32_const(case_index as i32)
                     .i32_eq()
                     .if_(BlockType::Empty);
-                let mut case_flat_index = payload_start;
-                emit_store_canonical_result(
+                emit_store_memory_value(
                     instructions,
                     payload,
-                    source,
-                    &mut case_flat_index,
+                    source.tail(1),
                     pointer,
                     offset + layout.payload_offset,
                 )?;
                 instructions.end();
             }
-            *flat_index = payload_start + payload_width;
+            Ok(flattened_type(type_).len())
         }
         AbiType::Sealed { inner, .. }
         | AbiType::Callback {
             environment: inner, ..
-        } => {
-            emit_store_canonical_result(instructions, inner, source, flat_index, pointer, offset)?;
-        }
+        } => emit_store_memory_value(instructions, inner, source, pointer, offset),
     }
-    Ok(())
 }
 
 fn text_scalar_count_function() -> Function {

@@ -1,6 +1,4 @@
-// Binding two measured lengths does not make either array a bound for the
-// other. The comparison has two stable witnesses and no independent subject,
-// so it proves nothing about the literal index zero for `ys`.
+// Array lengths are nonnegative, so a strictly longer array is nonempty.
 
 open import "blot:prelude"
 
@@ -13,4 +11,7 @@ let first = fn xs => fn ys => do:
   else:
     return 0
 
-return first
+return { .larger = first [] [41]; .equal = first [0] [7]; .smaller = first [
+  0,
+  1
+] [7]; }

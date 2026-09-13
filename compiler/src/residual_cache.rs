@@ -70,10 +70,13 @@ fn cache_word(value: &str) -> Option<&'static str> {
         "text.append",
         "text.join",
         "text.length",
+        "text.byte-length",
         "text.scalar-at",
         "text.next-byte",
         "text.slice",
+        "text.slice-bytes",
         "text.find-from",
+        "text.find-byte-from",
         "text.compare",
         "text.contains",
         "text.from-i64",
@@ -132,10 +135,13 @@ fn portable_operation(kind: &str) -> bool {
             | "text.append"
             | "text.join"
             | "text.length"
+            | "text.byte-length"
             | "text.scalar-at"
             | "text.next-byte"
             | "text.slice"
+            | "text.slice-bytes"
             | "text.find-from"
+            | "text.find-byte-from"
             | "text.compare"
             | "text.contains"
             | "text.from-i64"
@@ -167,6 +173,7 @@ pub(super) fn record(context: &Context, outcome: GraphCacheOutcome) {
 
 #[derive(Default)]
 pub(crate) struct ResidualCache {
+    pub(super) provenance: super::residual_identity::ProvenanceMemo,
     pub(super) registry: Option<super::residual_identity::RegistryMemo>,
     entries: HashMap<Rc<Vec<u8>>, Rc<Entry>>,
     order: VecDeque<Rc<Vec<u8>>>,

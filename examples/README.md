@@ -11,6 +11,38 @@ that has not been implemented are four different claims about the language.
 | `examples/rejected/` | programs the language intentionally rejects                       | fail in the recorded compiler phase with the recorded diagnostic                            |
 | `examples/pending/`  | desirable pressure tests which are **not implemented yet**        | retain the recorded refusal or non-principal type, then fail loudly when it can be promoted |
 
+## Effect and type abstractions
+
+These examples build APIs from ordinary type values and interpret computations
+with ordinary handler records. Each runs with
+`pnpm blot run examples/<name>.blot`.
+
+| Example                                                      | Abstraction                                                                                                       | Observations                                                 |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
+| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
+| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
+| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+
+The nonempty stream's final `return` supplies its last element. Its result
+signature requires that element even when the producer makes no `emit` calls,
+which is the singleton case. Reduction starts with that final element and
+combines earlier emissions while continuations unwind. Text separators therefore
+appear only between elements, and the first-element handler returns a value
+directly. This is a right reduction; the example makes no constant-stack claim.
+
+The schema example derives the effect interface and implements its clauses in
+`supply`. That factory explicitly checks the answers with `@satisfies`; it does
+not rely on the current generic handler's resume-result inference to enforce the
+port refinement. Its answers are supplied source values, not decoded user input.
+The transaction handlers simulate the ownership protocol; they do not implement
+database durability or isolation.
+
+`src/node/effect_abstractions.test.ts` checks principal types, both executions,
+the singleton and early-exit cases, and rejection of nonpositive emissions,
+missing final elements, invalid ports, duplicate commits, and abandoned
+transactions. `deno task verify:showcase` includes all four examples.
+
 ## Everyday programs
 
 These examples are good starting points when evaluating Blot as a programming

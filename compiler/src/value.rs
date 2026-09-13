@@ -1,7 +1,7 @@
 #[path = "value_graph.rs"]
 mod graph;
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::rc::{Rc, Weak};
@@ -85,7 +85,7 @@ pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
                         .as_deref()
                         .is_some_and(|signature| !graph::contains_free_type_variables(signature));
             if !relates_input_to_output && !preserves_closed_signature {
-                *closure_signature = Some(Box::new(complete_signature.clone()));
+                *closure_signature = Some(Rc::new(complete_signature.clone()));
             }
         }
         (Value::Shape(values), Value::Shape(signatures)) => {
@@ -182,6 +182,9 @@ pub struct Env {
     pub(crate) recursive_bindings: Option<Rc<RecursiveBindings>>,
     decoded_identity: Option<Rc<DecodedEnvironmentIdentity>>,
     captured: Cell<bool>,
+    // Most lexical frames have no index and pay only for this pointer.
+    #[allow(clippy::box_collection)]
+    name_locations: OnceCell<Box<HashMap<String, Weak<Env>>>>,
 }
 
 impl Drop for Env {
@@ -221,6 +224,7 @@ fn child_env_with_identity(
         recursive_bindings: None,
         decoded_identity,
         captured: Cell::new(false),
+        name_locations: OnceCell::new(),
     })
 }
 
@@ -256,7 +260,7 @@ struct RecursiveClosure {
     body: ExpressionId,
     self_name: Option<String>,
     imports: Option<BTreeMap<String, String>>,
-    signature: Option<Box<Value>>,
+    signature: Option<Rc<Value>>,
     reuse_assertion: Option<crate::ast::Span>,
     deferred: bool,
 }
@@ -509,6 +513,7 @@ fn recursive_env_with_identity(
         recursive_bindings: Some(bindings.clone()),
         decoded_identity,
         captured: Cell::new(false),
+        name_locations: OnceCell::new(),
     });
     *bindings.environment.borrow_mut() = Rc::downgrade(&environment);
     (environment, bindings)
@@ -553,6 +558,15 @@ pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> 
 pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
     let mut scope = Some(environment.clone());
     while let Some(current) = scope {
+        let (current, indexed) = if let Some(locations) = current.name_locations.get() {
+            let owner = locations
+                .get(name)?
+                .upgrade()
+                .expect("indexed name retains its owning scope");
+            (owner, true)
+        } else {
+            (current, false)
+        };
         if let Some(value) = current.names.borrow().get(name) {
             return Some(value.clone());
         }
@@ -568,9 +582,48 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
                 return Some(value.clone());
             }
         }
+        assert!(
+            !indexed,
+            "indexed binding {name} disappeared from its captured scope"
+        );
         scope = current.parent.borrow().clone();
     }
     None
+}
+
+pub(crate) fn index_environment_names(environment: &Environment) {
+    // Call only after reconstruction has filled every frame and recursive group.
+    // Capturing makes subsequent declarations use a child scope; weak locations
+    // avoid a root -> indexed closure environment -> root ownership cycle.
+    capture_env(environment);
+    environment.name_locations.get_or_init(|| {
+        let mut locations = HashMap::new();
+        let mut scope = Some(environment.clone());
+        while let Some(current) = scope {
+            let owner = Rc::downgrade(&current);
+            for name in current.names.borrow().keys() {
+                locations
+                    .entry(name.clone())
+                    .or_insert_with(|| owner.clone());
+            }
+            if let Some(bindings) = &current.recursive_bindings {
+                for name in bindings.closures.borrow().keys() {
+                    locations
+                        .entry(name.clone())
+                        .or_insert_with(|| owner.clone());
+                }
+            }
+            for opened in current.opens.borrow().iter().rev() {
+                for (name, _) in opened.fields().iter() {
+                    locations
+                        .entry(name.clone())
+                        .or_insert_with(|| owner.clone());
+                }
+            }
+            scope = current.parent.borrow().clone();
+        }
+        Box::new(locations)
+    });
 }
 
 pub(crate) fn opened_members(value: &Value) -> Option<OrderedFields> {
@@ -829,8 +882,10 @@ pub struct OrderedFields(Rc<OrderedFieldStorage>, Rc<()>);
 #[derive(Clone, Debug, Default)]
 struct OrderedFieldStorage {
     entries: Vec<(String, Value)>,
-    positions: BTreeMap<String, usize>,
+    positions: Option<BTreeMap<String, usize>>,
 }
+
+const LINEAR_FIELD_LOOKUP_LIMIT: usize = 8;
 
 impl OrderedFields {
     /// A call-local key for immutable structural conversion, not source identity.
@@ -843,8 +898,15 @@ impl OrderedFields {
     }
 
     pub fn get(&self, name: &str) -> Option<&Value> {
-        let position = self.0.positions.get(name)?;
-        Some(&self.0.entries[*position].1)
+        if let Some(positions) = &self.0.positions {
+            let position = positions.get(name)?;
+            return Some(&self.0.entries[*position].1);
+        }
+        self.0
+            .entries
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value)
     }
 
     pub fn insert(&mut self, name: String, value: Value) -> Option<Value> {
@@ -852,11 +914,27 @@ impl OrderedFields {
             self.1 = Rc::new(());
         }
         let fields = Rc::make_mut(&mut self.0);
-        if let Some(position) = fields.positions.get(&name) {
-            return Some(std::mem::replace(&mut fields.entries[*position].1, value));
+        let position = match &fields.positions {
+            Some(positions) => positions.get(&name).copied(),
+            None => fields.entries.iter().position(|(field, _)| field == &name),
+        };
+        if let Some(position) = position {
+            return Some(std::mem::replace(&mut fields.entries[position].1, value));
         }
-        fields.positions.insert(name.clone(), fields.entries.len());
+        if let Some(positions) = &mut fields.positions {
+            positions.insert(name.clone(), fields.entries.len());
+        }
         fields.entries.push((name, value));
+        if fields.positions.is_none() && fields.entries.len() > LINEAR_FIELD_LOOKUP_LIMIT {
+            fields.positions = Some(
+                fields
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (name, _))| (name.clone(), index))
+                    .collect(),
+            );
+        }
         None
     }
 
@@ -865,12 +943,19 @@ impl OrderedFields {
             self.1 = Rc::new(());
         }
         let fields = Rc::make_mut(&mut self.0);
-        let position = fields.positions.remove(name)?;
+        let position = match &mut fields.positions {
+            Some(positions) => positions.remove(name)?,
+            None => fields.entries.iter().position(|(field, _)| field == name)?,
+        };
         let value = fields.entries.remove(position).1;
-        for index in position..fields.entries.len() {
-            fields
-                .positions
-                .insert(fields.entries[index].0.clone(), index);
+        if fields.entries.len() <= LINEAR_FIELD_LOOKUP_LIMIT {
+            fields.positions = None;
+        } else if let Some(positions) = &mut fields.positions {
+            for index in position..fields.entries.len() {
+                *positions
+                    .get_mut(&fields.entries[index].0)
+                    .expect("record field has its index") = index;
+            }
         }
         Some(value)
     }
@@ -1042,7 +1127,7 @@ pub enum Value {
         environment: Environment,
         self_name: Option<String>,
         imports: Option<BTreeMap<String, String>>,
-        signature: Option<Box<Value>>,
+        signature: Option<Rc<Value>>,
         /// Source span of `@[assert.reuse]`, when this closure carries the
         /// cost-contract assertion. It grants no ownership permission.
         reuse_assertion: Option<crate::ast::Span>,
@@ -1146,7 +1231,7 @@ pub enum ChoiceSource {
         body: ExpressionId,
         environment: Environment,
         self_name: Option<String>,
-        signature: Option<Box<Value>>,
+        signature: Option<Rc<Value>>,
         reuse_assertion: Option<crate::ast::Span>,
         deferred: bool,
     },
@@ -1868,6 +1953,80 @@ fn effect_id(value: &Value) -> Option<u32> {
 mod type_value_tests {
     use super::*;
 
+    #[test]
+    fn indexed_lookup_preserves_shadowing_open_precedence_and_usage() {
+        let parent = child_env(None);
+        parent
+            .names
+            .borrow_mut()
+            .insert("shadowed".to_owned(), Value::Int(1.into()));
+        parent
+            .names
+            .borrow_mut()
+            .insert("inherited".to_owned(), Value::Int(2.into()));
+        let inner = child_env(Some(parent));
+        inner
+            .names
+            .borrow_mut()
+            .insert("shadowed".to_owned(), Value::Int(3.into()));
+        let used = Rc::new(RefCell::new(BTreeSet::new()));
+        inner.opens.borrow_mut().extend([
+            OpenedValues::new(OrderedFields::from_iter([(
+                "opened".to_owned(),
+                Value::Int(4.into()),
+            )])),
+            OpenedValues::tracked(
+                OrderedFields::from_iter([
+                    ("opened".to_owned(), Value::Int(5.into())),
+                    ("shadowed".to_owned(), Value::Int(6.into())),
+                    ("unused".to_owned(), Value::Int(7.into())),
+                ]),
+                used.clone(),
+            ),
+        ]);
+        let names = ["shadowed", "inherited", "opened", "missing", "opened"].map(str::to_owned);
+        let expected = names
+            .iter()
+            .filter_map(|name| lookup(&inner, name).map(|value| (name.clone(), value)))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(*used.borrow(), BTreeSet::from(["opened".to_owned()]));
+        used.borrow_mut().clear();
+        index_environment_names(&inner);
+        assert!(
+            used.borrow().is_empty(),
+            "building an index must not mark opens used"
+        );
+        for (name, expected) in &expected {
+            assert!(equal(
+                &lookup(&inner, name).expect("indexed name exists"),
+                expected
+            ));
+        }
+        assert!(lookup(&inner, "missing").is_none());
+        assert_eq!(*used.borrow(), BTreeSet::from(["opened".to_owned()]));
+        let shadow = declaration_env(&inner);
+        assert!(!Rc::ptr_eq(&shadow, &inner));
+        shadow
+            .names
+            .borrow_mut()
+            .insert("opened".to_owned(), Value::Int(8.into()));
+        assert!(equal(
+            &lookup(&shadow, "opened").unwrap(),
+            &Value::Int(8.into())
+        ));
+        assert!(equal(
+            &lookup(&inner, "opened").unwrap(),
+            &Value::Int(5.into())
+        ));
+        let weak = Rc::downgrade(&inner);
+        drop(shadow);
+        drop(inner);
+        assert!(
+            weak.upgrade().is_none(),
+            "indexed scopes must not retain themselves"
+        );
+    }
+
     fn identity(variable: u32) -> Value {
         Value::Forall {
             variable,
@@ -1972,7 +2131,7 @@ mod type_value_tests {
             environment,
             self_name: Some("loop".to_owned()),
             imports: None,
-            signature: Some(Box::new(captured)),
+            signature: Some(Rc::new(captured)),
             reuse_assertion: None,
             deferred: false,
         };
@@ -2198,6 +2357,48 @@ pub fn show(value: &Value) -> String {
 #[cfg(test)]
 mod show_tests {
     use super::*;
+
+    #[test]
+    fn record_updates_preserve_order_and_snapshots_across_index_sizes() {
+        let original = (0..24)
+            .map(|index| (format!("field_{index}"), Value::Int(index.into())))
+            .collect::<OrderedFields>();
+        let mut changed = original.clone();
+        for index in 0..24 {
+            let name = format!("field_{index}");
+            assert_eq!(show(changed.get(&name).unwrap()), index.to_string());
+            assert_eq!(show(&changed.remove(&name).unwrap()), index.to_string());
+            assert!(changed.get(&name).is_none());
+            for retained in index + 1..24 {
+                assert_eq!(
+                    show(changed.get(&format!("field_{retained}")).unwrap()),
+                    retained.to_string(),
+                );
+            }
+        }
+        assert!(changed.is_empty());
+        for index in (0..24).rev() {
+            changed.insert(format!("field_{index}"), Value::Int((index + 100).into()));
+        }
+        let keys = changed.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            (0..24)
+                .rev()
+                .map(|index| format!("field_{index}"))
+                .collect::<Vec<_>>()
+        );
+        for index in 0..24 {
+            let name = format!("field_{index}");
+            assert_eq!(
+                show(&changed.insert(name.clone(), Value::Unit).unwrap()),
+                (index + 100).to_string()
+            );
+            assert_eq!(show(original.get(&name).unwrap()), index.to_string());
+        }
+        assert_eq!(changed.keys().cloned().collect::<Vec<_>>(), keys);
+        assert!(!original.same_identity(&changed));
+    }
 
     #[test]
     fn shared_text_clones_keep_the_same_immutable_storage() {

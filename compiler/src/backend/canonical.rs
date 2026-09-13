@@ -315,8 +315,11 @@ impl CanonicalAdapters {
                         .i32_const(layout.payload_offset as i32)
                         .i32_add()
                         .call(self.types[&case.payload_type].lower);
-                    let width = layouts.flattened(module, case.payload_type)?.len();
-                    set_results(&mut ins, &result[1..1 + width]);
+                    let payload_lanes = layouts.flattened(module, case.payload_type)?;
+                    for (index, lane) in payload_lanes.iter().enumerate().rev() {
+                        emit_lane_conversion(&mut ins, *lane, lanes[index + 1])?;
+                        ins.local_set(result[index + 1]);
+                    }
                     emit_local_values(&mut ins, &result);
                     ins.return_().end();
                 }
@@ -519,8 +522,11 @@ impl CanonicalAdapters {
                     ins.local_get(0)
                         .i32_const(layout.payload_offset as i32)
                         .i32_add();
-                    let width = layouts.flattened(module, case.payload_type)?.len();
-                    emit_local_values(&mut ins, &source[1..1 + width]);
+                    let payload_lanes = layouts.flattened(module, case.payload_type)?;
+                    for (index, lane) in payload_lanes.iter().enumerate() {
+                        ins.local_get(source[index + 1]);
+                        emit_lane_conversion(&mut ins, lanes[index + 1], *lane)?;
+                    }
                     ins.call(self.types[&case.payload_type].upper)
                         .return_()
                         .end();

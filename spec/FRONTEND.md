@@ -214,7 +214,10 @@ Surface elaboration lowers rich control to the smaller Core owned by
   bound by the loop pattern are local to an iteration and are excluded from the
   accumulator even when rebound with `:=`; the initial argument is marked for
   retention of its checked expression type so specialization receives stable
-  accumulator fields rather than only their initial values;
+  accumulator fields rather than only their initial values; accumulator
+  collection includes nested loops when traversing statement conditionals and
+  outer loops, excluding each nested loop's pattern bindings and lexical
+  declarations;
 - comma-separated case subjects become affine deferred parameters whose first
   demanded reads are cached before ordinary nested cases inspect them; a
   non-executed decision tree over the unguarded rows carries the same subject
@@ -286,3 +289,33 @@ The frontend owes:
 Executable parser, CST, and elaboration fixtures provide finite evidence for
 these obligations. They do not authorize a source form absent from
 `grammar.baba` or a second downstream semantics.
+
+## Typed function headers and record field layout
+
+Parenthesized parameter patterns may carry ordinary type-value annotations.
+Single parenthesized patterns group; multiple patterns retain tuple elaboration.
+Header annotations elaborate to existing signature and binding declarations.
+Missing components use signature holes, including an effect-tail hole when the
+result is omitted. Written results are pure unless a row is supplied. Named and
+recursive bindings hoist their generated signature without wrapping the Lambda
+or Rec body; anonymous functions use a local signed binding. Matching source and
+generated signatures are cumulative constraints. Each still has source evidence.
+The checker must not discard one when both appear. No new Core node or backend
+operation represents an annotated parameter.
+
+Record value shorthand lowers to an ordinary field with a lexical variable read.
+The layout pass recognizes record openings from Baba token identities (`.` or
+`...` after `{`), tracks delimiter depth and first-field indentation, and
+inserts `;` only at equal-indented new fields or a later closing brace. Nested
+suite dedents precede that separator. More-indented dots remain field-access
+continuations. Tokens inside nested delimiters do not end an enclosing field.
+Same-line fields retain explicit separators. Source offsets map inserted tokens
+to their boundary; the Rust and syntax-only host layout must agree.
+
+The `for` elaboration sequences its recursive fold even when only the iterator
+step is effectful. Nested iterations count as sequencing when elaborating
+surrounding statement conditionals. The iterator step remains in the recursive
+case target; the body's declarations retain their ordinary individual effect
+rules, including pure rebinding and effectful `return`. No extra binding wraps
+the whole body to constrain its effects. These are existing Core forms and do
+not add a grammar island, parser resolution, or loop node.

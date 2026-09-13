@@ -222,11 +222,14 @@ Recursive closure dependencies include subsequent iterations of desugared loops.
 An unused lazy declaration does not extend a borrow's lifetime.
 
 Direct operation contracts decide their own suspension mode; other calls consult
-their checked effect row. Open rows and effect declarations unavailable during
-certificate replay cannot prove synchronous execution. Borrow liveness remains
-separate from type and effect inference and neither consumes a source binding
-nor grants ownership. Compound operands may conservatively retain a source
-borrow until their enclosing expression completes.
+their checked effect row, including the settled tail of an extended row.
+Unresolved tails and effect declarations unavailable during certificate replay
+cannot prove synchronous execution; a closed empty tail adds no suspension.
+Source combinators such as `Fn.pipe` must preserve callback effects in their
+checked signatures; syntax does not grant a suspension exemption. Borrow
+liveness remains separate from type and effect inference and neither consumes a
+source binding nor grants ownership. Compound operands may conservatively retain
+a source borrow until their enclosing expression completes.
 
 A function publishes a type-independent ownership summary describing parameter,
 callback, and result-path use. Passing a linear closure once to a function that
@@ -336,3 +339,46 @@ Finite-domain coverage generation, proposition mutation tests, path-generated
 ownership tests, certificate replay, source/Rust/Wasm differential execution,
 and Store-write classification are evidence for these obligations. None becomes
 a second safety semantics.
+
+## Bounded normal-return inference
+
+`relational_inference.rs` interprets the recognized source fragment into
+immutable symbolic operands: integer terms, array/region lengths, product
+fields, and constructor payloads. The shared difference-constraint kernel in
+`relational_proof.rs` is also used by direct array checking. An offset term
+denotes an immutable integer plus a constant; an inequality is
+`left - right <= bound`. This pass does not evaluate effects or create ordinary
+type constraints.
+
+The direct proof pass runs first. Only an unresolved index obligation enables
+source-helper expansion and recursive inference for the module. Typed parameter
+facts come from the settled Rust checker; an unknown operand cannot select an
+integer operator merely because the source uses an arithmetic spelling. Unknown
+operations produce no relationship. A returned constructor retains only its own
+path facts; an unconditional join retains facts entailed by every normal path.
+
+Self-tail recursion uses fresh symbolic accumulator terms and a finite set of
+difference inequalities over those terms, captured terms, and zero. Candidate
+constants include -1, 0, and 1, literal and affine offsets in entry/captured
+operands, and bounds in the caller context. Entry checking removes candidates
+not entailed after substitution of the actual argument. Each transfer evaluates
+the body symbolically, collecting tail-call arguments and normal exits.
+Fixed-point iteration removes candidates not preserved on every back edge. A
+missing accumulator projection fails substitution; it never denotes an unchanged
+value. The final set is replayed from the source body before safety checking
+uses it. Escaping or unsupported recursive closures receive ordinary
+parameter-only checking. No analysis identifies a loop by a compiler-generated
+name.
+
+The candidate cap is 256 and the symbolic transfer cap is 65,536 transfer visits
+per inference request. Proof graph limits remain 512 terms and 2,048 edges.
+Resource refusal contributes no tentative facts. A needed proof after exhaustion
+is a compiler limit, not a claim that the source is ill typed.
+
+Checked-module certificates carry erased array-index and recursive-invariant
+observations. Their algebra and source references are validated on restoration.
+They support explanations, not new assumptions: callers derive relationships
+from resolved source closures, and never consume imported observations as a
+substitute for deriving a summary. Recursive observations include entry and
+back-edge evidence; construction additionally replays the source transfer.
+`pnpm test:refinements` exercises acceptance, rejection, and runtime agreement.

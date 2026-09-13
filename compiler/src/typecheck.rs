@@ -1316,6 +1316,7 @@ pub struct CheckedModule {
     pub ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     pub simplifications: Vec<SimplificationFact>,
     pub readability: Vec<ReadabilityFact>,
+    pub refinements: Vec<crate::refinement_evidence::RefinementFact>,
 }
 
 #[derive(Clone)]
@@ -1325,12 +1326,15 @@ pub struct CachedModuleInterface {
     effects: FlatTypeId,
     parameter: Option<FlatTypeId>,
     evaluated: Option<ValueEnvironment>,
-    expression_types: Vec<(ExpressionId, FlatTypeId)>,
-    closure_signatures: Vec<(ExpressionId, FlatTypeId)>,
+    expression_types: Rc<[(ExpressionId, FlatTypeId)]>,
+    expression_type_index: Rc<HashMap<ExpressionId, FlatTypeId>>,
+    closure_signatures: Rc<[(ExpressionId, FlatTypeId)]>,
+    closure_signature_index: Rc<HashMap<ExpressionId, FlatTypeId>>,
     recursive_closures: Vec<ExpressionId>,
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     simplifications: Vec<SimplificationFact>,
     readability: Vec<ReadabilityFact>,
+    refinements: Vec<crate::refinement_evidence::RefinementFact>,
 }
 
 pub(crate) use crate::protocol::CHECKED_MODULE_CERTIFICATE_SCHEMA;
@@ -1348,6 +1352,7 @@ pub struct CheckedModuleCertificate {
     pub(crate) ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     pub(crate) simplifications: Vec<SimplificationFact>,
     pub(crate) readability: Vec<ReadabilityFact>,
+    pub(crate) refinements: Vec<crate::refinement_evidence::RefinementFact>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1630,8 +1635,8 @@ fn validate_named_flat_type_reference_budget(
     for (name, root) in roots {
         let index = root.0 as usize;
         let depth = reference_depths[index];
-        let prefix = name.map(|name| format!("{name}: ")).unwrap_or_default();
         if depth > ARTIFACT_REFERENCE_PATH_LIMIT {
+            let prefix = name.map(|name| format!("{name}: ")).unwrap_or_default();
             return Err(format!(
                 "{prefix}{artifact} root type {index} has reference-path depth {depth}, maximum is {ARTIFACT_REFERENCE_PATH_LIMIT}"
             ));
@@ -1640,6 +1645,7 @@ fn validate_named_flat_type_reference_budget(
             .saturating_add(expanded_references[index])
             .min(expanded_overflow);
         if expanded_roots > ARTIFACT_EXPANDED_REFERENCE_LIMIT {
+            let prefix = name.map(|name| format!("{name}: ")).unwrap_or_default();
             return Err(format!(
                 "{prefix}{artifact} roots expand to at least {expanded_roots} references, maximum is {ARTIFACT_EXPANDED_REFERENCE_LIMIT}"
             ));
@@ -1823,12 +1829,15 @@ impl CachedModuleInterface {
                 effects,
                 parameter,
                 evaluated: checked.evaluated.clone(),
-                expression_types,
-                closure_signatures,
+                expression_type_index: Rc::new(expression_types.iter().copied().collect()),
+                closure_signature_index: Rc::new(closure_signatures.iter().copied().collect()),
+                expression_types: expression_types.into(),
+                closure_signatures: closure_signatures.into(),
                 recursive_closures: checked.recursive_closures.clone(),
                 ownership_contracts: checked.ownership_contracts.clone(),
                 simplifications: checked.simplifications.clone(),
                 readability: checked.readability.clone(),
+                refinements: checked.refinements.clone(),
             })
         })();
         let Some(interface) = interface else {
@@ -1839,6 +1848,8 @@ impl CachedModuleInterface {
     }
 
     fn validate_type_budget(&self) -> Result<(), String> {
+        #[cfg(test)]
+        INTERFACE_BUDGET_SCANS.with(|count| count.set(count.get() + 1));
         let mut named_roots = vec![
             ("module result".to_owned(), self.result),
             ("module effects".to_owned(), self.effects),
@@ -1872,12 +1883,13 @@ impl CachedModuleInterface {
             result: self.result,
             effects: self.effects,
             parameter: self.parameter,
-            expression_types: self.expression_types.clone(),
-            closure_signatures: self.closure_signatures.clone(),
+            expression_types: self.expression_types.to_vec(),
+            closure_signatures: self.closure_signatures.to_vec(),
             recursive_closures: self.recursive_closures.clone(),
             ownership_contracts: self.ownership_contracts.clone(),
             simplifications: self.simplifications.clone(),
             readability: self.readability.clone(),
+            refinements: self.refinements.clone(),
         }
     }
 
@@ -1891,17 +1903,21 @@ impl CachedModuleInterface {
             effects: certificate.effects,
             parameter: certificate.parameter,
             evaluated: None,
-            expression_types: certificate.expression_types,
-            closure_signatures: certificate.closure_signatures,
+            expression_type_index: Rc::new(certificate.expression_types.iter().copied().collect()),
+            closure_signature_index: Rc::new(
+                certificate.closure_signatures.iter().copied().collect(),
+            ),
+            expression_types: certificate.expression_types.into(),
+            closure_signatures: certificate.closure_signatures.into(),
             recursive_closures: certificate.recursive_closures,
             ownership_contracts: certificate.ownership_contracts,
             simplifications: certificate.simplifications,
             readability: certificate.readability,
+            refinements: certificate.refinements,
         })
     }
 
     fn sealed_boundary_bytes(&self) -> Result<Vec<u8>, String> {
-        self.validate_type_budget()?;
         let mut builder = FlatTypeBuilder::default();
         let mut rigids = Vec::new();
         let mut next_rigid = 0;
@@ -1942,6 +1958,11 @@ impl CachedModuleInterface {
         }
         .to_bytes()
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static INTERFACE_BUDGET_SCANS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn closed_boundary_type_key(
@@ -2375,6 +2396,9 @@ impl CheckedModuleCertificate {
         if let Some(parameter) = self.parameter {
             validate_certificate_type(&self.types, parameter)?;
         }
+        for fact in &self.refinements {
+            fact.validate()?;
+        }
         let mut expressions = HashSet::new();
         for (expression, type_) in &self.expression_types {
             validate_certificate_type(&self.types, *type_)?;
@@ -2522,6 +2546,7 @@ pub struct CachedModuleAnalyses {
     ownership_contracts: Vec<(ExpressionId, crate::ownership::OwnershipContract)>,
     ownership_facts: Vec<crate::ownership::OwnershipFact>,
     safety: Result<(), Diagnostic>,
+    refinements: Vec<crate::refinement_evidence::RefinementFact>,
 }
 
 #[derive(Clone, Default)]
@@ -2625,6 +2650,7 @@ pub struct Checker {
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
     editor_holes: RefCell<ModuleFacts<ExpressionId, EditorHole>>,
+    handler_clauses: RefCell<ModuleFacts<ExpressionId, Vec<crate::ownership::HandlerClause>>>,
     member_constraints: RefCell<MemberConstraints>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
@@ -2697,6 +2723,10 @@ impl Checker {
         module_interfaces: Rc<RefCell<HashMap<String, CachedModuleInterface>>>,
         module_analyses: Rc<RefCell<HashMap<String, CachedModuleAnalyses>>>,
     ) -> Self {
+        let representation_holes = context
+            .representation_holes
+            .get_or_init(|| Rc::new(Cell::new(u32::MAX)))
+            .clone();
         Self {
             context,
             variables: RefCell::new(Vec::new()),
@@ -2718,9 +2748,10 @@ impl Checker {
             bound_insertions: RefCell::new(Vec::new()),
             numeric_literals: RefCell::new(BTreeMap::new()),
             editor_holes: RefCell::new(ModuleFacts::default()),
+            handler_clauses: RefCell::new(ModuleFacts::default()),
             member_constraints: RefCell::new(MemberConstraints::default()),
             next_skolem: Rc::new(Cell::new(0x8000_0000)),
-            next_representation_hole: Rc::new(Cell::new(u32::MAX)),
+            next_representation_hole: representation_holes,
             level: Cell::new(0),
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
@@ -3020,7 +3051,7 @@ impl Checker {
             .expect("checked module presence was tested")
             .module
             .clone();
-        for (expression, _) in &interface.expression_types {
+        for (expression, _) in interface.expression_types.iter() {
             if expression.0 as usize >= module.arena.expressions.len() {
                 return Err(format!(
                     "checked-module certificate references missing expression {}",
@@ -3028,7 +3059,7 @@ impl Checker {
                 ));
             }
         }
-        for (body, _) in &interface.closure_signatures {
+        for (body, _) in interface.closure_signatures.iter() {
             if body.0 as usize >= module.arena.expressions.len() {
                 return Err(format!(
                     "checked-module certificate references missing closure expression {}",
@@ -3056,17 +3087,25 @@ impl Checker {
                 }
             }
         }
+        for fact in &interface.refinements {
+            fact.validate_source(&module)?;
+        }
         crate::ownership::validate_contracts(&module, &interface.ownership_contracts)?;
         Ok(())
     }
 
     pub fn begin_request(&self) {
         self.module_work.borrow_mut().clear();
+        self.finish_request();
+    }
+
+    pub(crate) fn finish_request(&self) {
         self.modules.borrow_mut().clear();
         self.closure_types.borrow_mut().clear();
         self.signed_closure_types.borrow_mut().clear();
         self.expression_types.borrow_mut().clear();
         self.analysis_expression_types.borrow_mut().clear();
+        self.handler_clauses.borrow_mut().clear();
         self.structural_readability_candidates.borrow_mut().clear();
         self.stable_shadow_candidates.borrow_mut().clear();
         self.direct_effect_candidates.borrow_mut().clear();
@@ -3113,6 +3152,7 @@ impl Checker {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
             evaluated: None,
             ..checked
         };
@@ -3133,6 +3173,7 @@ impl Checker {
             .borrow_mut()
             .retain(|_, literal| !paths.contains(&literal.path));
         self.editor_holes.borrow_mut().remove_modules(paths);
+        self.handler_clauses.borrow_mut().remove_modules(paths);
         self.analysis_expression_types
             .borrow_mut()
             .remove_modules(paths);
@@ -3475,6 +3516,7 @@ impl Checker {
             "specializations": specializations,
             "simplifications": simplifications,
             "readability": readability,
+            "refinements": checked.refinements.iter().map(|fact| fact.explanation(&module)).collect::<Vec<_>>(),
             "work": self.module_work.borrow().get(path),
         })
     }
@@ -3724,6 +3766,7 @@ impl Checker {
 
     fn check_uncached(&self, path: &str) -> Result<CheckedModule, Diagnostic> {
         self.editor_holes.borrow_mut().remove_module(path);
+        self.handler_clauses.borrow_mut().remove_module(path);
         self.simplifications.borrow_mut().remove_module(path);
         self.readability.borrow_mut().remove_module(path);
         self.conflicting_readability
@@ -4143,6 +4186,7 @@ impl Checker {
             ownership_contracts: analyses.ownership_contracts,
             simplifications: simplifications.into_iter().map(|(_, fact)| fact).collect(),
             readability: readability.into_iter().map(|(_, fact)| fact).collect(),
+            refinements: analyses.refinements,
         };
         self.cache_module_result(path, &loaded.module, &checked);
         Ok(checked)
@@ -4220,6 +4264,12 @@ impl Checker {
                 (*expression, settled)
             })
             .collect::<HashMap<_, _>>();
+        let handler_clauses = self
+            .handler_clauses
+            .borrow()
+            .module(path)
+            .cloned()
+            .unwrap_or_default();
         let ownership = crate::ownership::check(
             path,
             module,
@@ -4227,15 +4277,29 @@ impl Checker {
             values,
             &closure_types,
             &expression_types,
+            &handler_clauses,
         );
+        let relational_parameters = closure_types
+            .iter()
+            .filter_map(|(body, type_)| {
+                let mut type_ = type_;
+                while let Type::Forall { body, .. } | Type::Qualified { body, .. } = type_ {
+                    type_ = body;
+                }
+                let Type::Function { parameter, .. } = type_ else {
+                    return None;
+                };
+                self.reify_runtime_type(&self.settle((**parameter).clone(), true))
+                    .map(|parameter| (*body, parameter))
+            })
+            .collect::<HashMap<_, _>>();
+        let safety = crate::safety::check(module, &self.context, values, &relational_parameters);
         let analyses = CachedModuleAnalyses {
             ownership: ownership.diagnostics.into_iter().next().map_or(Ok(()), Err),
             ownership_contracts: ownership.contracts,
             ownership_facts: ownership.facts,
-            safety: crate::safety::check(module, &self.context, values)
-                .into_iter()
-                .next()
-                .map_or(Ok(()), Err),
+            refinements: safety.facts,
+            safety: safety.diagnostics.into_iter().next().map_or(Ok(()), Err),
         };
         if module.parameter.is_none() {
             self.module_analyses
@@ -4276,9 +4340,6 @@ impl Checker {
     }
 
     fn inflate_interface(&self, path: &str, cached: CachedModuleInterface) -> CheckedModule {
-        cached
-            .validate_type_budget()
-            .expect("cached module interface must pass artifact admission before inflation");
         let mut rigids = HashMap::new();
         if self.expression_analyses.borrow().module(path).is_none() {
             let expression_analyses = cached
@@ -4308,12 +4369,7 @@ impl Checker {
                 .borrow_mut()
                 .replace_module(path.to_owned(), expression_analyses);
         }
-        let expression_type_ids = cached
-            .expression_types
-            .iter()
-            .copied()
-            .collect::<HashMap<_, _>>();
-        let expression_types = Rc::new(expression_type_ids);
+        let expression_types = cached.expression_type_index.clone();
         let expression_type_arena = cached.types.clone();
         let next_skolem = self.next_skolem.clone();
         let next_representation_hole = self.next_representation_hole.clone();
@@ -4333,12 +4389,7 @@ impl Checker {
             .expression_type_resolvers
             .borrow_mut()
             .insert(path.to_owned(), resolver);
-        let closure_signature_ids = cached
-            .closure_signatures
-            .iter()
-            .copied()
-            .collect::<HashMap<_, _>>();
-        let closure_signatures = Rc::new(closure_signature_ids);
+        let closure_signatures = cached.closure_signature_index.clone();
         let closure_signature_arena = cached.types.clone();
         let next_skolem = self.next_skolem.clone();
         let next_representation_hole = self.next_representation_hole.clone();
@@ -4394,6 +4445,7 @@ impl Checker {
             ownership_contracts: cached.ownership_contracts,
             simplifications: cached.simplifications,
             readability: cached.readability,
+            refinements: cached.refinements,
         }
     }
 
@@ -4859,7 +4911,7 @@ impl Checker {
                         let variable = hole_values
                             .get(expression)
                             .expect("every signature hole must have a type value");
-                        (*variable, self.fresh())
+                        (*variable, self.fresh_at_next_level())
                     })
                     .collect::<HashMap<_, _>>();
                 signature = substitute_rigid(signature, &replacements);
@@ -4885,6 +4937,12 @@ impl Checker {
                         ),
                         span,
                     ));
+                }
+                if let Some(previous) = signatures.remove(&name) {
+                    let combined = self.fresh();
+                    self.constrain(combined.clone(), previous, span)?;
+                    self.constrain(combined.clone(), signature, span)?;
+                    signature = combined;
                 }
                 if let Some(body) = declaration_closure_body(module, &name) {
                     self.signed_closure_types.borrow_mut().insert(
@@ -5487,6 +5545,14 @@ impl Checker {
                     self.constrain(previous.clone(), inferred_type, span)?;
                     inferred
                 };
+                self.constrain(inferred.effects.clone(), Type::Effects(BTreeSet::new()), span)
+                    .map_err(|_| {
+                        Diagnostic::new(
+                            "BLOT_UNSEQUENCED_EFFECT",
+                            "A rebinding value performs an effect. Sequence it with `use next <- expression;` before rebinding.",
+                            span,
+                        )
+                    })?;
                 self.resolve_numeric_literals()?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
@@ -6584,6 +6650,11 @@ impl Checker {
                             if matches!(target_value, Value::Extended { .. })
                                 || is_resolve_member_closure(&self.context, &member)
                             {
+                                if let Some(signature) =
+                                    self.bridge_closed_attached_signature(&member)
+                                {
+                                    return Some(signature);
+                                }
                                 return Some(self.fresh());
                             }
                         }
@@ -7788,7 +7859,12 @@ impl Checker {
                 span,
             )
         })?;
-        let Value::Effect { operations, .. } = &effect_value else {
+        let Value::Effect {
+            operations,
+            operation_ownership,
+            ..
+        } = &effect_value
+        else {
             return self.type_error(Type::Unit, Type::Opaque("Effect".to_owned()), span);
         };
         let handler_value = self.evaluate(path, handler_expression, values, Phase::Runtime)?;
@@ -7799,6 +7875,7 @@ impl Checker {
                 span,
             ));
         };
+        let mut checked_clauses = Vec::new();
         for (name, clause) in handler_fields {
             if name == "return" {
                 continue;
@@ -7810,8 +7887,33 @@ impl Checker {
                     span,
                 ));
             }
-            require_continuation_qualifier(module, name, clause, span)?;
+            let (defining_module, parameter, body) =
+                require_continuation_qualifier(&self.context, name, clause, span)?;
+            checked_clauses.push(crate::ownership::HandlerClause {
+                name: name.clone(),
+                module: defining_module,
+                parameter,
+                body,
+                operation: operation_ownership
+                    .get(name)
+                    .expect("checked effect operation has ownership")
+                    .clone(),
+            });
         }
+        let mut known_clauses = self
+            .handler_clauses
+            .borrow()
+            .get(path, &argument)
+            .cloned()
+            .unwrap_or_default();
+        for clause in checked_clauses {
+            if !known_clauses.contains(&clause) {
+                known_clauses.push(clause);
+            }
+        }
+        self.handler_clauses
+            .borrow_mut()
+            .insert(path.to_owned(), argument, known_clauses);
         let thunk = self.infer(
             path,
             module,
@@ -9470,6 +9572,11 @@ impl Checker {
             (ConstraintTypeNode::Effects(left), ConstraintTypeNode::Effects(right)) => {
                 left.is_subset(&right)
             }
+            (ConstraintTypeNode::Effects(labels), ConstraintTypeNode::Rigid(_))
+                if labels.is_empty() =>
+            {
+                true
+            }
             (
                 ConstraintTypeNode::Effects(left),
                 ConstraintTypeNode::OpenEffects {
@@ -9481,14 +9588,15 @@ impl Checker {
                     .difference(&right_labels)
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                if !missing.is_empty() {
-                    let missing = self.constraint_type(&Type::Effects(missing));
-                    work.push_back(WorkItem {
-                        left: missing,
-                        right: right_tail,
-                        span,
-                    });
-                }
+                // A closed empty contribution is evidence too: suspension
+                // analysis must distinguish a pure instantiation from a tail
+                // with no checked producer.
+                let missing = self.constraint_type(&Type::Effects(missing));
+                work.push_back(WorkItem {
+                    left: missing,
+                    right: right_tail,
+                    span,
+                });
                 true
             }
             (
@@ -10096,10 +10204,27 @@ impl Checker {
                     traversal,
                 )),
             },
-            Type::OpenEffects { labels, tail } => Type::OpenEffects {
-                labels,
-                tail: Rc::new(self.settle_seen(Rc::unwrap_or_clone(tail), positive, traversal)),
-            },
+            Type::OpenEffects { mut labels, tail } => {
+                let mut tail = self.settle_seen(Rc::unwrap_or_clone(tail), positive, traversal);
+                while let Type::OpenEffects {
+                    labels: nested,
+                    tail: next,
+                } = tail
+                {
+                    labels.extend(nested);
+                    tail = Rc::unwrap_or_clone(next);
+                }
+                match tail {
+                    Type::Effects(nested) => {
+                        labels.extend(nested);
+                        Type::Effects(labels)
+                    }
+                    tail => Type::OpenEffects {
+                        labels,
+                        tail: Rc::new(tail),
+                    },
+                }
+            }
             Type::Variant { cases, open } => Type::Variant {
                 cases: cases
                     .into_iter()
@@ -10339,7 +10464,14 @@ impl Checker {
                     .collect(),
             ),
         };
-        self.bind_pattern(module, pattern, type_.clone(), environment);
+        // Composite patterns already bound their leaves. Rebinding them here
+        // would detach those names from the payload variables a case constrains.
+        if matches!(
+            module.arena.patterns[pattern.0 as usize],
+            Pattern::Name { .. }
+        ) {
+            self.bind_pattern(module, pattern, type_.clone(), environment);
+        }
         Some(type_)
     }
 
@@ -11848,7 +11980,7 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
         }
         "@text.concat" => curried(vec![text.clone(), text.clone()], text),
         "@text.join" => curried(vec![Type::Array(Rc::new(text.clone()))], text),
-        "@text.len" => curried(vec![text], int),
+        "@text.len" | "@text.byte_len" => curried(vec![text], int),
         "@text.scalar_at" => curried(vec![text.clone(), int], text),
         "@text.next_byte" => curried(
             vec![text.clone(), int.clone()],
@@ -11864,8 +11996,10 @@ fn primitive_type(checker: &Checker, name: &str) -> Option<Type> {
                 open: false,
             },
         ),
-        "@text.slice" => curried(vec![text.clone(), int.clone(), int], text),
-        "@text.find_from" => curried(vec![text.clone(), text, int.clone()], int),
+        "@text.slice" | "@text.slice_bytes" => curried(vec![text.clone(), int.clone(), int], text),
+        "@text.find_from" | "@text.find_byte_from" => {
+            curried(vec![text.clone(), text, int.clone()], int)
+        }
         "@text.cmp" => curried(vec![text.clone(), text], ordering),
         "@text.contains" => curried(vec![text.clone(), text], bool_),
         "@text.of_int" => curried(vec![int], text),
@@ -13641,14 +13775,33 @@ fn validate_declaration_tag(value: &Value, span: Span) -> Result<String, Diagnos
 }
 
 fn require_continuation_qualifier(
-    module: &Module,
+    context: &Context,
     operation: &str,
     clause: &Value,
     span: Span,
-) -> Result<(), Diagnostic> {
-    let Value::Closure { parameter, .. } = clause else {
-        return Ok(());
+) -> Result<(Rc<String>, PatternId, ExpressionId), Diagnostic> {
+    let Value::Closure {
+        module: defining_module,
+        parameter,
+        body,
+        ..
+    } = clause
+    else {
+        return Err(Diagnostic::new(
+            "BLOT_HANDLER_RESUME_NOT_AFFINE",
+            format!(
+                "Handler clause `.{operation}` must be a source closure binding `?resume` or `!resume`."
+            ),
+            span,
+        ));
     };
+    let module = context
+        .modules
+        .borrow()
+        .get(defining_module.as_str())
+        .expect("evaluated handler clause has its defining module")
+        .module
+        .clone();
     let Pattern::Tuple { elements, .. } = &module.arena.patterns[parameter.0 as usize] else {
         return Err(Diagnostic::new(
             "BLOT_HANDLER_RESUME_NOT_AFFINE",
@@ -13671,7 +13824,7 @@ fn require_continuation_qualifier(
         ));
     };
     if matches!(qualifier, Qualifier::Affine | Qualifier::Linear) {
-        return Ok(());
+        return Ok((defining_module.clone(), *parameter, *body));
     }
     Err(Diagnostic::new(
         "BLOT_HANDLER_RESUME_NOT_AFFINE",
@@ -14010,6 +14163,18 @@ fn validate_signature_headers(
             ));
         };
         let next = &module.arena.declarations[next.0 as usize];
+        if let Declaration::Signature {
+            kind,
+            recursive,
+            name,
+            ..
+        } = next
+            && kind == expected_kind
+            && recursive == expected_recursive
+            && name == expected_name
+        {
+            continue;
+        }
         let Declaration::Binding {
             kind,
             pattern,
@@ -15890,6 +16055,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         }
     }
 
@@ -16078,6 +16244,16 @@ mod tests {
     fn bottom_drops_out_of_a_union_unless_it_is_the_union() {
         assert_eq!(show_union(vec!["Int".to_owned(), "⊥".to_owned()]), "Int");
         assert_eq!(show_union(vec!["⊥".to_owned(), "⊥".to_owned()]), "⊥");
+    }
+
+    #[test]
+    fn residual_checks_in_one_context_have_distinct_representation_holes() {
+        let context = Rc::new(Context::default());
+        let first = Checker::new(context.clone());
+        let second = Checker::new(context);
+        let first = first.reify_runtime_type(&Type::Bottom).unwrap();
+        let second = second.reify_runtime_type(&Type::Bottom).unwrap();
+        assert!(!crate::value::equal(&first, &second));
     }
 
     #[test]
@@ -16273,6 +16449,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let cached = cache_checked(&checked);
         let checker = Checker::new(Rc::new(Context::default()));
@@ -16389,10 +16566,32 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let cached = cache_checked(&checked);
+        let expression_index = cached.expression_type_index.clone();
+        let signature_index = cached.closure_signature_index.clone();
+        INTERFACE_BUDGET_SCANS.with(|count| count.set(0));
         let context = Rc::new(Context::default());
         let checker = Checker::new(context.clone());
+
+        for _ in 0..3 {
+            let repeated = cached.clone();
+            assert!(Rc::ptr_eq(
+                &expression_index,
+                &repeated.expression_type_index
+            ));
+            assert!(Rc::ptr_eq(
+                &signature_index,
+                &repeated.closure_signature_index
+            ));
+            repeated
+                .sealed_boundary_bytes()
+                .expect("admitted boundary seals");
+            checker.inflate_interface("cached", repeated);
+            checker.begin_request();
+        }
+        assert_eq!(INTERFACE_BUDGET_SCANS.with(Cell::get), 0);
 
         let inflated = checker.inflate_interface("cached", cached.clone());
 
@@ -16499,6 +16698,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let first = cache_checked(&interface(7, Type::Unit))
             .sealed_boundary_bytes()
@@ -16537,6 +16737,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let first = cache_checked(&boundary(vec![integer.clone(), text.clone()].into()))
             .sealed_boundary_bytes()
@@ -16591,6 +16792,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let first = cache_checked(&interface(Type::Unit))
             .sealed_boundary_bytes()
@@ -16615,6 +16817,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
 
         assert!(matches!(
@@ -16636,6 +16839,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let expected = cache_checked(&checked).sealed_boundary_bytes().unwrap();
         let mut private = Type::Unit;
@@ -16676,6 +16880,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
 
         let error = match CachedModuleInterface::from_checked(&checked) {
@@ -16716,6 +16921,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let cached = cache_checked(&checked);
 
@@ -16748,6 +16954,7 @@ mod tests {
             )],
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let cached = cache_checked(&checked);
 

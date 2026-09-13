@@ -1,0 +1,1 @@
+[{ .scalars = ["a", "😀", "e", "\u{301}"]; .single = [0.1f32, -0f32]; .double = [-0, inf, NaN]; .choice = #Some "e\u{301}"; }]

@@ -1,6 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Compiler } from "../src/compiler/session.ts";
+import { decodeManifest } from "../src/abi_values.ts";
 
 interface ProtocolVersions {
   readonly compilerHostAbi: number;
@@ -93,6 +95,23 @@ async function requireCurrent(path: string, expected: string): Promise<void> {
 async function validateCurrentClaims(
   current: CurrentImplementation,
 ): Promise<void> {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      resolve(root, "examples/minimal.blot"),
+    );
+    const { abi } = decodeManifest(artifact.manifestBytes);
+    if (
+      current.publicAbi.major !== abi.major ||
+      current.publicAbi.minor !== abi.minor
+    ) {
+      throw new Error(
+        `Current implementation claims public ABI ${current.publicAbi.major}.${current.publicAbi.minor}; the compiler emits ${abi.major}.${abi.minor}`,
+      );
+    }
+  } finally {
+    compiler.destroy();
+  }
   if (current.productionBackend !== "direct-rust") return;
   const paths = [
     "README.md",

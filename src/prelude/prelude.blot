@@ -72,8 +72,21 @@ const freeze :: @forall (fn T => [T] -> [T])
 const freeze = fn value => @linear.freeze value
 
 // Curried: these are the targets of `$` and `|>`.
-const apply = fn f => fn x => f x
-const pipe = fn x => fn f => f x
+const apply ::
+  @forall (fn e => @forall (fn T => @forall (fn U => do:
+    return ((T -> U) ~ [e]) -> ((T -> U) ~ [e])
+  )))
+const apply = fn f => fn x => do:
+  use result <- f x
+  return result
+
+const pipe ::
+  @forall (fn e => @forall (fn T => @forall (fn U => do:
+    return T -> ((((T -> U) ~ [e]) -> U) ~ [e])
+  )))
+const pipe = fn x => fn f => do:
+  use result <- f x
+  return result
 
 const compose = fn (f, g) => fn x => f (g x)
 const flip = fn f => fn (a, b) => f (b, a)
@@ -341,28 +354,21 @@ const rec text_split_from ::
     [@type.text]
     ) -> [@type.text]
 const rec text_split_from = fn (text, separator, start, ?parts) => do:
-  use result <- case text_find_from (text, separator, start) of
-    #Some found => do:
-      let piece = case text_slice (text, start, found) of
-        #Some value => value
-        #None => @panic "Text.split produced invalid scalar bounds"
-      use continued <- text_split_from (
-        text,
-        separator,
-        found + @text.len separator,
-        @array.push parts piece
-      )
-      return continued
-
-    #None => do:
-      let piece = case text_slice (text, start, @text.len text) of
-        #Some value => value
-        #None => @panic "Text.split produced invalid final bounds"
-      return @array.push parts piece
-  return result
+  let found = @text.find_byte_from text separator start
+  if found >= 0:
+    let piece = @text.slice_bytes text start found
+    return text_split_from (
+      text,
+      separator,
+      found + @text.byte_len separator,
+      @array.push parts piece
+    )
+  else:
+    let piece = @text.slice_bytes text start (@text.byte_len text)
+    return @array.push parts piece
 
 const text_split = fn (text, separator) => do:
-  if is_equal (@int.cmp (@text.len separator) 0):
+  if is_equal (@int.cmp (@text.byte_len separator) 0):
     return [text]
   else:
     return text_split_from (text, separator, 0, @array.empty)
@@ -399,26 +405,25 @@ const rec text_replace_from ::
     ) -> @type.text
 const rec text_replace_from =
   fn (text, query, replacement, start, chunks) => do:
-    return case text_find_from (text, query, start) of
-      #Some found => do:
-        let segment = @text.slice text start found
-        let chunks = @scratch.push chunks segment
-        let chunks = @scratch.push chunks replacement
-        return text_replace_from (
-          text,
-          query,
-          replacement,
-          found + @text.len query,
-          chunks
-        )
-
-      #None => do:
-        let tail = @text.slice text start (@text.len text)
-        let chunks = @scratch.push chunks tail
-        return @text.join (@scratch.finish chunks)
+    let found = @text.find_byte_from text query start
+    if found >= 0:
+      let segment = @text.slice_bytes text start found
+      let chunks = @scratch.push chunks segment
+      let chunks = @scratch.push chunks replacement
+      return text_replace_from (
+        text,
+        query,
+        replacement,
+        found + @text.byte_len query,
+        chunks
+      )
+    else:
+      let tail = @text.slice_bytes text start (@text.byte_len text)
+      let chunks = @scratch.push chunks tail
+      return @text.join (@scratch.finish chunks)
 
 const text_replace = fn (text, query, replacement) => do:
-  if is_equal (@int.cmp (@text.len query) 0):
+  if is_equal (@int.cmp (@text.byte_len query) 0):
     return text
   else:
     return text_replace_from (
@@ -862,6 +867,21 @@ const filter ::
   @forall (fn T => ([T], (T -> Bool)) -> [T])
 const filter = fn (&values, ?keep) => do:
   return filter_borrowed ((&values), (&keep))
+
+const array_find ::
+  @forall (fn e => @forall (fn T => ([T], (T -> Bool) ~ [e]) -> (#Some T | #None) ~ [e]))
+const array_find = fn (values, keep) => do:
+  let shared = @linear.freeze values
+  let rec visit = fn index => case array_get (shared, index) of
+    #None => #None
+    #Some value => do:
+      use accepted <- keep value
+      if accepted:
+        return #Some value
+      else:
+        return visit (index + 1)
+
+  return visit 0
 
 const partition_borrowed ::
   @forall (fn T => ([T], (T -> Bool)) -> ([T], [T]))
@@ -1542,6 +1562,7 @@ const Array =
     .fold = fold;
     .map = map;
     .filter = filter;
+    .find = array_find;
     .partition = partition;
     .uncons = array_uncons;
     .items = array_items;
@@ -2081,6 +2102,29 @@ const iter_range = fn (from, to) => {
   ;
 }
 
+const iter_map ::
+  @forall (fn e => @forall (fn S => @forall (fn T => @forall (fn U => (
+    {
+      .state = S;
+      .step = (S -> Option (T, S)) ~ [e];
+    },
+    (T -> U) ~ [e]
+  ) -> {
+    .state = S;
+    .step = (S -> Option (U, S)) ~ [e];
+  }))))
+const iter_map = fn (iterator, transform) => {
+  .state = iterator.state;
+  .step = fn state => do:
+    use next <- iterator.step state
+    return case next of
+      #None => #None
+      #Some (value, next_state) => do:
+        use mapped <- transform value
+        return #Some (mapped, next_state)
+  ;
+}
+
 const iter_items = array_items
 
 // A half-open affine walk over one array Store. The state is only the logical
@@ -2188,6 +2232,7 @@ const iter_each = fn visit => fn iterator => do:
 const Iter =
   {
     .range = iter_range;
+    .map = iter_map;
     .items = iter_items;
     .affine = iter_affine;
     .slice = iter_slice;

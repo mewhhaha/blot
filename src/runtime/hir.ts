@@ -114,10 +114,13 @@ export type BlotRuntimeOperation =
       | "text.append"
       | "text.join"
       | "text.length"
+      | "text.byte-length"
       | "text.scalar-at"
       | "text.next-byte"
       | "text.slice"
+      | "text.slice-bytes"
       | "text.find-from"
+      | "text.find-byte-from"
       | "text.from-i64"
       | "text.compare"
       | "text.contains";
@@ -1217,10 +1220,13 @@ const operationKinds: Readonly<Record<BlotRuntimeOperation["kind"], true>> = {
   "text.append": true,
   "text.join": true,
   "text.length": true,
+  "text.byte-length": true,
   "text.scalar-at": true,
   "text.next-byte": true,
   "text.slice": true,
+  "text.slice-bytes": true,
   "text.find-from": true,
+  "text.find-byte-from": true,
   "text.from-i64": true,
   "text.compare": true,
   "text.contains": true,

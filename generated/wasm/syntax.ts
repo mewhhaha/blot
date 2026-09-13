@@ -246,6 +246,7 @@ export type RuleName =
   | "pattern_core"
   | "unit_pattern"
   | "tuple_pattern"
+  | "annotated_pattern"
   | "array_pattern"
   | "constructor_pattern"
   | "shape_pattern"
@@ -283,6 +284,7 @@ export type RuleName =
   | "computed_shape_field"
   | "lambda"
   | "lambda_parameter"
+  | "lambda_result"
   | "conditional_statement"
   | "conditional_statement_guard"
   | "conditional_statement_branches"
@@ -454,8 +456,16 @@ export interface UnitPatternCursor extends RuleCursorBase<"unit_pattern"> {
 }
 
 export interface TuplePatternCursor extends RuleCursorBase<"tuple_pattern"> {
-  field(name: "first"): BindingPatternCursor;
-  field(name: "rest"): ReadonlyArray<BindingPatternCursor>;
+  field(name: "first"): AnnotatedPatternCursor;
+  field(name: "rest"): ReadonlyArray<AnnotatedPatternCursor> | null;
+  field(name: "tail"): readonly [TokenCursor<"literal", ",">, ReadonlyArray<AnnotatedPatternCursor>] | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface AnnotatedPatternCursor extends RuleCursorBase<"annotated_pattern"> {
+  field(name: "annotation"): readonly [TokenCursor<"literal", "::">, ValueCursor] | null;
+  field(name: "pattern"): BindingPatternCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -652,7 +662,7 @@ export interface ShapeSpreadCursor extends RuleCursorBase<"shape_spread"> {
 export interface ShapeFieldCursor extends RuleCursorBase<"shape_field"> {
   field(name: "name"): FieldNameCursor;
   field(name: "optional"): TokenCursor<"named", "QUESTION"> | null;
-  field(name: "value"): ValueCursor;
+  field(name: "value"): readonly [TokenCursor<"literal", "=">, ValueCursor] | null;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -674,6 +684,14 @@ export interface LambdaCursor extends RuleCursorBase<"lambda"> {
 
 export interface LambdaParameterCursor extends RuleCursorBase<"lambda_parameter"> {
   field(name: "pattern"): BindingPatternCursor;
+  field(name: "result"): LambdaResultCursor | null;
+  field(name: string): CursorFieldValue | undefined;
+  fieldArray(name: string): readonly CursorFieldValue[];
+}
+
+export interface LambdaResultCursor extends RuleCursorBase<"lambda_result"> {
+  field(name: "operator"): OperatorTokenCursor;
+  field(name: "value"): ExpressionCursor;
   field(name: string): CursorFieldValue | undefined;
   fieldArray(name: string): readonly CursorFieldValue[];
 }
@@ -784,6 +802,7 @@ export type AnyRuleCursor =
   | PatternCoreCursor
   | UnitPatternCursor
   | TuplePatternCursor
+  | AnnotatedPatternCursor
   | ArrayPatternCursor
   | ConstructorPatternCursor
   | ShapePatternCursor
@@ -821,6 +840,7 @@ export type AnyRuleCursor =
   | ComputedShapeFieldCursor
   | LambdaCursor
   | LambdaParameterCursor
+  | LambdaResultCursor
   | ConditionalStatementCursor
   | ConditionalStatementGuardCursor
   | ConditionalStatementBranchesCursor

@@ -138,6 +138,16 @@ pub(crate) struct OwnershipContract {
     pub(crate) callback_requirements: Vec<CallbackRequirement>,
 }
 
+/// Checked clause selection; pattern IDs belong to `module`, never its caller.
+#[derive(Clone, PartialEq)]
+pub(crate) struct HandlerClause {
+    pub(crate) name: String,
+    pub(crate) module: Rc<String>,
+    pub(crate) parameter: PatternId,
+    pub(crate) body: ExpressionId,
+    pub(crate) operation: crate::value::EffectOperationContract,
+}
+
 pub(crate) struct OwnershipCheck {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) contracts: Vec<(ExpressionId, OwnershipContract)>,
@@ -381,6 +391,7 @@ struct Analysis<'a> {
     values: &'a ValueEnvironment,
     closure_types: &'a HashMap<ExpressionId, Type>,
     expression_types: &'a HashMap<ExpressionId, Type>,
+    handler_clauses: &'a HashMap<ExpressionId, Vec<HandlerClause>>,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
     contracts: HashMap<ExpressionId, OwnershipContract>,
@@ -398,6 +409,7 @@ pub(crate) fn check(
     values: &ValueEnvironment,
     closure_types: &HashMap<ExpressionId, Type>,
     expression_types: &HashMap<ExpressionId, Type>,
+    handler_clauses: &HashMap<ExpressionId, Vec<HandlerClause>>,
 ) -> OwnershipCheck {
     let mut analysis = Analysis {
         module_path: path,
@@ -406,6 +418,7 @@ pub(crate) fn check(
         values,
         closure_types,
         expression_types,
+        handler_clauses,
         diagnostics: Vec::new(),
         function_results: HashMap::new(),
         contracts: HashMap::new(),
@@ -1890,23 +1903,10 @@ fn walk_apply(
                 analysis,
                 Use::Move,
             );
-            if handle_arguments.len() == 3 {
-                require_continuation_ownership(
-                    handle_arguments[2],
-                    obligation(&computation),
-                    scope,
-                    analysis,
-                );
-            }
             walk(handle_arguments[0], scope, analysis, Use::Move);
             if handle_arguments.len() == 3 {
                 walk(handle_arguments[2], scope, analysis, Use::Move);
-                validate_effect_handler_ownership(
-                    handle_arguments[0],
-                    handle_arguments[2],
-                    scope,
-                    analysis,
-                );
+                validate_effect_handler_ownership(arguments[0], obligation(&computation), analysis);
             }
             return shared_array_result(expression, Produced::None, analysis);
         }
@@ -2553,21 +2553,30 @@ fn callable_may_suspend(type_: &Type, context: &Context) -> bool {
 
 fn effects_may_suspend(effects: &Type, context: &Context) -> bool {
     match effects {
-        Type::Effects(labels) => labels.iter().any(|label| {
-            let Some(Value::Effect {
-                operation_ownership,
-                ..
-            }) = context.effect_value(label)
-            else {
-                // Certificate replay can expose a row before its declaration is
-                // resident. That row cannot prove a borrowed call synchronous.
+        Type::Effects(labels) | Type::OpenEffects { labels, .. } => {
+            if labels.iter().any(|label| {
+                let Some(Value::Effect {
+                    operation_ownership,
+                    ..
+                }) = context.effect_value(label)
+                else {
+                    // Certificate replay can expose a row before its declaration is
+                    // resident. That row cannot prove a borrowed call synchronous.
+                    return true;
+                };
+                operation_ownership
+                    .values()
+                    .any(|contract| contract.suspends)
+            }) {
                 return true;
-            };
-            operation_ownership
-                .values()
-                .any(|contract| contract.suspends)
-        }),
-        Type::OpenEffects { .. } | Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
+            }
+            match effects {
+                Type::OpenEffects { tail, .. } if matches!(tail.as_ref(), Type::Bottom) => true,
+                Type::OpenEffects { tail, .. } => effects_may_suspend(tail, context),
+                _ => false,
+            }
+        }
+        Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Union(members) => members
             .iter()
             .any(|member| effects_may_suspend(member, context)),
@@ -2576,78 +2585,84 @@ fn effects_may_suspend(effects: &Type, context: &Context) -> bool {
 }
 
 fn validate_effect_handler_ownership(
-    effect: ExpressionId,
-    handler: ExpressionId,
-    scope: &ScopeRef,
+    argument: ExpressionId,
+    computation: Obligation,
     analysis: &mut Analysis<'_>,
 ) {
-    let Some(Value::Effect {
-        operation_ownership,
-        ..
-    }) = analysis.callee_value(effect)
-    else {
-        return;
-    };
-    let handler = static_expression(handler, scope, analysis);
-    let Expression::Shape { members, .. } = &analysis.module.arena.expressions[handler.0 as usize]
-    else {
-        return;
-    };
-    for member in members {
-        let ShapeMember::Field { name, value } = member else {
-            continue;
+    let clauses = analysis
+        .handler_clauses
+        .get(&argument)
+        .expect("checked handle application has clause provenance")
+        .clone();
+    let span = analysis.module.arena.expression_span(argument);
+    for clause in clauses {
+        let module = analysis
+            .context
+            .modules
+            .borrow()
+            .get(clause.module.as_str())
+            .expect("checked handler clause has its defining module")
+            .module
+            .clone();
+        let Pattern::Tuple { elements, .. } = &module.arena.patterns[clause.parameter.0 as usize]
+        else {
+            panic!("checked handler clause has a tuple parameter");
         };
-        if name == "return" {
-            continue;
+        let [argument, resume] = elements.as_slice() else {
+            panic!("checked handler clause has operation and continuation parameters");
+        };
+        if computation == Obligation::Linear
+            && !matches!(
+                module.arena.patterns[resume.0 as usize],
+                Pattern::Name {
+                    qualifier: Qualifier::Linear,
+                    ..
+                }
+            )
+        {
+            analysis.report(
+                "BLOT_LINEAR_HANDLER_MAY_ABORT",
+                format!(
+                    "Handler clause `.{}` may abort a linear continuation.",
+                    clause.name
+                ),
+                span,
+            );
         }
-        let Some(expected) = operation_ownership.get(name) else {
-            continue;
-        };
-        let Expression::Lambda {
-            parameter, body, ..
-        } = analysis.module.arena.expressions[value.0 as usize]
-        else {
-            continue;
-        };
-        let Pattern::Tuple { elements, .. } = &analysis.module.arena.patterns[parameter.0 as usize]
-        else {
-            continue;
-        };
-        let Some(argument) = elements.first() else {
-            continue;
-        };
-        let written = written_parameter_pattern(*argument, analysis.module, None);
-        let expected_input = effect_ownership_produced(&expected.input);
+        let written = written_parameter_pattern(*argument, &module, None);
+        let expected_input = effect_ownership_produced(&clause.operation.input);
         if !same_effect_ownership_contract(&expected_input, &written) {
             analysis.report(
                 "BLOT_EFFECT_HANDLER_OWNERSHIP",
-                format!(
-                    "Handler clause `.{name}` must bind its operation argument with the declared ownership contract."
-                ),
-                pattern_span(analysis.module, *argument),
+                format!("Handler clause `.{}` must bind its operation argument with the declared ownership contract.", clause.name),
+                span,
             );
         }
-        let Some(resume) = elements.get(1) else {
-            continue;
-        };
-        let expected_result = effect_ownership_produced(&expected.result);
-        let requirements = analysis
-            .contracts
-            .get(&body)
-            .map(|contract| contract.callback_requirements.clone())
-            .unwrap_or_default();
-        for requirement in requirements {
-            if requirement.source != *resume {
-                continue;
-            }
-            if !same_effect_ownership_contract(&expected_result, &requirement.input) {
+        let contract = if clause.module.as_str() == analysis.module_path {
+            analysis.contracts.get(&clause.body).cloned()
+        } else {
+            analysis
+                .context
+                .ownership_contracts
+                .borrow()
+                .get(&clause.module, &clause.body)
+                .cloned()
+        }
+        .expect("checked handler clause has an ownership contract");
+        assert_eq!(
+            contract.parameter, clause.parameter,
+            "handler contract parameter belongs to the defining clause"
+        );
+        let expected_result = effect_ownership_produced(&clause.operation.result);
+        for requirement in &contract.callback_requirements {
+            if requirement.source == *resume
+                && !same_effect_ownership_contract(&expected_result, &requirement.input)
+            {
                 analysis.report(
-                        "BLOT_EFFECT_RESUME_OWNERSHIP",
-                        format!(
-                            "Handler clause `.{name}` passes an owned value to its continuation that does not match the operation result contract."
-                        ),
-                        analysis.module.arena.expression_span(*value),
-                    );
+                    "BLOT_EFFECT_RESUME_OWNERSHIP",
+                    format!("Handler clause `.{}` passes an owned value to its continuation that does not match the operation result contract.", clause.name),
+                    span,
+                );
             }
         }
     }
@@ -4287,76 +4302,6 @@ fn substitute_element_source(
             inner: Box::new(substitute_element_source(*inner, source, argument_elements)),
         },
     }
-}
-
-fn require_continuation_ownership(
-    handler: ExpressionId,
-    computation: Obligation,
-    scope: &ScopeRef,
-    analysis: &mut Analysis,
-) {
-    if computation != Obligation::Linear {
-        return;
-    }
-    let handler = static_expression(handler, scope, analysis);
-    let Expression::Shape { members, .. } =
-        analysis.module.arena.expressions[handler.0 as usize].clone()
-    else {
-        analysis.report(
-            "BLOT_LINEAR_HANDLER_UNKNOWN",
-            "A linear computation needs a statically known handler.",
-            analysis.module.arena.expression_span(handler),
-        );
-        return;
-    };
-    for member in members {
-        let ShapeMember::Field { name, value } = member else {
-            continue;
-        };
-        if name == "return" {
-            continue;
-        }
-        let Expression::Lambda { parameter, .. } =
-            analysis.module.arena.expressions[value.0 as usize]
-        else {
-            continue;
-        };
-        let Pattern::Tuple { elements, .. } = &analysis.module.arena.patterns[parameter.0 as usize]
-        else {
-            continue;
-        };
-        let linear_resume = elements.get(1).is_some_and(|resume| {
-            matches!(
-                analysis.module.arena.patterns[resume.0 as usize],
-                Pattern::Name {
-                    qualifier: Qualifier::Linear,
-                    ..
-                }
-            )
-        });
-        if !linear_resume {
-            analysis.report(
-                "BLOT_LINEAR_HANDLER_MAY_ABORT",
-                format!("Handler clause `.{name}` may abort a linear continuation."),
-                analysis.module.arena.expression_span(value),
-            );
-        }
-    }
-}
-
-fn static_expression(
-    expression: ExpressionId,
-    scope: &ScopeRef,
-    analysis: &Analysis,
-) -> ExpressionId {
-    let Expression::Var { ref name, .. } = analysis.module.arena.expressions[expression.0 as usize]
-    else {
-        return expression;
-    };
-    analysis
-        .lookup(scope, name)
-        .and_then(|(binding, _)| binding.borrow().value)
-        .unwrap_or(expression)
 }
 
 fn select_field(target: Produced, name: &str, span: Span, analysis: &mut Analysis) -> Produced {
@@ -6945,6 +6890,7 @@ mod tests {
                 &child_env(None),
                 &HashMap::new(),
                 &self.expression_types,
+                &HashMap::new(),
             )
             .diagnostics
         }
@@ -7239,6 +7185,10 @@ mod tests {
                 ("loop-after-last-use", "const run = fn &values => do:\n  let total = Array.length (&values)\n  for index in Iter.range (0, 3):\n    use next <- Device.read index\n    total := total + next\n  return total\nreturn { .run = run; }\n", true),
                 ("loop-capture", "const run = fn &values => do:\n  let total = 0\n  for index in Iter.range (0, 3):\n    let length = Array.length (&values)\n    use next <- Device.read length\n    total := total + next\n  return total\nreturn { .run = run; }\n", false),
                 ("held-argument", "const inspect = fn (&values, answer) => Array.length (&values) + answer\nconst run = fn ?values => inspect (&values, Device.read 1)\nreturn { .run = run; }\n", false),
+                ("pipeline-call", "const run = fn &values => do:\n  use answer <- values |> (fn _ => Device.read 1)\n  return Array.length (&values) + answer\nreturn { .run = run; }\n", false),
+                ("pure-pipeline-call", "const run = fn &values => do:\n  use answer <- values |> (fn _ => 1)\n  return Array.length (&values) + answer\nreturn { .run = run; }\n", true),
+                ("open-pipeline-call", "const run = fn read => fn &values => do:\n  use answer <- values |> read\n  return Array.length (&values) + answer\nreturn { .run = run; }\n", false),
+                ("application-call", "const run = fn &values => do:\n  use answer <- Device.read $ 1\n  return Array.length (&values) + answer\nreturn { .run = run; }\n", false),
                 ("handled-last-use", "const run = fn &values => do:\n  let length = Array.length (&values)\n  use answer <- Device.read length\n  return length + answer\nconst respond = { .read = fn (length, ?resume) => resume (length + 36); .return = identity; }\nreturn @handle (Device, fn () => run [1, 2, 3], respond)\n", true),
             ] {
                 let path = format!("borrow-liveness-{name}.blot");

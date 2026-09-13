@@ -34,6 +34,7 @@ const delimitedLayoutRules = new Set([
   "array",
   "effect_row",
   "parenthesized_or_tuple",
+  "tuple_pattern",
   "shape",
 ]);
 const layoutSensitiveRules = new Set([
@@ -68,6 +69,7 @@ const INDENTED_RULES = new Set([
   "effect_row",
   "lambda",
   "parenthesized_or_tuple",
+  "tuple_pattern",
   "shape",
   "shape_pattern",
   "statement_suite",
@@ -552,11 +554,14 @@ function formatOneArray(source: string, root: ConcreteRule): string {
 function formatOneTuple(source: string, root: ConcreteRule): string {
   const tuples: ConcreteRule[] = [];
   collectRules(root, "parenthesized_or_tuple", tuples);
+  collectRules(root, "tuple_pattern", tuples);
   tuples.sort((left, right) =>
     (right.span.end - right.span.start) - (left.span.end - left.span.start)
   );
   for (const tuple of tuples) {
-    const values = directRules(tuple, "value");
+    let valueRule = "value";
+    if (tuple.name === "tuple_pattern") valueRule = "annotated_pattern";
+    const values = directRules(tuple, valueRule);
     if (values.length < 2) continue;
     const tupleSpan = contentSpan(source, tuple.span);
     const original = source.slice(tupleSpan.start, tupleSpan.end);
@@ -1172,7 +1177,13 @@ function collectIndentRegions(
   if (node.name === "lambda") {
     const body = directRule(node, "expression");
     if (body === null) throw new Error("lambda has no body");
-    indentsFollowingLines = lineAtOffset(lineStarts, node.span.start) <
+    const lastParameter = directRules(node, "lambda_parameter").at(-1);
+    if (lastParameter === undefined) throw new Error("lambda has no parameter");
+    const arrow = directToken(lastParameter, "=>");
+    if (arrow === null) {
+      throw new Error("lambda parameter has no body boundary");
+    }
+    indentsFollowingLines = lineAtOffset(lineStarts, arrow.span.start) <
       lineAtOffset(lineStarts, body.span.start);
   }
   if (indentsFollowingLines) {

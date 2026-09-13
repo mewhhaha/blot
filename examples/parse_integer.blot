@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const Parse = import "blot:parse"
+
+return [
+  Parse.integer "42",
+  Parse.integer "-9223372036854775808",
+  Parse.integer_radix ("FF", 16),
+  Parse.integer "9223372036854775808",
+  Parse.integer "12🐱",
+  Parse.integer " 42",
+  Parse.integer "+"
+  ]

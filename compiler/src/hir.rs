@@ -1990,10 +1990,20 @@ impl ResidualTrace {
                 }
                 self.operation("text.join", 3, vec![texts.id], span, None)
             }
-            "@text.len" => {
+            "@text.len" | "@text.byte_len" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
                 let integer = self.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
-                self.operation("text.length", integer, vec![text.id], span, None)
+                self.operation(
+                    if name == "@text.byte_len" {
+                        "text.byte-length"
+                    } else {
+                        "text.length"
+                    },
+                    integer,
+                    vec![text.id],
+                    span,
+                    None,
+                )
             }
             "@text.scalar_at" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
@@ -2025,18 +2035,32 @@ impl ResidualTrace {
                 stepped.meaning = RuntimeMeaning::Sum { cases };
                 stepped
             }
-            "@text.slice" => {
+            "@text.slice" | "@text.slice_bytes" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
                 let start = self.lower_as(arguments.get(1), "signed-integer-64", span)?;
                 let end = self.lower_as(arguments.get(2), "signed-integer-64", span)?;
-                self.operation("text.slice", 3, vec![text.id, start.id, end.id], span, None)
+                self.operation(
+                    if name == "@text.slice_bytes" {
+                        "text.slice-bytes"
+                    } else {
+                        "text.slice"
+                    },
+                    3,
+                    vec![text.id, start.id, end.id],
+                    span,
+                    None,
+                )
             }
-            "@text.find_from" => {
+            "@text.find_from" | "@text.find_byte_from" => {
                 let text = self.lower_as(arguments.first(), "text", span)?;
                 let query = self.lower_as(arguments.get(1), "text", span)?;
                 let start = self.lower_as(arguments.get(2), "signed-integer-64", span)?;
                 self.operation(
-                    "text.find-from",
+                    if name == "@text.find_byte_from" {
+                        "text.find-byte-from"
+                    } else {
+                        "text.find-from"
+                    },
                     start.type_id,
                     vec![text.id, query.id, start.id],
                     span,
@@ -3143,7 +3167,10 @@ impl ResidualTrace {
             (None, false) => {
                 let cases = required_payloads.keys().cloned().collect::<Vec<_>>();
                 let payloads = required_payloads.values().copied().collect::<Vec<_>>();
-                Some(self.sum_type(&cases, &payloads))
+                Some(
+                    self.existing_sum_type(&cases, &payloads)
+                        .unwrap_or_else(|| self.sum_type(&cases, &payloads)),
+                )
             }
         };
         let mut lowered = Vec::new();
@@ -3333,7 +3360,10 @@ impl ResidualTrace {
                 }
                 let cases = payloads.keys().cloned().collect::<Vec<_>>();
                 let payload_types = payloads.values().copied().collect::<Vec<_>>();
-                Some(self.sum_type(&cases, &payload_types))
+                Some(
+                    self.existing_sum_type(&cases, &payload_types)
+                        .unwrap_or_else(|| self.sum_type(&cases, &payload_types)),
+                )
             }
             (
                 RuntimeType::Store {
@@ -6880,7 +6910,9 @@ impl ResidualTrace {
                     {
                         return Ok(1);
                     }
-                    return Ok(self.sum_type(&cases, &payload_types));
+                    return Ok(self
+                        .existing_sum_type(&cases, &payload_types)
+                        .unwrap_or_else(|| self.sum_type(&cases, &payload_types)));
                 }
                 let mut members = members.iter();
                 let first_member = members
@@ -7303,35 +7335,50 @@ impl ResidualTrace {
                     {
                         return Ok(1);
                     }
-                    return Ok(self.sum_type(&cases, &payload_types));
+                    return Ok(self.existing_sum_type(&cases, &payload_types)
+                        .unwrap_or_else(|| self.sum_type(&cases, &payload_types)));
                 }
                 let mut unresolved = Vec::new();
-                let mut representation = None;
-                let mut represented_member = None;
-                for member_value in members {
-                    if let Value::TypeVariable(variable) = member_value
+                let mut represented = Vec::new();
+                for member in members {
+                    if let Value::TypeVariable(variable) = member
                         && !substitutions.contains_key(variable)
                     {
                         unresolved.push(*variable);
-                        continue;
+                    } else {
+                        represented.push(member.clone());
                     }
-                    let member_type = self.specialized_type_from_type_value(
-                        member_value,
+                }
+                let mut representation = None;
+                if !represented.is_empty()
+                    && represented
+                        .iter()
+                        .all(|member| matches!(member, Value::Tag { .. }))
+                {
+                    representation = Some(self.specialized_type_from_type_value(
+                        &Value::Union(represented.into()),
                         substitutions,
                         representation_facts,
-                    )?;
-                    if representation.is_some_and(|known| known != member_type) {
-                        return Err(hir_error(&format!(
-                            "Residual union member {} has runtime type {member_type}, but {} has runtime type {}.",
-                            crate::value::show(member_value),
-                            represented_member
-                                .as_deref()
-                                .expect("a represented union member exists"),
-                            representation.expect("a union representation exists"),
-                        )));
+                    )?);
+                } else {
+                    for member in &represented {
+                        let member_type = self.specialized_type_from_type_value(
+                            member,
+                            substitutions,
+                            representation_facts,
+                        )?;
+                        if let Some(known) = representation
+                            && known != member_type
+                        {
+                            return Err(hir_error(&format!(
+                                "Residual union {} has incompatible runtime representations {:?} and {:?}.",
+                                crate::value::show(value),
+                                self.types[known],
+                                self.types[member_type],
+                            )));
+                        }
+                        representation = Some(member_type);
                     }
-                    representation = Some(member_type);
-                    represented_member = Some(crate::value::show(member_value));
                 }
                 let representation = representation.ok_or_else(|| {
                     hir_error("A residual union has no concrete runtime representation.")
@@ -7485,6 +7532,18 @@ impl ResidualTrace {
             Type::Opaque(name) if simd_layout(name).is_some() => {
                 let layout = simd_layout(name).expect("matched SIMD type");
                 Ok(self.insert_type(&layout.key(), layout.runtime_type()))
+            }
+            Type::Union(members) => {
+                let members = members
+                    .iter()
+                    .filter(|member| !matches!(member, Type::Bottom))
+                    .map(|member| self.runtime_type_from_checked_type(member))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.join_runtime_types(members).ok_or_else(|| {
+                    hir_error(
+                        "A checked export union has no shared first-order ABI representation.",
+                    )
+                })
             }
             Type::Forall { body, .. } => self.runtime_type_from_checked_type(body),
             _ => Err(hir_error(
@@ -10632,9 +10691,17 @@ fn deduplicate_runtime_functions(
         .map(|function| {
             let mut graph = crate::continuation::lower_function(module, function)
                 .map_err(|message| hir_error(&message))?;
-            graph
-                .fill_captures()
-                .map_err(|message| hir_error(&message))?;
+            graph.fill_captures().map_err(|message| {
+                Diagnostic::new(
+                    "BLOT_RUST_INVARIANT",
+                    message,
+                    crate::ast::Span {
+                        start: function.span.start,
+                        end: function.span.end,
+                    },
+                )
+                .at(&function.span.file)
+            })?;
             Ok(graph)
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;

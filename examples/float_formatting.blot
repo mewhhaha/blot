@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Float = import "blot:float"
+
+return [
+  Float.F64.to_text (-0.0),
+  Float.F64.to_text 0.1,
+  Float.F32.to_text (F32.of_float 0.1),
+  Float.F64.to_text 5e-324
+  ]

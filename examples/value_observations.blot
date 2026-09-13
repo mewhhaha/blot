@@ -1,0 +1,12 @@
+open import "blot:prelude"
+
+const observe = fn () => do:
+  let negative_zero = F64.negate 0.0
+  return {
+    .scalars = collect (Text.scalars "a😀é");
+    .single = [F32.of_float 0.1, F32.negate (F32.of_float 0.0)];
+    .double = [negative_zero, F64.div 1.0 0.0, F64.div 0.0 0.0];
+    .choice = #Some "é";
+    }
+
+return [observe ()]

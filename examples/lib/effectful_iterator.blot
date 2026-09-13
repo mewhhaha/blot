@@ -1,0 +1,47 @@
+open import "blot:prelude"
+
+const Visit = @effect.host { .value = Effect.suspends (Int -> Int); }
+const run = fn limit => do:
+  let total = 0
+  for value in Iter.map (Iter.range (0, limit), fn value => Visit.value value):
+    total := total + value
+
+  return total
+
+const first = fn limit => do:
+  for value in Iter.map (Iter.range (0, limit), fn value => Visit.value value):
+    return value
+
+  return -1
+
+const limited = fn limit => do:
+  let total = 0
+  for value in Iter.map (Iter.range (0, limit), fn value => Visit.value value):
+    if value == 2:
+      continue
+
+    total := total + value
+    if value >= 3:
+      break
+
+  return total
+
+const nested = fn limit => do:
+  let total = 0
+  for outer in Iter.range (0, limit):
+    for value in Iter.map (
+      Iter.range (0, 2),
+      fn value => Visit.value (outer * 10 + value)
+    ):
+      total := total + value
+
+  return total
+
+const body_return = fn limit => do:
+  for value in Iter.range (0, limit):
+    if value >= 1:
+      return Visit.value value
+
+  return -1
+
+return { .run; .first; .limited; .nested; .body_return; }

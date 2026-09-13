@@ -1,0 +1,38 @@
+// A record of types becomes a record of effect operation signatures. Supplying
+// answers checks the whole record against that same schema before building
+// handler clauses, including each field's refinement.
+open import "blot:prelude"
+
+const Readers = fn schema => do:
+  let operations = @shape.empty
+  for name in Iter.items (@shape.names schema):
+    let field_type = @shape.get schema name
+    operations := { ...operations; .[name] = Unit -> field_type; }
+
+  return @effect operations
+
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+const Settings = { .host = Text; .port = Port; }
+const Config = Readers Settings
+
+const supply = fn answers => do:
+  let checked = @satisfies answers Settings
+  return {
+    .host = fn ((), ?resume) => resume checked.host;
+    .port = fn ((), ?resume) => resume checked.port;
+    }
+
+let endpoint = fn () => do:
+  use host <- Config.host ()
+  use port <- Config.port ()
+  return host <> ":" <> Text.of_int port
+
+const development = supply { .host = "localhost"; .port = 8080; }
+const production = supply { .host = "example.com"; .port = 443; }
+
+return {
+  .default = {
+    .development = @handle (Config, endpoint, development);
+    .production = @handle (Config, endpoint, production);
+  };
+  }

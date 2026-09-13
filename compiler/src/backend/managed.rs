@@ -341,6 +341,7 @@ impl ManagedValues {
                 }
             }
             RuntimeType::Sum { cases, .. } => {
+                let lanes = layouts.flattened(module, type_id)?;
                 for (index, case) in cases.iter().enumerate() {
                     if !self.values[&case.payload_type].owns_memory {
                         continue;
@@ -349,8 +350,13 @@ impl ManagedValues {
                         .i32_const(index as i32)
                         .i32_eq()
                         .if_(BlockType::Empty);
-                    for local in 1..1 + layouts.flattened(module, case.payload_type)?.len() as u32 {
-                        ins.local_get(local);
+                    for (index, lane) in layouts
+                        .flattened(module, case.payload_type)?
+                        .iter()
+                        .enumerate()
+                    {
+                        ins.local_get(1 + index as u32);
+                        emit_lane_conversion(ins, lanes[index + 1], *lane)?;
                     }
                     ins.call(mode.value(self.values[&case.payload_type])).end();
                 }

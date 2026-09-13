@@ -1,0 +1,24 @@
+open import "blot:prelude"
+
+const find ::
+  @forall (fn e => @forall (fn T => (([
+    T
+  ], (T -> Bool) ~ [e]) -> Option T) ~ [e]))
+const find = fn (values, keep) => do:
+  let shared = @linear.freeze values
+  let rec visit = fn index => case Array.get (shared, index) of
+    #None => #None
+    #Some value => do:
+      use accepted <- keep value
+      if accepted:
+        return #Some value
+      else:
+        return visit (index + 1)
+
+  return visit 0
+
+const run :: [Int] -> Option Int
+const run = fn values => find (values, fn value => value > 2)
+const text :: [Text] -> Option Text
+const text = fn values => find (values, fn value => Text.length value > 2)
+return { .run; .text; }

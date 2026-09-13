@@ -1,3 +1,9 @@
+#[path = "relational_inference.rs"]
+pub(crate) mod inference;
+
+#[path = "relational_proof.rs"]
+pub(crate) mod proof;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 

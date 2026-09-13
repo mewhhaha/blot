@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Codec = import "./lib/command_codec.blot"
+
+return [
+  Codec.decode (Codec.encode #Reset),
+  Codec.decode (Codec.encode (#Move { .x = 12; .y = -4; })),
+  Codec.decode "move 12🐱 -4",
+  Codec.decode "move 9223372036854775808 0"
+  ]

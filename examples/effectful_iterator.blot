@@ -1,0 +1,17 @@
+open import "blot:prelude"
+
+const Visit = @effect { .value = Int -> Int; }
+const sum = fn limit => do:
+  let total = 0
+  for value in Iter.map (Iter.range (0, limit), fn value => Visit.value value):
+    total := total + value
+
+  return total
+
+return @handle (
+  Visit,
+  fn () => sum 4,
+  {
+    .value = fn (value, ?resume) => resume (value + 10)
+  }
+  )

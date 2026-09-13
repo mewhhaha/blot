@@ -1735,6 +1735,7 @@ mod tests {
             ownership_contracts: Vec::new(),
             simplifications: Vec::new(),
             readability: Vec::new(),
+            refinements: Vec::new(),
         };
         let mut arena = AstArena::default();
         let result = arena.expression(Expression::Unit {

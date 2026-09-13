@@ -1,0 +1,10 @@
+module with settings
+open import "blot:prelude"
+
+const Settings = { .prefix = Text; .count = Int; }
+let configured :: Settings
+let configured = settings
+
+let render =
+  fn () => Text.append configured.prefix (Text.of_int configured.count)
+return { .render; }

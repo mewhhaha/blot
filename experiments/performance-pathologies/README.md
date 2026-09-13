@@ -15,8 +15,8 @@ constants. An all-`a` haystack and an `a…ab` query force the former substring
 helper to retry long prefixes. The shared Two-Way helper also handles periodic
 queries, early mismatches, overlaps, empty queries, arbitrary bytes internally,
 and UTF-8 scalar offsets at the public boundary. It performs no allocation or
-input writes. Repeated higher-level searches still have their own scalar-index
-conversion costs.
+input writes. Scalar-indexed searches retain their conversion costs; composite
+splitting and replacement now carry byte positions between matches.
 
 Run with the compiler artifact rebuilt from the same source revision:
 
@@ -48,6 +48,45 @@ timing, protect against restoring the pathological algorithms.
 
 The normative boundary is
 [the cost model](../../spec/COST_MODEL.md#8-adversarial-canonical-layouts-and-substring-search).
+
+## Composite traversal
+
+`text_composition.ts` repeats the September triage's dense-delimiter workload.
+It compiles once, warms each export three times per size, and records seven
+calls including canonical argument/result adaptation. Input construction,
+compilation, warmup, and result assertions are outside each measured interval.
+It emits raw samples, compiler provenance and host versions:
+
+```sh
+node --import tsx experiments/performance-pathologies/text_composition.ts
+```
+
+The implementation carries monotone UTF-8 byte positions through search and
+slicing, and joins replacement chunks once. The emitted-instruction tests bound
+total byte work across successive searches and the byte-boundary validator's
+instruction shape; Unicode and empty-query behavior have evaluator/Wasm tests.
+The measurements in
+[the implementation ledger](../../docs/triage-implementation.md) are local
+observations, not portable timing gates.
+
+## Source float presentation
+
+`float_format.ts` measures the pure `blot:float` formatter at ordinary and
+extreme binary32/binary64 values:
+
+```sh
+node --import tsx experiments/performance-pathologies/float_format.ts
+```
+
+The compile clock includes source checking and compilation in a newly created
+compiler session, but excludes compiler creation and guest instantiation. After
+three warmup calls per value, seven batches of 100 calls include canonical
+argument/result adaptation and the exact output assertion. JSON retains every
+per-call batch mean, its median, emitted Wasm size, compiler provenance and host
+versions. These observations are not a portable latency gate or a comparison
+with a native host formatter. The exact interval algorithm uses source arrays;
+it trades some code size and runtime allocation for a pure implementation with
+no formatting primitive or host service.
 
 ## Bounded command-line inputs
 

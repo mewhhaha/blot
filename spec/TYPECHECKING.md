@@ -180,7 +180,11 @@ required field type, not a distinct optional-field constructor.
 
 Functions are contravariant in their parameter and covariant in their effect row
 and result. Arrays are immutable at the language level and therefore covariant.
-Effects and variants use finite set inclusion.
+Effects and variants use finite set inclusion. The empty effect row flows into
+any quantified effect tail. Constraining a closed row against an extended row
+records its missing labels even when that set is empty. This preserves evidence
+of a pure instantiation for suspension checking; a tail without a checked
+producer must not become proof of purity.
 
 ## 3. Constraint state
 
@@ -274,6 +278,16 @@ and recursive back edges jointly determine the stable type. When `for` lowering
 introduces its unspellable `loop$` accumulator binding, a closed
 multi-constructor variant already established for a carried source name is also
 retained separately as that name's stable lineage.
+
+A rebinding's replacement effects must flow into the empty effect row, just as
+for a `let` value. An effect must first be sequenced with `use`; accepting an
+effectful iterator does not relax this value-position constraint.
+
+Case-pattern construction binds each name once to the same inference variable
+that occurs in its accepted payload type. Composite patterns assemble their
+children's types without rebinding those children to fresh variables. Later
+constraints from the matched value must still reach every name used by the arm,
+including nested record payloads in elaborated early-return control results.
 
 The initial accumulator argument retains its checked structural type for
 residual instance checking. A declared Boolean field remains the complete
@@ -697,9 +711,13 @@ live Region value, expose Store identity or bounds, or admit Region at a public
 ABI boundary.
 
 An unsettled top or bottom position in a residual signature reifies as a fresh
-representation hole, never as runtime `Unit`. The call site's checked expression
-type, a structural ownership result, or the private recursive-representation
-rule must close that hole before ordinary first-order use.
+representation hole, never as runtime `Unit`. All checkers publishing into one
+resident context share the representation-hole allocator, including independent
+residual instance checks. Their holes cannot alias because allocation restarted
+in a new checker; snapshot staging retains its transactional allocator handoff.
+The call site's checked expression type, a structural ownership result, or the
+private recursive-representation rule must close that hole before ordinary
+first-order use.
 
 The synthetic recursive closure emitted for `for` has the representation
 signature of its type-preserving `:=` accumulator. A `RecordUpdate` relationship
@@ -1597,10 +1615,14 @@ Attached callable names are ordinary source names, not a compiler allow-list.
 
 Receiver lookup follows upper-variable aliases with a visited set. Repeated
 bounds and cycle edges cannot discard a concrete domain already established by
-another upper edge. Only the receiver's upper edges provide this evidence:
-lookup does not project a numeric element or field out of a container, nor use
-an unconstrained cycle as a default. The chosen member's complete signature is
-still constrained against the pending requirement.
+another upper edge. Ordinary lookup uses the receiver's upper edges. During
+specialization, a forwarded receiver can additionally use the compatible numeric
+carriers established for every lower-bound producer. This traversal preserves
+all alternatives: an unknown leaf refuses selection; an ungrounded cycle
+contributes no domain; a container is never projected to its element or field.
+The chosen member's complete signature is still constrained against the pending
+requirement. Generic inference retains its qualified schemes without this
+specialized selection.
 
 ### Specialized source reflection and nominal carriers
 
@@ -1646,3 +1668,25 @@ Native regression tests use depth-30 shared diamonds and count visits rather
 than timing the machine. Source regressions preserve principal types, evaluator
 observations, and Wasm results for valid programs, and ensure invalid programs
 parse before reporting a source type diagnostic.
+
+Function-header annotations reuse ordinary signature constraints. When a binding
+has both a written signature and an elaborated header signature, a fresh
+constraint variable carries both upper bounds. Checking, staging facts, and
+ownership all consume the jointly constrained function; neither signature
+replaces the other. Signature-target validation admits adjacent matching
+headers, and still requires their matching binding immediately after the group.
+
+### Partial signatures and attached function values
+
+Each `_` in a signature is fresh at the following binding's inference level.
+Generalization therefore preserves independent instantiation of omitted
+parameter, result, and effect components. Closed effect tails are flattened into
+their enclosing row; a bottom tail without a checked producer is not proof of
+purity. Existing suspension and borrow checks continue to consume that
+distinction.
+
+A statically selected attached closure with a closed checked signature retains
+that signature when used as a value, including immediate re-export. Direct
+application is not required to recover its parameter, result, or effect types.
+Polymorphic signatures instantiate at the use site; unresolved attached members
+retain their existing specialization obligations.

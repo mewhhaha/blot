@@ -1,0 +1,48 @@
+// The final return is the last element: every normally completing stream is
+// nonempty, even when it performs no emit operation. A reduction therefore
+// needs neither an empty seed nor a separator after the final element.
+open import "blot:prelude"
+
+const Yield = fn T => @effect { .emit = T -> Unit; }
+const Positive = refine (Int, fn value => value > 0)
+const Numbers = Yield Positive
+
+let produce :: Unit -> Positive ~ { Numbers }
+let produce = fn () => do:
+  use Numbers.emit 10
+  use Numbers.emit 20
+  return 12
+
+const reduce_with = fn (project, combine) => {
+  .emit = fn (value, ?resume) => do:
+    use rest <- resume ()
+    return combine (project value, rest)
+  ;
+  .return = project;
+}
+
+const sum = reduce_with (fn value => value, fn (value, rest) => value + rest)
+const describe =
+  reduce_with (
+    Text.of_int,
+    fn (value, rest) => value <> ", " <> rest
+  )
+const first =
+  {
+    .emit = fn (value, ?resume) => value;
+    .return = fn value => value;
+  }
+
+// No emission is the singleton case, rather than the empty case.
+let singleton :: Unit -> Positive ~ { Numbers }
+let singleton = fn () => 7
+
+return {
+  .default = {
+    .sum = @handle (Numbers, produce, sum);
+    .text = @handle (Numbers, produce, describe);
+    .first = @handle (Numbers, produce, first);
+    .singleton_text = @handle (Numbers, singleton, describe);
+    .singleton_first = @handle (Numbers, singleton, first);
+  };
+  }

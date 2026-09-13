@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const run :: Int -> Int
+const run = fn count => do:
+  let total = 0
+  let value = 100
+  for outer in Iter.range (0, count):
+    if outer >= 0:
+      for value in Iter.items [1, 2]:
+        value := value + 1
+        total := total + value
+
+  return total + value
+return run

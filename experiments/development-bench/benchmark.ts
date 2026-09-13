@@ -27,6 +27,7 @@ interface BenchmarkOptions {
   readonly gate: "enforce" | "report-only";
   readonly output: string | null;
   readonly compilerProfile: DevelopmentBenchmarkCompilerProfile;
+  readonly editPattern: "alternating" | "unique";
 }
 
 const options = parseOptions(Deno.args);
@@ -73,7 +74,8 @@ try {
     const sampleProfiles: Array<typeof initial.developmentProfile> = [];
     for (let iteration = 0; iteration < options.samples; iteration += 1) {
       let increment = 102;
-      if (iteration % 2 === 1) increment = 101;
+      if (options.editPattern === "unique") increment += iteration;
+      else if (iteration % 2 === 1) increment = 101;
       const committedStarted = performance.now();
       await Deno.writeTextFile(
         workload.editedProviderPath,
@@ -145,6 +147,7 @@ try {
         editedProviderBytes: workload.editedProviderBytes,
         unitCount: workload.unitCount,
         voxelDeclarations: workload.voxelDeclarations,
+        editPattern: options.editPattern,
       },
       initial: {
         buildMilliseconds: initial.durationMilliseconds,
@@ -205,6 +208,7 @@ function parseOptions(arguments_: readonly string[]): BenchmarkOptions {
   let gate: BenchmarkOptions["gate"] = "enforce";
   let output: string | null = null;
   let compilerProfile: DevelopmentBenchmarkCompilerProfile = "production";
+  let editPattern: BenchmarkOptions["editPattern"] = "alternating";
   for (const argument of arguments_) {
     if (argument === "--") {
       continue;
@@ -218,6 +222,8 @@ function parseOptions(arguments_: readonly string[]): BenchmarkOptions {
       output = argument.slice("--output=".length);
     } else if (argument === "--development-profile") {
       compilerProfile = "development-profile";
+    } else if (argument === "--unique-edits") {
+      editPattern = "unique";
     } else {
       throw new Error(`unknown development benchmark argument ${argument}`);
     }
@@ -234,6 +240,7 @@ function parseOptions(arguments_: readonly string[]): BenchmarkOptions {
     gate,
     output,
     compilerProfile,
+    editPattern,
   };
 }
 

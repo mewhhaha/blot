@@ -326,3 +326,37 @@ fn emitted_search_preserves_zero_high_bytes_and_overlapping_matches() {
         program.check(b"\0\xff\0\xff\0\xff\0", b"\0\xff\0", start);
     }
 }
+
+#[test]
+fn successive_nonoverlapping_searches_have_linear_total_byte_work() {
+    let body = super::function().into_raw_body();
+    let program = Program::new(&body);
+    for (piece, query) in [
+        ("a\n", "\n"),
+        ("🐱α🐱", "🐱"),
+        ("ababababx", "abab"),
+        ("aaaaaaaaab", "aaaaab"),
+    ] {
+        for count in [256, 1024] {
+            let text = piece.repeat(count);
+            let mut start = 0;
+            let mut loads = 0;
+            let mut matches = 0;
+            loop {
+                let (found, current_loads) = program.run(text.as_bytes(), query.as_bytes(), start);
+                loads += current_loads;
+                if found < 0 {
+                    break;
+                }
+                matches += 1;
+                start = found as usize + query.len();
+            }
+            assert_eq!(matches, text.matches(query).count());
+            assert!(
+                loads <= 12 * (text.len() + query.len()) + 16 * (matches + 1),
+                "{loads} loads for {} bytes",
+                text.len()
+            );
+        }
+    }
+}

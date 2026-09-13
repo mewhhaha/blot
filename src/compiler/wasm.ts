@@ -372,6 +372,13 @@ export interface CompilerTargetPreflight {
   readonly alternatives: readonly string[];
 }
 
+export interface CompilerRefinementFact {
+  readonly span: { readonly start: number; readonly end: number };
+  readonly kind: "array-index" | "recursive-invariant";
+  readonly summary: string;
+  readonly reasons: readonly string[];
+}
+
 export type CompilerAnalysisResult =
   | {
     readonly ok: true;
@@ -383,6 +390,7 @@ export type CompilerAnalysisResult =
     readonly specializations: readonly CompilerSpecializationFact[];
     readonly simplifications: readonly CompilerSimplificationFact[];
     readonly readability: readonly CompilerReadabilityFact[];
+    readonly refinements: readonly CompilerRefinementFact[];
     readonly work: CompilerWork | null;
     readonly invalidation: CompilerInvalidationTelemetry;
     readonly targetPreflight: CompilerTargetPreflight;

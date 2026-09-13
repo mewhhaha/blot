@@ -1,0 +1,15 @@
+const nested = import "./dynamic_nested_loop_accumulator.blot"
+const sums = import "./affine_index_rebinding.blot"
+const lengths = import "./compared_lengths.blot"
+
+return [
+  nested 0,
+  nested 2,
+  nested 20,
+  sums.empty,
+  sums.one,
+  sums.many,
+  lengths.larger,
+  lengths.equal,
+  lengths.smaller
+  ]

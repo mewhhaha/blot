@@ -1,0 +1,335 @@
+// Exact interval-based decimal conversion. Limbs are little-endian base 10^9;
+// multiplying one by at most 10^9 keeps every intermediate below 10^18.
+open import "blot:prelude"
+
+const limb_base = 1000000000
+const limb =
+  fn (&limbs :: [Int], index :: Int) -> Int => case Array.get (limbs, index) of
+    #None => 0
+    #Some value => value
+
+const natural = fn (value :: Int) -> [Int] => do:
+  if value == 0:
+    return []
+
+  if value < limb_base:
+    return [value]
+
+  return [value % limb_base, value / limb_base]
+
+const multiply = fn (&limbs :: [Int], factor :: Int) -> [Int] => do:
+  let width = Array.length limbs
+  let rec visit :: (Int, [Int], Int) -> [Int]
+  let rec visit = fn (index, ?output, carry) => do:
+    if index == width:
+      if carry > 0:
+        return @array.push output carry
+      else:
+        return @linear.own output
+    else:
+      let product = limb (limbs, index) * factor + carry
+      return visit (
+          index + 1,
+          @array.push output (product % limb_base),
+          product / limb_base
+        )
+
+  return @linear.freeze (visit (0, [], 0))
+
+const power_two = fn (exponent :: Int) -> Int => do:
+  let value = 1
+  for _ in Iter.range (0, exponent):
+    value := value * 2
+
+  return value
+
+const scale_two = fn (&limbs :: [Int], exponent :: Int) -> [Int] => do:
+  let scaled = Array.copy (&limbs)
+  for _ in Iter.range (0, exponent / 29):
+    scaled := multiply (scaled, 536870912)
+
+  return multiply (scaled, power_two (exponent % 29))
+
+const compare = fn (&left :: [Int], &right :: [Int]) -> Int => do:
+  let width = Array.length left
+  let other_width = Array.length right
+  if width < other_width:
+    return -1
+
+  if width > other_width:
+    return 1
+
+  for offset in Iter.range (0, width):
+    let index = width - offset - 1
+    let a = limb (left, index)
+    let b = limb (right, index)
+    if a < b:
+      return -1
+
+    if a > b:
+      return 1
+
+  return 0
+
+const add = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
+  let width = Int.max (Array.length left) (Array.length right)
+  let rec visit :: (Int, [Int], Int) -> [Int]
+  let rec visit = fn (index, ?output, carry) => do:
+    if index == width:
+      if carry > 0:
+        return @array.push output carry
+      else:
+        return @linear.own output
+    else:
+      let sum = limb (left, index) + limb (right, index) + carry
+      return
+        visit (index + 1, @array.push output (sum % limb_base), sum / limb_base)
+
+  return @linear.freeze (visit (0, [], 0))
+
+const subtract = fn (&left :: [Int], &right :: [Int]) -> [Int] => do:
+  let width = Array.length left
+  let rec visit :: (Int, [Int], Int, Int) -> ([Int], Int)
+  let rec visit = fn (index, ?output, borrow, used) => do:
+    if index == width:
+      if borrow != 0:
+        return @panic "float conversion subtraction underflow"
+      else:
+        return (@linear.own output, used)
+    else:
+      let difference = limb (left, index) - limb (right, index) - borrow
+      let digit = case difference < 0 of
+        #True => difference + limb_base
+        #False => difference
+      let next_borrow = case difference < 0 of
+        #True => 1
+        #False => 0
+      let next_used = case digit != 0 of
+        #True => index + 1
+        #False => used
+      return visit (index + 1, @array.push output digit, next_borrow, next_used)
+
+  let (built, used) = visit (0, [], 0, 0)
+  let complete = @linear.freeze built
+  let rec trim :: (Int, [Int]) -> [Int]
+  let rec trim = fn (index, ?output) => do:
+    if index == used:
+      return @linear.own output
+    else:
+      return trim (index + 1, @array.push output (limb (complete, index)))
+
+  return @linear.freeze (trim (0, []))
+
+// Each normalization step is an exact multiplication or division by a power of
+// two. The extra 2^512 step reaches the smallest binary64 subnormal.
+const scales =
+  @linear.freeze [
+    (1.3407807929942597e154, 512),
+    (1.157920892373162e77, 256),
+    (3.402823669209385e38, 128),
+    (1.8446744073709552e19, 64),
+    (4294967296.0, 32),
+    (65536.0, 16),
+    (256.0, 8),
+    (16.0, 4),
+    (4.0, 2),
+    (2.0, 1)
+  ]
+
+const decompose :: (Int, Int) -> F64 -> (Int, Int, Bool)
+const decompose = fn (fraction_bits, minimum_exponent) => fn magnitude => do:
+  let normalized = magnitude
+  let exponent = 0
+  if normalized < 7.458340731200207e-155:
+    normalized := normalized * 1.3407807929942597e154
+    exponent := exponent - 512
+
+  for (scale, shift) in Array.items scales:
+    if normalized >= scale:
+      normalized := normalized / scale
+      exponent := exponent + shift
+    else if normalized < 1.0 / scale:
+      normalized := normalized * scale
+      exponent := exponent - shift
+
+  if normalized < 1.0:
+    normalized := normalized * 2.0
+    exponent := exponent - 1
+
+  let implicit = power_two fraction_bits
+  let significand = F64.truncate (normalized * F64.of_int implicit)
+  if exponent < minimum_exponent:
+    significand := significand / power_two (minimum_exponent - exponent)
+    exponent := minimum_exponent
+
+  return (
+      significand,
+      exponent - fraction_bits - 2,
+      significand == implicit && exponent > minimum_exponent
+    )
+
+// Burger/Dybvig's exact rounding interval, with unequal margins at normal
+// powers of two and inclusive boundaries for an even binary significand.
+const shortest =
+  fn (
+    significand :: Int,
+    binary_exponent :: Int,
+    asymmetric :: Bool
+  ) -> (Int, Int) => do:
+    let remainder = natural (4 * significand)
+    let denominator :: [Int]
+    let denominator = [1]
+    let lower :: [Int]
+    let lower = case asymmetric of
+      #True => [1]
+      #False => [2]
+    let upper :: [Int]
+    let upper = [2]
+    if binary_exponent >= 0:
+      remainder := scale_two (remainder, binary_exponent)
+      lower := scale_two (lower, binary_exponent)
+      upper := scale_two (upper, binary_exponent)
+    else:
+      denominator := scale_two (denominator, -binary_exponent)
+
+    // Scaling nine decimal places at once bounds work even for subnormals.
+    let exponent = 0
+    if compare (remainder, denominator) >= 0:
+      for _ in Iter.range (0, 35):
+        let next = multiply (denominator, limb_base)
+        if compare (remainder, next) < 0:
+          break
+
+        denominator := next
+        exponent := exponent + 9
+
+      for _ in Iter.range (0, 9):
+        let next = multiply (denominator, 10)
+        if compare (remainder, next) < 0:
+          break
+
+        denominator := next
+        exponent := exponent + 1
+    else:
+      for _ in Iter.range (0, 36):
+        let next = multiply (remainder, limb_base)
+        if compare (next, denominator) >= 0:
+          break
+
+        remainder := next
+        lower := multiply (lower, limb_base)
+        upper := multiply (upper, limb_base)
+        exponent := exponent - 9
+
+      for _ in Iter.range (0, 9):
+        if compare (remainder, denominator) >= 0:
+          break
+
+        remainder := multiply (remainder, 10)
+        lower := multiply (lower, 10)
+        upper := multiply (upper, 10)
+        exponent := exponent - 1
+
+    // Binary64 needs at most 17 significant decimal digits; binary32 needs nine.
+    let inclusive = significand % 2 == 0
+    let digits = 0
+    let count = 0
+    for _ in Iter.range (0, 17):
+      let digit = 0
+      for _ in Iter.range (0, 10):
+        if compare (remainder, denominator) < 0:
+          break
+
+        remainder := subtract (remainder, denominator)
+        digit := digit + 1
+
+      let low = compare (remainder, lower)
+      let high = compare (add (remainder, upper), denominator)
+      let round_down = low < 0 || (inclusive && low == 0)
+      let round_up = high > 0 || (inclusive && high == 0)
+      digits := digits * 10 + digit
+      count := count + 1
+      if round_down || round_up:
+        let midpoint = compare (multiply (remainder, 2), denominator)
+        if round_up && (not round_down || midpoint > 0 || (midpoint == 0 && digit % 2 != 0)):
+          digits := digits + 1
+
+        break
+
+      remainder := multiply (remainder, 10)
+      lower := multiply (lower, 10)
+      upper := multiply (upper, 10)
+
+    if @text.byte_len (Text.of_int digits) > count:
+      exponent := exponent + 1
+
+    for _ in Iter.range (0, 17):
+      if digits % 10 != 0:
+        break
+
+      digits := digits / 10
+
+    return (digits, exponent)
+
+const zeroes = fn (count :: Int) -> Text => do:
+  let text = ""
+  for _ in Iter.range (0, count):
+    text := text <> "0"
+
+  return text
+
+const decimal = fn (digits :: Int, exponent :: Int) -> Text => do:
+  let text = Text.of_int digits
+  let width = @text.byte_len text
+  if exponent >= -6 && exponent < 21:
+    if exponent < 0:
+      return "0." <> zeroes (-exponent - 1) <> text
+
+    let point = exponent + 1
+    if point >= width:
+      return text <> zeroes (point - width)
+
+    return
+      @text.slice_bytes text 0 point <> "." <> @text.slice_bytes text point width
+
+  let first = @text.slice_bytes text 0 1
+  let tail = case width == 1 of
+    #True => ""
+    #False => "." <> @text.slice_bytes text 1 width
+  let sign = case exponent >= 0 of
+    #True => "+"
+    #False => ""
+  return first <> tail <> "e" <> sign <> Text.of_int exponent
+
+const display :: (Int, Int) -> F64 -> Text
+const display = fn (fraction_bits, minimum_exponent) => fn value => do:
+  if F64.is_nan value:
+    return "nan"
+
+  if is_equal (F64.cmp value 0.0):
+    if 1.0 / value < 0.0:
+      return "-0"
+
+    return "0"
+
+  let negative = value < 0.0
+  let sign = case negative of
+    #True => "-"
+    #False => ""
+  if F64.is_nan (value - value):
+    return sign <> "inf"
+
+  let magnitude = case negative of
+    #True => -value
+    #False => value
+  let (significand, exponent, asymmetric) =
+    decompose (fraction_bits, minimum_exponent) magnitude
+  let (digits, decimal_exponent) = shortest (significand, exponent, asymmetric)
+  return sign <> decimal (digits, decimal_exponent)
+
+const binary64 :: F64 -> Text
+const binary64 = display (52, -1022)
+const single_precision :: F64 -> Text
+const single_precision = display (23, -126)
+const binary32 = fn (value :: F32) -> Text => single_precision (F32.widen value)
+return { .binary64; .binary32; }

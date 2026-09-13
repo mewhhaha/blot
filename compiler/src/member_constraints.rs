@@ -89,17 +89,50 @@ impl Checker {
     /// domain, and subsequent applications still check the selected signature.
     /// In particular, an unconstrained upper Top is never a lookup subject.
     pub(super) fn member_lookup_subject(&self, type_: &Type) -> Option<Type> {
-        let mut subject = self.settle(type_.clone(), true);
-        if matches!(subject, Type::Bottom | Type::Top)
-            && let Some(upper) = self.member_upper_subject(type_)
-        {
-            subject = upper;
-        }
-        (!matches!(subject, Type::Top)
+        let subject = self.settle(type_.clone(), true);
+        if !matches!(subject, Type::Top)
             && !contains_bottom(&subject)
             && closed_checked_type(&subject, &mut HashSet::new())
-            && operator_dispatch_type_is_concrete(&subject))
-        .then_some(subject)
+            && operator_dispatch_type_is_concrete(&subject)
+        {
+            return Some(subject);
+        }
+        if let Some(upper) = self.member_upper_subject(type_) {
+            return Some(upper);
+        }
+        if self.specialization_depth.get() == 0 {
+            return None;
+        }
+        // Keep every possible producer: one unknown alternative still prevents
+        // choosing an operation during specialization.
+        let mut pending = vec![self.constraint_type(type_)];
+        let mut visited = HashSet::new();
+        let mut evidence = Vec::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let source = self.expand_constraint(id);
+            if type_domain(&source).is_some() {
+                evidence.push(source);
+                continue;
+            }
+            if let Some(upper) = self.member_upper_subject(&source) {
+                if type_domain(&upper).is_some() {
+                    evidence.push(upper);
+                    continue;
+                }
+                return None;
+            }
+            let variable = self.constraint_variable(id)?;
+            let lower = self.variables.borrow()[variable as usize].lower.clone();
+            if lower.is_empty() {
+                return None;
+            }
+            pending.extend(lower);
+        }
+        let carrier = join_types(evidence);
+        type_domain(&carrier).map(|_| carrier)
     }
 
     /// A checked upper edge is evidence even when negative settlement has
