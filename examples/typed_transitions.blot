@@ -30,9 +30,7 @@ const Receipt =
     .reference = Text;
   }
 const CheckoutError =
-  #InvalidQuantity Int |
-  #InvalidUnitPrice Int |
-  #LimitExceeded Int
+  #InvalidQuantity Int | #InvalidUnitPrice Int | #LimitExceeded Int
 
 let price :: Step (Draft, Priced, CheckoutError)
 let price = fn draft => case draft of
@@ -64,7 +62,7 @@ let capture = fn approved => case approved of
   #Approved payment => Ok (#Receipt {
     .subtotal = payment.subtotal;
     .reference = payment.reference;
-  })
+})
 
 // Pain point: the generic transition helper needs four explicit nested @forall
 // binders in `lib/transition.blot`; factoring the alias keeps application code
@@ -89,22 +87,25 @@ let summarize = fn result => case result of
       .total = value.subtotal;
       .detail = 0;
     }
+
   #Error error => case error of
     #InvalidQuantity value => {
       .status = "invalid-quantity";
       .total = 0;
       .detail = value;
     }
+
     #InvalidUnitPrice value => {
       .status = "invalid-unit-price";
       .total = 0;
       .detail = value;
     }
+
     #LimitExceeded value => {
       .status = "limit-exceeded";
       .total = 0;
       .detail = value;
-    }
+}
 
 let run = fn request => summarize (checkout (#Draft request))
 
@@ -115,4 +116,4 @@ return {
     .invalid_price = run { .sku = "pen"; .quantity = 2; .unit_price = -1; };
     .over_limit = run { .sku = "desk"; .quantity = 2; .unit_price = 75; };
   };
-}
+  }
