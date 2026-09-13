@@ -12,7 +12,9 @@ test("effect-row middleware preserves callback effects and both executions", asy
     const source = await readFile(path, "utf8");
     const formatted = await formatSource(source);
     assert.equal(formatted.ok, true);
-    if (!formatted.ok) throw new Error("effect-row middleware failed to format");
+    if (!formatted.ok) {
+      throw new Error("effect-row middleware failed to format");
+    }
     assert.equal(formatted.source, source);
 
     const expected = (await readFile(
@@ -37,7 +39,10 @@ test("effect-row middleware cannot hide effects performed by its callback", asyn
   const compiler = await Compiler.create();
   try {
     await assert.rejects(
-      () => compiler.check("src/node/fixtures/effect_middleware_dropped_fetch.blot"),
+      () =>
+        compiler.check(
+          "src/node/fixtures/effect_middleware_dropped_fetch.blot",
+        ),
       /BLOT_TYPE_ERROR/,
     );
   } finally {
