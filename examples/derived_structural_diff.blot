@@ -1,0 +1,76 @@
+// Derive a reusable structural differ from ordinary record type values.
+//
+// The same library implementation specializes to unrelated schemas. Its
+// `Differ Value` result keeps both compared values tied to the schema that
+// generated it, while `blot:derive` supplies checked scalar field readers.
+// No reflection or dynamic field lookup is needed by the runtime program.
+
+open import "blot:prelude"
+const Diff = import "./lib/structural_diff.blot"
+
+const ReplicaCount = range (1, 32)
+const Deployment =
+  {
+    .version = Int;
+    .region = Text;
+    .replicas = ReplicaCount;
+    .owner = Text;
+  }
+const Account =
+  {
+    .id = Int;
+    .name = Text;
+    .team = Text;
+  }
+
+// Pain point: direct static application retains `[Text]` field-name precision;
+// wrapping `Diff.derive` in a generic higher-order helper currently widens it.
+const deployment_diff = Diff.derive Deployment
+const account_diff = Diff.derive Account
+
+let deployment_before :: Deployment
+let deployment_before =
+  {
+    .version = 17;
+    .region = "eu-central";
+    .replicas = 3;
+    .owner = "platform";
+  }
+
+let deployment_after :: Deployment
+let deployment_after =
+  {
+    .version = 18;
+    .region = "eu-central";
+    .replicas = 5;
+    .owner = "runtime";
+  }
+
+let deployment_boundary :: Deployment
+let deployment_boundary =
+  {
+    .version = 18;
+    .region = "eu-central";
+    .replicas = 32;
+    .owner = "runtime";
+  }
+
+let account_before :: Account
+let account_before = { .id = 7; .name = "Ada"; .team = "compiler"; }
+let account_after :: Account
+let account_after = { .id = 7; .name = "Ada"; .team = "runtime"; }
+
+// Pain point: the derivation API deliberately refuses owned/opaque/compound
+// fields. This example stays inside its documented unrestricted scalar fragment
+// instead of weakening ownership merely to make generic reflection convenient.
+return {
+  .default = {
+    .deployment_changed = deployment_diff.changed (deployment_before, deployment_after);
+    .deployment_equal = deployment_diff.equal (deployment_before, deployment_after);
+    .same_changed = deployment_diff.changed (deployment_after, deployment_after);
+    .same_equal = deployment_diff.equal (deployment_after, deployment_after);
+    .boundary_changed = deployment_diff.changed (deployment_after, deployment_boundary);
+    .account_changed = account_diff.changed (account_before, account_after);
+    .account_equal = account_diff.equal (account_before, account_after);
+  };
+  }

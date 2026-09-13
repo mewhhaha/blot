@@ -1,0 +1,1 @@
+{ .default = { .deployment_changed = ["version", "replicas", "owner"]; .deployment_equal = #False; .same_changed = []; .same_equal = #True; .boundary_changed = ["replicas"]; .account_changed = ["team"]; .account_equal = #False; }; }

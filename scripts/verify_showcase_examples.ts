@@ -48,6 +48,7 @@ const abstractionExamples = [
   "nominal_keyed_index.blot",
   "composable_parser.blot",
   "composable_prisms.blot",
+  "derived_structural_diff.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
