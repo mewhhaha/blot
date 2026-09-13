@@ -8,8 +8,7 @@ import { runArtifact } from "./run.ts";
 const example = "examples/typed_semiring_matrices.blot";
 const library = "examples/lib/semiring_matrix.blot";
 const mismatchFixture = "src/node/fixtures/semiring_carrier_mismatch.blot";
-const matrixMismatchFixture =
-  "src/node/fixtures/semiring_matrix_mismatch.blot";
+const matrixMismatchFixture = "src/node/fixtures/semiring_matrix_mismatch.blot";
 
 test(
   "typed semiring matrices preserve one carrier in both executions",
