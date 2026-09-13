@@ -27,6 +27,7 @@ record and return fresh integer and text records with their own layouts.
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`typed_codec.blot`](typed_codec.blot)                       | Bidirectional codecs compose validated fields while preserving model, wire, and error types                       | round trips, boundary values, and typed decode errors        |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -42,10 +43,20 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
+The typed codec example composes two independently validated integer fields.
+Each leaf codec keeps its narrow error constructor, while algebraic subtyping
+widens those errors to the application-level union at the product boundary.
+`imap` requires both directions of a representation change, so a one-way remap
+cannot masquerade as a codec. Product decoding is intentionally left-biased on
+errors; the example records that behavior rather than claiming accumulation.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions.
+`src/node/typed_codec.test.ts` adds the codec principal type, evaluator and
+emitted-Wasm goldens, and rejection cases. `deno task verify:showcase` includes
+all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
