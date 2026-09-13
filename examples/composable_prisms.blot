@@ -45,17 +45,28 @@ const original_age = #User (#AgeChanged 41)
 const system_event :: AuditEvent
 const system_event = #System "deploy"
 
+const Observation = {
+  .matched_age = Option Int;
+  .matched_name = Option Text;
+  .wrong_user_case = Option Int;
+  .system_miss = Option Int;
+  .incremented = AuditEvent;
+  .unchanged = AuditEvent;
+  .reviewed = AuditEvent;
+}
+
 // Pain point: constructor knowledge is intentionally concrete. Generic Prism
 // composition is elegant, but defining a prism for a closed variant still needs
 // one exhaustive `case`; constructor labels are not row-polymorphic values.
-return {
-  .default = {
-    .matched_age = audit_age.preview original_age;
-    .matched_name = audit_registration.preview (#User (#Registered "Ada"));
-    .wrong_user_case = audit_age.preview (#User (#Registered "Ada"));
-    .system_miss = audit_age.preview system_event;
-    .incremented = P.over (audit_age, original_age, fn age => age + 1);
-    .unchanged = P.over (audit_age, system_event, fn age => age + 1);
-    .reviewed = audit_registration.review "Grace";
-  };
+const observation :: Observation
+const observation = {
+  .matched_age = audit_age.preview original_age;
+  .matched_name = audit_registration.preview (#User (#Registered "Ada"));
+  .wrong_user_case = audit_age.preview (#User (#Registered "Ada"));
+  .system_miss = audit_age.preview system_event;
+  .incremented = P.over (audit_age, original_age, fn age => age + 1);
+  .unchanged = P.over (audit_age, system_event, fn age => age + 1);
+  .reviewed = audit_registration.review "Grace";
 }
+
+return { .default = observation; }
