@@ -9,6 +9,7 @@ const examples = [
   "idempotent_events",
   "paginated_feed",
   "sensor_units",
+  "typed_transitions",
   "unicode_preview",
 ];
 
