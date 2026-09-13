@@ -36,10 +36,7 @@ const reverse = fn order => {
 // Pain point: scalar comparison primitives are curried, while Array.merge_sort
 // accepts one tupled Boolean predicate. Keep that shape conversion private.
 const before_or_equal :: @forall (fn Value => Order Value -> (Value, Value) -> Bool)
-const before_or_equal = fn order => fn (left, right) => case order.compare left right of
-  #Greater => False
-  #Less => True
-  #Equal => True
+const before_or_equal = fn order => fn (left, right) => not (is_greater (order.compare left right))
 
 const sort :: @forall (fn Value => (Order Value, [Value]) -> [Value])
 const sort = fn (order, values) => Array.merge_sort (values, before_or_equal order)
