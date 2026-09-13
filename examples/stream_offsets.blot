@@ -20,8 +20,8 @@ let reconcile = fn (start, &offsets) => do:
   let gaps = 0
   let stale = 0
 
-  // Pain point: iteration borrows the source array explicitly; the call site
-  // must opt into that borrow even though the loop only observes offsets.
+  // Pain point: collection iteration spells the borrow explicitly even though
+  // the loop only observes offsets; ownership intent is visible at every use.
   for offset in Iter.items (&offsets):
     if offset == checkpoint:
       duplicates := duplicates + 1
