@@ -1,0 +1,55 @@
+open import "blot:prelude"
+const Store = import "./lib/nominal_index.blot"
+
+const UserIds = Store.Keyspace "user"
+const ProjectIds = Store.Keyspace "project"
+
+const User = {
+  .name = Text;
+  .email = Text;
+}
+
+const Project = {
+  .slug = Text;
+  .budget = Int;
+}
+
+const Membership = {
+  .user = UserIds.type;
+  .project = ProjectIds.type;
+}
+
+const users :: Store.Index (UserIds.type, User)
+const users = Store.from_entries (UserIds.equal, [
+  { .key = UserIds.of 1; .value = { .name = "Ada"; .email = "ada@example.test"; }; },
+  { .key = UserIds.of 2; .value = { .name = "Grace"; .email = "grace@example.test"; }; },
+])
+
+const projects :: Store.Index (ProjectIds.type, Project)
+const projects = Store.from_entries (ProjectIds.equal, [
+  { .key = ProjectIds.of 7; .value = { .slug = "compiler"; .budget = 1200; }; },
+  { .key = ProjectIds.of 8; .value = { .slug = "docs"; .budget = 400; }; },
+])
+
+const user_names = Store.map_values (users, fn user => user.name)
+const project_slugs = Store.map_values (projects, fn project => project.slug)
+
+const membership :: Membership
+const membership = {
+  .user = UserIds.of 1;
+  .project = ProjectIds.of 7;
+}
+
+// Pain point: the nominal guarantee is deliberately compile-time only. When a
+// raw integer crosses an external boundary, the application must choose the
+// keyspace descriptor that is allowed to mint that identity; runtime Ints do
+// not carry a hidden user/project tag.
+return {
+  .default = {
+    .user = Store.lookup (user_names, membership.user);
+    .project = Store.lookup (project_slugs, membership.project);
+    .missing_user = Store.lookup (user_names, UserIds.of 99);
+    .user_id = UserIds.value membership.user;
+    .project_id = ProjectIds.value membership.project;
+  };
+}
