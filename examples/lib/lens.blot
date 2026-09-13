@@ -1,5 +1,3 @@
-open import "blot:prelude"
-
 // A lens is just a pair of ordinary functions whose shared type parameters say
 // which whole value contains which focused part. No runtime wrapper or compiler
 // primitive is needed.
