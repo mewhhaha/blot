@@ -23,6 +23,7 @@ with ordinary handler records. Each runs with
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -38,10 +39,20 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
+The structural-reader example is deliberately pure. Tax, shipping, and currency
+computations name only the record capabilities they consume. `zip_with` closes
+those narrower function inputs at a wider structural boundary, while `local`
+lifts pricing under an application field. A refined percentage field and two
+negative fixtures make missing or invalid capabilities type errors before
+execution; extra outer and nested record fields remain valid through width and
+depth subtyping.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/structural_readers.test.ts` checks evaluator/Wasm
+agreement plus missing-field and invalid-refinement rejections.
+`deno task verify:showcase` includes all five abstraction examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
