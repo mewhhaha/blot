@@ -34,6 +34,7 @@ const abstractionExamples = [
   "typed_effect_pipeline.blot",
   "schema_effects.blot",
   "linear_transaction.blot",
+  "typed_validation.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
