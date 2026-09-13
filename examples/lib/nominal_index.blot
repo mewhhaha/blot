@@ -1,0 +1,33 @@
+open import "blot:prelude"
+
+// A keyed index is structural. The Key parameter appears in both stored entries
+// and the equality dictionary, so lookup can only accept the same key domain.
+const Entry = fn (key, value) => {
+  .key = key;
+  .value = value;
+}
+
+const Index = fn (key, value) => {
+  .entries = [Entry (key, value)];
+  .equal = key -> key -> Bool;
+}
+
+const from_entries :: @forall (fn Key => @forall (fn Value => (Key -> Key -> Bool, [Entry (Key, Value)]) -> Index (Key, Value)))
+const from_entries = fn (equal, entries) => { .entries = entries; .equal = equal; }
+
+const lookup :: @forall (fn Key => @forall (fn Value => (Index (Key, Value), Key) -> Option Value))
+const lookup = fn (index, key) => Option.map (fn entry => entry.value) (Array.find (index.entries, fn entry => index.equal entry.key key))
+
+const map_values :: @forall (fn Key => @forall (fn Input => @forall (fn Output => (Index (Key, Input), (Input -> Output)) -> Index (Key, Output))))
+const map_values = fn (index, transform) => { .entries = Array.map (index.entries, fn entry => { .key = entry.key; .value = transform entry.value; }); .equal = index.equal; }
+
+// Pain point: attached type namespaces are intentionally invisible through a
+// generic type parameter, so the index carries equality as an explicit ordinary
+// dictionary instead of attempting to project `Key.equal` inside these helpers.
+return {
+  .Entry = Entry;
+  .Index = Index;
+  .from_entries = from_entries;
+  .lookup = lookup;
+  .map_values = map_values;
+  }

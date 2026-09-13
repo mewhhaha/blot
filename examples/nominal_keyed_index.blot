@@ -1,0 +1,76 @@
+open import "blot:prelude"
+const Store = import "./lib/nominal_index.blot"
+
+const UserId = #UserId Int
+UserId := UserId <+ {
+  .of = fn value => #UserId value;
+  .value = fn id => case id of
+    #UserId value => value
+  ;
+  .equal = fn left => fn right => case (left, right) of
+    (#UserId a, #UserId b) => Int.eq a b
+  ;
+}
+
+const ProjectId = #ProjectId Int
+ProjectId := ProjectId <+ {
+  .of = fn value => #ProjectId value;
+  .value = fn id => case id of
+    #ProjectId value => value
+  ;
+  .equal = fn left => fn right => case (left, right) of
+    (#ProjectId a, #ProjectId b) => Int.eq a b
+  ;
+}
+
+const User = { .name = Text; .email = Text; }
+const Project = { .slug = Text; .budget = Int; }
+const Membership = { .user = UserId; .project = ProjectId; }
+
+const users :: Store.Index (UserId, User)
+const users =
+  Store.from_entries (
+    UserId.equal,
+    [
+      { .key = UserId.of 1; .value = { .name = "Ada"; .email = "ada@example.test"; }; },
+      { .key = UserId.of 2; .value = { .name = "Grace"; .email = "grace@example.test"; }; }
+    ]
+  )
+
+const projects :: Store.Index (ProjectId, Project)
+const projects =
+  Store.from_entries (
+    ProjectId.equal,
+    [
+      { .key = ProjectId.of 7; .value = { .slug = "compiler"; .budget = 1200; }; },
+      { .key = ProjectId.of 8; .value = { .slug = "docs"; .budget = 400; }; }
+    ]
+  )
+
+const user_names :: Store.Index (UserId, Text)
+const user_names = Store.map_values (users, fn user => user.name)
+const project_slugs :: Store.Index (ProjectId, Text)
+const project_slugs = Store.map_values (projects, fn project => project.slug)
+
+const membership :: Membership
+const membership = { .user = UserId.of 1; .project = ProjectId.of 7; }
+
+// Pain point: these concrete result boundaries currently keep the generic lookup
+// result from collapsing to `#Some ⊥` during source checking. The executable
+// value is Text in both evaluator and emitted Wasm.
+let selected_user :: Option Text
+let selected_user = Store.lookup (user_names, membership.user)
+let selected_project :: Option Text
+let selected_project = Store.lookup (project_slugs, membership.project)
+let missing_user :: Option Text
+let missing_user = Store.lookup (user_names, UserId.of 99)
+
+return {
+  .default = {
+    .user = selected_user;
+    .project = selected_project;
+    .missing_user = missing_user;
+    .user_id = UserId.value membership.user;
+    .project_id = ProjectId.value membership.project;
+  };
+  }
