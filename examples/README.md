@@ -38,9 +38,9 @@ not rely on the current generic handler's resume-result inference to enforce the
 port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation. The middleware example keeps its callback row
-open: `traced` and `counted` add named observability effects while `instrument`
-preserves any unrelated callback effects instead of hiding them behind a runtime
-registry.
+open: `traced` and `counted` add named observability effects while direct
+composition preserves any unrelated callback effects instead of hiding them
+behind a runtime registry.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
