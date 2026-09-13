@@ -44,6 +44,7 @@ Its focused test also locks down rejection of a headless value.
 | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
 | [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
+| [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
