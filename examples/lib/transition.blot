@@ -1,0 +1,17 @@
+open import "blot:prelude"
+
+// A transition is only a type-level alias: no wrapper value is allocated at
+// runtime. The three parameters keep the source and destination states visible
+// while reusing the prelude's Result for typed failure.
+const Transition = fn (input, output, failure) => (input -> Result (output, failure))
+
+// Pain point: a reusable four-parameter combinator needs a deeply nested
+// @forall signature on one logical line. The explicit quantification is precise,
+// but the surface gets noisy before the implementation does anything interesting.
+const and_then :: @forall (fn Input => @forall (fn Middle => @forall (fn Output => @forall (fn Failure => (Transition (Input, Middle, Failure), Transition (Middle, Output, Failure)) -> Transition (Input, Output, Failure)))))
+const and_then = fn (first, second) => fn input => first input |> Result.and_then second
+
+return {
+  .Transition = Transition;
+  .and_then = and_then;
+  }
