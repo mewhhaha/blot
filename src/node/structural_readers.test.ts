@@ -28,13 +28,18 @@ test("structural readers compose capabilities and preserve both executions", asy
     const expectedWasm = (
       await readFile("examples/expected/structural_readers.wasm.txt", "utf8")
     ).trim();
-    assert.equal(await runArtifact(await compiler.compile(path)), expectedWasm);
+    assert.equal(
+      await runArtifact(await compiler.compile(path)),
+      expectedWasm,
+    );
   } finally {
     compiler.destroy();
   }
 });
 
-for (const name of ["reader_missing_capability", "reader_refined_capability"]) {
+for (
+  const name of ["reader_missing_capability", "reader_refined_capability"]
+) {
   test(`structural readers reject ${name}`, async () => {
     const compiler = await Compiler.create();
     try {
