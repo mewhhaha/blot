@@ -1,6 +1,5 @@
-// Dimension-safe quantities built from compile-time descriptors and nominal
-// seals. The descriptor carries construction, observation, and arithmetic while
-// each concrete value remains a distinct source type.
+// Dimension-safe quantities use singleton unit labels and compile-time
+// descriptors carrying construction, observation, and arithmetic.
 
 open import "blot:prelude"
 
@@ -31,10 +30,12 @@ let elapsed = Seconds.of 90
 // members do not participate in a type's shape. The extra `.type` field is the
 // bridge between first-class operations and signatures such as `Meters.type`.
 return {
-  .distance = Meters.value distance;
-  .distance_unit = Meters.symbol;
-  .centimeters = Centimeters.value metric_detail;
-  .centimeters_unit = Centimeters.symbol;
-  .elapsed = Seconds.value elapsed;
-  .elapsed_unit = Seconds.symbol;
-}
+  .default = {
+    .distance = Meters.value distance;
+    .distance_unit = Meters.symbol;
+    .centimeters = Centimeters.value metric_detail;
+    .centimeters_unit = Centimeters.symbol;
+    .elapsed = Seconds.value elapsed;
+    .elapsed_unit = Seconds.symbol;
+  };
+  }

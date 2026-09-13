@@ -1,5 +1,28 @@
 import { assertEquals } from "@std/assert";
 import { elaborateLayout } from "./layout.ts";
+import { parse } from "./parse.ts";
+
+Deno.test("continuation guidance uses the rejected declaration's source tokens", async () => {
+  for (const [source, token, guidance] of [
+    ["const twice = fn value =>\n  value\nreturn twice\n", "=>", "`do:`"],
+    ["const Choice =\n  #First\n  | #Second\nreturn Choice\n", "|", "parentheses"],
+  ]) {
+    const result = await parse(source);
+    if (result.ok) throw new Error("invalid continuation was accepted");
+    const diagnostic = result.diagnostics[0];
+    assertEquals(diagnostic.message.includes(guidance), true);
+    assertEquals(source.slice(diagnostic.span.start, diagnostic.span.end), token);
+  }
+  for (const source of [
+    "const twice = fn value => do:\n  return value\nreturn twice\n",
+    "const Choice = (\n  #First\n  | #Second\n)\nreturn Choice\n",
+  ]) {
+    assertEquals((await parse(source)).ok, true);
+  }
+  const unrelated = await parse("const broken = )\nconst later = fn value =>\n  value\nreturn later\n");
+  if (unrelated.ok) throw new Error("invalid delimiter was accepted");
+  assertEquals(unrelated.diagnostics[0].message.includes("`do:`"), false);
+});
 
 Deno.test("layout elaboration inserts suites only outside delimiters", async () => {
   const source = `let choose = fn condition =>

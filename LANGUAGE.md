@@ -2392,6 +2392,12 @@ preserves directional subtype, effect, region, and refinement relations while
 preventing a chain of wrappers from retaining every prior wrapper's private
 variables. Recursive schemes retain their live fixed-point graph.
 
+A higher-order call must satisfy the callee's checked signature before its
+body is specialized. Written function signatures supply parameter context before
+checking the body, including quantified parameters and tuple destructuring.
+Rechecking a computed constant closure preserves closed input and result types
+already established by its call, along with the call's effects.
+
 ```blot
 // Before its body is checked: 'a -> 'b
 // The field projection adds: 'a <: { .name = 'n; }, result = 'n.
@@ -2492,6 +2498,11 @@ predicate. No refinement object reaches inference, Runtime HIR, WebAssembly, or
 the ABI. Branch comparison facts can prove that an `Int` inhabits such a type in
 exactly the same way they prove an explicitly written range.
 
+Comparisons also refine immutable field paths, such as `raw.port` or
+`settings.http.port`. Repeating that same projection in the guarded branch uses
+the fact; another field does not. Shadowing or rebinding the root record replaces
+its field facts with those of the new binding.
+
 This operation does not turn value relationships into ordinary types. Facts such
 as `i < length(values)` remain in the refinement context described in §8.5, and
 ownership remains a separate flow judgment. The formal boundary and erasure
@@ -2501,6 +2512,10 @@ obligation are specified in
 ### 10.3 Display notation
 
 Compiler output uses notation that is not additional source syntax:
+
+Constructor payloads containing a union or function are parenthesized. Thus
+`#User (#Registered Text | #Deleted)` keeps both alternatives inside `#User`;
+`#User #Registered Text | #Deleted` has a separate outer `#Deleted` alternative.
 
 | display                     | meaning                          |
 | --------------------------- | -------------------------------- |
@@ -3826,6 +3841,9 @@ the examples above do.
 An empty intersection or difference, and `@type.union_of []`, are errors; Blot
 has no value representing an empty compile-time union.
 
+`@type.of` maps floating-point values to `F64` or `F32`, including inside
+records, arrays, and constructor payloads. Floats have no singleton types.
+
 `@type.reflect` returns one of:
 
 ```text
@@ -4036,6 +4054,10 @@ requires a unit result. They retain their iterator state across suspension.
 fold remains nonsuspending; borrowing does not grant a resumable lifetime.
 `List.fold` likewise requires a synchronous visitor because traversal borrows
 its backing node array.
+
+Array `each (values, visit)` freezes its input for traversal and preserves the
+unit-returning visitor's effect row, including suspension. The borrowed array
+`fold` remains synchronous.
 
 `Option` and `Result` remain callable type constructors and also expose source
 combinators. Namespace attachment preserves the underlying function's call and

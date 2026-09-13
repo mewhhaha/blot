@@ -1,0 +1,31 @@
+open import "blot:prelude"
+
+const Selection =
+  {
+    .key = Int;
+    .name = Text;
+    .status = #Active | #Paused;
+  }
+let selections :: [Selection]
+let selections =
+  [
+    { .key = 1; .name = "first"; .status = #Active; },
+    { .key = 2; .name = "second"; .status = #Paused; }
+  ]
+
+let select = fn key => do:
+  let selected = Array.expect_get ((&selections), 0)
+  for candidate in Iter.items (Array.copy (&selections)):
+    if candidate.key == key:
+      selected := candidate
+
+  return selected
+
+let run :: Int -> Int
+let run = fn key => do:
+  let selected = select key
+  return case selected.status of
+    #Active => selected.key
+    #Paused => selected.key * 10
+
+return run

@@ -148,7 +148,9 @@ occurrence for another. This changes evaluation work only; the exported runtime
 body retains the source algorithm.
 
 A returned source closure receives the closed result signature recorded at its
-call site in preference to an unspecialized codomain. Its effects remain those
+call site in preference to an unspecialized codomain. A source codomain is
+substituted in the completed call's lexical environment before it is attached
+to returned values, including records containing closures. Its effects remain those
 established by checking, including when the closure captures other computations.
 A generic representation signature that omits those effects cannot certify
 purity for call-result caching.
@@ -319,6 +321,21 @@ accumulator names. Checked expression and nested-closure facts belong to that
 instance and are restored when leaving it, rather than overwriting facts for
 other calls of the same source body.
 
+An open or quantified recursive signature can request instance checking using
+the same source checker. Each instance identifies the source body checked at its
+entry. Calls back to that body reuse its facts instead of repeatedly minting new
+interfaces; a nested closure still checks its own actual argument at entry.
+An empty residual Scratch contributes a fresh element unknown, and
+the body's checked operations determine its element representation. Physical
+scalar evidence contributes its full carrier, without inventing refinements.
+When recursive lower bounds remain open, residual signature settlement combines
+settled upper evidence, removing redundant bounds and neutral `Top` entries.
+
+A nonrecursive call with a partially known argument may remain in the staged
+evaluator to eliminate statically selected alternatives, even if an alternative's
+payload contains runtime values. Recursive helpers, host callback boundaries,
+and development boundaries still require a settled runtime interface.
+
 Contextual source checking must likewise preserve an expression's existing
 generic representation fact. A concrete call refines its call site; it cannot
 replace the shared body's fact with its own scalar, record, or vector layout.
@@ -345,11 +362,22 @@ Source type evidence, including refinements, is retained across runtime
 parameter and capture renaming. An unrefined physical carrier may identify an
 integer, floating-point, collection, or recursive aggregate representation, but
 cannot supply a source refinement, nominal seal, or ownership permission.
+The eight built-in SIMD vector and mask types have distinct, fixed element and
+lane layouts; their exact layouts identify those built-in carriers. Other vector
+layouts supply no source type. Checked record requirements retain all fields of
+the physical carrier, and checked integer ranges are restricted to that carrier's
+bounds. A record's argument representation can be reused only for the same
+checked type value, never because unrelated fields have similar shapes.
 Captured record fields retain closed callable signatures independently: an
 unknown field does not erase another field's quantified contract. Free
 representation holes are not genuine quantified binders and must not be admitted
 as rigid source evidence. Sum arguments are lowered against their
 call-site-substituted representation, not the original open signature spelling.
+
+Substitutions recovered from a known array account for every element rather than
+only its first element. Integer values contribute the finite `Int` carrier.
+Reification and substitution use the ordinary finite type-value union operation:
+nested unions flatten and equal members collapse before runtime layout selection.
 
 Host-operation specialization applies one binder substitution to both the
 declared parameter and result, recursively through arrays, matching constructor

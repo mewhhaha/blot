@@ -11,13 +11,8 @@ const segment =
     fn scalar => scalar != "/" && scalar != "."
   )
 
-const health :: P.Parser Route
 const health = P.map (P.literal "/health", fn _ => #Health)
 
-// Pain point: this explicit result boundary is currently needed for composed
-// generic parsers; without it, source checking collapses the run result to
-// `#Ok ⊥ | #Error ⊥` even though evaluator execution produces the user value.
-const user :: P.Parser Route
 const user =
   P.zip_with (
     P.literal "/users/",
@@ -25,7 +20,6 @@ const user =
     fn (_, name) => #User { .name = name; }
   )
 
-const asset_name :: P.Parser Text
 const asset_name =
   P.zip_with (
     P.literal "/assets/",
@@ -33,7 +27,6 @@ const asset_name =
     fn (_, name) => name
   )
 
-const asset_stem :: P.Parser Text
 const asset_stem =
   P.zip_with (
     asset_name,
@@ -41,7 +34,6 @@ const asset_stem =
     fn (name, _) => name
   )
 
-const asset :: P.Parser Route
 const asset =
   P.zip_with (
     asset_stem,
@@ -50,12 +42,10 @@ const asset =
   )
 
 // The public boundary closes the common Route carrier while the parser pieces
-// remain reusable for other result types. It also works around the same current
-// generic-result inference limitation when alternatives are composed.
+// remain reusable for other result types.
 const route :: P.Parser Route
 const route = P.or_else (health, P.or_else (user, asset))
 
-const parse_route :: Text -> Result (Route, P.ParseError)
 const parse_route = fn text => P.run (route, text)
 
 return {

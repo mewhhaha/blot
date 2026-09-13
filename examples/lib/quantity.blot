@@ -1,27 +1,27 @@
 open import "blot:prelude"
 
-// A quantity descriptor keeps the nominal type and the operations that know
-// how to construct and inspect it together. The record is compile-time data;
-// concrete quantity values lower as the sealed Int carrier.
+// The singleton unit label distinguishes quantity types. A descriptor carries
+// that type and its operations into generic conversions at compile time.
 const Quantity = fn (name, symbol) => do:
-  const T = seal (name, Int)
+  const T = #Quantity { .unit = name; .value = Int; }
 
-  let of :: Int -> T
-  let of = fn value => seal (name, value)
+  let from_int :: Int -> T
+  let from_int = fn value => #Quantity { .unit = name; .value = value; }
 
   let value :: T -> Int
-  let value = fn quantity => unseal quantity
+  let value = fn quantity => case quantity of
+    #Quantity quantity => quantity.value
 
   let add :: T -> T -> T
-  let add = fn left => fn right => of (value left + value right)
+  let add = fn left => fn right => from_int (value left + value right)
 
   return {
     .type = T;
-    .of = of;
+    .of = from_int;
     .value = value;
     .add = add;
     .symbol = symbol;
-  }
+    }
 
 // A conversion is generated from two descriptors. `From.type` and `To.type`
 // make the relationship part of the resulting function's checked signature.
@@ -33,8 +33,8 @@ const scale = fn (From, To, factor) => do:
 // Pain point: attached type namespaces are deliberately invisible to typing,
 // so a generic helper cannot accept a bare type and then call its attached
 // `.of`/`.value` members. Passing this explicit comptime descriptor preserves
-// the same operations as first-class data without weakening nominal types.
+// the same operations as first-class values while keeping unit labels distinct.
 return {
   .Quantity = Quantity;
   .scale = scale;
-}
+  }

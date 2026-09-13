@@ -11,6 +11,7 @@ const LAYOUT_DEDENT: u16 = 0xe002;
 pub(crate) struct LayoutSource {
     pub(crate) source: Vec<u16>,
     pub(crate) original_offsets: Vec<u32>,
+    continuation_hints: Vec<(u32, Diagnostic)>,
 }
 
 impl LayoutSource {
@@ -22,6 +23,13 @@ impl LayoutSource {
                 message: diagnostic.message,
                 span: self.map_span(diagnostic.span),
                 origin: diagnostic.origin,
+            })
+            .map(|diagnostic| {
+                self.continuation_hints
+                    .iter()
+                    .find(|(start, _)| *start == diagnostic.span.start)
+                    .map(|(_, hint)| hint.clone())
+                    .unwrap_or(diagnostic)
             })
             .collect()
     }
@@ -115,6 +123,8 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
     }];
     let mut delimiters = Delimiters::default();
     let mut previous = tokens[0];
+    let mut declaration_start = previous.start as u32;
+    let mut continuation_hints = Vec::new();
     update_delimiters(source, &mut delimiters, previous);
 
     for token in tokens.iter().skip(1) {
@@ -125,10 +135,39 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
         let frame = *frames.last().expect("layout always has a root frame");
         let inside_active_suite = frames.len() > 1 && delimiters.brackets == frame.brackets;
         let layout_active = inside_active_suite || delimiters.brackets == 0 || suite_introducer;
+        if layout_active && (is_text(source, token, "const") || is_text(source, token, "let")) {
+            declaration_start = token.start as u32;
+        }
 
         if let Some(newline) = newline
             && layout_active
         {
+            let hint = if is_text(source, previous, "=>") && !is_text(source, token, "do") {
+                Some((
+                    previous,
+                    "A multiline lambda body needs an explicit `do:` block after `=>`, with `return` for its result.",
+                ))
+            } else if is_text(source, token, "|") {
+                Some((
+                    *token,
+                    "Enclose a union that continues on another line in parentheses: `(#First Int | #Second Text)`.",
+                ))
+            } else {
+                None
+            };
+            if let Some((token, message)) = hint {
+                continuation_hints.push((
+                    declaration_start,
+                    Diagnostic::new(
+                        "GPU_FRONTEND_SYNTAX_ERROR",
+                        message,
+                        Span {
+                            start: token.start as u32,
+                            end: token.end as u32,
+                        },
+                    ),
+                ));
+            }
             let line_start = previous.end + newline;
             let indent = indentation_width(&source[line_start..token.start])
                 .expect("Baba left non-trivia text in indentation");
@@ -206,13 +245,16 @@ pub(crate) fn elaborate(source: &[u16]) -> Result<LayoutSource, Vec<Diagnostic>>
         closing.push(LAYOUT_NEWLINE);
     }
     insertions.push((previous.end, closing));
-    Ok(apply_insertions(source, &insertions))
+    let mut layout = apply_insertions(source, &insertions);
+    layout.continuation_hints = continuation_hints;
+    Ok(layout)
 }
 
 fn identity(source: &[u16]) -> LayoutSource {
     LayoutSource {
         source: source.to_vec(),
         original_offsets: (0..=source.len()).map(|offset| offset as u32).collect(),
+        continuation_hints: Vec::new(),
     }
 }
 
@@ -242,6 +284,7 @@ fn apply_insertions(source: &[u16], insertions: &[(usize, Vec<u16>)]) -> LayoutS
     LayoutSource {
         source: elaborated,
         original_offsets,
+        continuation_hints: Vec::new(),
     }
 }
 

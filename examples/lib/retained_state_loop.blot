@@ -1,46 +1,61 @@
 open import "blot:prelude"
 
 const Frame = @type.union_of [{ .time = F64; .steps = Int; .events = [Int]; }]
-const Clock = @effect.host {
-  .next_frame = Effect.suspends (Unit -> (#Frame Frame | #Checkpoint));
-  .render = (Int, Int, F64) -> Unit;
-}
+const Clock =
+  @effect.host {
+    .next_frame = Effect.suspends (Unit -> (#Frame Frame | #Checkpoint));
+    .render = (Int, Int, F64) -> Unit;
+  }
 const for_state = fn State => do:
-  const Checkpoint = @type.union_of [{ .current = State; .pending = [Int]; .tick = Int; }]
-  const Game = { .initial = Unit -> State; .update = (State, [Int]) -> State; .render = State -> Int; }
-  const run = fn (game :: Game) => fn (saved :: Option Checkpoint) -> Checkpoint ~ { Clock } => do:
-    let checkpoint :: Checkpoint = case saved of
-      #Some value => value
-      #None => { .current = game.initial (); .pending = @satisfies [] [Int]; .tick = 0; }
-    let current = checkpoint.current
-    let pending = @linear.freeze checkpoint.pending
-    let tick = checkpoint.tick
-    let previous_time :: Option F64 = None
-    for ever:
-      use command <- Clock.next_frame ()
-      if let #Frame frame = command else:
-        break
-      pending := @linear.freeze [...Array.copy (&pending), ...Array.copy (&frame.events)]
-      for index in Iter.range (0, 5):
-        if index < frame.steps:
-          current := game.update (current, Array.copy (&pending))
-          pending := @linear.freeze (@satisfies [] [Int])
-          tick := tick + 1
-      let last_time :: F64 = case previous_time of
-        #None => frame.time
-        #Some time => time
-      use Clock.render (tick, game.render current, last_time)
-      previous_time := Some frame.time
-    return { .current = current; .pending = pending; .tick = tick; }
+  const Checkpoint =
+    @type.union_of [{ .current = State; .pending = [Int]; .tick = Int; }]
+  const Game =
+    { .initial = Unit -> State; .update = (State, [
+      Int
+    ]) -> State; .render = State -> Int; }
+  const run =
+    fn (game :: Game) => fn (saved :: Option Checkpoint) -> Checkpoint ~ { Clock } => do:
+      let checkpoint :: Checkpoint = case saved of
+        #Some value => value
+        #None => { .current = game.initial (); .pending = @satisfies [] [
+          Int
+        ]; .tick = 0; }
+      let current = checkpoint.current
+      let pending = @linear.freeze checkpoint.pending
+      let tick = checkpoint.tick
+      let previous_time :: Option F64 = None
+      for ever:
+        use command <- Clock.next_frame ()
+        if let #Frame frame = command else:
+          break
+
+        pending := @linear.freeze [
+          ...Array.copy (&pending),
+          ...Array.copy (&frame.events)
+        ]
+        for index in Iter.range (0, 5):
+          if index < frame.steps:
+            current := game.update (current, Array.copy (&pending))
+            pending := @linear.freeze (@satisfies [] [Int])
+            tick := tick + 1
+
+        let last_time :: F64 = case previous_time of
+          #None => frame.time
+          #Some time => time
+        use Clock.render (tick, game.render current, last_time)
+        previous_time := Some frame.time
+
+      return { .current = current; .pending = pending; .tick = tick; }
   return { .run; }
 
 const State = { .total = Int; }
 const Loop = for_state State
-const run = Loop.run {
-  .initial = fn () -> State => { .total = 0; };
-  .update = fn (state :: State, events :: [Int]) -> State => {
-    .total = fold (events, state.total, fn (total, event) => total + event);
-  };
-  .render = fn (state :: State) -> Int => state.total;
-}
+const run =
+  Loop.run {
+    .initial = fn () -> State => { .total = 0; };
+    .update = fn (state :: State, events :: [Int]) -> State => {
+      .total = fold (events, state.total, fn (total, event) => total + event);
+    };
+    .render = fn (state :: State) -> Int => state.total;
+  }
 return { .run; }

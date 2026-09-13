@@ -55,14 +55,8 @@ const project_slugs = Store.map_values (projects, fn project => project.slug)
 const membership :: Membership
 const membership = { .user = UserId.of 1; .project = ProjectId.of 7; }
 
-// Pain point: these concrete result boundaries currently keep the generic lookup
-// result from collapsing to `#Some ⊥` during source checking. The executable
-// value is Text in both evaluator and emitted Wasm.
-let selected_user :: Option Text
 let selected_user = Store.lookup (user_names, membership.user)
-let selected_project :: Option Text
 let selected_project = Store.lookup (project_slugs, membership.project)
-let missing_user :: Option Text
 let missing_user = Store.lookup (user_names, UserId.of 99)
 
 return {

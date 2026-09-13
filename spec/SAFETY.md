@@ -206,6 +206,11 @@ Moving a field changes that leaf and its ancestors. Whole-value use requires a
 live root. Aggregates carry the joined obligations of their children, and
 closures carry captured paths.
 
+An unqualified capture of a symbolic store parameter transfers that parameter's
+ownership authority into the closure. It does not freeze an unknown element
+type into unrestricted storage. Concrete readable captures may still freeze;
+borrowed captures retain their original borrow restrictions.
+
 Branches begin with the same incoming ownership state. Continuing branch outputs
 must agree for linear paths; affine joins are conservative and may discard a
 path but cannot duplicate it. A borrow preserves the ownership tree but cannot

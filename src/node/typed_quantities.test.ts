@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Compiler } from "../compiler.ts";
 import { runArtifact } from "./run.ts";
 
-const expected =
-  '{ .distance = 1550; .distance_unit = "m"; .centimeters = 155000; .centimeters_unit = "cm"; .elapsed = 90; .elapsed_unit = "s"; }';
-
-test("typed quantities execute through the emitted Wasm compiler", async () => {
+test("typed quantities preserve units through both executions", async () => {
   const compiler = await Compiler.create();
   try {
-    const artifact = await compiler.compile("examples/typed_quantities.blot");
-    assert.equal(await runArtifact(artifact), expected);
+    const path = "examples/typed_quantities.blot";
+    const evaluated = await compiler.evaluate(path);
+    assert.deepEqual(evaluated.writes, []);
+    assert.equal(
+      evaluated.display,
+      (await readFile("examples/expected/typed_quantities.txt", "utf8")).trim(),
+    );
+    assert.equal(
+      await runArtifact(await compiler.compile(path)),
+      (await readFile("examples/expected/typed_quantities.wasm.txt", "utf8")).trim(),
+    );
   } finally {
     compiler.destroy();
   }

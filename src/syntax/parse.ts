@@ -62,14 +62,16 @@ export async function parseConcrete(
   if (!result.ok) {
     return {
       ok: false,
-      diagnostics: result.diagnostics.map((diagnostic) => ({
-        code: diagnosticCode(diagnostic.code),
-        message: diagnostic.message,
-        span: {
-          start: elaborated.layout.originalOffset(diagnostic.start),
-          end: elaborated.layout.originalOffset(diagnostic.end),
-        },
-      })),
+      diagnostics: result.diagnostics.map((diagnostic) => {
+        const start = elaborated.layout.originalOffset(diagnostic.start);
+        const hint = elaborated.layout.continuationHints.find((hint) => hint.declarationStart === start);
+        if (hint !== undefined) return hint.diagnostic;
+        return {
+          code: diagnosticCode(diagnostic.code),
+          message: diagnostic.message,
+          span: { start, end: elaborated.layout.originalOffset(diagnostic.end) },
+        };
+      }),
     };
   }
 

@@ -8,10 +8,10 @@ const Percent = refine (Int, fn value => value >= 0 && value <= 100)
 const Cart = { .subtotal = Int; .zone = #Local | #Remote; }
 const TaxPolicy = { .tax_percent = Percent; }
 const ShippingPolicy = { .local_shipping = Int; .remote_shipping = Int; }
-const Pricing = TaxPolicy & ShippingPolicy
+const Pricing = { ...TaxPolicy; ...ShippingPolicy; }
 const PricingCapability = { .pricing = Pricing; }
 const CurrencyCapability = { .currency = Text; }
-const App = PricingCapability & CurrencyCapability
+const App = { ...PricingCapability; ...CurrencyCapability; }
 
 const tax :: Cart -> R.Reader (TaxPolicy, Int)
 const tax = fn cart => fn policy => cart.subtotal * policy.tax_percent / 100
@@ -22,7 +22,7 @@ const shipping = fn cart => fn policy => case cart.zone of
   #Remote => policy.remote_shipping
 
 // `zip_with` has one Environment parameter. Function-input contravariance,
-// structural intersection, and record width subtyping let the narrower readers
+// record spreads, and record width subtyping let the narrower readers
 // flow into one Pricing requirement without wrappers, casts, or field copying.
 const pricing_total :: Cart -> R.Reader (Pricing, Int)
 const pricing_total = fn cart => do:

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@mewhhaha/baba':
-        specifier: npm:@jsr/mewhhaha__baba@9.0.0
-        version: '@jsr/mewhhaha__baba@9.0.0'
+        specifier: npm:@jsr/mewhhaha__baba@9.0.1
+        version: '@jsr/mewhhaha__baba@9.0.1'
       '@std/path':
         specifier: npm:@jsr/std__path@1.1.6
         version: '@jsr/std__path@1.1.6'
@@ -192,8 +192,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@jsr/mewhhaha__baba@9.0.0':
-    resolution: {integrity: sha512-ude91q/Zj3ALXyihluHXcyK0/WyEookCJ39Yuc47SqS3gUF7t8NsVRlr5zin7nTOiYxqjZnskN6CwS+7N9VHlw==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__baba/9.0.0.tgz}
+  '@jsr/mewhhaha__baba@9.0.1':
+    resolution: {integrity: sha512-KmljzaWTMAjbNIi6ZFpk5SJI6D2Om3FWBiMCepcoqWXGD18qLKm1JzaGUDdI1UY61Ir543ZYpYlUqyYqmDZ38g==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__baba/9.0.1.tgz}
 
   '@jsr/mewhhaha__gpupaper@0.1.6':
     resolution: {integrity: sha512-FLlFZ00QDUvbgRuQeBob5uSujkTyqaM4kugag6l0evMnqJ03RcpQdYnrl5YRrvcDRn5Y77sJmCxivZQzKYWeOA==, tarball: https://npm.jsr.io/~/11/@jsr/mewhhaha__gpupaper/0.1.6.tgz}
@@ -433,7 +433,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@jsr/mewhhaha__baba@9.0.0': {}
+  '@jsr/mewhhaha__baba@9.0.1': {}
 
   '@jsr/mewhhaha__gpupaper@0.1.6': {}
 

@@ -56,6 +56,12 @@ recovery decisions. A later elaborator may reject a syntactically accepted form
 for a semantic reason, but it may not reinterpret the token stream through a
 second parser.
 
+After Baba rejects a declaration, layout may replace the generic rejection with
+continuation guidance derived from that declaration's Baba tokens. A newline
+after `=>` can point to an explicit `do:` body; a continued union can point to
+parenthesized grouping. Hints neither accept source nor replace a diagnostic for
+another declaration, and retain the original continuation token's source span.
+
 Every compact node retains enough source origin to produce stable diagnostics.
 Compiler-generated nodes created after parsing retain an origin pointing to the
 source construct whose elaboration required them.

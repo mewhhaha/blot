@@ -198,7 +198,9 @@ fn refinement_does_not_invent_an_integer_domain() {
     for type_ in [checker.fresh(), float_type(), float32_type()] {
         let mut environment = TypeEnvironment::default();
         Rc::make_mut(&mut environment.names).insert("value".to_owned(), Typing::Mono(type_));
-        assert!(refined_original_integer_type(&checker, &environment, &["value".to_owned()]).is_none());
+        assert!(
+            refined_original_integer_type(&checker, &environment, &["value".to_owned()]).is_none()
+        );
     }
 }
 

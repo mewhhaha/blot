@@ -1370,7 +1370,10 @@ fn walk_expression(
                 }
                 if matches!(
                     analysis.module.arena.patterns[captured.borrow().pattern.0 as usize],
-                    Pattern::Name { qualifier: Qualifier::None, .. }
+                    Pattern::Name {
+                        qualifier: Qualifier::None,
+                        ..
+                    }
                 ) && matches!(captured.borrow().owned, Produced::StoreParameter { .. })
                 {
                     // A generic Store cannot be frozen before its element

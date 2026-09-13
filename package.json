@@ -93,7 +93,7 @@
     "release:check": "tsx scripts/release_evidence.ts"
   },
   "dependencies": {
-    "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.0",
+    "@mewhhaha/baba": "npm:@jsr/mewhhaha__baba@9.0.1",
     "@std/path": "npm:@jsr/std__path@1.1.6"
   },
   "devDependencies": {

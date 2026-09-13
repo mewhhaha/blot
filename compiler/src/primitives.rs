@@ -1630,7 +1630,7 @@ fn vector_shuffle(arguments: Vec<Value>, span: Span) -> Result<Value, Diagnostic
     Ok(Value::Vector(selected))
 }
 
-fn union(left: Value, right: Value) -> Value {
+pub(crate) fn union(left: Value, right: Value) -> Value {
     fn add(members: &mut UnionMembers, value: Value) {
         if let Value::Extended { inner, .. } = value {
             add(members, *inner);
@@ -1859,6 +1859,8 @@ fn type_of(value: &Value) -> Value {
     }
     match value {
         Value::Extended { inner, .. } => type_of(inner),
+        Value::Float(_) => constant("@type.float").expect("F64 is a built-in type"),
+        Value::Float32(_) => constant("@type.float32").expect("F32 is a built-in type"),
         Value::Shape(fields) => Value::Shape(
             fields
                 .iter()
@@ -2347,6 +2349,38 @@ mod tests {
             .expect_err("an invalid byte boundary must fail");
             assert_eq!(error.code, "BLOT_TEXT_BYTE_BOUNDS");
             assert_eq!(error.span, span);
+        }
+    }
+
+    #[test]
+    fn type_of_floats_uses_the_numeric_domain_through_structures() {
+        let span = Span { start: 1, end: 2 };
+        for (value, type_name) in [
+            (Value::Float(0.4), "@type.float"),
+            (Value::Float(-0.0), "@type.float"),
+            (Value::Float32(0.4), "@type.float32"),
+            (Value::Float32(-0.0), "@type.float32"),
+        ] {
+            let expected = constant(type_name).expect("a built-in numeric type");
+            let inferred = run_primitive("@type.of", vec![value.clone()], span, Phase::Comptime)
+                .expect("a float has a type");
+            assert!(equal(&inferred, &expected), "{}", show(&inferred));
+
+            let nested = |element| {
+                Value::Shape(OrderedFields::from([(
+                    "components".to_owned(),
+                    Value::Array(
+                        vec![Value::Tag {
+                            name: "Some".to_owned(),
+                            payload: Some(Box::new(element)),
+                        }]
+                        .into(),
+                    ),
+                )]))
+            };
+            let inferred = run_primitive("@type.of", vec![nested(value)], span, Phase::Comptime)
+                .expect("nested floats have structural types");
+            assert!(equal(&inferred, &nested(expected)), "{}", show(&inferred));
         }
     }
 

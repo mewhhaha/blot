@@ -7,6 +7,7 @@ mod runtime_signature;
 #[path = "value_bridge.rs"]
 mod value_bridge;
 pub(crate) struct ResidualInstanceFacts {
+    pub(crate) body: ExpressionId,
     pub(crate) module: String,
     pub(crate) signature: Value,
     pub(crate) expression_types: HashMap<ExpressionId, Value>,
@@ -5317,10 +5318,16 @@ impl Checker {
                     let mut selected = selected?;
                     if let (
                         Type::Function {
-                            effects: checked, parameter: checked_parameter, result: checked_result, ..
+                            effects: checked,
+                            parameter: checked_parameter,
+                            result: checked_result,
+                            ..
                         },
                         Type::Function {
-                            effects: captured, parameter: captured_parameter, result: captured_result, ..
+                            effects: captured,
+                            parameter: captured_parameter,
+                            result: captured_result,
+                            ..
                         },
                     ) = (self.settle(inferred.type_.clone(), true), &mut selected)
                     {
@@ -5798,7 +5805,25 @@ impl Checker {
                     .or_insert_with(|| inferred.type_.clone());
             }
         }
-        inferred
+        inferred.map_err(|mut diagnostic| {
+            if diagnostic.code == "BLOT_TYPE_ERROR"
+                && matches!(
+                    module.arena.expressions[expression_id.0 as usize],
+                    Expression::Apply { .. }
+                )
+                && !module.arena.synthetic_expressions.contains(&expression_id)
+                && let Some(origin) = diagnostic.origin.as_deref()
+                && origin != path
+            {
+                diagnostic.message = format!(
+                    "{} Required by {origin} at source span [{}, {}).",
+                    diagnostic.message, diagnostic.span.start, diagnostic.span.end,
+                );
+                diagnostic.span = module.arena.expression_span(expression_id);
+                diagnostic.origin = Some(path.to_owned());
+            }
+            diagnostic
+        })
     }
 
     fn infer_inner(
@@ -6449,7 +6474,19 @@ impl Checker {
                             signature,
                         );
                     }
-                    let checked_result = self.settle(checked_result, true);
+                    let mut checked_result = self.settle(checked_result, true);
+                    if let (
+                        Type::Function { effects, .. },
+                        Type::Function {
+                            effects: specialized_effects,
+                            ..
+                        },
+                    ) = (&mut checked_result, self.settle(result.clone(), true))
+                    {
+                        *effects = Rc::new(
+                            self.join_effects((**effects).clone(), (*specialized_effects).clone())?,
+                        );
+                    }
                     let result = if closed_checked_type(&checked_result, &mut HashSet::new())
                         && !contains_bottom(&checked_result)
                         && !self.contains_unevidenced(&checked_result, &mut HashSet::new())
@@ -6730,6 +6767,7 @@ impl Checker {
                         effects: subject.effects,
                     });
                 }
+                let mut checked_member_type = None;
                 let static_type = self
                     .evaluate(path, target, values, Phase::Comptime)
                     .ok()
@@ -6744,11 +6782,19 @@ impl Checker {
                             let attached = matches!(target_value, Value::Extended { .. })
                                 || is_resolve_member_closure(&self.context, &member);
                             if let Some(signature) = self.bridge_closed_attached_signature(&member)
-                                && (attached || type_exposes_generative_effect(&signature))
                             {
-                                // A closed effectful member carries this module
-                                // instance's effect identities, not its template's.
-                                return Some(signature);
+                                if attached || type_exposes_generative_effect(&signature) {
+                                    // A closed effectful member carries this module
+                                    // instance's effect identities, not its template's.
+                                    return Some(signature);
+                                }
+                                if closure_signature(&member).is_some_and(|signature| {
+                                    !crate::value::contains_type_variables(&signature)
+                                }) && !contains_bottom(&signature)
+                                    && !self.contains_unevidenced(&signature, &mut HashSet::new())
+                                {
+                                    checked_member_type = Some(signature);
+                                }
                             }
                             if attached {
                                 return Some(self.fresh());
@@ -6786,6 +6832,18 @@ impl Checker {
                         Type::Record(vec![(name, field.clone())].into()),
                         span,
                     )?;
+                    let field = if let Some(signature) = checked_member_type {
+                        let settled = self.settle(field.clone(), true);
+                        if contains_bottom(&settled)
+                            || self.contains_unevidenced(&settled, &mut HashSet::new())
+                        {
+                            signature
+                        } else {
+                            field
+                        }
+                    } else {
+                        field
+                    };
                     Ok(Inferred {
                         type_: field,
                         effects: target.effects,
@@ -7016,10 +7074,18 @@ impl Checker {
                     if let Some((projection, consequence, alternate)) = refinements {
                         let name = projection[0].clone();
                         let original = self.instantiate(
-                            remaining.lookup(&name, self).expect("a refinement has a binding"),
+                            remaining
+                                .lookup(&name, self)
+                                .expect("a refinement has a binding"),
                         );
-                        let consequence = refine_projection(self, original.clone(), &projection[1..], consequence);
-                        let alternate = refine_projection(self, original, &projection[1..], alternate);
+                        let consequence = refine_projection(
+                            self,
+                            original.clone(),
+                            &projection[1..],
+                            consequence,
+                        );
+                        let alternate =
+                            refine_projection(self, original, &projection[1..], alternate);
                         let binding_phase = remaining.binding_phase(&name);
                         let stable = remaining.lookup_stable(&name, self).ok_or_else(|| {
                             Diagnostic::new(
@@ -7404,7 +7470,14 @@ impl Checker {
         if let Type::Forall { variables, body } = expected.clone() {
             let body = self.skolemize(variables, Rc::unwrap_or_clone(body));
             let inferred = self.infer_against(
-                path, module, expression, body, environment, values, dependencies, span,
+                path,
+                module,
+                expression,
+                body,
+                environment,
+                values,
+                dependencies,
+                span,
             )?;
             return Ok(Inferred {
                 type_: expected,
@@ -9698,7 +9771,11 @@ impl Checker {
                 true
             }
             (ConstraintTypeNode::Rigid(_), ConstraintTypeNode::OpenEffects { tail, .. }) => {
-                work.push_back(WorkItem { left, right: tail, span });
+                work.push_back(WorkItem {
+                    left,
+                    right: tail,
+                    span,
+                });
                 true
             }
             (
@@ -10062,7 +10139,12 @@ impl Checker {
                 let upper_evidence = match upper_evidence.len() {
                     0 => None,
                     1 => upper_evidence.pop(),
-                    _ => Some(meet_types(upper_evidence)),
+                    _ => Some(meet_residual_bounds(
+                        upper_evidence
+                            .into_iter()
+                            .map(|bound| self.settle(bound, false))
+                            .collect(),
+                    )),
                 };
                 let evidence = if lower_evidence.is_empty() {
                     upper_evidence.clone()
@@ -10431,6 +10513,7 @@ impl Checker {
                             Type::Record(fields) => fields.get(&index.to_string()).cloned(),
                             _ => None,
                         }
+                        .filter(|field| Self::syntactic_type_variables(field).is_empty())
                         .unwrap_or_else(|| self.fresh());
                         self.bind_pattern_at_phase(
                             module,
@@ -11891,6 +11974,9 @@ pub(crate) fn union_members(members: &[Type]) -> Vec<&Type> {
 /// absent bound is the domain's own end. Arrays nest by their elements, and
 /// `⊥` is covered by anything.
 fn covers(outer: &Type, inner: &Type) -> bool {
+    if same_type(outer, inner) {
+        return true;
+    }
     // Nothing inhabits `⊥`, so every member covers it.
     if matches!(inner, Type::Bottom) {
         return true;
@@ -12780,7 +12866,9 @@ fn refine_projection(checker: &Checker, original: Type, fields: &[String], refin
     let Type::Record(record) = checker.settle(original.clone(), true) else {
         unreachable!("a checked field refinement has a record receiver");
     };
-    let previous = record.get(field).expect("a checked field refinement has its field");
+    let previous = record
+        .get(field)
+        .expect("a checked field refinement has its field");
     let refined = refine_projection(checker, previous.clone(), remaining, refined);
     record_update_type(original, vec![(field.clone(), refined)].into())
 }
@@ -12900,9 +12988,7 @@ fn comparison_refinements(
         &module.arena.expressions[left.0 as usize],
         &module.arena.expressions[right.0 as usize],
     ) {
-        (_, Expression::Int { value, .. }) => {
-            (expression_field_path(module, left)?, value.clone())
-        }
+        (_, Expression::Int { value, .. }) => (expression_field_path(module, left)?, value.clone()),
         (Expression::Int { value, .. }, _) => {
             orderings = mirror_orderings(&orderings);
             (expression_field_path(module, right)?, value.clone())
@@ -14590,13 +14676,20 @@ fn reify_type_with_holes(context: &Context, type_: &Type, next_hole: &mut u32) -
                 effect_tail,
             })
         }
-        Type::Union(members) => Some(Value::Union(
-            members
-                .iter()
-                .map(|member| reify_type_with_holes(context, member, next_hole))
-                .collect::<Option<Vec<_>>>()?
-                .into(),
-        )),
+        Type::Union(members) => {
+            let members = union_members(members);
+            if let [member] = members.as_slice() {
+                return reify_type_with_holes(context, member, next_hole);
+            }
+            let mut union = Value::Union(Default::default());
+            for member in members {
+                union = crate::primitives::union(
+                    union,
+                    reify_type_with_holes(context, member, next_hole)?,
+                );
+            }
+            Some(union)
+        }
         Type::Top => {
             let hole = *next_hole;
             *next_hole = next_hole.checked_sub(1)?;
@@ -15173,6 +15266,29 @@ fn meet_types(mut types: Vec<Type>) -> Type {
         return Type::Record(merge_fields(records.into_iter().flatten().collect()).into());
     }
     Type::Top
+}
+
+fn meet_residual_bounds(mut types: Vec<Type>) -> Type {
+    for type_ in &mut types {
+        if let Type::Union(members) = type_ {
+            let members = union_members(members);
+            if let [member] = members.as_slice() {
+                *type_ = (*member).clone();
+            }
+        }
+    }
+    types.retain(|type_| !matches!(type_, Type::Top));
+    let mut distinct = Vec::new();
+    for type_ in types {
+        if !distinct.iter().any(|previous| same_type(previous, &type_)) {
+            distinct.push(type_);
+        }
+    }
+    if distinct.is_empty() {
+        Type::Top
+    } else {
+        meet_types(distinct)
+    }
 }
 
 fn merge_fields(fields: Vec<(String, Type)>) -> Vec<(String, Type)> {

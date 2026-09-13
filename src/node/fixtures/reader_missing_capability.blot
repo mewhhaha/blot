@@ -3,7 +3,7 @@ const R = import "../../../examples/lib/reader.blot"
 
 const Left = { .left = Int; }
 const Right = { .right = Int; }
-const Both = Left & Right
+const Both = { ...Left; ...Right; }
 
 const left :: R.Reader (Left, Int)
 const left = fn environment => environment.left

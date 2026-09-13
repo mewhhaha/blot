@@ -9,6 +9,7 @@ const layoutMarkers = new Set([layoutNewline, layoutIndent, layoutDedent]);
 
 export interface LayoutSource {
   readonly source: string;
+  readonly continuationHints: readonly { readonly declarationStart: number; readonly diagnostic: Diagnostic }[];
   originalOffset(offset: number): number;
 }
 
@@ -104,6 +105,8 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
   }];
   const delimiters: Delimiters = { brackets: 0, records: [] };
   let previous = tokens[0];
+  let declarationStart = previous.span.start;
+  const continuationHints: { declarationStart: number; diagnostic: Diagnostic }[] = [];
   updateDelimiters(source, delimiters, previous);
 
   for (let tokenIndex = 1; tokenIndex < tokens.length; tokenIndex += 1) {
@@ -121,7 +124,23 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
       delimiters.brackets === frame.brackets;
     const layoutActive = insideActiveSuite || delimiters.brackets === 0 ||
       suiteIntroducer;
+    if (layoutActive && (token.text === "const" || token.text === "let")) {
+      declarationStart = token.span.start;
+    }
     if (newline >= 0 && layoutActive) {
+      if (previous.text === "=>" && token.text !== "do") {
+        continuationHints.push({ declarationStart, diagnostic: {
+          code: "GPU_FRONTEND_SYNTAX_ERROR",
+          message: "A multiline lambda body needs an explicit `do:` block after `=>`, with `return` for its result.",
+          span: previous.span,
+        } });
+      } else if (token.text === "|") {
+        continuationHints.push({ declarationStart, diagnostic: {
+          code: "GPU_FRONTEND_SYNTAX_ERROR",
+          message: "Enclose a union that continues on another line in parentheses: `(#First Int | #Second Text)`.",
+          span: token.span,
+        } });
+      }
       const lineStart = previous.span.end + newline;
       const indentText = source.slice(lineStart, token.span.start);
       const indent = indentationWidth(indentText);
@@ -188,7 +207,7 @@ export async function elaborateLayout(source: string): Promise<LayoutResult> {
     closing += layoutDedent + layoutNewline;
   }
   insertions.push({ offset: previous.span.end, text: closing });
-  return { ok: true, layout: applyInsertions(source, insertions) };
+  return { ok: true, layout: { ...applyInsertions(source, insertions), continuationHints } };
 }
 
 function closesLayoutExpression(token: Token): boolean {
@@ -202,7 +221,7 @@ function closesLayoutExpression(token: Token): boolean {
 }
 
 function identityLayout(source: string): LayoutSource {
-  return { source, originalOffset: (offset) => offset };
+  return { source, originalOffset: (offset) => offset, continuationHints: [] };
 }
 
 function applyInsertions(
@@ -239,6 +258,7 @@ function applyInsertions(
   }
   return {
     source: elaborated,
+    continuationHints: [],
     originalOffset(offset: number): number {
       const mapped = originalOffsets[offset];
       if (mapped === undefined) {

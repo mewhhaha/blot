@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -104,6 +104,26 @@ test("check still requires the semantic compiler", async () => {
       fixture.run("check", path),
       /semantic compiler deliberately unavailable/,
     );
+  } finally {
+    await rm(fixture.directory, { recursive: true });
+  }
+});
+
+test("the standalone formatter checks and writes without a semantic compiler", async () => {
+  const fixture = await syntaxOnlyFixture();
+  const command = ["--import", "tsx", "--import", join(fixture.directory, "no-compiler.mjs"), resolve("scripts/format_blot.ts")];
+  try {
+    const path = join(fixture.directory, "format.blot");
+    const source = "return    42\n";
+    await writeFile(path, source);
+    await assert.rejects(execute(process.execPath, [...command, "--check", path]), /run pnpm format/);
+    assert.equal(await readFile(path, "utf8"), source);
+    await execute(process.execPath, [...command, "--write", path]);
+    assert.equal(await readFile(path, "utf8"), "return 42\n");
+    await execute(process.execPath, [...command, "--check", path]);
+    await writeFile(path, "const broken = (\n");
+    await assert.rejects(execute(process.execPath, [...command, "--write", path]), /GPU_FRONTEND_MALFORMED_DELIMITER/);
+    assert.equal(await readFile(path, "utf8"), "const broken = (\n");
   } finally {
     await rm(fixture.directory, { recursive: true });
   }

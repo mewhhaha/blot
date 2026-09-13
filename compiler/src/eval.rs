@@ -4790,6 +4790,11 @@ fn apply_with_expected(
                 });
                 let call = trace.borrow_mut().begin_residual_function(
                     crate::hir::ResidualClosure {
+                        instance_checked: runtime
+                            .instance_facts
+                            .iter()
+                            .rev()
+                            .any(|facts| facts.module == *closure_module && facts.body == body),
                         context: &context,
                         module: &closure_module,
                         parameter,
@@ -4976,6 +4981,16 @@ fn apply_with_expected(
                 application,
                 creation_scope,
             });
+            let source_result_signature =
+                signature
+                    .as_deref()
+                    .map(signature_body)
+                    .and_then(|signature| {
+                        let Value::Arrow { codomain, .. } = signature else {
+                            return None;
+                        };
+                        Some(substitute_signature(codomain, &scope))
+                    });
             Computation::step(move || {
                 evaluate_expression(context, closure_module, body, scope, closure_runtime)
                     .map_result(move |result| {
@@ -5005,14 +5020,7 @@ fn apply_with_expected(
                                 matches!(value, Value::Closure { .. })
                                     && !contains_type_variables(expected)
                             })
-                            .or_else(|| {
-                                let Value::Arrow { codomain, .. } =
-                                    signature.as_deref().map(signature_body)?
-                                else {
-                                    return None;
-                                };
-                                Some(codomain.as_ref())
-                            });
+                            .or(source_result_signature.as_ref());
                         if let Some(result_signature) = result_signature {
                             attach_signature(&mut value, result_signature);
                         }
@@ -6250,12 +6258,13 @@ pub(crate) fn substitute_signature(signature: &Value, environment: &Environment)
         Value::EmptyArray { element } => Value::EmptyArray {
             element: Box::new(substitute_signature(element, environment)),
         },
-        Value::Union(members) => Value::Union(
+        Value::Union(members) => {
             members
                 .iter()
-                .map(|value| substitute_signature(value, environment))
-                .collect(),
-        ),
+                .fold(Value::Union(Default::default()), |union, member| {
+                    crate::primitives::union(union, substitute_signature(member, environment))
+                })
+        }
         Value::Tag { name, payload } => Value::Tag {
             name: name.clone(),
             payload: payload
@@ -6313,11 +6322,9 @@ pub(crate) fn record_signature_substitutions(
                 signature: Some(signature),
                 ..
             } => Some((**signature).clone()),
-            Value::Int(_) => Some(Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
-                domain: Some(ValueDomain::Int),
-            }),
+            Value::Int(_) => crate::primitives::constant("@type.int"),
+            Value::Float(_) => crate::primitives::constant("@type.float"),
+            Value::Float32(_) => crate::primitives::constant("@type.float32"),
             Value::Text(_) => Some(Value::Range {
                 low: Box::new(Value::Unbounded),
                 high: Box::new(Value::Unbounded),
@@ -6336,9 +6343,17 @@ pub(crate) fn record_signature_substitutions(
                     .map(|(name, value)| Some((name.clone(), value_signature(value)?)))
                     .collect::<Option<OrderedFields>>()?,
             )),
-            Value::Array(elements) => Some(Value::Array(
-                vec![value_signature(elements.first()?)?].into(),
-            )),
+            Value::Array(elements) => {
+                if elements.is_empty() {
+                    return None;
+                }
+                let mut element_type = Value::Union(Default::default());
+                for element in elements {
+                    element_type =
+                        crate::primitives::union(element_type, value_signature(element)?);
+                }
+                Some(Value::Array(vec![element_type].into()))
+            }
             Value::EmptyArray { element } => Some(Value::Array(vec![(**element).clone()].into())),
             Value::Union(members) => Some(Value::Union(
                 members
@@ -6471,8 +6486,8 @@ pub(crate) fn record_signature_substitutions(
         }
         (Value::Array(expected), Value::Array(actual)) => {
             if let Some(expected) = expected.first() {
-                for actual in actual {
-                    record_signature_substitutions(environment, expected, actual);
+                if let Some(Value::Array(types)) = value_signature(&Value::Array(actual.clone())) {
+                    record_types(environment, expected, &types[0]);
                 }
             }
         }

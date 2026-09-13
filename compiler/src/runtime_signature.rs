@@ -82,6 +82,7 @@ impl Checker {
         let parameter = checker.fresh();
         checker.constrain(evidence, parameter.clone(), loaded.module.span)?;
         let path = closure.module_path.to_owned();
+        let body = closure.body;
         let signature = checker.infer_evaluated_closure(
             &path,
             &loaded.module,
@@ -125,6 +126,7 @@ impl Checker {
             })
             .collect();
         Ok(Some(Rc::new(ResidualInstanceFacts {
+            body,
             module: path,
             signature,
             expression_types,
@@ -181,7 +183,10 @@ impl Checker {
         memo: &mut HashMap<usize, Type>,
     ) -> Option<Type> {
         match value {
+            Value::Int(_) => Some(int_type()),
+            Value::Text(_) => Some(text_type()),
             Value::Runtime(value) => self.residual_carrier(value.type_id, types, memo),
+            Value::DeferredScratch { .. } => Some(Type::Scratch(Rc::new(self.fresh()))),
             Value::Shape(fields) => Some(Type::Record(
                 fields
                     .iter()
@@ -275,10 +280,11 @@ impl Checker {
                         .into(),
                     open: false,
                 },
-                // A physical seal or SIMD lane layout is not enough source evidence.
-                RuntimeType::Sealed { .. }
-                | RuntimeType::Vector { .. }
-                | RuntimeType::Mask { .. } => return None,
+                RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => {
+                    Type::Opaque(crate::hir::simd_type_name(source)?.to_owned())
+                }
+                // A physical seal cannot establish its source identity.
+                RuntimeType::Sealed { .. } => return None,
             };
         let Type::Variable(variable_id) = variable else {
             unreachable!()

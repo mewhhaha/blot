@@ -1,1 +1,1 @@
-{ .local = "EUR 12500"; .remote = "EUR 11100"; .trace = "checkout-42"; }
+{ .local = "EUR 12500"; .remote = "EUR 11100"; .trace = "checkout-42" }

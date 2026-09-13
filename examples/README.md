@@ -15,11 +15,17 @@ that has not been implemented are four different claims about the language.
 
 These examples build APIs from ordinary type values. Effect-oriented examples
 interpret computations with ordinary handler records. Each runs with
-`pnpm blot run examples/<name>.blot`.
+`pnpm blot run examples/<name>.blot`. Check formatting without loading the
+semantic compiler with `pnpm format:check -- examples/<name>.blot`, or format
+the file with `pnpm format -- examples/<name>.blot`. CI checks changed Blot
+files before rebuilding the compiler.
 
 [`record_view_results.blot`](record_view_results.blot) exercises a related
 representation boundary: functions consume a `{ .count = Int; }` view of a wider
 record and return fresh integer and text records with their own layouts.
+[`lib/record_selection.blot`](lib/record_selection.blot) carries records with
+nested variant fields through an array iterator and a selection fold; both
+array alternatives remain available at runtime.
 
 | Example                                                      | Abstraction                                                                                                       | Observations                                                 |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -27,26 +33,26 @@ record and return fresh integer and text records with their own layouts.
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
-| [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a nominal quantity type to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
+| [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a quantity type distinguished by its unit label to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
 | [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
 | [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
 | [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
+
+| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
+| [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
+| [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
+| [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
+| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
+| [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
+| [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
+| [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records            | changed field names, exact equality, and refined-field bounds |
+| [`staged_request_builder.blot`](staged_request_builder.blot) | Required slots are type parameters; consuming setters advance either order while preserving the other slot        | Two receipts; invalid stages reject statically               |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
 `Semigroup`, `Mappable`, `Foldable`, and `Length` interfaces through structural
 typing, while deliberately failing `Monoid` because no `.empty` value can exist.
 Its focused test also locks down rejection of a headless value.
-| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
-| [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
-| [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
-| [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
-| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
-| [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
-| [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
-| [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records            | changed field names, exact equality, and refined-field bounds |
-| [`staged_request_builder.blot`](staged_request_builder.blot) | Required slots are type parameters; consuming setters advance either order while preserving the other slot        | Two receipts; invalid stages reject statically               |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -62,7 +68,7 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation. The quantity example keeps its operation
 dictionary explicit because attached type namespaces are intentionally outside
-the structural type lattice; its `.type` member carries the nominal type into
+the structural type lattice; its `.type` member carries the unit-specific type into
 generic checked signatures without runtime dispatch.
 
 The lens example treats a path as a pair of ordinary functions plus the type

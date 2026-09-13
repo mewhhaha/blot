@@ -1,6 +1,6 @@
 import { scalarExport } from "../../test_support/guest_abi.ts";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -43,6 +43,14 @@ async function agrees(
     await rm(directory, { recursive: true });
   }
 }
+
+test("record selection preserves every array alternative and its nested variant", async () => {
+  const source = await readFile("examples/lib/record_selection.blot", "utf8");
+  await agrees(
+    source.replace('open import "blot:prelude"\n', "").replace(/\nreturn run\s*$/, ""),
+    [[1n, 1n], [2n, 20n], [99n, 1n], [2n, 20n]],
+  );
+});
 
 for (const reverse of [false, true]) {
   test(`static field captures survive residual sharing (reverse=${reverse})`, async () => {

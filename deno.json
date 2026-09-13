@@ -36,7 +36,7 @@
     "tree-sitter-blot"
   ],
   "tasks": {
-    "generate:parser": "deno run --allow-read --allow-write npm:@jsr/mewhhaha__baba@9.0.0/cli grammar.baba --out generated --name blot --root program --metadata baba.json --target wasm",
+    "generate:parser": "deno run --allow-read --allow-write npm:@jsr/mewhhaha__baba@9.0.1/cli grammar.baba --out generated --name blot --root program --metadata baba.json --target wasm",
     "generate:compiler-schema": "deno run --allow-read --allow-write scripts/generate_compiler_schema.ts",
     "generate:qcore": "deno run --allow-read --allow-write scripts/generate_qcore.ts",
     "generate": "deno task generate:parser && deno task generate:compiler-schema && deno task generate:qcore",

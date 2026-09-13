@@ -23,10 +23,9 @@ const Account =
     .team = Text;
   }
 
-// Pain point: direct static application retains `[Text]` field-name precision;
-// wrapping `Diff.derive` in a generic higher-order helper currently widens it.
-const deployment_diff = Diff.derive Deployment
-const account_diff = Diff.derive Account
+const make_diff = fn derive => fn schema => derive schema
+const deployment_diff = make_diff Diff.derive Deployment
+const account_diff = make_diff Diff.derive Account
 
 let deployment_before :: Deployment
 let deployment_before =

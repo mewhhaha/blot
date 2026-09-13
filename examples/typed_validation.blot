@@ -22,31 +22,26 @@ const Config =
 const ConfigError =
   #InvalidPort Int | #InvalidReplicas Int | #InvalidTimeout Int
 
-// Pain point: bind the field before guarding it. Repeating `raw.port` in the
-// guard and `#Ok` payload does not carry the refinement fact to the payload.
 let port :: V.Validator (RawConfig, Port, #InvalidPort Int)
 let port = fn raw => do:
-  let value = raw.port
-  if value >= 1 && value <= 65535:
-    return #Ok value
+  if raw.port >= 1 && raw.port <= 65535:
+    return #Ok raw.port
 
-  return #Error [#InvalidPort value]
+  return #Error [#InvalidPort raw.port]
 
 let replicas :: V.Validator (RawConfig, Replicas, #InvalidReplicas Int)
 let replicas = fn raw => do:
-  let value = raw.replicas
-  if value >= 1 && value <= 32:
-    return #Ok value
+  if raw.replicas >= 1 && raw.replicas <= 32:
+    return #Ok raw.replicas
 
-  return #Error [#InvalidReplicas value]
+  return #Error [#InvalidReplicas raw.replicas]
 
 let timeout :: V.Validator (RawConfig, TimeoutMs, #InvalidTimeout Int)
 let timeout = fn raw => do:
-  let value = raw.timeout_ms
-  if value >= 100 && value <= 60000:
-    return #Ok value
+  if raw.timeout_ms >= 100 && raw.timeout_ms <= 60000:
+    return #Ok raw.timeout_ms
 
-  return #Error [#InvalidTimeout value]
+  return #Error [#InvalidTimeout raw.timeout_ms]
 
 const Core = { .port = Port; .replicas = Replicas; }
 const CoreError = #InvalidPort Int | #InvalidReplicas Int

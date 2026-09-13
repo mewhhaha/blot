@@ -10,7 +10,7 @@ const libraryPath = "examples/lib/prism.blot";
 const mismatchPath = "src/node/fixtures/prism_composition_mismatch.blot";
 
 const principalType =
-  "{ .default = { .matched_age = #None | #Some Int; .matched_name = #None | #Some Text; .wrong_user_case = #None | #Some Int; .system_miss = #None | #Some Int; .incremented = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text; .unchanged = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text; .reviewed = #User #Registered Text | #AgeChanged Int | #Deleted | #System Text } }";
+  "{ .default = { .matched_age = #None | #Some Int; .matched_name = #None | #Some Text; .wrong_user_case = #None | #Some Int; .system_miss = #None | #Some Int; .incremented = #User (#Registered Text | #AgeChanged Int | #Deleted) | #System Text; .unchanged = #User (#Registered Text | #AgeChanged Int | #Deleted) | #System Text; .reviewed = #User (#Registered Text | #AgeChanged Int | #Deleted) | #System Text } }";
 
 test("composable prisms preserve types and both executions", async () => {
   const compiler = await Compiler.create();
@@ -54,7 +54,7 @@ test("prism composition rejects non-adjacent focuses", async () => {
   try {
     await assert.rejects(
       () => compiler.check(mismatchPath),
-      /BLOT_TYPE_ERROR: Text does not flow into Int/,
+      /BLOT_TYPE_ERROR: Int does not flow into Text/,
     );
   } finally {
     compiler.destroy();

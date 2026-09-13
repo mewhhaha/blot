@@ -9,8 +9,11 @@ let service = fn key => do:
   use value <- Fetch.get key
   return value * 2
 
+const instrument :: @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Middleware.Trace, Middleware.Metrics, ..e }))
+const instrument = fn operation => Middleware.traced (Middleware.counted operation)
+
 let instrumented :: Int -> Int ~ { Middleware.Trace, Middleware.Metrics, Fetch }
-let instrumented = Middleware.traced (Middleware.counted service)
+let instrumented = instrument service
 
 const fetch_handler =
   {
@@ -50,7 +53,7 @@ use effectful_answer <- effectful
 
 let pure_program :: Unit -> Int ~ { Middleware.Trace, Middleware.Metrics }
 let pure_program =
-  fn () => Middleware.traced (Middleware.counted (fn value => value + 1)) 40
+  fn () => instrument (fn value => value + 1) 40
 let pure =
   pure_program
     |> @handle (Middleware.Trace, trace_score)

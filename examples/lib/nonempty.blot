@@ -62,9 +62,7 @@ const reduce = fn (values, combine) => fold (
   combine
 )
 
-// This implementation is deliberately inferred: it only needs `.tail`, so its
-// principal input type is wider than `nonempty_type T`. Structural interface
-// matching still lets it satisfy `Length (nonempty_type T)` at each use site.
+const length :: @forall (fn T => nonempty_type T -> Int)
 const length = fn values => Array.length (&values.tail) + 1
 
 // Pain point: Blot's structural collection interfaces are intentionally

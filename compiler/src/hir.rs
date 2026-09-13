@@ -808,7 +808,6 @@ struct RecursiveResultIdentity {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum RepresentationShape {
-    Unknown,
     Unit,
     SignedInteger64,
     Float32,
@@ -831,7 +830,6 @@ enum RepresentationShape {
 #[derive(Default)]
 struct RepresentationFacts {
     exact: Vec<(Value, Option<usize>)>,
-    shapes: HashMap<RepresentationShape, Option<usize>>,
 }
 
 #[derive(Default)]
@@ -914,16 +912,6 @@ impl RepresentationFacts {
         } else {
             self.exact.push((value.clone(), Some(type_id)));
         }
-        if let Some(shape) = specialization_representation_shape(value) {
-            self.shapes
-                .entry(shape)
-                .and_modify(|known| {
-                    if known.is_some_and(|known| known != type_id) {
-                        *known = None;
-                    }
-                })
-                .or_insert(Some(type_id));
-        }
     }
 
     fn get(&self, value: &Value) -> Option<usize> {
@@ -934,8 +922,7 @@ impl RepresentationFacts {
         {
             return Some(*type_id);
         }
-        let shape = specialization_representation_shape(value)?;
-        self.shapes.get(&shape).copied().flatten()
+        None
     }
 }
 
@@ -959,6 +946,7 @@ pub(crate) enum ResidualFunctionCall {
 }
 
 pub(crate) struct ResidualClosure<'a> {
+    pub(crate) instance_checked: bool,
     pub(crate) context: &'a Rc<Context>,
     pub(crate) module: &'a str,
     pub(crate) parameter: crate::ast::PatternId,
@@ -1048,6 +1036,25 @@ fn simd_layout(name: &str) -> Option<SimdLayout> {
         vector_name,
         mask,
     })
+}
+
+pub(crate) fn simd_type_name(type_: &RuntimeType) -> Option<&'static str> {
+    let (element, lanes, mask) = match type_ {
+        RuntimeType::Vector { element, lanes } => (*element, *lanes, false),
+        RuntimeType::Mask { element, lanes } => (*element, *lanes, true),
+        _ => return None,
+    };
+    match (element, lanes, mask) {
+        ("float-32", 4, false) => Some("F32x4"),
+        ("float-32", 4, true) => Some("F32x4Mask"),
+        ("integer-32", 4, false) => Some("I32x4"),
+        ("integer-32", 4, true) => Some("I32x4Mask"),
+        ("integer-16", 8, false) => Some("I16x8"),
+        ("integer-16", 8, true) => Some("I16x8Mask"),
+        ("integer-8", 16, false) => Some("I8x16"),
+        ("integer-8", 16, true) => Some("I8x16Mask"),
+        _ => None,
+    }
 }
 
 struct ResidualBlock {
@@ -1344,11 +1351,17 @@ impl ResidualTrace {
             {
                 None
             }
-            Value::Runtime(value) => self
-                .checked_values
-                .get(&value.id)
-                .cloned()
-                .or_else(|| self.runtime_type_value(value.type_id, &mut HashSet::new())),
+            Value::Runtime(value) => {
+                let carrier = self.runtime_type_value(value.type_id, &mut HashSet::new());
+                match (carrier, self.checked_values.get(&value.id)) {
+                    (Some(carrier), Some(checked)) => {
+                        Some(refine_runtime_carrier(carrier, checked))
+                    }
+                    (carrier, None) => carrier,
+                    (None, Some(checked)) => Some(checked.clone()),
+                }
+            }
+
             Value::Shape(fields) => Some(Value::Shape(
                 fields
                     .iter()
@@ -1392,12 +1405,7 @@ impl ResidualTrace {
                 family: name.clone(),
                 payload: Box::new(self.runtime_type_value(*payload_type, seen)?),
             },
-            RuntimeType::Integer32 => Value::Range {
-                low: Box::new(Value::Unbounded),
-                high: Box::new(Value::Unbounded),
-                domain: Some(crate::value::Domain::Int),
-            },
-            RuntimeType::SignedInteger64 => Value::Range {
+            RuntimeType::Integer32 | RuntimeType::SignedInteger64 => Value::Range {
                 low: Box::new(Value::Int(i64::MIN.into())),
                 high: Box::new(Value::Int(i64::MAX.into())),
                 domain: Some(crate::value::Domain::Int),
@@ -1472,7 +1480,9 @@ impl ResidualTrace {
                 name: name.clone(),
                 inner: Box::new(self.runtime_type_value(*representation_type, seen)?),
             },
-            RuntimeType::Vector { .. } | RuntimeType::Mask { .. } => return None,
+            type_ @ (RuntimeType::Vector { .. } | RuntimeType::Mask { .. }) => {
+                Value::OpaqueType(simd_type_name(type_)?.to_owned())
+            }
         };
         seen.remove(&type_id);
         Some(value)
@@ -4475,6 +4485,7 @@ impl ResidualTrace {
         span: crate::ast::Span,
     ) -> Result<ResidualFunctionCall, Diagnostic> {
         let ResidualClosure {
+            instance_checked,
             context,
             module,
             parameter: closure_parameter,
@@ -4554,6 +4565,7 @@ impl ResidualTrace {
         let mut signature = signature;
         if (signature.is_none()
             && (host_callback || self_name.is_some() || crosses_development_boundary))
+            || (!instance_checked && self_name.is_some() && signature.is_some_and(crate::value::contains_type_variables))
             || (host_callback && signature.is_some_and(|mut signature| {
                 while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
                     signature = body;
@@ -4626,7 +4638,7 @@ impl ResidualTrace {
             || (!host_callback
                 && !crosses_development_boundary
                 && self_name.is_none()
-                && matches!(result_body, Value::Union(_)))
+                && matches!(result_body, Value::Union(_) | Value::Tag { .. }))
         {
             return Ok(ResidualFunctionCall::Static(
                 "the callback is deferred or its result requires staging",
@@ -4702,7 +4714,10 @@ impl ResidualTrace {
                 break;
             }
         }
-        if has_unresolved_representation(domain, &substitutions) && !contains_runtime(argument) {
+        if has_unresolved_representation(domain, &substitutions)
+            && (!contains_runtime(argument)
+                || (self_name.is_none() && !host_callback && !crosses_development_boundary))
+        {
             return Ok(ResidualFunctionCall::Static(
                 "the argument representation is unresolved",
             ));
@@ -6936,6 +6951,18 @@ impl ResidualTrace {
                     RuntimeType::Scratch { element_type },
                 ))
             }
+            Value::Tag { name, payload } => {
+                let payload = compiler_tag_payload(payload.as_deref());
+                let payload_type = self.type_from_type_value(&payload)?;
+                if (name == "False" || name == "True") && payload_type == 0 {
+                    return Ok(1);
+                }
+                let cases = [name.clone()];
+                let payload_types = [payload_type];
+                Ok(self
+                    .existing_sum_type(&cases, &payload_types)
+                    .unwrap_or_else(|| self.sum_type(&cases, &payload_types)))
+            }
             Value::Union(members) => {
                 if members
                     .iter()
@@ -7362,6 +7389,22 @@ impl ResidualTrace {
             Value::ResourceType { family, payload } => {
                 let payload_type = self.specialized_type_from_type_value(payload, substitutions, representation_facts)?;
                 Ok(self.insert_type(&format!("resource({}:{family}){payload_type}", family.len()), RuntimeType::Resource { name: family.clone(), payload_type }))
+            }
+            Value::Tag { name, payload } => {
+                let payload = compiler_tag_payload(payload.as_deref());
+                let payload_type = self.specialized_type_from_type_value(
+                    &payload,
+                    substitutions,
+                    representation_facts,
+                )?;
+                if (name == "False" || name == "True") && payload_type == 0 {
+                    return Ok(1);
+                }
+                let cases = [name.clone()];
+                let payload_types = [payload_type];
+                Ok(self
+                    .existing_sum_type(&cases, &payload_types)
+                    .unwrap_or_else(|| self.sum_type(&cases, &payload_types)))
             }
             Value::Union(members) => {
                 if members
@@ -9382,6 +9425,68 @@ fn contains_staged_iterator(value: &Value) -> bool {
     }
 }
 
+// A requirement may mention fewer fields or a wider scalar domain than the
+// physical value. Keep its refinements without losing the carrier's layout.
+fn refine_runtime_carrier(carrier: Value, checked: &Value) -> Value {
+    match (carrier, checked) {
+        (Value::Shape(carrier), Value::Shape(checked)) => Value::Shape(
+            carrier
+                .iter()
+                .map(|(name, field)| {
+                    let field = match checked.get(name) {
+                        Some(checked) => refine_runtime_carrier(field.clone(), checked),
+                        None => field.clone(),
+                    };
+                    (name.clone(), field)
+                })
+                .collect(),
+        ),
+        (Value::Array(carrier), Value::Array(checked))
+            if carrier.len() == 1 && checked.len() == 1 =>
+        {
+            Value::Array(vec![refine_runtime_carrier(carrier[0].clone(), &checked[0])].into())
+        }
+        (Value::ScratchType(carrier), Value::ScratchType(checked)) => {
+            Value::ScratchType(Box::new(refine_runtime_carrier(*carrier, checked)))
+        }
+        (Value::RegionType(carrier), Value::RegionType(checked)) => {
+            Value::RegionType(Box::new(refine_runtime_carrier(*carrier, checked)))
+        }
+        (
+            Value::Range {
+                low: carrier_low,
+                high: carrier_high,
+                domain: Some(crate::value::Domain::Int),
+            },
+            Value::Range {
+                low,
+                high,
+                domain: Some(crate::value::Domain::Int),
+            },
+        ) => {
+            let (Value::Int(minimum), Value::Int(maximum)) = (*carrier_low, *carrier_high) else {
+                unreachable!("a runtime integer carrier has finite bounds");
+            };
+            let low = match low.as_ref() {
+                Value::Int(bound) => bound.max(&minimum).clone(),
+                Value::Unbounded => minimum,
+                _ => unreachable!("an integer range has integer bounds"),
+            };
+            let high = match high.as_ref() {
+                Value::Int(bound) => bound.min(&maximum).clone(),
+                Value::Unbounded => maximum,
+                _ => unreachable!("an integer range has integer bounds"),
+            };
+            Value::Range {
+                low: Box::new(Value::Int(low)),
+                high: Box::new(Value::Int(high)),
+                domain: Some(crate::value::Domain::Int),
+            }
+        }
+        (_, checked) => checked.clone(),
+    }
+}
+
 fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
     fn shape(value: &Value) -> Option<RepresentationShape> {
         match value {
@@ -9464,48 +9569,6 @@ fn checked_representation_shape(value: &Value) -> Option<RepresentationShape> {
         _ => false,
     };
     represented.then(|| shape(value)).flatten()
-}
-
-fn specialization_representation_shape(value: &Value) -> Option<RepresentationShape> {
-    fn shape(value: &Value) -> RepresentationShape {
-        match value {
-            Value::Shape(fields) => RepresentationShape::Shape(
-                fields
-                    .iter()
-                    .map(|(name, value)| (name.clone(), shape(value)))
-                    .collect(),
-            ),
-            Value::Array(elements) => {
-                RepresentationShape::Array(elements.first().map(|element| Box::new(shape(element))))
-            }
-            Value::RegionType(element) => RepresentationShape::Region(Box::new(shape(element))),
-            Value::ScratchType(element) => RepresentationShape::Scratch(Box::new(shape(element))),
-            Value::ResourceType { family, payload } => {
-                RepresentationShape::Resource(family.clone(), Box::new(shape(payload)))
-            }
-            Value::Tag { name, payload } => RepresentationShape::Tag(
-                name.clone(),
-                payload.as_deref().map(|payload| Box::new(shape(payload))),
-            ),
-            Value::Extended { inner, .. }
-            | Value::Sealed { inner, .. }
-            | Value::Forall { body: inner, .. } => shape(inner),
-            _ => RepresentationShape::Unknown,
-        }
-    }
-
-    let represented = match value {
-        Value::Shape(_) | Value::Array(_) => true,
-        Value::RegionType(element)
-        | Value::ScratchType(element)
-        | Value::ResourceType {
-            payload: element, ..
-        } => {
-            matches!(element.as_ref(), Value::TypeVariable(_))
-        }
-        _ => false,
-    };
-    represented.then(|| shape(value))
 }
 
 fn collect_fields(
@@ -12501,7 +12564,14 @@ fn prepare_function_export(
         }
         let (argument, parameter_type) = trace
             .borrow_mut()
-            .export_parameter(&parameter, crate::ast::Span { start: 0, end: 0 })?;
+            .export_parameter(&parameter, crate::ast::Span { start: 0, end: 0 })
+            .map_err(|mut diagnostic| {
+                diagnostic.message = format!(
+                    "Parameter {} of export '{}' has no concrete ABI representation. {} Add a concrete function signature to this export.",
+                    parameter_types.len() + 1, exported.name, diagnostic.message,
+                );
+                diagnostic
+            })?;
         let input = match &function {
             Value::Closure { module, body, .. } => context
                 .ownership_contracts
