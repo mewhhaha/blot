@@ -24,8 +24,6 @@ const ConfigError =
 
 // Pain point: bind the field before guarding it. Repeating `raw.port` in the
 // guard and `#Ok` payload does not carry the refinement fact to the payload.
-// Keep each leaf error precise too: widening it to `ConfigError` currently
-// checks, but emitted-Wasm lowering refuses the unused variant alternatives.
 let port :: V.Validator (RawConfig, Port, #InvalidPort Int)
 let port = fn raw => do:
   let value = raw.port
