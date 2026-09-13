@@ -22,9 +22,9 @@ test("nominal keyed indexes preserve key domains in both executions", async () =
 
     const checked = await compiler.check(example);
     assert.equal(checked.effects, "");
-    assert.match(checked.type, /\.user =/);
-    assert.match(checked.type, /\.project =/);
-    assert.match(checked.type, /\.missing_user =/);
+    assert.match(checked.type, /\.user = #None \| #Some Text/);
+    assert.match(checked.type, /\.project = #None \| #Some Text/);
+    assert.match(checked.type, /\.missing_user = #None \| #Some Text/);
 
     const evaluated = await compiler.evaluate(example);
     const expected = await readFile(
