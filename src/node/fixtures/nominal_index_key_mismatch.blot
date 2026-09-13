@@ -1,14 +1,19 @@
 open import "blot:prelude"
 const Store = import "../../../examples/lib/nominal_index.blot"
 
-const UserIds = Store.Keyspace "user"
-const ProjectIds = Store.Keyspace "project"
-
-const users :: Store.Index (UserIds.type, Text)
-const users = Store.from_entries (UserIds.equal, [
-  { .key = UserIds.of 1; .value = "Ada"; },
-])
-
-return {
-  .default = Store.lookup (users, ProjectIds.of 1);
+const UserId = #UserId Int
+UserId := UserId <+ {
+  .of = fn value => #UserId value;
+  .equal = fn left => fn right => case (left, right) of
+    (#UserId a, #UserId b) => Int.eq a b
+  ;
 }
+
+const ProjectId = #ProjectId Int
+ProjectId := ProjectId <+ { .of = fn value => #ProjectId value; }
+
+const users :: Store.Index (UserId, Text)
+const users =
+  Store.from_entries (UserId.equal, [{ .key = UserId.of 1; .value = "Ada"; }])
+
+return { .default = Store.lookup (users, ProjectId.of 1); }
