@@ -16,6 +16,7 @@ the same vector type while retaining distinct reader identities.
 pnpm blot run case-studies/ecs/main.blot
 pnpm blot run case-studies/ecs/queries-and-messages.blot
 pnpm blot run case-studies/ecs/schedule-plan.blot
+pnpm blot run case-studies/ecs/simd/main.blot
 pnpm test:ecs
 pnpm benchmark:ecs
 ```
@@ -25,7 +26,11 @@ ordinary Blot source in [ecs.blot](ecs.blot); [simulation.blot](simulation.blot)
 contains the particle application. [arena.blot](arena.blot) adds fighters,
 medics, sleeping entities, scenery, and messages.
 [scheduling.blot](scheduling.blot) adds explicit component access, dependency
-graphs, compatible batches, and traversal barriers.
+graphs, compatible batches, and traversal barriers. The
+[SIMD extension](simd/README.md) generates the same transform ECS from scalar or
+vector algebra, multiplies 4×4 matrices, and schedules particle components in
+blocks of four entities. It includes runtime comparisons and a separate
+benchmark.
 
 ## Generate components from types
 

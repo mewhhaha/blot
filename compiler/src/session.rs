@@ -10614,6 +10614,83 @@ return { .pick = pick; }
     }
 
     #[test]
+    fn ecs_scalar_and_simd_factories_emit_distinct_arithmetic() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let scalar_first =
+                "const Scalar = Transforms Mat4.Scalar\nconst Simd = Transforms Mat4.Simd";
+            let simd_first =
+                "const Simd = Transforms Mat4.Simd\nconst Scalar = Transforms Mat4.Scalar";
+            for declarations in [scalar_first, simd_first] {
+                let transforms = include_str!("../../case-studies/ecs/simd/transforms.blot")
+                    .replace(scalar_first, declarations);
+                let mut session = CompilerSession::default();
+                session
+                    .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                    .expect("prelude snapshot should install");
+                for (path, contents) in [
+                    ("systems.blot", include_str!("../../case-studies/ecs/systems.blot")),
+                    ("planning.blot", include_str!("../../case-studies/ecs/planning.blot")),
+                    ("matrix.blot", include_str!("../../case-studies/ecs/simd/matrix.blot")),
+                    ("transforms.blot", transforms.as_str()),
+                    ("particles.blot", include_str!("../../case-studies/ecs/simd/particles.blot")),
+                    ("scalar.blot", "const T = import \"./transforms.blot\"\nreturn T.Scalar.tick\n"),
+                    ("simd.blot", "const T = import \"./transforms.blot\"\nreturn T.tick\n"),
+                    ("blocks.blot", "const P = import \"./particles.blot\"\nreturn P.run\n"),
+                ] {
+                    session
+                        .add_source(path.to_owned(), source(contents))
+                        .expect("SIMD fixture should load");
+                    let imports = [
+                        ("blot:prelude", "prelude.blot"),
+                        ("../systems.blot", "systems.blot"),
+                        ("../planning.blot", "planning.blot"),
+                        ("./matrix.blot", "matrix.blot"),
+                        ("./transforms.blot", "transforms.blot"),
+                        ("./particles.blot", "particles.blot"),
+                    ]
+                    .into_iter()
+                    .filter(|(specifier, _)| contents.contains(&format!("import \"{specifier}\"")))
+                    .map(|(specifier, resolved)| (specifier.to_owned(), resolved.to_owned()))
+                    .collect();
+                    session
+                        .configure_module(path, imports, BTreeMap::new())
+                        .expect("SIMD fixture should configure");
+                }
+                for (path, expected) in [
+                    ("scalar.blot", (false, false, false)),
+                    ("simd.blot", (true, true, false)),
+                    ("blocks.blot", (true, false, true)),
+                ] {
+                    let artifact = session
+                        .compile_module(path)
+                        .unwrap_or_else(|error| panic!("{path}: {error:?}"));
+                    let mut add = false;
+                    let mut multiply = false;
+                    let mut select = false;
+                    for payload in wasmparser::Parser::new(0).parse_all(&artifact.wasm) {
+                        let wasmparser::Payload::CodeSectionEntry(body) = payload.unwrap() else {
+                            continue;
+                        };
+                        for operation in body.get_operators_reader().unwrap() {
+                            match operation.unwrap() {
+                                wasmparser::Operator::F32x4Add => add = true,
+                                wasmparser::Operator::F32x4Mul => multiply = true,
+                                wasmparser::Operator::V128Bitselect => select = true,
+                                _ => {}
+                            }
+                        }
+                    }
+                    assert_eq!((add, multiply, select), expected, "{path}, {declarations}");
+                }
+            }
+        });
+    }
+
+    #[test]
     fn exported_non_tail_recursion_emits_an_internal_call_target() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(

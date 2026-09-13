@@ -1,0 +1,7 @@
+open import "blot:prelude"
+const Mat4 = import "../simd/matrix.blot"
+const multiply :: [(Mat4.Matrix, Mat4.Matrix)] -> [Mat4.Matrix]
+const multiply = fn pairs => map (pairs, Mat4.product)
+const transform :: [(Mat4.Matrix, Mat4.Vector)] -> [Mat4.Vector]
+const transform = fn requests => map (requests, Mat4.point)
+return { .multiply; .transform; }

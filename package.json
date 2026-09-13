@@ -60,6 +60,7 @@
     "benchmark": "tsx experiments/node-wasm-benchmark.ts",
     "benchmark:owned-arrays": "tsx experiments/owned-arrays/benchmark.ts",
     "benchmark:ecs": "tsx case-studies/ecs/benchmark.ts",
+    "benchmark:ecs-simd": "tsx case-studies/ecs/simd-benchmark.ts",
     "benchmark:owned-regions": "tsx experiments/owned-regions/benchmark.ts",
     "benchmark:owned-maps": "tsx experiments/owned-maps/benchmark.ts",
     "benchmark:owned-sorts": "tsx experiments/owned-sorts/benchmark.ts",

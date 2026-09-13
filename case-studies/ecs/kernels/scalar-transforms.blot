@@ -1,0 +1,2 @@
+const Transforms = import "../simd/transforms.blot"
+return Transforms.Scalar.tick

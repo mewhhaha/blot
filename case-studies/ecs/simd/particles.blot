@@ -1,0 +1,86 @@
+open import "blot:prelude"
+const Systems = import "../systems.blot"
+const Planning = import "../planning.blot"
+
+const Entity = { .Position = F32; .Velocity = F32; }
+// A block holds two component columns for four consecutive entities.
+const Block = { .Position = F32x4; .Velocity = F32x4; }
+const Table = { .count = Int; .blocks = [Block]; }
+const zero = F32x4.splat 0
+
+const pack :: [Entity] -> Table
+const pack = fn rows => do:
+  let count = Array.length rows
+  let blocks :: [Block]
+  let blocks = []
+  for start in Iter.range (0, (count + 3) / 4):
+    let at = fn lane => case Array.get (rows, start * 4 + lane) of
+      #Some row => row
+      #None => { .Position = F32.of_int 0; .Velocity = F32.of_int 0; }
+    let a = at 0
+    let b = at 1
+    let c = at 2
+    let d = at 3
+    blocks := @array.push blocks {
+      .Position = F32x4.of (a.Position, b.Position, c.Position, d.Position);
+      .Velocity = F32x4.of (a.Velocity, b.Velocity, c.Velocity, d.Velocity);
+    }
+
+  return { .count; .blocks; }
+
+const unpack :: Table -> [Entity]
+const unpack = fn table => Iter.collect (Iter.map (
+  Iter.range (0, table.count),
+  fn index => do:
+    let block = Array.expect_get (table.blocks, index / 4)
+    return case index % 4 of
+      0 => { .Position = F32x4.x block.Position; .Velocity = F32x4.x block.Velocity; }
+      1 => { .Position = F32x4.y block.Position; .Velocity = F32x4.y block.Velocity; }
+      2 => { .Position = F32x4.z block.Position; .Velocity = F32x4.z block.Velocity; }
+      _ => { .Position = F32x4.w block.Position; .Velocity = F32x4.w block.Velocity; }
+))
+
+const S = Systems Block
+const integrate = S.define (
+  { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+  fn read => { .Position = F32x4.add read.Position read.Velocity; }
+)
+const bounce = S.define (
+  { .reads = ["Position", "Velocity"]; .writes = ["Velocity"]; },
+  fn read => { .Velocity = F32x4.select (F32x4.less read.Position (F32x4.splat 10)) read.Velocity (F32x4.sub zero read.Velocity); }
+)
+const plan = Planning.compile (Block, { .integrate; .bounce; }, Planning.before ("integrate", "bounce"))
+const advance :: Table -> Table
+const advance = fn table => { .count = table.count; .blocks = plan.each table.blocks; }
+const run :: ([Entity], Int) -> [Entity]
+const run = fn (rows, frames) => do:
+  let table = pack rows
+  for Iter.range (0, frames):
+    table := advance table
+
+  return unpack table
+
+const scalar :: ([Entity], Int) -> [Entity]
+const scalar = fn (rows, frames) => do:
+  let rows = rows
+  for Iter.range (0, frames):
+    rows := map (rows, fn row => do:
+      let position = F32.add row.Position row.Velocity
+      let below = case F32.is_nan position of
+        #True => False
+        #False => is_less (F32.cmp position 10)
+      let velocity = case below of
+        #True => row.Velocity
+        #False => F32.sub 0 row.Velocity
+      return { .Position = position; .Velocity = velocity; }
+    )
+
+  return rows
+
+const seed :: Int -> [Entity]
+const seed = fn count => Iter.collect (Iter.map (
+  Iter.range (0, count),
+  fn index => { .Position = F32.of_int (index % 11); .Velocity = F32.of_int (index % 5 - 2); }
+))
+
+return { .Entity; .Block; .Table; .pack; .unpack; .plan; .advance; .run; .scalar; .seed; }

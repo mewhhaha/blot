@@ -1,0 +1,20 @@
+open import "blot:prelude"
+const Mat4 = import "./matrix.blot"
+
+const translation :: Mat4.Matrix
+const translation =
+  { ...Mat4.identity; .c3 = { .x = 10; .y = 20; .z = 30; .w = 1; }; }
+const scale :: Mat4.Matrix
+const scale =
+  { ...Mat4.identity; .c0 = { .x = 2; .y = 0; .z = 0; .w = 0; }; .c1 = { .x = 0; .y = 3; .z = 0; .w = 0; }; }
+const point :: Mat4.Vector
+const point = { .x = 1; .y = 2; .z = 3; .w = 1; }
+const direction :: Mat4.Vector
+const direction = { .x = 1; .y = 2; .z = 3; .w = 0; }
+
+return { .default = {
+  .product = Mat4.product (translation, scale);
+  .scale_then_translate = Mat4.point (Mat4.product (translation, scale), point);
+  .translate_then_scale = Mat4.point (Mat4.product (scale, translation), point);
+  .direction = Mat4.point (translation, direction);
+  }; }

@@ -313,6 +313,12 @@ accumulator names. Checked expression and nested-closure facts belong to that
 instance and are restored when leaving it, rather than overwriting facts for
 other calls of the same source body.
 
+Contextual source checking must likewise preserve an expression's existing
+generic representation fact. A concrete call refines its call site; it cannot
+replace the shared body's fact with its own scalar, record, or vector layout.
+Constructing another implementation of the same factory must not change the
+representation used by an earlier implementation.
+
 Closed checked argument evidence takes precedence over the initial value's
 narrower observed type during instance checking. Surface elaboration marks the
 initial accumulator argument for retention as an ordinary checked expression

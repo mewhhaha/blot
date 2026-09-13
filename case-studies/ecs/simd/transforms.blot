@@ -1,0 +1,81 @@
+open import "blot:prelude"
+const Mat4 = import "./matrix.blot"
+const Systems = import "../systems.blot"
+const Planning = import "../planning.blot"
+
+const Transforms = fn Algebra => do:
+  const Entity =
+    {
+      .Id = Int;
+      .Parent = Algebra.Matrix;
+      .Local = Algebra.Matrix;
+      .World = Algebra.Matrix;
+      .Point = Algebra.Vector;
+      .Projected = Algebra.Vector;
+      .Age = Int;
+    }
+  const S = Systems Entity
+  const compose =
+    S.define (
+      { .reads = ["Parent", "Local"]; .writes = ["World"]; },
+      fn read => { .World = Algebra.multiply (read.Parent, read.Local); }
+    )
+  const project =
+    S.define (
+      { .reads = ["World", "Point"]; .writes = ["Projected"]; },
+      fn read => { .Projected = Algebra.transform (read.World, read.Point); }
+    )
+  const age =
+    S.define (
+      { .reads = ["Age"]; .writes = ["Age"]; },
+      fn read => { .Age = read.Age + 1; }
+    )
+  const registry = { .compose; .project; .age; }
+  const graph =
+    Planning.merge (
+      Planning.before ("compose", "project"),
+      Planning.group ["age"]
+    )
+  const plan = Planning.compile (Entity, registry, graph)
+  let tick :: [Entity] -> [Entity]
+  let tick = plan.each
+  return { .Entity; .plan; .tick; }
+
+const Scalar = Transforms Mat4.Scalar
+const Simd = Transforms Mat4.Simd
+
+const pack :: Scalar.Entity -> Simd.Entity
+const pack = fn row => {
+  ...row;
+  .Parent = Mat4.pack row.Parent;
+  .Local = Mat4.pack row.Local;
+  .World = Mat4.pack row.World;
+  .Point = Mat4.pack_vector row.Point;
+  .Projected = Mat4.pack_vector row.Projected;
+}
+const unpack :: Simd.Entity -> Scalar.Entity
+const unpack = fn row => {
+  ...row;
+  .Parent = Mat4.unpack row.Parent;
+  .Local = Mat4.unpack row.Local;
+  .World = Mat4.unpack row.World;
+  .Point = Mat4.unpack_vector row.Point;
+  .Projected = Mat4.unpack_vector row.Projected;
+}
+const tick :: [Scalar.Entity] -> [Scalar.Entity]
+const tick = fn rows => map (Simd.tick (map (rows, pack)), unpack)
+
+const spawn :: Int -> Scalar.Entity
+const spawn = fn index => {
+  .Id = index;
+  .Parent = { ...Mat4.identity; .c3 = { .x = 10; .y = 20; .z = 30; .w = 1; }; };
+  .Local = { ...Mat4.identity; .c0 = { .x = 2; .y = 0; .z = 0; .w = 0; }; .c1 = { .x = 0; .y = 3; .z = 0; .w = 0; }; };
+  .World = Mat4.identity;
+  .Point = { .x = F32.of_int index; .y = 1; .z = 2; .w = 1; };
+  .Projected = { .x = 0; .y = 0; .z = 0; .w = 0; };
+  .Age = 0;
+}
+const seed :: Int -> [Scalar.Entity]
+const seed = fn count => Iter.collect (Iter.map (Iter.range (0, count), spawn))
+
+return { .Scalar; .Simd; .pack; .unpack; .tick; .seed; }

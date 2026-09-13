@@ -1032,6 +1032,11 @@ types are equal. Sharing emitted code is permitted only when corresponding
 arguments and captured environments have the same residual meaning; the order in
 which specializations are encountered cannot change the result.
 
+This also applies when a factory accepts an arithmetic implementation and
+constructs component types from it. Scalar and SIMD implementations may share
+the same source body; each constructed function retains its own checked
+component representation.
+
 ### 6.1 Unit, arrays, tuples, and shapes
 
 `()` is the unit value.

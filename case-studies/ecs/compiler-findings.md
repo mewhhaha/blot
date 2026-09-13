@@ -1,9 +1,45 @@
 # Compiler findings from the ECS prototypes
 
 The case study exercises the compiler as well as the library design. The
-compiler defects below are fixed by the query/message and scheduling extensions.
-The remaining effect findings were observed at `ab2cfc8`; their workarounds
-remain explicit in the runnable study.
+compiler defects below are fixed by the query/message, scheduling, and SIMD
+extensions. The remaining effect findings were observed at `ab2cfc8`; their
+workarounds remain explicit in the runnable study.
+
+## Fixed: one algebra specialization replaced another's body representation
+
+The SIMD transform factory constructs the same ECS with scalar record columns
+and with `F32x4` columns. Constructing the scalar instance first and the SIMD
+instance second made the scalar kernel fail during emission: its correctly typed
+callback returned scalar columns, but an expression fact demanded vector
+columns. Reversing the constructor order changed which layout was retained.
+
+Contextual inference had overwritten a shared generic body's call-expression
+fact with the latest concrete specialization. It now preserves an existing body
+fact while refining the concrete call site. Residual instance checking continues
+to collect its own facts. No backend coercion or inferred-layout fallback hides
+the mismatch.
+
+The native regression compiles both factory orders and verifies actual Wasm SIMD
+instructions. Runtime tests run both ECS implementations on changing arrays over
+several frames against an independent matrix model. The fix also regenerates the
+checked prelude snapshot.
+
+## SIMD ergonomics and current boundaries
+
+- Contextual F32 literals inside a generic iterator callback did not acquire the
+  intended numeric domain from the surrounding result signature. Giving the
+  entity-producing `spawn` function an explicit signature supplies that
+  evidence.
+- A conditional append formulation of block unpacking produced an unhelpful
+  array type mismatch whose printed source and destination types were identical.
+  This diagnostic remains unresolved. Unpacking with a map over the known live
+  entity count is accepted and keeps the padding rule visible.
+- The TypeScript host adapter refuses indirect parameter blocks. A direct pair
+  of 4×4 matrices exceeds its flat-parameter limit; an array of pairs has a
+  supported public representation. The matrix kernels use that batch interface.
+- Block components are vectors, but the outer storage remains an array of Blot
+  records. Native SIMD instructions alone do not imply flat world columns,
+  allocation-free updates, or parallel workers.
 
 ## Fixed: local signatures could not depend on a constructor's type argument
 

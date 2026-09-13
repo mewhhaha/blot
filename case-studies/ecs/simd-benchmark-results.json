@@ -1,0 +1,981 @@
+{
+  "boundary": "Warm emitted-Wasm calls including seed construction, packing once, all frames, unpacking once, checksum, and scalar ABI scope entry/exit. Setup includes seed and checksum only and is not subtracted. Compilation, instantiation, warmup, and verification are untimed.",
+  "compileOptions": {},
+  "provenance": {
+    "revision": "1a15300f95624a7634d9fc236997d811a221e532",
+    "sourceHashes": {
+      "case-studies/ecs/systems.blot": "1813ebe8fb1fafae52a5fde999c4aebcd89a4901f97c8fd94153e534bcf322d8",
+      "case-studies/ecs/planning.blot": "e2777fe8e9a922609d8f67a30b538314499874ac282d5c7d7520671c5a542c07",
+      "case-studies/ecs/simd/matrix.blot": "ea8a43c5e79ee05b98ad1ab8e3bdd129fe70d310a0f09c917db0370e278075eb",
+      "case-studies/ecs/simd/transforms.blot": "3ad989d6523996fef6fe31b0233059cbc41baa20ce8460b9d1c30477bbfceb42",
+      "case-studies/ecs/simd/particles.blot": "b8aa4dcca97f4366893d9746dd476526495854e1887250f457b4ea89b60c0905",
+      "case-studies/ecs/bench/simd.blot": "d13b64b04f6e345cf69d7f8ecb35f16e05ff9ef995afecbb129bc64a77803412",
+      "case-studies/ecs/simd-benchmark.ts": "2786ef1aa2c49f669dde7d23c3191aecb4a13361e8b547cd11c961432c978fd9",
+      "test_support/guest_abi.ts": "feaa04bef39dd8ed2ffd1df3141242ab35a9c6af2aef5416723b83e03c470705",
+      "src/abi_values.ts": "6a21ec6837b8e5fcdc61f5df592b5041e02b935776a7680644259ee0ae32987e",
+      "src/compiler/session.ts": "5f3c1e0756fd178d7f59e1ee9d326a91b442f73257644d337cc71a37285913aa",
+      "generated/compiler/compiler.wasm": "21a02a283a7efd3ed801730e3299a4924cec3777c4d4e36ee516894453d1da39",
+      "generated/compiler/compiler-artifact.json": "4a427aa6631edb81fde1cc9e82a288d6483ef69a0ad71352453ecace4426ebc3",
+      "generated/compiler/prelude.snapshot": "821bb755fd2cf2644da43adc7f97f5582fdef62df5f2ca72614d0f8a618f6923"
+    }
+  },
+  "environment": {
+    "node": "v24.12.0",
+    "v8": "13.6.233.17-node.37",
+    "platform": "linux",
+    "architecture": "x64",
+    "flags": [
+      "--import",
+      "tsx"
+    ],
+    "cpuModels": [
+      "AMD Ryzen 7 7800X3D 8-Core Processor"
+    ],
+    "logicalCpus": 16
+  },
+  "warmupCalls": 16,
+  "samples": 7,
+  "artifact": {
+    "source": "case-studies/ecs/bench/simd.blot",
+    "bytes": 68712,
+    "sha256": "62bbeef9a5ae096d4950246b528410ecca84c031646d53690f32d77d461ae3a4"
+  },
+  "timings": [
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 2623.7646484374986,
+      "samplesNanoseconds": [
+        2653.0419921875214,
+        2623.7646484374986,
+        2606.273437500084,
+        2499.262695312643,
+        3734.2558593751464,
+        2480.8154296873663,
+        2696.585937500107
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 4863.907226562381,
+      "samplesNanoseconds": [
+        4909.961914062455,
+        4945.693359375003,
+        4725.080078124888,
+        4697.433593749966,
+        4863.907226562381,
+        4967.637695312499,
+        4801.817382812601
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 1384.5234375000625,
+      "samplesNanoseconds": [
+        1367.071289062549,
+        1379.718749999981,
+        1390.382812499924,
+        1384.5234375000625,
+        1456.730468750056,
+        1739.9697265625402,
+        1371.974609374993
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 36321.86914062507,
+      "samplesNanoseconds": [
+        39948.12695312499,
+        35191.51464843739,
+        34943.79101562517,
+        35201.67089843751,
+        36321.86914062507,
+        46335.28710937518,
+        38081.830078124935
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 15729.850585937565,
+      "samplesNanoseconds": [
+        15869.546875000084,
+        16232.054687500107,
+        15487.429687499833,
+        15729.850585937565,
+        15509.108398437555,
+        15378.260742187511,
+        16458.53710937506
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 1377.8730468749777,
+      "samplesNanoseconds": [
+        1377.8730468749777,
+        1394.8251953126435,
+        1368.1171875001842,
+        1330.8808593750498,
+        1348.566406250029,
+        1847.5771484376403,
+        1552.7255859375532
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 17818.94042968757,
+      "samplesNanoseconds": [
+        17818.94042968757,
+        17625.805664062354,
+        20821.06054687527,
+        18949.12792968739,
+        17688.735351562456,
+        18110.56835937519,
+        17115.554687500367
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 32524.078125000244,
+      "samplesNanoseconds": [
+        32122.772460937198,
+        37420.29101562494,
+        32524.078125000244,
+        36588.987304687405,
+        33566.6503906249,
+        31689.816406250236,
+        31625.753906249887
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 9853.165039062527,
+      "samplesNanoseconds": [
+        9462.474609374993,
+        10258.36816406267,
+        11619.874023437671,
+        9710.900390624833,
+        10855.17089843746,
+        9853.165039062527,
+        9485.48242187508
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 128,
+      "medianNanoseconds": 265479.16406249785,
+      "samplesNanoseconds": [
+        269538.04687499884,
+        259571.38281249924,
+        285502.64062500116,
+        260501.22656249997,
+        263610.11718750047,
+        265479.16406249785,
+        284323.1171874976
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 256,
+      "medianNanoseconds": 108825.07421874977,
+      "samplesNanoseconds": [
+        104236.77734375048,
+        112290.36328125019,
+        108998.19921875143,
+        106803.36328124972,
+        107146.80078125127,
+        112082.70703125045,
+        108825.07421874977
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 10208.681640624829,
+      "samplesNanoseconds": [
+        10434.978515625025,
+        10256.512695312469,
+        10165.000000000202,
+        9714.01660156257,
+        10208.681640624829,
+        10889.233398437615,
+        9786.154296874905
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 256,
+      "medianNanoseconds": 139516.22265624942,
+      "samplesNanoseconds": [
+        135911.8281249998,
+        141782.26171874898,
+        139763.56250000067,
+        139516.22265624942,
+        148691.0507812489,
+        137448.30468749924,
+        138788.92578125244
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 128,
+      "medianNanoseconds": 260094.3515625005,
+      "samplesNanoseconds": [
+        255891.48437499886,
+        251114.71093750026,
+        260094.3515625005,
+        267418.2890625012,
+        255983.51562499744,
+        260921.1484374967,
+        262237.00000000605
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 512,
+      "medianNanoseconds": 80139.90624999945,
+      "samplesNanoseconds": [
+        76813.7539062499,
+        80631.7578125002,
+        90750.97656250009,
+        80170.16015625079,
+        78939.73828124956,
+        80139.90624999945,
+        77116.66210937551
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "scalar",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 16,
+      "medianNanoseconds": 2036458.8124999728,
+      "samplesNanoseconds": [
+        2036973.7499999588,
+        2131535.187499992,
+        2004865.2499999662,
+        2036458.8124999728,
+        2032956.9374999893,
+        2061660.5000000163,
+        2003212.7499999888
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "simd",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 32,
+      "medianNanoseconds": 828957.3750000158,
+      "samplesNanoseconds": [
+        833040.4999999814,
+        845570.4062500047,
+        777398.2812500151,
+        778887.3437500001,
+        865593.4062500137,
+        828957.3750000158,
+        798830.6874999864
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "particles",
+      "variant": "setup",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 512,
+      "medianNanoseconds": 78379.99414062403,
+      "samplesNanoseconds": [
+        80241.74218749991,
+        78379.99414062403,
+        81012.55664062634,
+        74627.88671875131,
+        76467.9921875011,
+        74726.08984375029,
+        79869.86914062477
+      ],
+      "memoryPages": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 15563.766601562002,
+      "samplesNanoseconds": [
+        16057.621093749753,
+        15563.766601562002,
+        15503.00585937503,
+        15510.8671874995,
+        15443.133789062813,
+        16400.37402343708,
+        17045.76074218789
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 11481.300781250426,
+      "samplesNanoseconds": [
+        12659.731445312516,
+        11311.750976562784,
+        11481.300781250426,
+        11364.827148437229,
+        11338.147460937087,
+        12008.27050781239,
+        12343.747070312716
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 64,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 3025.353515625717,
+      "samplesNanoseconds": [
+        3377.0898437497367,
+        2939.7587890631626,
+        2995.95898437488,
+        3018.7617187493743,
+        3025.353515625717,
+        3074.445312500451,
+        3239.3076171874923
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 64,
+      "medianNanoseconds": 427844.07812499127,
+      "samplesNanoseconds": [
+        397358.93750000175,
+        433568.89062499703,
+        418038.35937498946,
+        397673.31250000384,
+        427844.07812499127,
+        439305.1093749989,
+        436548.71875000367
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 512,
+      "medianNanoseconds": 84057.40234375081,
+      "samplesNanoseconds": [
+        86541.4707031249,
+        88175.5449218744,
+        82850.51562499923,
+        84057.40234375081,
+        83958.28124999838,
+        84213.74999999997,
+        81019.41210937369
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 64,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 3061.828124999444,
+      "samplesNanoseconds": [
+        3061.828124999444,
+        3604.7451171867806,
+        3308.1933593743784,
+        3063.3613281247917,
+        2988.1269531255584,
+        2976.9560546872854,
+        2982.9707031252537
+      ],
+      "memoryPages": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 256,
+      "medianNanoseconds": 127818.51562500179,
+      "samplesNanoseconds": [
+        134240.35546875146,
+        122405.49999999927,
+        127818.51562500179,
+        121346.59765625244,
+        126330.83203124684,
+        136438.11718749886,
+        138878.53124999694
+      ],
+      "memoryPages": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 512,
+      "medianNanoseconds": 86974.10546874984,
+      "samplesNanoseconds": [
+        86547.17382812471,
+        86974.10546874984,
+        85045.83593749971,
+        86307.05664062433,
+        88219.68359374921,
+        90260.99999999993,
+        87483.10546874904
+      ],
+      "memoryPages": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 512,
+      "frames": 1,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 23530.634765625004,
+      "samplesNanoseconds": [
+        23688.73046875031,
+        23048.918945312023,
+        23146.42871093753,
+        23702.7919921875,
+        23473.593749999465,
+        23530.634765625004,
+        26712.852539062304
+      ],
+      "memoryPages": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 8,
+      "medianNanoseconds": 3400983.9999998803,
+      "samplesNanoseconds": [
+        3514313.3749999152,
+        3485662.2500000186,
+        3323015.749999968,
+        3338695.6250001276,
+        3412279.0000001257,
+        3254799.7500000745,
+        3400983.9999998803
+      ],
+      "memoryPages": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 64,
+      "medianNanoseconds": 626446.8281250118,
+      "samplesNanoseconds": [
+        623512.9374999957,
+        629525.5624999924,
+        638206.9218749962,
+        623682.7968749879,
+        624502.7812500155,
+        626446.8281250118,
+        640020.1874999993
+      ],
+      "memoryPages": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 512,
+      "frames": 32,
+      "callsPerSample": 1024,
+      "medianNanoseconds": 23688.31933593718,
+      "samplesNanoseconds": [
+        23028.518554688126,
+        23226.574218750073,
+        23705.360351562453,
+        23688.31933593718,
+        24718.430664060874,
+        23404.522460937827,
+        24763.918945312824
+      ],
+      "memoryPages": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 32,
+      "medianNanoseconds": 1007292.9062500293,
+      "samplesNanoseconds": [
+        1007292.9062500293,
+        998955.1562500197,
+        1006327.2812499804,
+        1101467.687500019,
+        1058361.3437499935,
+        997230.1562499979,
+        1021982.5000000355
+      ],
+      "memoryPages": [
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 64,
+      "medianNanoseconds": 728980.0000000071,
+      "samplesNanoseconds": [
+        742074.2812500123,
+        705273.4062500008,
+        738378.8437500129,
+        742713.0312499913,
+        717587.0781250069,
+        696093.92187499,
+        728980.0000000071
+      ],
+      "memoryPages": [
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 4096,
+      "frames": 1,
+      "callsPerSample": 128,
+      "medianNanoseconds": 194724.2578125099,
+      "samplesNanoseconds": [
+        197279.789062506,
+        189537.96093749985,
+        227560.63281251217,
+        194724.2578125099,
+        195972.21875000058,
+        190749.67968749945,
+        192476.22656249063
+      ],
+      "memoryPages": [
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "scalar",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 1,
+      "medianNanoseconds": 26261506.999999255,
+      "samplesNanoseconds": [
+        27936188.000001494,
+        26261506.999999255,
+        25196384.000000764,
+        26332747.00000038,
+        26363446.999999724,
+        25590732.00000057,
+        25447453.000000678
+      ],
+      "memoryPages": [
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "simd",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 8,
+      "medianNanoseconds": 5269546.87500006,
+      "samplesNanoseconds": [
+        5357478.875000197,
+        5269546.87500006,
+        5100597.999999991,
+        5256033.249999973,
+        5444823.374999941,
+        5129372.749999902,
+        5565902.625000035
+      ],
+      "memoryPages": [
+        49,
+        49,
+        49,
+        49,
+        49,
+        49,
+        49
+      ]
+    },
+    {
+      "workload": "transforms",
+      "variant": "setup",
+      "rows": 4096,
+      "frames": 32,
+      "callsPerSample": 256,
+      "medianNanoseconds": 201640.66406249502,
+      "samplesNanoseconds": [
+        201640.66406249502,
+        192861.53515624703,
+        201857.8906249999,
+        194503.63671874983,
+        205401.15234375378,
+        188358.47656249884,
+        202979.48828125102
+      ],
+      "memoryPages": [
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33
+      ]
+    }
+  ]
+}

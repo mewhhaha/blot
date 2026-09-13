@@ -5762,11 +5762,16 @@ impl Checker {
                     .contains(&expression_id))
             && intrinsic_head(module, expression_id) != Some("@import")
         {
-            self.expression_types.borrow_mut().insert(
-                path.to_owned(),
-                expression_id,
-                inferred.type_.clone(),
-            );
+            let mut expression_types = self.expression_types.borrow_mut();
+            if self.specialization_depth.get() == 0 {
+                expression_types.insert(path.to_owned(), expression_id, inferred.type_.clone());
+            } else {
+                // A contextual call must not replace the generic body fact
+                // shared by other instantiations of the same source expression.
+                expression_types
+                    .entry(path.to_owned(), expression_id)
+                    .or_insert_with(|| inferred.type_.clone());
+            }
         }
         inferred
     }
