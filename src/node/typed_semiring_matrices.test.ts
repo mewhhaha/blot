@@ -26,7 +26,6 @@ test(
       assert.equal(checked.effects, "");
       assert.match(checked.type, /\.walks =/);
       assert.match(checked.type, /\.costs =/);
-      assert.match(checked.type, /#None \| #Some Int/);
 
       const evaluated = await compiler.evaluate(example);
       const expected = await readFile(

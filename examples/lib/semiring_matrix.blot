@@ -1,5 +1,3 @@
-open import "blot:prelude"
-
 // A semiring is an ordinary structural dictionary. The shared `Value` type
 // keeps both identities and both binary operations in one algebra.
 const Semiring = fn value => {
@@ -18,18 +16,24 @@ const Matrix2 = fn value => {
   .m11 = value;
 }
 
-const dot2 :: @forall (fn Value => (Semiring Value, Value, Value, Value, Value) -> Value)
-const dot2 = fn (semiring, left0, left1, right0, right1) => semiring.add (
-  semiring.multiply (left0, right0),
-  semiring.multiply (left1, right1)
-)
-
 const multiply :: @forall (fn Value => (Semiring Value, Matrix2 Value, Matrix2 Value) -> Matrix2 Value)
 const multiply = fn (semiring, left, right) => {
-  .m00 = dot2 (semiring, left.m00, left.m01, right.m00, right.m10);
-  .m01 = dot2 (semiring, left.m00, left.m01, right.m01, right.m11);
-  .m10 = dot2 (semiring, left.m10, left.m11, right.m00, right.m10);
-  .m11 = dot2 (semiring, left.m10, left.m11, right.m01, right.m11);
+  .m00 = semiring.add (
+    semiring.multiply (left.m00, right.m00),
+    semiring.multiply (left.m01, right.m10)
+  );
+  .m01 = semiring.add (
+    semiring.multiply (left.m00, right.m01),
+    semiring.multiply (left.m01, right.m11)
+  );
+  .m10 = semiring.add (
+    semiring.multiply (left.m10, right.m00),
+    semiring.multiply (left.m11, right.m10)
+  );
+  .m11 = semiring.add (
+    semiring.multiply (left.m10, right.m01),
+    semiring.multiply (left.m11, right.m11)
+  );
 }
 
 const identity :: @forall (fn Value => Semiring Value -> Matrix2 Value)

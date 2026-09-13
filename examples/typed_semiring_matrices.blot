@@ -26,19 +26,32 @@ const two_step_walks = Matrix.multiply (integer_semiring, adjacency, adjacency)
 
 const Cost = Option Int
 
+// Pain point: a tupled signature does not currently narrow destructured
+// parameters enough for exhaustive variant cases. Rebinding through `Cost`
+// keeps the operation tupled for `Semiring` while preserving exhaustive cases.
 const cheapest :: (Cost, Cost) -> Cost
-const cheapest = fn (left, right) => case left of
-  #None => right
-  #Some left_cost => case right of
-    #None => left
-    #Some right_cost => Some (Int.min left_cost right_cost)
+const cheapest = fn (left, right) => do:
+  let left :: Cost
+  let left = left
+  let right :: Cost
+  let right = right
+  return case left of
+    #None => right
+    #Some left_cost => case right of
+      #None => left
+      #Some right_cost => Some (Int.min left_cost right_cost)
 
 const extend_cost :: (Cost, Cost) -> Cost
-const extend_cost = fn (left, right) => case left of
-  #None => None
-  #Some left_cost => case right of
+const extend_cost = fn (left, right) => do:
+  let left :: Cost
+  let left = left
+  let right :: Cost
+  let right = right
+  return case left of
     #None => None
-    #Some right_cost => Some (left_cost + right_cost)
+    #Some left_cost => case right of
+      #None => None
+      #Some right_cost => Some (left_cost + right_cost)
 
 // `None` is additive zero (no route), while `Some 0` is multiplicative one
 // (the empty route). This avoids a magic "infinity" sentinel in the carrier.
