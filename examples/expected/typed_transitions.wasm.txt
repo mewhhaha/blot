@@ -1,0 +1,1 @@
+{ .invalid_price = { .detail = -1; .status = "invalid-unit-price"; .total = 0 }; .invalid_quantity = { .detail = 0; .status = "invalid-quantity"; .total = 0 }; .over_limit = { .detail = 150; .status = "limit-exceeded"; .total = 0 }; .valid = { .detail = 0; .status = "approved"; .total = 36 } }

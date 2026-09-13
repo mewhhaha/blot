@@ -68,6 +68,7 @@ language rather than studying one compiler feature at a time.
 | [`shader_metadata.blot`](shader_metadata.blot)           | read WGSL at compile time and project filename plus struct metadata         |
 | [`retry_policy.blot`](retry_policy.blot)                 | carry retry state through a bounded loop and stop on the first final result |
 | [`shopping_cart.blot`](shopping_cart.blot)               | calculate checkout totals from immutable tuples and collection operations   |
+| [`typed_transitions.blot`](typed_transitions.blot)       | compose tagged protocol states through a rank-polymorphic transition alias  |
 | [`validation_pipeline.blot`](validation_pipeline.blot)   | accumulate accepted values and typed rejection reasons                      |
 | [`word_frequency.blot`](word_frequency.blot)             | tokenize text, count sorted runs, and build an ordered text map             |
 
@@ -93,6 +94,9 @@ return a `.default` value so each runs directly through the Node CLI.
 - [`stream_offsets.blot`](stream_offsets.blot): monotonic consumer checkpoints,
   duplicate/stale/gapped deliveries, empty input, and an Int-maximum checkpoint
   whose successor test is guarded so runtime addition cannot overflow.
+- [`typed_transitions.blot`](typed_transitions.blot): a reusable `Transition`
+  type constructor plus rank-polymorphic composition, tagged protocol states,
+  one exhaustive error union, and valid/invalid/limit fixtures.
 
 ```sh
 pnpm blot run examples/paginated_feed.blot
@@ -100,6 +104,7 @@ pnpm blot run examples/unicode_preview.blot
 pnpm blot run examples/idempotent_events.blot
 pnpm blot run examples/sensor_units.blot
 pnpm blot run examples/stream_offsets.blot
+pnpm blot run examples/typed_transitions.blot
 ```
 
 Run `deno task verify:showcase` to evaluate the everyday programs, these five

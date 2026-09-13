@@ -10,6 +10,7 @@ const examples = [
   "paginated_feed",
   "sensor_units",
   "stream_offsets",
+  "typed_transitions",
   "unicode_preview",
 ];
 
