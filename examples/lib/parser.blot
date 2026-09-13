@@ -56,6 +56,7 @@ const or_else = fn (left, right) => fn cursor => case left cursor of
     #Error right_error => do:
       if right_error.offset > left_error.offset:
         return #Error right_error
+
       return #Error left_error
 
 const literal :: Text -> Parser Text
@@ -68,6 +69,7 @@ const literal = fn expected => fn input => do:
       #Some (actual, next) => do:
         if actual == wanted:
           return visit (expected_next, next)
+
         return #Error (error_at (cursor, wanted))
 
   return visit (Text.cursor expected, input)
@@ -79,13 +81,16 @@ const take_while1 = fn (expected, accepts) => fn input => do:
     #None => do:
       if Array.length (&scalars) == 0:
         return #Error (error_at (cursor, expected))
+
       return #Ok { .value = @text.join scalars; .rest = cursor; }
 
     #Some (scalar, next) => do:
       if accepts scalar:
         return visit (next, @array.push scalars scalar)
+
       if Array.length (&scalars) == 0:
         return #Error (error_at (cursor, expected))
+
       return #Ok { .value = @text.join scalars; .rest = cursor; }
 
   let scalars :: [Text]
@@ -112,4 +117,4 @@ return {
   .literal = literal;
   .take_while1 = take_while1;
   .run = run;
-  }
+}
