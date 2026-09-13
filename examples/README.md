@@ -53,10 +53,9 @@ errors; the example records that behavior rather than claiming accumulation.
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions.
-`src/node/typed_codec.test.ts` adds the codec principal type, evaluator and
-emitted-Wasm goldens, and rejection cases. `deno task verify:showcase` includes
-all five examples.
+transactions. `src/node/typed_codec.test.ts` adds the codec principal type,
+evaluator and emitted-Wasm goldens, and rejection cases.
+`deno task verify:showcase` includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
