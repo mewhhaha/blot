@@ -1,0 +1,1 @@
+{ .default = { .walks = { .m00 = 1; .m01 = 1; .m10 = 1; .m11 = 2; }; .costs = { .m00 = #Some 7; .m01 = #Some 12; .m10 = #Some 3; .m11 = #Some 15; }; .identity = { .m00 = #Some 4; .m01 = #None; .m10 = #Some 7; .m11 = #Some 1; }; }; }

@@ -1,0 +1,13 @@
+open import "blot:prelude"
+
+const Matrix = import "../../../examples/lib/semiring_matrix.blot"
+
+const invalid :: Matrix.Semiring Int
+const invalid = {
+  .zero = 0;
+  .one = 1;
+  .add = fn (left, right) => left + right;
+  .multiply = fn (left, right) => Text.of_int (left * right);
+}
+
+return invalid.zero

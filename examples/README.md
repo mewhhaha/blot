@@ -21,12 +21,13 @@ with ordinary handler records. Each runs with
 representation boundary: functions consume a `{ .count = Int; }` view of a wider
 record and return fresh integer and text records with their own layouts.
 
-| Example                                                      | Abstraction                                                                                                       | Observations                                                 |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
-| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
-| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
-| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| Example                                                        | Abstraction                                                                                                       | Observations                                                 |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot)   | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
+| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)     | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
+| [`schema_effects.blot`](schema_effects.blot)                   | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
+| [`linear_transaction.blot`](linear_transaction.blot)           | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -40,12 +41,17 @@ The schema example derives the effect interface and implements its clauses in
 not rely on the current generic handler's resume-result inference to enforce the
 port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
-database durability or isolation.
+database durability or isolation. The semiring example uses ordinary structural
+dictionaries and type-valued matrices; it checks carrier compatibility
+statically, while algebraic laws remain executable library contracts rather than
+compiler proofs.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/typed_semiring_matrices.test.ts` checks evaluator/Wasm
+agreement, canonical source, and rejection of a mixed-carrier semiring.
+`deno task verify:showcase` includes all five abstraction examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
