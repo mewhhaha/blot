@@ -27,6 +27,7 @@ record and return fresh integer and text records with their own layouts.
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice       | health, Unicode user, and asset routes plus precise failures  |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -42,10 +43,17 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
+The parser example uses `Text.Cursor` as ordinary immutable parser state. `map`
+changes the parsed value, `zip_with` sequences different result types, and
+`or_else` backtracks while retaining the failure at the farthest byte offset.
+`run` closes the abstraction by requiring complete input consumption.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/composable_parser.test.ts` separately checks the parser
+abstraction, both executions, canonical source, and result-type rejection.
+`deno task verify:showcase` includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
