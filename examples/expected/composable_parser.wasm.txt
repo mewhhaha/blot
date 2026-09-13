@@ -1,0 +1,1 @@
+{ .asset = #Ok #Asset { .extension = "svg"; .name = "logo" }; .health = #Ok #Health; .missing_user = #Error { .actual = #None; .expected = "path segment"; .offset = 7 }; .trailing = #Error { .actual = #Some "/"; .expected = "end of input"; .offset = 7 }; .unicode_user = #Ok #User { .name = "ada🐱" } }
