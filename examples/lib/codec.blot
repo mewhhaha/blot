@@ -1,0 +1,61 @@
+open import "blot:prelude"
+
+// A codec couples both directions of one representation boundary. The same
+// Model, Wire, and Error parameters are shared by every operation.
+const Codec = fn (model, wire, error) => {
+  .encode = model -> wire;
+  .decode = wire -> Result (model, error);
+}
+
+// A lossless representation change leaves the wire format and decode error
+// unchanged. Both directions are required, so a one-way map cannot claim to be
+// a codec.
+const imap :: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Outer), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
+const imap = fn (codec, forward, backward) => {
+  .encode = fn outer => codec.encode (backward outer);
+  .decode = fn wire => case codec.decode wire of
+    #Error error => #Error error
+    #Ok inner => #Ok (forward inner)
+  ;
+}
+
+// A checked representation change may reject during decoding while encoding is
+// total because callers already hold a valid Outer value.
+const validate :: @forall (fn Inner => @forall (fn Outer => @forall (fn Wire => @forall (fn Error => (Codec (Inner, Wire, Error), (Inner -> Result (Outer, Error)), (Outer -> Inner)) -> Codec (Outer, Wire, Error)))))
+const validate = fn (codec, check, forget) => {
+  .encode = fn outer => codec.encode (forget outer);
+  .decode = fn wire => case codec.decode wire of
+    #Error error => #Error error
+    #Ok inner => check inner
+  ;
+}
+
+const identity :: @forall (fn Value => @forall (fn Error => Codec (Value, Value, Error)))
+const identity = {
+  .encode = fn value => value;
+  .decode = fn value => #Ok value;
+}
+
+// Product composition relates both model components to their corresponding wire
+// components while preserving one decode-error carrier.
+const product :: @forall (fn Left => @forall (fn Right => @forall (fn LeftWire => @forall (fn RightWire => @forall (fn Error => (Codec (Left, LeftWire, Error), Codec (Right, RightWire, Error)) -> Codec ((Left, Right), (LeftWire, RightWire), Error))))))
+const product = fn (left, right) => {
+  .encode = fn (left_value, right_value) => (
+    left.encode left_value,
+    right.encode right_value
+  );
+  .decode = fn (left_wire, right_wire) => case left.decode left_wire of
+    #Error error => #Error error
+    #Ok left_value => case right.decode right_wire of
+      #Error error => #Error error
+      #Ok right_value => #Ok (left_value, right_value)
+  ;
+}
+
+return {
+  .Codec = Codec;
+  .identity = identity;
+  .imap = imap;
+  .validate = validate;
+  .product = product;
+  }
