@@ -37,6 +37,7 @@ const abstractionExamples = [
   "schema_effects.blot",
   "linear_transaction.blot",
   "typed_quantities.blot",
+  "typed_lenses.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

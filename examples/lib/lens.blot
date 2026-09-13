@@ -1,0 +1,29 @@
+// A lens is just a pair of ordinary functions whose shared type parameters say
+// which whole value contains which focused part. No runtime wrapper or compiler
+// primitive is needed.
+const Lens = fn (whole, part) => {
+  .view = whole -> part;
+  .set = (whole, part) -> whole;
+}
+
+// Composition is the useful invariant: the outer focus and inner whole are one
+// `Middle` type, so an invalid path is rejected before any update can run.
+// Pain point: expressing that relationship needs three explicit nested @forall
+// binders even though the implementation is a two-line record of functions.
+const compose :: @forall (fn Whole => @forall (fn Middle => @forall (fn Part => (Lens (Whole, Middle), Lens (Middle, Part)) -> Lens (Whole, Part))))
+const compose = fn (outer, inner) => {
+  .view = fn whole => inner.view (outer.view whole);
+  .set = fn (whole, part) => outer.set (
+    whole,
+    inner.set (outer.view whole, part)
+  );
+}
+
+const over :: @forall (fn Whole => @forall (fn Part => (Lens (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over = fn (lens, whole, change) => lens.set (whole, change (lens.view whole))
+
+return {
+  .Lens = Lens;
+  .compose = compose;
+  .over = over;
+  }

@@ -13,8 +13,8 @@ that has not been implemented are four different claims about the language.
 
 ## Effect and type abstractions
 
-These examples build APIs from ordinary type values and interpret computations
-with ordinary handler records. Each runs with
+These examples build APIs from ordinary type values. Effect-oriented examples
+interpret computations with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
 [`record_view_results.blot`](record_view_results.blot) exercises a related
@@ -28,6 +28,7 @@ record and return fresh integer and text records with their own layouts.
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
 | [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a nominal quantity type to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
+| [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -46,11 +47,16 @@ dictionary explicit because attached type namespaces are intentionally outside
 the structural type lattice; its `.type` member carries the nominal type into
 generic checked signatures without runtime dispatch.
 
+The lens example treats a path as a pair of ordinary functions plus the type
+relationship between its whole and focused part. Composition reuses the same
+middle type on both sides, so a non-adjacent path is rejected statically while
+`Shape.update` preserves fields outside each local focus.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. The ordinary executable catalog checks the typed quantity golden,
-and `deno task verify:showcase` includes all five abstraction examples.
+transactions. Focused Node tests check the lens and quantity contracts, and
+`deno task verify:showcase` includes the executable abstractions.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with

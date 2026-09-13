@@ -1,0 +1,76 @@
+// Compose immutable nested updates from small typed focuses. Each lens states the
+// whole and part it connects, so only adjacent paths compose and unrelated fields
+// survive updates without being threaded through every call site.
+
+open import "blot:prelude"
+
+const L = import "./lib/lens.blot"
+
+const Address = {
+  .city = Text;
+  .postal = Int;
+}
+const User = {
+  .name = Text;
+  .address = Address;
+}
+const Model = {
+  .user = User;
+  .revision = Int;
+}
+
+const model_user :: L.Lens (Model, User)
+const model_user = {
+  .view = fn model => model.user;
+  .set = fn (model, user) => Shape.update (model, { .user = user; });
+}
+
+const user_address :: L.Lens (User, Address)
+const user_address = {
+  .view = fn user => user.address;
+  .set = fn (user, address) => Shape.update (user, { .address = address; });
+}
+
+const address_city :: L.Lens (Address, Text)
+const address_city = {
+  .view = fn address => address.city;
+  .set = fn (address, city) => Shape.update (address, { .city = city; });
+}
+
+const address_postal :: L.Lens (Address, Int)
+const address_postal = {
+  .view = fn address => address.postal;
+  .set = fn (address, postal) => Shape.update (address, { .postal = postal; });
+}
+
+const model_address :: L.Lens (Model, Address)
+const model_address = L.compose (model_user, user_address)
+const model_city :: L.Lens (Model, Text)
+const model_city = L.compose (model_address, address_city)
+const model_postal :: L.Lens (Model, Int)
+const model_postal = L.compose (model_address, address_postal)
+
+let original :: Model
+let original = {
+  .user = {
+    .name = "Ada";
+    .address = {
+      .city = "London";
+      .postal = 1001;
+    };
+  };
+  .revision = 7;
+}
+
+let renamed = L.over (model_city, original, fn city => city <> " / west")
+let moved = model_postal.set (renamed, 90210)
+
+return {
+  .default = {
+    .before = model_city.view original;
+    .after = model_city.view moved;
+    .postal = model_postal.view moved;
+    .name = moved.user.name;
+    .revision = moved.revision;
+  };
+  }
