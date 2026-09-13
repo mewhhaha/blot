@@ -28,8 +28,8 @@ const guest_codec = C.validate (guest_base, check_guests, fn value => value)
 const night_codec :: C.Codec (Nights, Int, #InvalidNights Int)
 const night_codec = C.validate (night_base, check_nights, fn value => value)
 
-// The two narrow leaf error types flow into one inferred union at the product
-// boundary; the leaf codecs do not need to know the application's full error set.
+// Product computes the union of the two narrow leaf error types, so neither
+// leaf codec needs to know the application's complete decode-error set.
 const pair_codec :: C.Codec ((Guests, Nights), (Int, Int), DecodeError)
 const pair_codec = C.product (guest_codec, night_codec)
 
