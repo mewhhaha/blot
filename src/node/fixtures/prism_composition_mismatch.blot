@@ -3,16 +3,18 @@ open import "blot:prelude"
 const P = import "../../../examples/lib/prism.blot"
 
 const first :: P.Prism (Int, Text)
-const first = {
-  .preview = fn _ => #Some "first";
-  .review = fn _ => 1;
-}
+const first =
+  {
+    .preview = fn _ => #Some "first";
+    .review = fn _ => 1;
+  }
 
 const second :: P.Prism (Int, Text)
-const second = {
-  .preview = fn _ => #Some "second";
-  .review = fn _ => 2;
-}
+const second =
+  {
+    .preview = fn _ => #Some "second";
+    .review = fn _ => 2;
+  }
 
 // `first` focuses Text, but `second` requires Int as its whole value.
 return P.compose (first, second)
