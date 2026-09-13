@@ -29,6 +29,7 @@ record and return fresh integer and text records with their own layouts.
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
 | [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a nominal quantity type to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
 | [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
+| [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -52,11 +53,18 @@ relationship between its whole and focused part. Composition reuses the same
 middle type on both sides, so a non-adjacent path is rejected statically while
 `Shape.update` preserves fields outside each local focus.
 
+The ordering example treats an ordering policy as an ordinary structural record.
+`on` uses two quantified types to connect a projection result to its key order,
+`reverse` changes direction without changing the subject, and `then` composes
+tie-breakers. The concrete `Order Ticket` signature closes the subject type
+after composition; the stable merge sort preserves source order when every
+configured key compares equal.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. Focused Node tests check the lens and quantity contracts, and
-`deno task verify:showcase` includes the executable abstractions.
+transactions. Focused Node tests cover runtime results, formatting, type
+boundaries, and rejected programs. `deno task verify:showcase` runs the catalog.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with

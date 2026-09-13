@@ -1,0 +1,52 @@
+open import "blot:prelude"
+
+// An order is only a typed comparator. Its curried shape matches Blot's scalar
+// comparison primitives, so primitive orders need no adapter wrapper.
+const Order = fn item => { .compare = item -> item -> Ordering; }
+
+const integer :: Order Int
+const integer = { .compare = @int.cmp; }
+
+const text :: Order Text
+const text = { .compare = @text.cmp; }
+
+const on :: @forall (fn Value => @forall (fn Key => (Order Key, (Value -> Key)) -> Order Value))
+const on = fn (order, key) => {
+  .compare = fn left => fn right => order.compare (key left) (key right);
+}
+
+const then :: @forall (fn Value => (Order Value, Order Value) -> Order Value)
+const then = fn (first, second) => {
+  .compare = fn left => fn right => case first.compare left right of
+    #Equal => second.compare left right
+    #Less => #Less
+    #Greater => #Greater
+  ;
+}
+
+const reverse :: @forall (fn Value => Order Value -> Order Value)
+const reverse = fn order => {
+  .compare = fn left => fn right => case order.compare left right of
+    #Less => #Greater
+    #Equal => #Equal
+    #Greater => #Less
+  ;
+}
+
+// Pain point: scalar comparison primitives are curried, while Array.merge_sort
+// accepts one tupled Boolean predicate. Keep that shape conversion private.
+const before_or_equal :: @forall (fn Value => Order Value -> (Value, Value) -> Bool)
+const before_or_equal = fn order => fn (left, right) => not (is_greater (order.compare left right))
+
+const sort :: @forall (fn Value => (Order Value, [Value]) -> [Value])
+const sort = fn (order, values) => Array.merge_sort (values, before_or_equal order)
+
+return {
+  .Order;
+  .integer;
+  .text;
+  .on;
+  .then;
+  .reverse;
+  .sort;
+}
