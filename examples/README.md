@@ -37,6 +37,7 @@ record and return fresh integer and text records with their own layouts.
 `Semigroup`, `Mappable`, `Foldable`, and `Length` interfaces through structural
 typing, while deliberately failing `Monoid` because no `.empty` value can exist.
 Its focused test also locks down rejection of a headless value.
+| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -66,6 +67,14 @@ The ordering example treats an ordering policy as an ordinary structural record.
 tie-breakers. The concrete `Order Ticket` signature closes the subject type
 after composition; the stable merge sort preserves source order when every
 configured key compares equal.
+
+The structural-reader example is deliberately pure. Tax, shipping, and currency
+computations name only the record capabilities they consume. `zip_with` closes
+those narrower function inputs at a wider structural boundary, while `local`
+lifts pricing under an application field. A refined percentage field and two
+negative fixtures make missing or invalid capabilities type errors before
+execution; extra outer and nested record fields remain valid through width and
+depth subtyping.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
