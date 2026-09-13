@@ -1,0 +1,64 @@
+// Reconcile consumer offsets without overflowing at the signed-Int boundary.
+// Duplicate, stale, and gapped deliveries leave the checkpoint unchanged.
+
+open import "blot:prelude"
+
+const Summary =
+  {
+    .checkpoint = Int;
+    .accepted = Int;
+    .duplicates = Int;
+    .gaps = Int;
+    .stale = Int;
+  }
+
+let reconcile :: (Int, [Int]) -> Summary
+let reconcile = fn (start, &offsets) => do:
+  let checkpoint = start
+  let accepted = 0
+  let duplicates = 0
+  let gaps = 0
+  let stale = 0
+
+  // Pain point: iteration borrows the source array explicitly; the call site
+  // must opt into that borrow even though the loop only observes offsets.
+  for offset in Iter.items (&offsets):
+    if offset == checkpoint:
+      duplicates := duplicates + 1
+      continue
+
+    if offset < checkpoint:
+      stale := stale + 1
+      continue
+
+    // Pain point: runtime Int addition traps on overflow. Check equality and
+    // ordering first so checkpoint + 1 is evaluated only when offset is larger.
+    // At Int.max no larger runtime Int exists, so this addition is unreachable.
+    if offset == checkpoint + 1:
+      checkpoint := offset
+      accepted := accepted + 1
+      continue
+
+    gaps := gaps + 1
+
+  return {
+    .checkpoint = checkpoint;
+    .accepted = accepted;
+    .duplicates = duplicates;
+    .gaps = gaps;
+    .stale = stale;
+  }
+
+let normal = [41, 41, 43, 40, 42, 43]
+let descending = [-1, 1, 0, 2]
+let at_max = [9223372036854775807]
+
+// Name a default value so `pnpm blot run` can select one runtime export.
+return {
+  .default = {
+    .normal = reconcile (40, normal);
+    .descending = reconcile (0, descending);
+    .at_max = reconcile (9223372036854775807, at_max);
+    .empty = reconcile (7, []);
+  };
+}
