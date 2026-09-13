@@ -22,11 +22,10 @@ const compose = fn (outer, inner) => {
 }
 
 const over :: @forall (fn Whole => @forall (fn Part => (Lens (Whole, Part), Whole, (Part -> Part)) -> Whole))
-const over = fn (lens, whole, change) =>
-  lens.set (whole, change (lens.view whole))
+const over = fn (lens, whole, change) => lens.set (whole, change (lens.view whole))
 
 return {
   .Lens = Lens;
   .compose = compose;
   .over = over;
-}
+  }
