@@ -75,7 +75,8 @@ return Request.with_retries (!draft, 6)`,
       "reuse of a consumed stage",
       `let !draft = Request.begin "/users"
 let first = Request.with_retries (!draft, 1)
-return Request.with_retries (!draft, 2)`,
+let second = Request.with_retries (!draft, 2)
+return (first.retries, second.retries)`,
       "BLOT_LINEAR_CONSUMED_TWICE",
     ],
   ] as const
