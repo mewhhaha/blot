@@ -1,0 +1,21 @@
+open import "blot:prelude"
+
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+const Replicas = refine (Int, fn value => value >= 1 && value <= 32)
+const TimeoutMs = refine (Int, fn value => value >= 100 && value <= 60000)
+const Config =
+  {
+    .port = Port;
+    .replicas = Replicas;
+    .timeout_ms = TimeoutMs;
+  }
+
+let raw_port = 0
+let invalid :: Config
+let invalid =
+  {
+    .port = raw_port;
+    .replicas = 3;
+    .timeout_ms = 5000;
+  }
+return invalid

@@ -38,6 +38,7 @@ record and return fresh integer and text records with their own layouts.
 typing, while deliberately failing `Monoid` because no `.empty` value can exist.
 Its focused test also locks down rejection of a headless value.
 | [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
+| [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -75,6 +76,11 @@ lifts pricing under an application field. A refined percentage field and two
 negative fixtures make missing or invalid capabilities type errors before
 execution; extra outer and nested record fields remain valid through width and
 depth subtyping.
+
+The validation example treats a check as `Input -> Result (Value, [Error])`.
+`zip_with` shares one input and error carrier across independent checks, so
+failures accumulate instead of short-circuiting. Successful leaves strengthen
+ordinary integer fields into refinements before the final config is built.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,

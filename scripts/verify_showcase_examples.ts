@@ -41,6 +41,7 @@ const abstractionExamples = [
   "composable_ordering.blot",
   "typed_nonempty.blot",
   "structural_readers.blot",
+  "typed_validation.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
