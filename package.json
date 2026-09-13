@@ -40,6 +40,8 @@
   "scripts": {
     "blot": "tsx src/node/cli.ts",
     "check": "tsx src/node/cli.ts check examples/minimal.blot",
+    "format": "tsx scripts/format_blot.ts --write",
+    "format:check": "tsx scripts/format_blot.ts --check",
     "example:hot-reload": "node --import tsx case-studies/hot-reload/serve.ts",
     "example:spark-browser": "node --import tsx case-studies/spark-browser/serve.ts",
     "test": "pnpm test:node && pnpm test:web-workers && pnpm test:regression",

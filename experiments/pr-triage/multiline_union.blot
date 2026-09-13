@@ -1,0 +1,5 @@
+open import "blot:prelude"
+const Choice =
+  #First Int
+  | #Second Text
+return @satisfies (#First 3) Choice

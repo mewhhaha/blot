@@ -1676,14 +1676,16 @@ const Arena =
     .get = Array.get;
   }
 
+const each :: @forall (fn T => ([T], T -> @type.unit ~ { ..e }) -> @type.unit ~ { ..e })
 const each = fn (values, visit) => do:
-  use result <- fold (
-    values,
-    (),
-    fn (_, value) => do:
+  let shared = @linear.freeze values
+  let rec go = fn index => case array_get (shared, index) of
+    #None => ()
+    #Some value => do:
       use visit value
-  )
-  return result
+      return go (index + 1)
+
+  return go 0
 
 const sum = fn values => do:
   return fold (

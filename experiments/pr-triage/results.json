@@ -1,0 +1,275 @@
+{
+  "revision": "b2173fb28019fa4555cb2ad2a663963792ea3899",
+  "compilerSha256": "011dc1d8eee32e2f0b6d7f51ee3ead1986cc73f76309fef3b07eeba45e0b9827",
+  "node": "v24.12.0",
+  "results": [
+    {
+      "name": "fold_input",
+      "sourceSha256": "93fcae152d139bfbcbaaab4b19b1b4fce7c07296e2a25802847b016d5f65be62",
+      "check": {
+        "type": "Int",
+        "effects": ""
+      },
+      "evaluate": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE",
+          "message": "@int.add expects an integer, found \"oops\".",
+          "span": {
+            "start": 1777,
+            "end": 1812
+          }
+        },
+        "path": "src/prelude/prelude.blot",
+        "sourceAvailable": false
+      },
+      "compile": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE",
+          "message": "@int.add expects an integer, found \"oops\".",
+          "span": {
+            "start": 1777,
+            "end": 1812
+          }
+        },
+        "path": "src/prelude/prelude.blot",
+        "sourceAvailable": false
+      }
+    },
+    {
+      "name": "generic_result",
+      "sourceSha256": "4cabebd36e1d95b34e12a576375cb0b9af4c2b66c5efb2525d196afd9fd18d6c",
+      "check": {
+        "type": "#Error ⊥ | #Ok { .value = ⊥; .rest = ⊥ }",
+        "effects": ""
+      },
+      "evaluate": {
+        "display": "#Ok { .value = #Health; .rest = \"\"; }",
+        "writes": []
+      },
+      "compile": {
+        "bytes": 8802
+      },
+      "wasm": {
+        "display": "#Ok { .rest = \"\"; .value = #Health }"
+      }
+    },
+    {
+      "name": "effect_composition",
+      "sourceSha256": "87a61ba7b1b487f6cb890fac9c8fdc04cc6c2fcea7f4750f921100f759be2ec6",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE_ERROR",
+          "message": "'s2147485550 does not flow into { ..⊥ }.",
+          "span": {
+            "start": 768,
+            "end": 828
+          }
+        },
+        "path": "experiments/pr-triage/effect_composition.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "tuple_case",
+      "sourceSha256": "1df08fd65a5cbc54c413698148c9be432664a26f2fd7833d6beca1d749c7025c",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_INCOMPLETE_CASE",
+          "message": "The case arms do not cover every value of ⊤.",
+          "span": {
+            "start": 178,
+            "end": 270
+          }
+        },
+        "path": "experiments/pr-triage/tuple_case.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "projected_refinement",
+      "sourceSha256": "8ff13a652b09bb784fa1a8c87494c87ae698244036d9310ec18359279e523ddb",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE_ERROR",
+          "message": "Int does not flow into 1..65535.",
+          "span": {
+            "start": 145,
+            "end": 258
+          }
+        },
+        "path": "experiments/pr-triage/projected_refinement.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "quantified_length",
+      "sourceSha256": "e6b34af1d5efe1bb203d8d6b507de2b7be867f7d9fb71fe604917cfd8fd74217",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE_ERROR",
+          "message": "[⊤] -> Int does not flow into forall 'q0. ['q0] -> Int.",
+          "span": {
+            "start": 72,
+            "end": 123
+          }
+        },
+        "path": "experiments/pr-triage/quantified_length.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "nested_variant_display",
+      "sourceSha256": "9d1312d52e6fb6e7a21f6f2fc7d8c66a397230236f5f49e2aaf252e1b43f8945",
+      "check": {
+        "type": "{ .nested = #User #Registered Text | #Deleted | #System Text -> #User #Registered Text | #Deleted | #System Text; .flat = #User #Registered Text | #Deleted | #System Text -> #User #Registered Text | #Deleted | #System Text }",
+        "effects": ""
+      }
+    },
+    {
+      "name": "multiline_lambda",
+      "sourceSha256": "0aeb5a01f5324c61f41d326d4984c5cb74478e279e721f0f834a4c30deb70e3b",
+      "check": {
+        "kind": "frontend-diagnostic",
+        "diagnostics": [
+          {
+            "code": "GPU_FRONTEND_SYNTAX_ERROR",
+            "message": "Island 56 rejected syntax at span [28, 33).",
+            "span": {
+              "start": 27,
+              "end": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "multiline_union",
+      "sourceSha256": "384889fc6ff648f8bae38627945f76515635641dfda0ac0c156d9e849f5f6bc9",
+      "check": {
+        "kind": "frontend-diagnostic",
+        "diagnostics": [
+          {
+            "code": "GPU_FRONTEND_SYNTAX_ERROR",
+            "message": "Island 8 rejected syntax at span [28, 33).",
+            "span": {
+              "start": 27,
+              "end": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime_seal",
+      "sourceSha256": "cbe080c8a9427181625731e461d522a3423e2b2ede2a924d3819a808db65945e",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_TYPE_ERROR",
+          "message": "Type does not flow into Sealed:Meter.",
+          "span": {
+            "start": 88,
+            "end": 135
+          }
+        },
+        "path": "experiments/pr-triage/runtime_seal.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "record_intersection",
+      "sourceSha256": "688de7ef764bba109f3dc4c713f46076fb8d523b4bb58cb6a86e434ffc1698f9",
+      "check": {
+        "kind": "source-diagnostic",
+        "diagnostic": {
+          "code": "BLOT_EMPTY_TYPE",
+          "message": "The intersection is empty.",
+          "span": {
+            "start": 102,
+            "end": 114
+          }
+        },
+        "path": "experiments/pr-triage/record_intersection.blot",
+        "sourceAvailable": true
+      }
+    },
+    {
+      "name": "control_tuple_case",
+      "sourceSha256": "2d4a64f899d6c922c679ed8be95e64954cb1b5b10e73ac654bd5dd060e32b34e",
+      "check": {
+        "type": "#None | #Some Int",
+        "effects": ""
+      },
+      "evaluate": {
+        "display": "#Some 3",
+        "writes": []
+      },
+      "compile": {
+        "bytes": 6873
+      },
+      "wasm": {
+        "display": "#Some 3"
+      }
+    },
+    {
+      "name": "control_refinement_alias",
+      "sourceSha256": "d8c5adcb92d9a850266b9cc1ce17ac68dd35c5b176381a7ea19df064f7401e95",
+      "check": {
+        "type": "#None | #Some 1..65535",
+        "effects": ""
+      },
+      "evaluate": {
+        "display": "#Some 42",
+        "writes": []
+      },
+      "compile": {
+        "bytes": 6879
+      },
+      "wasm": {
+        "display": "#Some 42"
+      }
+    },
+    {
+      "name": "control_multiline_lambda",
+      "sourceSha256": "7ae84b725a4f7cab20ae9f9a175e59153b6dbcf35ac3b11347a3a91c7abfa4a0",
+      "check": {
+        "type": "Int",
+        "effects": ""
+      },
+      "evaluate": {
+        "display": "6",
+        "writes": []
+      },
+      "compile": {
+        "bytes": 6147
+      },
+      "wasm": {
+        "display": "6"
+      }
+    },
+    {
+      "name": "control_record_spread",
+      "sourceSha256": "36740f104981061a3fbd262dd637312dcc442e408980d708323c226aa5402e7d",
+      "check": {
+        "type": "{ .left = 1; .right = 2 }",
+        "effects": ""
+      },
+      "evaluate": {
+        "display": "{ .left = 1; .right = 2; }",
+        "writes": []
+      },
+      "compile": {
+        "bytes": 6812
+      },
+      "wasm": {
+        "display": "{ .left = 1; .right = 2 }"
+      }
+    }
+  ]
+}

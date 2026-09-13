@@ -5314,19 +5314,29 @@ impl Checker {
                         None,
                     );
                     self.phase.set(previous_phase);
-                    let selected = selected?;
+                    let mut selected = selected?;
                     if let (
                         Type::Function {
-                            effects: checked, ..
+                            effects: checked, parameter: checked_parameter, result: checked_result, ..
                         },
                         Type::Function {
-                            effects: captured, ..
+                            effects: captured, parameter: captured_parameter, result: captured_result, ..
                         },
-                    ) = (self.settle(inferred.type_.clone(), true), &selected)
+                    ) = (self.settle(inferred.type_.clone(), true), &mut selected)
                     {
                         // Rechecking a closure's captures may refine its layout;
                         // it cannot erase effects established at its call site.
                         self.constrain(Rc::unwrap_or_clone(checked), (**captured).clone(), span)?;
+                        if closed_checked_type(&checked_result, &mut HashSet::new())
+                            && !contains_bottom(&checked_result)
+                            && !self.contains_unevidenced(&checked_result, &mut HashSet::new())
+                            && closed_checked_type(&checked_parameter, &mut HashSet::new())
+                            && !contains_bottom(&checked_parameter)
+                            && !self.contains_unevidenced(&checked_parameter, &mut HashSet::new())
+                        {
+                            *captured_parameter = checked_parameter;
+                            *captured_result = checked_result;
+                        }
                     }
                     inferred.type_ = selected;
                 }
@@ -6377,6 +6387,27 @@ impl Checker {
                     && let Some(argument) = contextual_argument.as_ref()
                     && contains_function(&self.settle(argument.type_.clone(), true))
                 {
+                    let checked_function = self.infer(
+                        path,
+                        module,
+                        function_expression,
+                        environment,
+                        values,
+                        dependencies,
+                    )?;
+                    let checked_result = self.fresh();
+                    let checked_performed = self.fresh();
+                    let deferred_call = self.deferred_call(&checked_function.type_);
+                    self.constrain(
+                        checked_function.type_,
+                        Type::Function {
+                            deferred: deferred_call,
+                            parameter: Rc::new(argument.type_.clone()),
+                            effects: Rc::new(checked_performed.clone()),
+                            result: Rc::new(checked_result.clone()),
+                        },
+                        span,
+                    )?;
                     self.record_specialization(closure_module, *body, &argument.type_, path, span)?;
                     let argument_value = self
                         .evaluate(path, argument_expression, values, Phase::Comptime)
@@ -6418,9 +6449,24 @@ impl Checker {
                             signature,
                         );
                     }
+                    let checked_result = self.settle(checked_result, true);
+                    let result = if closed_checked_type(&checked_result, &mut HashSet::new())
+                        && !contains_bottom(&checked_result)
+                        && !self.contains_unevidenced(&checked_result, &mut HashSet::new())
+                    {
+                        checked_result
+                    } else {
+                        result
+                    };
                     return Ok(Inferred {
                         type_: result,
-                        effects: self.join_effects(argument.effects.clone(), performed)?,
+                        effects: self.join_effects(
+                            self.join_effects(
+                                self.join_effects(checked_function.effects, checked_performed)?,
+                                argument.effects.clone(),
+                            )?,
+                            performed,
+                        )?,
                     });
                 }
                 let function = match evaluated_function
@@ -6967,7 +7013,13 @@ impl Checker {
                     let refinements =
                         comparison_refinements(module, branch.condition, &remaining, values, self);
                     let mut consequence_scope = TypeEnvironment::child(Rc::new(remaining.clone()));
-                    if let Some((name, consequence, alternate)) = refinements {
+                    if let Some((projection, consequence, alternate)) = refinements {
+                        let name = projection[0].clone();
+                        let original = self.instantiate(
+                            remaining.lookup(&name, self).expect("a refinement has a binding"),
+                        );
+                        let consequence = refine_projection(self, original.clone(), &projection[1..], consequence);
+                        let alternate = refine_projection(self, original, &projection[1..], alternate);
                         let binding_phase = remaining.binding_phase(&name);
                         let stable = remaining.lookup_stable(&name, self).ok_or_else(|| {
                             Diagnostic::new(
@@ -7349,6 +7401,16 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         span: Span,
     ) -> Result<Inferred, Diagnostic> {
+        if let Type::Forall { variables, body } = expected.clone() {
+            let body = self.skolemize(variables, Rc::unwrap_or_clone(body));
+            let inferred = self.infer_against(
+                path, module, expression, body, environment, values, dependencies, span,
+            )?;
+            return Ok(Inferred {
+                type_: expected,
+                effects: inferred.effects,
+            });
+        }
         if let Expression::Rec { lambda, .. } = module.arena.expressions[expression.0 as usize] {
             let inferred = self.infer_against(
                 path,
@@ -9635,6 +9697,10 @@ impl Checker {
             {
                 true
             }
+            (ConstraintTypeNode::Rigid(_), ConstraintTypeNode::OpenEffects { tail, .. }) => {
+                work.push_back(WorkItem { left, right: tail, span });
+                true
+            }
             (
                 ConstraintTypeNode::Effects(left),
                 ConstraintTypeNode::OpenEffects {
@@ -10361,7 +10427,11 @@ impl Checker {
                     .iter()
                     .enumerate()
                     .map(|(index, pattern)| {
-                        let field = self.fresh();
+                        let field = match &type_ {
+                            Type::Record(fields) => fields.get(&index.to_string()).cloned(),
+                            _ => None,
+                        }
+                        .unwrap_or_else(|| self.fresh());
                         self.bind_pattern_at_phase(
                             module,
                             *pattern,
@@ -11196,7 +11266,15 @@ impl Checker {
                     if matches!(payload, Type::Unit) {
                         format!("#{name}")
                     } else {
-                        format!("#{name} {}", self.show_settled(payload))
+                        let shown = self.show_settled(payload);
+                        let grouped = matches!(payload, Type::Function { .. } | Type::Forall { .. })
+                            || matches!(payload, Type::Variant { cases, .. } if cases.len() > 1)
+                            || matches!(payload, Type::Union(members) if union_members(members).len() > 1);
+                        if grouped {
+                            format!("#{name} ({shown})")
+                        } else {
+                            format!("#{name} {shown}")
+                        }
                     }
                 })
                 .collect::<Vec<_>>()
@@ -12695,12 +12773,30 @@ fn integer_equality_pattern(
     }
 }
 
+fn refine_projection(checker: &Checker, original: Type, fields: &[String], refined: Type) -> Type {
+    let Some((field, remaining)) = fields.split_first() else {
+        return refined;
+    };
+    let Type::Record(record) = checker.settle(original.clone(), true) else {
+        unreachable!("a checked field refinement has a record receiver");
+    };
+    let previous = record.get(field).expect("a checked field refinement has its field");
+    let refined = refine_projection(checker, previous.clone(), remaining, refined);
+    record_update_type(original, vec![(field.clone(), refined)].into())
+}
+
 fn refined_original_integer_type(
     checker: &Checker,
     environment: &TypeEnvironment,
-    name: &str,
+    projection: &[String],
 ) -> Option<Type> {
-    let instantiated = checker.instantiate(environment.lookup(name, checker)?);
+    let mut instantiated = checker.instantiate(environment.lookup(projection.first()?, checker)?);
+    for field in &projection[1..] {
+        let Type::Record(fields) = checker.settle(instantiated, true) else {
+            return None;
+        };
+        instantiated = fields.get(field)?.clone();
+    }
     let settled_pos = checker.settle(instantiated.clone(), true);
     if integer_intervals(&settled_pos).is_some_and(|v| !v.is_empty()) {
         Some(settled_pos)
@@ -12723,7 +12819,7 @@ fn comparison_refinements(
     environment: &TypeEnvironment,
     values: &ValueEnvironment,
     checker: &Checker,
-) -> Option<(String, Type, Type)> {
+) -> Option<(Vec<String>, Type, Type)> {
     if let Expression::If {
         branches,
         fallback: Some(fallback),
@@ -12800,24 +12896,24 @@ fn comparison_refinements(
     let mut orderings = crate::recognise::comparison(&checker.context, &operator)?;
     let left = arguments[0];
     let right = arguments[1];
-    let (name, witness) = match (
+    let (projection, witness) = match (
         &module.arena.expressions[left.0 as usize],
         &module.arena.expressions[right.0 as usize],
     ) {
-        (Expression::Var { name, .. }, Expression::Int { value, .. }) => {
-            (name.clone(), value.clone())
+        (_, Expression::Int { value, .. }) => {
+            (expression_field_path(module, left)?, value.clone())
         }
-        (Expression::Int { value, .. }, Expression::Var { name, .. }) => {
+        (Expression::Int { value, .. }, _) => {
             orderings = mirror_orderings(&orderings);
-            (name.clone(), value.clone())
+            (expression_field_path(module, right)?, value.clone())
         }
         _ => return None,
     };
-    let original = refined_original_integer_type(checker, environment, &name)?;
+    let original = refined_original_integer_type(checker, environment, &projection)?;
     let accepted = ordering_type(&orderings, &witness);
     let rejected = ordering_type(&complement_orderings(&orderings), &witness);
     Some((
-        name,
+        projection,
         intersect_integer_types(&original, &accepted)?,
         intersect_integer_types(&original, &rejected)?,
     ))

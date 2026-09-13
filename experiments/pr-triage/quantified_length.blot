@@ -1,0 +1,4 @@
+open import "blot:prelude"
+const length :: @forall (fn T => [T] -> Int)
+const length = fn values => Array.length (&values)
+return length [1, 2, 3]
