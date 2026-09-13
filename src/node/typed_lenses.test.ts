@@ -11,7 +11,7 @@ test("typed lenses compose and execute through emitted Wasm", async () => {
   try {
     assert.deepEqual(await compiler.check("examples/typed_lenses.blot"), {
       type:
-        "{ .default = { .before = Text; .after = Text; .postal = Int; .name = Text; .revision = Int } }",
+        '{ .default = { .before = Text; .after = Text; .postal = Int; .name = "Ada"; .revision = 7 } }',
       effects: "",
     });
     const artifact = await compiler.compile("examples/typed_lenses.blot");
