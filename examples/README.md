@@ -60,6 +60,7 @@ language rather than studying one compiler feature at a time.
 | [`shader_metadata.blot`](shader_metadata.blot)           | read WGSL at compile time and project filename plus struct metadata         |
 | [`retry_policy.blot`](retry_policy.blot)                 | carry retry state through a bounded loop and stop on the first final result |
 | [`shopping_cart.blot`](shopping_cart.blot)               | calculate checkout totals from immutable tuples and collection operations   |
+| [`typed_quantities.blot`](typed_quantities.blot)         | build dimension-safe values from nominal seals and compile-time descriptors |
 | [`validation_pipeline.blot`](validation_pipeline.blot)   | accumulate accepted values and typed rejection reasons                      |
 | [`word_frequency.blot`](word_frequency.blot)             | tokenize text, count sorted runs, and build an ordered text map             |
 

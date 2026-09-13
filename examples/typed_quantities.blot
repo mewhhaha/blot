@@ -1,0 +1,40 @@
+// Dimension-safe quantities built from compile-time descriptors and nominal
+// seals. The descriptor carries construction, observation, and arithmetic while
+// each concrete value remains a distinct source type.
+
+open import "blot:prelude"
+
+const quantities = import "./lib/quantity.blot"
+
+const Meters = quantities.Quantity ("Meters", "m")
+const Centimeters = quantities.Quantity ("Centimeters", "cm")
+const Seconds = quantities.Quantity ("Seconds", "s")
+
+const meters_to_centimeters = quantities.scale (Meters, Centimeters, 100)
+
+let outbound :: Meters.type
+let outbound = Meters.of 1200
+
+let detour :: Meters.type
+let detour = Meters.of 350
+
+let distance :: Meters.type
+let distance = Meters.add outbound detour
+
+let metric_detail :: Centimeters.type
+let metric_detail = meters_to_centimeters distance
+
+let elapsed :: Seconds.type
+let elapsed = Seconds.of 90
+
+// Pain point: Blot makes this dictionary explicit because attached namespace
+// members do not participate in a type's shape. The extra `.type` field is the
+// bridge between first-class operations and signatures such as `Meters.type`.
+return {
+  .distance = Meters.value distance;
+  .distance_unit = Meters.symbol;
+  .centimeters = Centimeters.value metric_detail;
+  .centimeters_unit = Centimeters.symbol;
+  .elapsed = Seconds.value elapsed;
+  .elapsed_unit = Seconds.symbol;
+}
