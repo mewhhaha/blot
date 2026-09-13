@@ -3,22 +3,24 @@ open import "blot:prelude"
 const Matrix = import "./lib/semiring_matrix.blot"
 
 const integer_semiring :: Matrix.Semiring Int
-const integer_semiring = {
-  .zero = 0;
-  .one = 1;
-  .add = fn (left, right) => left + right;
-  .multiply = fn (left, right) => left * right;
-}
+const integer_semiring =
+  {
+    .zero = 0;
+    .one = 1;
+    .add = fn (left, right) => left + right;
+    .multiply = fn (left, right) => left * right;
+  }
 
 // Squaring this adjacency matrix counts two-step walks. The generic matrix
 // algorithm does not know that its scalar values are path counts.
 const adjacency :: Matrix.Matrix2 Int
-const adjacency = {
-  .m00 = 0;
-  .m01 = 1;
-  .m10 = 1;
-  .m11 = 1;
-}
+const adjacency =
+  {
+    .m00 = 0;
+    .m01 = 1;
+    .m10 = 1;
+    .m11 = 1;
+  }
 
 const two_step_walks = Matrix.multiply (integer_semiring, adjacency, adjacency)
 
@@ -41,33 +43,37 @@ const extend_cost = fn (left, right) => case left of
 // `None` is additive zero (no route), while `Some 0` is multiplicative one
 // (the empty route). This avoids a magic "infinity" sentinel in the carrier.
 const cost_semiring :: Matrix.Semiring Cost
-const cost_semiring = {
-  .zero = None;
-  .one = Some 0;
-  .add = cheapest;
-  .multiply = extend_cost;
-}
+const cost_semiring =
+  {
+    .zero = None;
+    .one = Some 0;
+    .add = cheapest;
+    .multiply = extend_cost;
+  }
 
 // First-leg costs from two sources to two hubs.
 const first_leg :: Matrix.Matrix2 Cost
-const first_leg = {
-  .m00 = Some 4;
-  .m01 = None;
-  .m10 = Some 7;
-  .m11 = Some 1;
-}
+const first_leg =
+  {
+    .m00 = Some 4;
+    .m01 = None;
+    .m10 = Some 7;
+    .m11 = Some 1;
+  }
 
 // Second-leg costs from those hubs to two destinations.
 const second_leg :: Matrix.Matrix2 Cost
-const second_leg = {
-  .m00 = Some 3;
-  .m01 = Some 8;
-  .m10 = Some 2;
-  .m11 = None;
-}
+const second_leg =
+  {
+    .m00 = Some 3;
+    .m01 = Some 8;
+    .m10 = Some 2;
+    .m11 = None;
+  }
 
 const cheapest_two_leg = Matrix.multiply (cost_semiring, first_leg, second_leg)
-const preserved = Matrix.multiply (cost_semiring, first_leg, Matrix.identity cost_semiring)
+const preserved =
+  Matrix.multiply (cost_semiring, first_leg, Matrix.identity cost_semiring)
 
 // Pain point: the structural dictionary proves that all four operations use the
 // same carrier, but ordinary types do not prove semiring laws such as identity,

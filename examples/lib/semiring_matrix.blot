@@ -45,4 +45,4 @@ return {
   .Matrix2 = Matrix2;
   .multiply = multiply;
   .identity = identity;
-}
+  }
