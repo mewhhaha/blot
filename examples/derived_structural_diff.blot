@@ -9,44 +9,51 @@ open import "blot:prelude"
 const Diff = import "./lib/structural_diff.blot"
 
 const ReplicaCount = range (1, 32)
-const Deployment = {
-  .version = Int;
-  .region = Text;
-  .replicas = ReplicaCount;
-  .owner = Text;
-}
-const Account = {
-  .id = Int;
-  .name = Text;
-  .team = Text;
-}
+const Deployment =
+  {
+    .version = Int;
+    .region = Text;
+    .replicas = ReplicaCount;
+    .owner = Text;
+  }
+const Account =
+  {
+    .id = Int;
+    .name = Text;
+    .team = Text;
+  }
 
+// Pain point: direct static application retains `[Text]` field-name precision;
+// wrapping `Diff.derive` in a generic higher-order helper currently widens it.
 const deployment_diff = Diff.derive Deployment
 const account_diff = Diff.derive Account
 
 let deployment_before :: Deployment
-let deployment_before = {
-  .version = 17;
-  .region = "eu-central";
-  .replicas = 3;
-  .owner = "platform";
-}
+let deployment_before =
+  {
+    .version = 17;
+    .region = "eu-central";
+    .replicas = 3;
+    .owner = "platform";
+  }
 
 let deployment_after :: Deployment
-let deployment_after = {
-  .version = 18;
-  .region = "eu-central";
-  .replicas = 5;
-  .owner = "runtime";
-}
+let deployment_after =
+  {
+    .version = 18;
+    .region = "eu-central";
+    .replicas = 5;
+    .owner = "runtime";
+  }
 
 let deployment_boundary :: Deployment
-let deployment_boundary = {
-  .version = 18;
-  .region = "eu-central";
-  .replicas = 32;
-  .owner = "runtime";
-}
+let deployment_boundary =
+  {
+    .version = 18;
+    .region = "eu-central";
+    .replicas = 32;
+    .owner = "runtime";
+  }
 
 let account_before :: Account
 let account_before = { .id = 7; .name = "Ada"; .team = "compiler"; }
@@ -66,4 +73,4 @@ return {
     .account_changed = account_diff.changed (account_before, account_after);
     .account_equal = account_diff.equal (account_before, account_after);
   };
-}
+  }
