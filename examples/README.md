@@ -13,8 +13,8 @@ that has not been implemented are four different claims about the language.
 
 ## Effect and type abstractions
 
-These examples build APIs from ordinary type values and interpret computations
-with ordinary handler records. Each runs with
+These examples build APIs from ordinary type values. Effect-oriented examples
+interpret computations with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
 [`record_view_results.blot`](record_view_results.blot) exercises a related
@@ -43,10 +43,11 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
-`src/node/effect_abstractions.test.ts` checks principal types, both executions,
-the singleton and early-exit cases, and rejection of nonpositive emissions,
-missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+`src/node/effect_abstractions.test.ts` checks the four effect examples, including
+principal types, both executions, early exits, and ownership rejection cases.
+`src/node/composable_prisms.test.ts` separately checks prism composition, exact
+evaluator and Wasm results, canonical formatting, and the incompatible-path
+rejection. `deno task verify:showcase` includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
