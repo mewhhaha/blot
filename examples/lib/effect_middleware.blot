@@ -15,13 +15,9 @@ let counted = fn operation => fn input => do:
   use Metrics.increment "call"
   return operation input
 
-let instrument :: @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Trace, Metrics, ..e }))
-let instrument = fn operation => traced (counted operation)
-
 return {
   .Trace = Trace;
   .Metrics = Metrics;
   .traced = traced;
   .counted = counted;
-  .instrument = instrument;
-}
+  }

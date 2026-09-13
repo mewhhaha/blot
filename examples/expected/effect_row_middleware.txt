@@ -1,1 +1,1 @@
-{ .effectful = 252; .pure = 251 }
+{ .default = { .effectful = 252; .pure = 251; }; }

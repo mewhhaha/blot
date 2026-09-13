@@ -10,32 +10,36 @@ let service = fn key => do:
   return value * 2
 
 let instrumented :: Int -> Int ~ { Middleware.Trace, Middleware.Metrics, Fetch }
-let instrumented = Middleware.instrument service
+let instrumented = Middleware.traced (Middleware.counted service)
 
-const fetch_handler = {
-  .get = fn (key, ?resume) => do:
-    use result <- resume (key + 1)
-    return result
-  ;
-}
+const fetch_handler =
+  {
+    .get = fn (key, ?resume) => do:
+      use result <- resume (key + 1)
+      return result
+    ;
+  }
 
-const trace_score = {
-  .event = fn (_, ?resume) => do:
-    use result <- resume ()
-    return result + 100
-  ;
-  .return = fn result => result;
-}
+const trace_score =
+  {
+    .event = fn (_, ?resume) => do:
+      use result <- resume ()
+      return result + 100
+    ;
+    .return = fn result => result;
+  }
 
-const metric_score = {
-  .increment = fn (_, ?resume) => do:
-    use result <- resume ()
-    return result + 10
-  ;
-  .return = fn result => result;
-}
+const metric_score =
+  {
+    .increment = fn (_, ?resume) => do:
+      use result <- resume ()
+      return result + 10
+    ;
+    .return = fn result => result;
+  }
 
-let effectful_program :: Unit -> Int ~ { Middleware.Trace, Middleware.Metrics, Fetch }
+let effectful_program ::
+  Unit -> Int ~ { Middleware.Trace, Middleware.Metrics, Fetch }
 let effectful_program = fn () => instrumented 20
 let effectful =
   effectful_program
@@ -45,11 +49,12 @@ let effectful =
 use effectful_answer <- effectful
 
 let pure_program :: Unit -> Int ~ { Middleware.Trace, Middleware.Metrics }
-let pure_program = fn () => Middleware.instrument (fn value => value + 1) 40
+let pure_program =
+  fn () => Middleware.traced (Middleware.counted (fn value => value + 1)) 40
 let pure =
   pure_program
     |> @handle (Middleware.Trace, trace_score)
     |> @handle (Middleware.Metrics, metric_score)
 use pure_answer <- pure
 
-return { .effectful = effectful_answer; .pure = pure_answer; }
+return { .default = { .effectful = effectful_answer; .pure = pure_answer; }; }

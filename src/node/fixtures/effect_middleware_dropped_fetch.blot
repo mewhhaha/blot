@@ -7,6 +7,6 @@ let service :: Int -> Int ~ { Fetch }
 let service = fn key => Fetch.get key
 
 let invalid :: Int -> Int ~ { Middleware.Trace, Middleware.Metrics }
-let invalid = Middleware.instrument service
+let invalid = Middleware.traced (Middleware.counted service)
 
 return invalid 20
