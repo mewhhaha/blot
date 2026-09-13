@@ -13,8 +13,8 @@ that has not been implemented are four different claims about the language.
 
 ## Effect and type abstractions
 
-These examples build APIs from ordinary type values and interpret computations
-with ordinary handler records. Each runs with
+These examples build APIs from ordinary type values. Effect-oriented examples
+interpret computations with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
 | Example                                                      | Abstraction                                                                                                       | Observations                                                 |
@@ -23,6 +23,7 @@ with ordinary handler records. Each runs with
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`                 | priority desc; team/id asc; equal keys stay stable           |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -38,10 +39,20 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
+The ordering example treats an ordering policy as an ordinary structural record.
+`on` uses two quantified types to connect a projection result to its key order,
+`reverse` changes direction without changing the subject, and `then` composes
+tie-breakers. The concrete `Order Ticket` signature closes the subject type after
+composition; the stable merge sort preserves source order when every configured
+key compares equal.
+
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/composable_ordering.test.ts` checks the emitted-Wasm
+result, canonical formatting, and rejection of mismatched projection keys and
+mixed-subject composition at a concrete public boundary. `deno task
+verify:showcase` includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
