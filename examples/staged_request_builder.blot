@@ -1,5 +1,3 @@
-open import "blot:prelude"
-
 const Request = import "./lib/staged_request.blot"
 
 // Authorize first, then add the body. Every stage is linear so the old state is
@@ -28,4 +26,4 @@ return {
     .auth_first = auth_first;
     .body_first = body_first;
   };
-}
+  }
