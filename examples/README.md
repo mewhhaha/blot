@@ -50,18 +50,22 @@ return a `.default` value so each runs directly through the Node CLI.
 - [`sensor_units.blot`](sensor_units.blot): explicit Int/F64 conversion, typed
   float accumulation, an optional empty mean, and a named-operation workaround
   for the current generic float-loop inference limitation.
+- [`stream_offsets.blot`](stream_offsets.blot): monotonic consumer checkpoints,
+  duplicate/stale/gapped deliveries, empty input, and an Int-maximum checkpoint
+  whose successor test is guarded so runtime addition cannot overflow.
 
 ```sh
 pnpm blot run examples/paginated_feed.blot
 pnpm blot run examples/unicode_preview.blot
 pnpm blot run examples/idempotent_events.blot
 pnpm blot run examples/sensor_units.blot
+pnpm blot run examples/stream_offsets.blot
 ```
 
-Run `deno task verify:showcase` to evaluate the everyday programs, these four
+Run `deno task verify:showcase` to evaluate the everyday programs, these five
 boundary examples, and the graph showcases against their golden results and
 compile each one through the semantic compiler. `pnpm test:node` also checks the
-four new examples' exact emitted-Wasm outputs and canonical formatting.
+five boundary examples' exact emitted-Wasm outputs and canonical formatting.
 
 See [the current-state review](../docs/review-2026-09-05-examples.md) for
 findings, reproduction details, and the distinction between fixes and
