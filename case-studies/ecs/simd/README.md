@@ -157,19 +157,20 @@ hashes, artifact size, runtime versions, and CPU model:
 node --import tsx case-studies/ecs/simd-benchmark.ts > ecs-simd-results.json
 ```
 
-The [recorded local run](../simd-benchmark-results.json) used Node 24.12.0, V8
-13.6, and a Ryzen 7 7800X3D on 2026-09-13. For 4096 entities, median
+The [recorded local run](../simd-benchmark-results.json) measures `725fc051`,
+including generated component descriptors and the compiler fixes. It used Node
+24.12.0, V8 13.6, and a Ryzen 7 7800X3D on 2026-09-13. For 4096 entities, median
 microseconds per call over seven samples were:
 
 | Workload   | Frames |   Scalar |    SIMD | Setup and checksum |
 | ---------- | -----: | -------: | ------: | -----------------: |
-| Particles  |      1 |   139.52 |  260.09 |              80.14 |
-| Particles  |     32 |  2036.46 |  828.96 |              78.38 |
-| Transforms |      1 |  1007.29 |  728.98 |             194.72 |
-| Transforms |     32 | 26261.51 | 5269.55 |             201.64 |
+| Particles  |      1 |   146.13 |  269.53 |              84.70 |
+| Particles  |     32 |  2185.70 |  843.91 |              79.01 |
+| Transforms |      1 |  1083.70 |  745.69 |             198.69 |
+| Transforms |     32 | 26567.24 | 5703.08 |             203.34 |
 
-At 32 frames, packed transforms were about 5.0 times faster and particle blocks
-about 2.5 times faster. A single particle frame was slower after paying for
+At 32 frames, packed transforms were about 4.7 times faster and particle blocks
+about 2.6 times faster. A single particle frame was slower after paying for
 packing and unpacking. The useful application boundary is therefore persistent
 packed state, with conversions at input and output. These are local workload
 observations, not a portable speed guarantee or a CI threshold. The complete

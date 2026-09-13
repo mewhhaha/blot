@@ -2,10 +2,15 @@
   "boundary": "Warm emitted-Wasm calls, including seed construction, row work, checksum, and scalar ABI scope entry/exit; setup is reported separately without subtraction.",
   "compileOptions": {},
   "provenance": {
-    "revision": "ab2cfc82037a7bec8e67a45dde31a29d64ffed5c",
+    "revision": "725fc05182e24ffddbcc1277a104465eb76ed275",
     "sourceHashes": {
-      "case-studies/ecs/ecs.blot": "4dc50ef9c0dfd8234515ce1d27d7fb1b13cd1fc7df2ce2439ce77342c5167a9c",
-      "case-studies/ecs/simulation.blot": "94e5a5c575f29643d1ba92ea71cd62d8e855d7f2035ed825dac303cd1f53605a",
+      "case-studies/ecs/components.blot": "7a3c4c8b126d8b0ba00a7158c79d33ded648668f3cbe6f1e762e07a6d537600c",
+      "case-studies/ecs/ecs.blot": "46495977d077fe165d1945b9cef23d4c95c76feb881fc45b88607eaff9ffb69a",
+      "case-studies/ecs/streams.blot": "45a268a0085eefe3d106e833eb19890218ef9600c1861f0c46d781b7b5df70d2",
+      "case-studies/ecs/messages.blot": "10cd8bd8522bd899397b9fa77f70e78d75b0be4a2446f5f6b088bbe770a101f7",
+      "case-studies/ecs/systems.blot": "c1a49f090a027ecf0c0f92eb464938f870c7b009551cf828453e82d3f79b24da",
+      "case-studies/ecs/planning.blot": "e2777fe8e9a922609d8f67a30b538314499874ac282d5c7d7520671c5a542c07",
+      "case-studies/ecs/simulation.blot": "3b5e572c31e364e09d39a38075f0e789cad0b8b8316afc614846ed969961f6ce",
       "case-studies/ecs/bench/fused.blot": "983daaa44b16cb70467ea1e8a6e7b2eca6cb8db88e7c2aba6249590fb42948b4",
       "case-studies/ecs/bench/separate.blot": "bae7498c574211e334ced983957801114bcd415aa90ddc4444bcac8fd764368e",
       "case-studies/ecs/bench/direct.blot": "7fdc76cee8c2d438fc401185a2d3f2d8224a905f2c62d3073c4c3c1f7c26a906",
@@ -14,14 +19,14 @@
       "case-studies/ecs/kernels/fused.blot": "4f292839ba6cc97c60a6ee923065ad6c7be43a8ad43a0e44887b44a7b5077628",
       "case-studies/ecs/kernels/separate.blot": "3d6f0439f1a523e114485e2613d90ebbcc7c99e937efd40e5376b59c554c7d0a",
       "case-studies/ecs/kernels/direct.blot": "351e691ec766040da92933b12f398232927b1e3035ba712285ecb52261d300d5",
-      "case-studies/ecs/benchmark.ts": "e5c8125ec341c19ecb4cbf21138ee25466913d5c291553565c631ce2fa1cd2b8",
+      "case-studies/ecs/benchmark.ts": "0c3c469c53d0e2b38d55efe895cc02af74134782b9b41bc1a04a90d09004fe8d",
       "case-studies/ecs/verification.ts": "b632e267643f9cd2646613142e732f63327a75ffaf7e508f715b30eb38af1e58",
       "test_support/guest_abi.ts": "feaa04bef39dd8ed2ffd1df3141242ab35a9c6af2aef5416723b83e03c470705",
       "src/abi_values.ts": "6a21ec6837b8e5fcdc61f5df592b5041e02b935776a7680644259ee0ae32987e",
       "src/compiler/session.ts": "5f3c1e0756fd178d7f59e1ee9d326a91b442f73257644d337cc71a37285913aa",
-      "generated/compiler/compiler.wasm": "c414550a570aa9ced55cb6cedc5187f196aae9aaeada144c2070ff29471a90b9",
-      "generated/compiler/compiler-artifact.json": "8cee0cf0779366bee07644ab1ee5acf693f7b6c77e8a38955c8e8c37ea2405c3",
-      "generated/compiler/prelude.snapshot": "33a1b30ecc8cd526e76ea91e9353082ab99a37f625337c54e0ec9e753c1f5069"
+      "generated/compiler/compiler.wasm": "011dc1d8eee32e2f0b6d7f51ee3ead1986cc73f76309fef3b07eeba45e0b9827",
+      "generated/compiler/compiler-artifact.json": "b446d2d8ce8443099f9c9c01fc411ed7f490808a9012be874de2ff2c209b684a",
+      "generated/compiler/prelude.snapshot": "d54166c6a89a757e439ffda46dd9986942d293f4729291b9851c123e5b347dad"
     }
   },
   "environment": {
@@ -96,15 +101,15 @@
       "variant": "fused",
       "rows": 64,
       "callsPerSample": 1024,
-      "medianNanoseconds": 6256.124023437448,
+      "medianNanoseconds": 6462.860351562405,
       "samplesNanoseconds": [
-        6363.183593749988,
-        6256.124023437448,
-        6076.525390624976,
-        6706.42382812503,
-        6117.326171874993,
-        6124.45507812498,
-        6449.46289062498
+        7199.510742187609,
+        6180.285156250021,
+        6375.361328124995,
+        6324.501953124839,
+        6668.7548828126,
+        6631.744140624951,
+        6462.860351562405
       ],
       "memoryPages": [
         1,
@@ -120,15 +125,15 @@
       "variant": "separate",
       "rows": 64,
       "callsPerSample": 1024,
-      "medianNanoseconds": 8709.337890625002,
+      "medianNanoseconds": 9107.700195312596,
       "samplesNanoseconds": [
-        9205.476562499925,
-        8709.337890625002,
-        8676.320312499985,
-        8529.789062499904,
-        8573.127929687453,
-        8921.29882812498,
-        8836.993164062502
+        8828.845703125144,
+        10236.699218749924,
+        9287.874023437447,
+        8934.147460937458,
+        9887.377929687524,
+        9091.625976562545,
+        9107.700195312596
       ],
       "memoryPages": [
         1,
@@ -144,15 +149,15 @@
       "variant": "direct",
       "rows": 64,
       "callsPerSample": 1024,
-      "medianNanoseconds": 3671.807617187439,
+      "medianNanoseconds": 3722.346679687627,
       "samplesNanoseconds": [
-        3971.268554687546,
-        3671.807617187439,
-        3651.6416015625055,
-        3687.110351562439,
-        3641.7207031249623,
-        3864.9707031250814,
-        3577.326171875006
+        3722.346679687627,
+        5126.1572265624,
+        3595.0341796875396,
+        3686.166015624881,
+        4176.384765625096,
+        3685.540039062518,
+        4082.5566406250678
       ],
       "memoryPages": [
         1,
@@ -168,15 +173,15 @@
       "variant": "setup",
       "rows": 64,
       "callsPerSample": 1024,
-      "medianNanoseconds": 2418.3017578125464,
+      "medianNanoseconds": 2572.478515624921,
       "samplesNanoseconds": [
-        2490.655273437503,
-        2482.6962890625027,
-        2345.0800781249504,
-        2421.6318359374654,
-        2323.888671874941,
-        2418.3017578125464,
-        2358.155273437523
+        2526.804687499995,
+        3409.5566406249222,
+        2955.089843750036,
+        2572.478515624921,
+        2467.7822265626314,
+        2578.883789062569,
+        2562.1171874998795
       ],
       "memoryPages": [
         1,
@@ -192,15 +197,15 @@
       "variant": "fused",
       "rows": 512,
       "callsPerSample": 1024,
-      "medianNanoseconds": 46387.20507812488,
+      "medianNanoseconds": 47786.7343749998,
       "samplesNanoseconds": [
-        46993.88964843743,
-        45421.14746093762,
-        46387.20507812488,
-        46182.86132812499,
-        45614.193359375,
-        46572.14550781252,
-        53676.93554687491
+        46594.170898437646,
+        51381.31933593737,
+        49992.567382812544,
+        47786.7343749998,
+        45678.22656249976,
+        47698.91406249993,
+        48132.89355468742
       ],
       "memoryPages": [
         2,
@@ -216,15 +221,15 @@
       "variant": "separate",
       "rows": 512,
       "callsPerSample": 512,
-      "medianNanoseconds": 65523.621093749985,
+      "medianNanoseconds": 66917.02539062528,
       "samplesNanoseconds": [
-        66007.05468750023,
-        67177.82812500017,
-        65706.82421875017,
-        64841.69335937473,
-        65523.621093749985,
-        63588.675781249825,
-        63632.132812499796
+        64083.87890625012,
+        67315.16601562504,
+        66329.39843749997,
+        66917.02539062528,
+        65653.74023437532,
+        72009.61914062542,
+        68538.90234375015
       ],
       "memoryPages": [
         2,
@@ -240,15 +245,15 @@
       "variant": "direct",
       "rows": 512,
       "callsPerSample": 1024,
-      "medianNanoseconds": 27031.89355468738,
+      "medianNanoseconds": 27135.758789062602,
       "samplesNanoseconds": [
-        25561.53417968754,
-        27031.89355468738,
-        28478.249999999814,
-        25939.783203124956,
-        35083.73632812489,
-        29524.990234374825,
-        26269.08691406249
+        26279.978515624913,
+        26176.43457031238,
+        27135.758789062602,
+        27276.46972656239,
+        27070.437499999935,
+        28995.415039062776,
+        30833.339843750364
       ],
       "memoryPages": [
         2,
@@ -264,15 +269,15 @@
       "variant": "setup",
       "rows": 512,
       "callsPerSample": 1024,
-      "medianNanoseconds": 17240.395507812646,
+      "medianNanoseconds": 18093.390624999818,
       "samplesNanoseconds": [
-        18016.845703125116,
-        16782.685546874898,
-        17240.395507812646,
-        20647.459960937642,
-        17631.10546874991,
-        16646.192382812507,
-        17151.607421874938
+        17565.575195312544,
+        19141.922851562576,
+        18795.334960937547,
+        17443.076171875127,
+        18093.390624999818,
+        16806.560546875015,
+        18767.795898437354
       ],
       "memoryPages": [
         2,
@@ -287,16 +292,16 @@
     {
       "variant": "fused",
       "rows": 4096,
-      "callsPerSample": 128,
-      "medianNanoseconds": 375016.7578124994,
+      "callsPerSample": 64,
+      "medianNanoseconds": 393537.01562500023,
       "samplesNanoseconds": [
-        362160.6015625005,
-        370913.10937499953,
-        383793.8671874994,
-        372470.91406250023,
-        375252.6953125006,
-        378682.4375000002,
-        375016.7578124994
+        396584.01562500244,
+        393537.01562500023,
+        381741.85937499773,
+        403121.28124999447,
+        362370.7031250021,
+        406563.5937500005,
+        379915.3281250014
       ],
       "memoryPages": [
         13,
@@ -312,15 +317,15 @@
       "variant": "separate",
       "rows": 4096,
       "callsPerSample": 64,
-      "medianNanoseconds": 514367.81250000506,
+      "medianNanoseconds": 538333.0625000014,
       "samplesNanoseconds": [
-        519226.8125000012,
-        510789.2343749967,
-        509497.21875000617,
-        525885.5312499974,
-        515382.7968749951,
-        506709.10937500227,
-        514367.81250000506
+        542645.6562499951,
+        538333.0625000014,
+        541296.1406250006,
+        511962.9218749964,
+        566484.1250000023,
+        533714.6718750034,
+        523039.6718749972
       ],
       "memoryPages": [
         13,
@@ -336,15 +341,15 @@
       "variant": "direct",
       "rows": 4096,
       "callsPerSample": 128,
-      "medianNanoseconds": 203191.34374999948,
+      "medianNanoseconds": 219774.87500000236,
       "samplesNanoseconds": [
-        203818.8437499997,
-        205759.67968749965,
-        203191.34374999948,
-        200413.70312500108,
-        206431.16406250073,
-        198447.1640625003,
-        202109.71093750274
+        226393.77343750055,
+        225355.5078125018,
+        221789.60937500137,
+        204856.22656249802,
+        203575.23437499837,
+        201548.14062500038,
+        219774.87500000236
       ],
       "memoryPages": [
         13,
@@ -360,15 +365,15 @@
       "variant": "setup",
       "rows": 4096,
       "callsPerSample": 256,
-      "medianNanoseconds": 135680.8398437508,
+      "medianNanoseconds": 146667.1367187491,
       "samplesNanoseconds": [
-        135680.8398437508,
-        133883.4335937502,
-        142929.84765625148,
-        141096.58203125087,
-        136508.10546875114,
-        131230.87499999997,
-        132810.70703125052
+        138456.3046874998,
+        146667.1367187491,
+        148146.45703125073,
+        157702.394531249,
+        142643.16796874965,
+        142660.15625000073,
+        152542.81250000012
       ],
       "memoryPages": [
         9,

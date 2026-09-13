@@ -427,18 +427,18 @@ execution environment. To save a report without package-runner output:
 node --import tsx case-studies/ecs/benchmark.ts > ecs-results.json
 ```
 
-The [recorded local run](benchmark-results.json) is the particle baseline from
-`7b4bc9b`, before the ownership fixes and messaging extension below. Its source
-and compiler hashes identify that historical run; these timings do not measure
-the new messaging or dependency-planning workloads. On 2026-09-13 it used Node
+The [recorded local run](benchmark-results.json) measures the particle baseline
+at `725fc051`, including generated component handlers and the compiler fixes.
+Its source and compiler hashes identify the measured inputs; these timings do
+not measure messaging or dependency planning. On 2026-09-13 it used Node
 24.12.0, V8 13.6, and a Ryzen 7 7800X3D. Median microseconds per call, over
 seven samples:
 
 | Rows |  Fused | Separate passes | Direct | Setup and checksum |
 | ---- | -----: | --------------: | -----: | -----------------: |
-| 64   |   6.26 |            8.71 |   3.67 |               2.42 |
-| 512  |  46.39 |           65.52 |  27.03 |              17.24 |
-| 4096 | 375.02 |          514.37 | 203.19 |             135.68 |
+| 64   |   6.46 |            9.11 |   3.72 |               2.57 |
+| 512  |  47.79 |           66.92 |  27.14 |              18.09 |
+| 4096 | 393.54 |          538.33 | 219.77 |             146.67 |
 
 Here fusion is about 1.4 times faster than separate passes. Direct code remains
 1.7–1.8 times faster than the abstraction. The remaining direct calls and record
