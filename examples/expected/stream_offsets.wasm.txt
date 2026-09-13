@@ -1,0 +1,1 @@
+{ .at_max = { .accepted = 0; .checkpoint = 9223372036854775807; .duplicates = 1; .gaps = 0; .stale = 0 }; .descending = { .accepted = 2; .checkpoint = 2; .duplicates = 0; .gaps = 0; .stale = 2 }; .empty = { .accepted = 0; .checkpoint = 7; .duplicates = 0; .gaps = 0; .stale = 0 }; .normal = { .accepted = 3; .checkpoint = 43; .duplicates = 1; .gaps = 1; .stale = 1 } }
