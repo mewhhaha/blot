@@ -1,0 +1,65 @@
+open import "blot:prelude"
+const P = import "./lib/parser.blot"
+
+const Route =
+  (#Health | #User { .name = Text; } | #Asset { .name = Text; .extension = Text; })
+
+const segment :: P.Parser Text
+const segment =
+  P.take_while1 (
+    "path segment",
+    fn scalar => scalar != "/" && scalar != "."
+  )
+
+const health :: P.Parser Route
+const health = P.map (P.literal "/health", fn _ => #Health)
+
+const user :: P.Parser Route
+const user =
+  P.zip_with (
+    P.literal "/users/",
+    segment,
+    fn (_, name) => #User { .name = name; }
+  )
+
+const asset_name :: P.Parser Text
+const asset_name =
+  P.zip_with (
+    P.literal "/assets/",
+    segment,
+    fn (_, name) => name
+  )
+
+const asset_stem :: P.Parser Text
+const asset_stem =
+  P.zip_with (
+    asset_name,
+    P.literal ".",
+    fn (name, _) => name
+  )
+
+const asset :: P.Parser Route
+const asset =
+  P.zip_with (
+    asset_stem,
+    segment,
+    fn (name, extension) => #Asset { .name = name; .extension = extension; }
+  )
+
+// A concrete public boundary closes the common Route carrier while the parser
+// pieces remain reusable for other result types.
+const route :: P.Parser Route
+const route = P.or_else (health, P.or_else (user, asset))
+
+const parse_route :: Text -> Result (Route, P.ParseError)
+const parse_route = fn text => P.run (route, text)
+
+return {
+  .default = {
+    .health = parse_route "/health";
+    .unicode_user = parse_route "/users/ada🐱";
+    .asset = parse_route "/assets/logo.svg";
+    .missing_user = P.run (user, "/users/");
+    .trailing = parse_route "/health/extra";
+  };
+  }
