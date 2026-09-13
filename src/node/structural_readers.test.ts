@@ -12,7 +12,9 @@ test("structural readers compose capabilities and preserve both executions", asy
     const source = await readFile(path, "utf8");
     const formatted = await formatSource(source);
     assert.equal(formatted.ok, true);
-    if (!formatted.ok) throw new Error("structural reader example failed to format");
+    if (!formatted.ok) {
+      throw new Error("structural reader example failed to format");
+    }
     assert.equal(formatted.source, source);
 
     const checked = await compiler.check(path);
