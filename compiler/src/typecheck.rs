@@ -11715,7 +11715,7 @@ fn free_rigid_variables(
 /// accumulator produces — the initial literal's singleton beside the widened
 /// domain, once per iteration — and printing all of them describes the
 /// solver's bookkeeping rather than the type.
-fn union_members(members: &[Type]) -> Vec<&Type> {
+pub(crate) fn union_members(members: &[Type]) -> Vec<&Type> {
     let mut keep = vec![true; members.len()];
     let first_bottom = members
         .iter()

@@ -3,6 +3,103 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { Compiler } from "../compiler.ts";
 import { type HostOperation, instantiateArtifact } from "../host.ts";
+import type { RuntimeValue } from "../abi_values.ts";
+
+test("a generic suspended loop retains aggregate state and checkpoints pending events", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const artifact = await compiler.compile(
+      "examples/lib/retained_state_loop.blot",
+    );
+    const commands: RuntimeValue[] = [];
+    const rendered: RuntimeValue[] = [];
+    const record = (fields: [string, RuntimeValue][]): RuntimeValue => ({
+      kind: "record",
+      fields: new Map(fields),
+    });
+    const frame = (
+      time: number,
+      steps: bigint,
+      events: bigint[],
+    ): RuntimeValue => ({
+      kind: "variant",
+      name: "Frame",
+      payload: record([["time", time], ["steps", steps], ["events", events]]),
+    });
+    const hosted = await instantiateArtifact(
+      artifact,
+      new Map([[
+        "Clock",
+        new Map<string, HostOperation>([
+          ["next_frame", async () => {
+            const command = commands.shift();
+            assert.notEqual(
+              command,
+              undefined,
+              "the loop requested an unexpected frame",
+            );
+            return await Promise.resolve(command!);
+          }],
+          ["render", (_context, value) => {
+            rendered.push(value);
+            return null;
+          }],
+        ]),
+      ]]),
+    );
+    const checkpoint = async (frames: RuntimeValue[], saved: RuntimeValue) => {
+      commands.push(...frames, { kind: "variant", name: "Checkpoint" });
+      const result = await hosted.callAsync("run", [saved]);
+      assert.equal(commands.length, 0);
+      return result;
+    };
+    try {
+      let saved = await checkpoint([
+        frame(0, 0n, [3n, 4n]),
+        frame(1, 2n, [5n]),
+        frame(2, 0n, [7n]),
+      ], { kind: "variant", name: "None" });
+      assert.deepEqual(
+        saved,
+        record([
+          ["current", record([["total", 12n]])],
+          ["pending", [7n]],
+          ["tick", 2n],
+        ]),
+      );
+      assert.deepEqual(rendered, [
+        record([["0", 0n], ["1", 0n], ["2", 0]]),
+        record([["0", 2n], ["1", 12n], ["2", 0]]),
+        record([["0", 2n], ["1", 12n], ["2", 1]]),
+      ]);
+      rendered.length = 0;
+      saved = await checkpoint([
+        frame(10, 1n, [11n]),
+        ...Array.from(
+          { length: 8192 },
+          (_, index) => frame(index + 11, 2n, [1n]),
+        ),
+      ], { kind: "variant", name: "Some", payload: saved });
+      assert.deepEqual(
+        saved,
+        record([
+          ["current", record([["total", 8222n]])],
+          ["pending", []],
+          ["tick", 16387n],
+        ]),
+      );
+      assert.deepEqual(rendered[0], record([["0", 3n], ["1", 30n], ["2", 10]]));
+      assert.deepEqual(
+        rendered.at(-1),
+        record([["0", 16387n], ["1", 8222n], ["2", 8201]]),
+      );
+    } finally {
+      await hosted.close();
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
 
 test("lexical borrows require a provably synchronous call", async () => {
   const compiler = await Compiler.create();

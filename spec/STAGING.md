@@ -452,9 +452,13 @@ already established representation. Nested unions contribute substitutions by
 constructor name. Settlement closes the complete checked constructor set,
 including alternatives absent from that first result; it must not choose the
 layout of an inner branch before an enclosing branch contributes its
-constructors. Later results are coerced into that fixed representation. Loading
-an indirect result whose pointee already has the expected type preserves that
-representation.
+constructors. Later results are coerced into that fixed representation. An
+indirect result is loaded before applying the same structural conversion to its
+pointee; constructor names, rather than private tag numbers, determine the
+conversion. Before closing an export union's representation, staging uses the
+checker's union-member simplification. In particular, `[Bottom] | [A]` uses the
+element representation of `[A]`; the redundant empty alternative cannot require
+a separate representation for `Bottom`.
 
 The checked-aggregate memo is queried online while Runtime HIR is constructed.
 Equality of its structural keys must therefore imply equality of the complete

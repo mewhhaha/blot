@@ -6022,8 +6022,9 @@ impl ResidualTrace {
                 let value = self.coerce_runtime_value(value, target_type, span)?;
                 Ok(self.operation("indirect.make", expected_type, vec![value.id], span, None))
             }
-            (RuntimeType::Indirect { target_type }, _) if target_type == expected_type => {
-                Ok(self.load_indirect(value, span))
+            (RuntimeType::Indirect { .. }, _) => {
+                let loaded = self.load_indirect(value, span);
+                self.coerce_runtime_value(&loaded, expected_type, span)
             }
             (
                 RuntimeType::Product {
@@ -7589,8 +7590,8 @@ impl ResidualTrace {
                 Ok(self.insert_type(&layout.key(), layout.runtime_type()))
             }
             Type::Union(members) => {
-                let members = members
-                    .iter()
+                let members = crate::typecheck::union_members(members)
+                    .into_iter()
                     .filter(|member| !matches!(member, Type::Bottom))
                     .map(|member| self.runtime_type_from_checked_type(member))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -14250,6 +14251,88 @@ mod tests {
             .map(|operation| operation.case)
             .collect::<Vec<_>>();
         assert_eq!(emitted_cases, vec![Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn indirect_residual_sums_are_loaded_before_retagging() {
+        let mut trace = ResidualTrace::new("indirect-sum-retag-test.blot");
+        let span = crate::ast::Span { start: 0, end: 0 };
+        let payload_type = trace.insert_type("signed-integer-64", RuntimeType::SignedInteger64);
+        let source_type =
+            trace.sum_type(&["Some".to_owned(), "None".to_owned()], &[payload_type, 0]);
+        let indirect_type = trace.insert_type(
+            "indirect-source",
+            RuntimeType::Indirect {
+                target_type: source_type,
+            },
+        );
+        let expected_type =
+            trace.sum_type(&["None".to_owned(), "Some".to_owned()], &[0, payload_type]);
+        let source = trace.next_value();
+        let ownership = trace.ownership(indirect_type);
+        let runtime_span = trace.span(span);
+        trace.blocks[0].parameters.push(StagedBlockParameter {
+            value: source,
+            type_id: indirect_type,
+            ownership,
+            span: runtime_span,
+        });
+        let value = RuntimeValue {
+            id: source,
+            type_id: indirect_type,
+            meaning: RuntimeMeaning::Plain,
+        };
+
+        let coerced = trace
+            .coerce_runtime_value(&value, expected_type, span)
+            .expect("indirect residual sums should use the checked constructor order");
+
+        assert_eq!(coerced.type_id, expected_type);
+        assert_eq!(trace.blocks[0].operations[0].kind, "indirect.load");
+        let emitted_cases = trace
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.kind == "sum.make")
+            .map(|operation| operation.case)
+            .collect::<Vec<_>>();
+        assert_eq!(emitted_cases, vec![Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn export_array_unions_use_the_inhabited_element_representation() {
+        let mut trace = ResidualTrace::new("export-array-union-test.blot");
+        let integers = Type::Array(Rc::new(Type::Range {
+            domain: Domain::Int,
+            low: None,
+            high: None,
+        }));
+        let empty = Type::Array(Rc::new(Type::Bottom));
+        let expected = trace.runtime_type_from_checked_type(&integers).unwrap();
+
+        for members in [
+            vec![empty.clone(), integers.clone()],
+            vec![integers.clone(), empty],
+        ] {
+            let checked = Type::Union(members.into());
+            assert_eq!(
+                trace.runtime_type_from_checked_type(&checked).unwrap(),
+                expected
+            );
+        }
+
+        let incompatible = Type::Union(
+            vec![
+                integers,
+                Type::Array(Rc::new(Type::Range {
+                    domain: Domain::Text,
+                    low: None,
+                    high: None,
+                })),
+            ]
+            .into(),
+        );
+        assert!(trace.runtime_type_from_checked_type(&incompatible).is_err());
     }
 
     #[test]
