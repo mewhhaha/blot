@@ -1,0 +1,52 @@
+// A semiring is an ordinary structural dictionary. The shared `Value` type
+// keeps both identities and both binary operations in one algebra.
+const Semiring = fn value => {
+  .zero = value;
+  .one = value;
+  .add = (value, value) -> value;
+  .multiply = (value, value) -> value;
+}
+
+// A fixed 2x2 matrix keeps the example focused on algebraic composition rather
+// than collection indexing. The matrix carrier is still an ordinary type value.
+const Matrix2 = fn value => {
+  .m00 = value;
+  .m01 = value;
+  .m10 = value;
+  .m11 = value;
+}
+
+const multiply :: @forall (fn Value => (Semiring Value, Matrix2 Value, Matrix2 Value) -> Matrix2 Value)
+const multiply = fn (semiring, left, right) => {
+  .m00 = semiring.add (
+    semiring.multiply (left.m00, right.m00),
+    semiring.multiply (left.m01, right.m10)
+  );
+  .m01 = semiring.add (
+    semiring.multiply (left.m00, right.m01),
+    semiring.multiply (left.m01, right.m11)
+  );
+  .m10 = semiring.add (
+    semiring.multiply (left.m10, right.m00),
+    semiring.multiply (left.m11, right.m10)
+  );
+  .m11 = semiring.add (
+    semiring.multiply (left.m10, right.m01),
+    semiring.multiply (left.m11, right.m11)
+  );
+}
+
+const identity :: @forall (fn Value => Semiring Value -> Matrix2 Value)
+const identity = fn semiring => {
+  .m00 = semiring.one;
+  .m01 = semiring.zero;
+  .m10 = semiring.zero;
+  .m11 = semiring.one;
+}
+
+return {
+  .Semiring = Semiring;
+  .Matrix2 = Matrix2;
+  .multiply = multiply;
+  .identity = identity;
+  }

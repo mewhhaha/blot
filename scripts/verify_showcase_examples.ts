@@ -44,6 +44,7 @@ const abstractionExamples = [
   "typed_validation.blot",
   "effect_row_middleware.blot",
   "composable_reducers.blot",
+  "typed_semiring_matrices.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

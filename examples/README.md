@@ -41,6 +41,8 @@ Its focused test also locks down rejection of a headless value.
 | [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
 | [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
 | [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -88,6 +90,11 @@ The middleware example keeps its callback row
 open: `traced` and `counted` add named observability effects while direct
 composition preserves any unrelated callback effects instead of hiding them
 behind a runtime registry.
+
+The semiring example uses ordinary structural
+dictionaries and type-valued matrices; it checks carrier compatibility
+statically, while algebraic laws remain executable library contracts rather than
+compiler proofs.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
