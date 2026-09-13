@@ -16,6 +16,7 @@ const suites = [
   "src/node/residual_identity.test.ts",
   "src/node/inline_products.test.ts",
   "src/node/language_claims.test.ts",
+  "src/node/staged_request_builder.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
