@@ -50,6 +50,7 @@ const abstractionExamples = [
   "composable_prisms.blot",
   "derived_structural_diff.blot",
   "staged_request_builder.blot",
+  "typed_codec.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

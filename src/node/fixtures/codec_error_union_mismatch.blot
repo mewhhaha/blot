@@ -1,0 +1,19 @@
+open import "blot:prelude"
+const C = import "../../../examples/lib/codec.blot"
+
+const left :: C.Codec (Int, Int, #Left Int)
+const left =
+  {
+    .encode = fn value => value;
+    .decode = fn value => #Error (#Left value);
+  }
+const right :: C.Codec (Int, Int, #Right Int)
+const right =
+  {
+    .encode = fn value => value;
+    .decode = fn value => #Error (#Right value);
+  }
+
+const incomplete :: C.Codec ((Int, Int), (Int, Int), #Left Int)
+const incomplete = C.product (left, right)
+return incomplete

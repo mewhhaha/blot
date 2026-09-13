@@ -37,7 +37,6 @@ array alternatives remain available at runtime.
 | [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
 | [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
 | [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
-
 | [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
 | [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
 | [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
@@ -47,6 +46,7 @@ array alternatives remain available at runtime.
 | [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records            | changed field names, exact equality, and refined-field bounds |
 | [`staged_request_builder.blot`](staged_request_builder.blot) | Required slots are type parameters; consuming setters advance either order while preserving the other slot        | Two receipts; invalid stages reject statically               |
+| [`typed_codec.blot`](typed_codec.blot)                       | Bidirectional codecs compose validated fields while preserving model, wire, and error types                       | round trips, boundary values, and typed decode errors        |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -110,6 +110,13 @@ The parser example uses `Text.Cursor` as ordinary immutable parser state. `map`
 changes the parsed value, `zip_with` sequences different result types, and
 `or_else` backtracks while retaining the failure at the farthest byte offset.
 `run` closes the abstraction by requiring complete input consumption.
+
+The typed codec example composes two independently validated integer fields.
+Each leaf codec keeps its narrow error constructor, while algebraic subtyping
+widens those errors to the application-level union at the product boundary.
+`imap` requires both directions of a representation change, so a one-way remap
+cannot masquerade as a codec. Product decoding is intentionally left-biased on
+errors; the example records that behavior rather than claiming accumulation.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,

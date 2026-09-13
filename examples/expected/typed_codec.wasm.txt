@@ -1,0 +1,1 @@
+{ .both_invalid = #Error #InvalidGuests 0; .boundary = #Ok { .guests = 1; .nights = 30 }; .encoded = { .guests = 3; .nights = 2 }; .invalid_guests = #Error #InvalidGuests 0; .invalid_nights = #Error #InvalidNights 40; .round_trip = #Ok { .guests = 3; .nights = 2 }; .valid = #Ok { .guests = 2; .nights = 4 } }
