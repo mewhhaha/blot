@@ -1,0 +1,61 @@
+open import "blot:prelude"
+const C = import "./lib/codec.blot"
+
+const Guests = refine (Int, fn value => value >= 1 && value <= 8)
+const Nights = refine (Int, fn value => value >= 1 && value <= 30)
+const Reservation = { .guests = Guests; .nights = Nights; }
+const DecodeError = #InvalidGuests Int | #InvalidNights Int
+
+const guest_base :: C.Codec (Int, Int, #InvalidGuests Int)
+const guest_base = C.identity
+const night_base :: C.Codec (Int, Int, #InvalidNights Int)
+const night_base = C.identity
+
+const check_guests :: Int -> Result (Guests, #InvalidGuests Int)
+const check_guests = fn value => do:
+  if value >= 1 && value <= 8:
+    return #Ok value
+  return #Error (#InvalidGuests value)
+
+const check_nights :: Int -> Result (Nights, #InvalidNights Int)
+const check_nights = fn value => do:
+  if value >= 1 && value <= 30:
+    return #Ok value
+  return #Error (#InvalidNights value)
+
+const guest_codec :: C.Codec (Guests, Int, #InvalidGuests Int)
+const guest_codec = C.validate (guest_base, check_guests, fn value => value)
+const night_codec :: C.Codec (Nights, Int, #InvalidNights Int)
+const night_codec = C.validate (night_base, check_nights, fn value => value)
+
+// The two narrow leaf error types flow into one inferred union at the product
+// boundary; the leaf codecs do not need to know the application's full error set.
+const pair_codec :: C.Codec ((Guests, Nights), (Int, Int), DecodeError)
+const pair_codec = C.product (guest_codec, night_codec)
+
+const reservation_codec :: C.Codec (Reservation, (Int, Int), DecodeError)
+const reservation_codec =
+  C.imap (
+    pair_codec,
+    fn (guests, nights) => { .guests = guests; .nights = nights; },
+    fn reservation => (reservation.guests, reservation.nights)
+  )
+
+const stored :: Reservation
+const stored = { .guests = 3; .nights = 2; }
+let (encoded_guests, encoded_nights) = reservation_codec.encode stored
+
+// Pain point: product decoding is intentionally short-circuiting because its
+// result is Result, so the both-invalid case reports the left error rather than
+// accumulating both independent failures.
+return {
+  .default = {
+    .encoded = { .guests = encoded_guests; .nights = encoded_nights; };
+    .valid = reservation_codec.decode (2, 4);
+    .invalid_guests = reservation_codec.decode (0, 4);
+    .invalid_nights = reservation_codec.decode (2, 40);
+    .both_invalid = reservation_codec.decode (0, 40);
+    .boundary = reservation_codec.decode (1, 30);
+    .round_trip = reservation_codec.decode (reservation_codec.encode stored);
+  };
+  }
