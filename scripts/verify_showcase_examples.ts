@@ -46,6 +46,7 @@ const abstractionExamples = [
   "composable_reducers.blot",
   "typed_semiring_matrices.blot",
   "nominal_keyed_index.blot",
+  "composable_parser.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

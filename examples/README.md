@@ -43,6 +43,7 @@ Its focused test also locks down rejection of a headless value.
 | [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
 | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
+| [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -95,6 +96,11 @@ The semiring example uses ordinary structural
 dictionaries and type-valued matrices; it checks carrier compatibility
 statically, while algebraic laws remain executable library contracts rather than
 compiler proofs.
+
+The parser example uses `Text.Cursor` as ordinary immutable parser state. `map`
+changes the parsed value, `zip_with` sequences different result types, and
+`or_else` backtracks while retaining the failure at the farthest byte offset.
+`run` closes the abstraction by requiring complete input consumption.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,

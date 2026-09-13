@@ -1,0 +1,129 @@
+open import "blot:prelude"
+
+// A parser is an ordinary function over Blot's Unicode-safe Text cursor. The
+// result type is the only varying parameter; cursor and error plumbing stay
+// uniform across combinators.
+const ParseError = {
+  .offset = Int;
+  .expected = Text;
+  .actual = Option Text;
+}
+
+const Parsed = fn value => {
+  .value = value;
+  .rest = Text.Cursor;
+}
+
+const Parser = fn value => Text.Cursor -> Result (Parsed value, ParseError)
+
+const cursor_text :: Text.Cursor -> Text
+const cursor_text = fn cursor => case cursor of
+  #TextCursor (text, _) => text
+
+const cursor_offset :: Text.Cursor -> Int
+const cursor_offset = fn cursor => case cursor of
+  #TextCursor (_, offset) => offset
+
+const error_at :: (Text.Cursor, Text) -> ParseError
+const error_at = fn (cursor, expected) => do:
+  let actual = case Text.next cursor of
+    #None => #None
+    #Some (scalar, _) => #Some scalar
+  return {
+    .offset = cursor_offset cursor;
+    .expected = expected;
+    .actual = actual;
+  }
+
+const map :: @forall (fn Input => @forall (fn Output => (Parser Input, (Input -> Output)) -> Parser Output))
+const map = fn (parser, transform) => fn cursor => case parser cursor of
+  #Error error => #Error error
+  #Ok parsed => #Ok { .value = transform parsed.value; .rest = parsed.rest; }
+
+const zip_with :: @forall (fn Left => @forall (fn Right => @forall (fn Output => (Parser Left, Parser Right, ((Left, Right) -> Output)) -> Parser Output)))
+const zip_with = fn (left, right, combine) => fn cursor => case left cursor of
+  #Error error => #Error error
+  #Ok left_value => case right left_value.rest of
+    #Error error => #Error error
+    #Ok right_value => #Ok {
+      .value = combine (left_value.value, right_value.value);
+      .rest = right_value.rest;
+    }
+
+// Alternatives backtrack because a Text.Cursor is an immutable value. When both
+// fail, keep the error that reached the farthest UTF-8 byte offset.
+const or_else :: @forall (fn Value => (Parser Value, Parser Value) -> Parser Value)
+const or_else = fn (left, right) => fn cursor => case left cursor of
+  #Ok parsed => #Ok parsed
+  #Error left_error => case right cursor of
+    #Ok parsed => #Ok parsed
+    #Error right_error => do:
+      if right_error.offset > left_error.offset:
+        return #Error right_error
+
+      return #Error left_error
+
+const literal :: Text -> Parser Text
+const literal = fn expected => fn input => do:
+  let rec visit :: (Text.Cursor, Text.Cursor) -> Result (Parsed Text, ParseError)
+  let rec visit = fn (expected_cursor, cursor) => case Text.next expected_cursor of
+    #None => #Ok { .value = expected; .rest = cursor; }
+    #Some (wanted, expected_next) => case Text.next cursor of
+      #None => #Error (error_at (cursor, wanted))
+      #Some (actual, next) => do:
+        if actual == wanted:
+          return visit (expected_next, next)
+
+        return #Error (error_at (cursor, wanted))
+
+  return visit (Text.cursor expected, input)
+
+const take_while1 :: (Text, (Text -> Bool)) -> Parser Text
+const take_while1 = fn (expected, accepts) => fn input => do:
+  let text = cursor_text input
+  let start = cursor_offset input
+  let rec visit :: Text.Cursor -> Result (Parsed Text, ParseError)
+  let rec visit = fn cursor => do:
+    if let #Some (scalar, next) = Text.next cursor else:
+      if cursor_offset cursor == start:
+        return #Error (error_at (cursor, expected))
+
+      return #Ok {
+        .value = @text.slice_bytes text start (cursor_offset cursor);
+        .rest = cursor;
+      }
+
+    if accepts scalar:
+      return visit next
+
+    if cursor_offset cursor == start:
+      return #Error (error_at (cursor, expected))
+
+    return #Ok {
+      .value = @text.slice_bytes text start (cursor_offset cursor);
+      .rest = cursor;
+    }
+
+  return visit input
+
+const run :: @forall (fn Value => (Parser Value, Text) -> Result (Value, ParseError))
+const run = fn (parser, text) => case parser (Text.cursor text) of
+  #Error error => #Error error
+  #Ok parsed => case Text.next parsed.rest of
+    #None => #Ok parsed.value
+    #Some _ => #Error (error_at (parsed.rest, "end of input"))
+
+// Pain point: Text.Cursor exposes its UTF-8 byte offset, not a scalar index. The
+// parser therefore reports byte offsets without carrying a second position
+// counter through every combinator.
+return {
+  .ParseError = ParseError;
+  .Parsed = Parsed;
+  .Parser = Parser;
+  .map = map;
+  .zip_with = zip_with;
+  .or_else = or_else;
+  .literal = literal;
+  .take_while1 = take_while1;
+  .run = run;
+}
