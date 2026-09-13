@@ -8,15 +8,48 @@ enum TokenType {
   LAYOUT_NEWLINE,
   LAYOUT_INDENT,
   LAYOUT_DEDENT,
+  RECORD_OPEN,
+  RECORD_CLOSE,
+  RECORD_SEPARATOR,
 };
 
 typedef struct {
   uint16_t indents[64];
+  uint16_t record_indents[64];
   uint8_t count;
+  uint8_t record_count;
 } Scanner;
 
 static void skip(TSLexer *lexer) {
   lexer->advance(lexer, true);
+}
+
+// Peek after an opening brace without extending its token. Only a first field
+// on its own line establishes an indentation for implicit field separators.
+static uint16_t record_indent(TSLexer *lexer) {
+  bool found_newline = false;
+  uint16_t indent = 0;
+  for (;;) {
+    if (lexer->lookahead == '\n') {
+      found_newline = true;
+      indent = 0;
+    } else if (lexer->lookahead == ' ') {
+      indent += 1;
+    } else if (lexer->lookahead == '\t') {
+      indent += 8 - indent % 8;
+    } else if (lexer->lookahead == '/') {
+      lexer->advance(lexer, false);
+      if (lexer->lookahead != '/') return UINT16_MAX;
+      while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
+        lexer->advance(lexer, false);
+      }
+      continue;
+    } else if (lexer->lookahead != '\r') {
+      if (found_newline && lexer->lookahead == '.') return indent;
+      return UINT16_MAX;
+    }
+    lexer->advance(lexer, false);
+  }
 }
 
 // A block and an ordinary continued value can both follow a physical newline.
@@ -29,22 +62,6 @@ static bool starts_layout_entry(TSLexer *lexer) {
   if (lexer->lookahead == '@') {
     lexer->advance(lexer, false);
     return lexer->lookahead == '[';
-  }
-
-  bool parenthesized_lambda = false;
-  if (lexer->lookahead == '(') {
-    lexer->advance(lexer, false);
-    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
-      lexer->advance(lexer, false);
-    }
-    if (lexer->lookahead == 'f') {
-      lexer->advance(lexer, false);
-      if (lexer->lookahead == 'n') {
-        lexer->advance(lexer, false);
-        parenthesized_lambda = lexer->lookahead == ' ' ||
-          lexer->lookahead == '\t';
-      }
-    }
   }
 
   char word[16] = {0};
@@ -63,11 +80,13 @@ static bool starts_layout_entry(TSLexer *lexer) {
     strcmp(word, "const") == 0 ||
     strcmp(word, "return") == 0 || strcmp(word, "use") == 0 ||
     strcmp(word, "for") == 0 ||
-    strcmp(word, "break") == 0 || strcmp(word, "open") == 0 ||
+    strcmp(word, "break") == 0 || strcmp(word, "continue") == 0 ||
+    strcmp(word, "open") == 0 ||
     strcmp(word, "if") == 0;
   if (statement_keyword) return true;
 
-  const bool lambda = parenthesized_lambda || strcmp(word, "fn") == 0;
+  const bool lambda = strcmp(word, "fn") == 0;
+  unsigned delimiters = 0;
   bool quoted = false;
   bool escaped = false;
   while (!lexer->eof(lexer) && lexer->lookahead != '\n') {
@@ -87,6 +106,16 @@ static bool starts_layout_entry(TSLexer *lexer) {
       quoted = true;
       continue;
     }
+    if (current == '(' || current == '[' || current == '{') {
+      delimiters += 1;
+      continue;
+    }
+    if (current == ')' || current == ']' || current == '}') {
+      if (delimiters == 0) return false;
+      delimiters -= 1;
+      continue;
+    }
+    if (delimiters > 0) continue;
     if (
       (current == '<' && lexer->lookahead == '-') ||
       (current == ':' && lexer->lookahead == '=') ||
@@ -113,10 +142,14 @@ unsigned tree_sitter_blot_external_scanner_serialize(
   char *buffer
 ) {
   Scanner *scanner = payload;
-  const unsigned size = 1 + scanner->count * sizeof(uint16_t);
+  const unsigned indent_size = scanner->count * sizeof(uint16_t);
+  const unsigned record_size = scanner->record_count * sizeof(uint16_t);
+  const unsigned size = 2 + indent_size + record_size;
   if (size > TREE_SITTER_SERIALIZATION_BUFFER_SIZE) return 0;
   buffer[0] = (char)scanner->count;
-  memcpy(buffer + 1, scanner->indents, scanner->count * sizeof(uint16_t));
+  buffer[1] = (char)scanner->record_count;
+  memcpy(buffer + 2, scanner->indents, indent_size);
+  memcpy(buffer + 2 + indent_size, scanner->record_indents, record_size);
   return size;
 }
 
@@ -126,15 +159,23 @@ void tree_sitter_blot_external_scanner_deserialize(
   unsigned length
 ) {
   Scanner *scanner = payload;
+  memset(scanner, 0, sizeof(Scanner));
   scanner->count = 1;
-  scanner->indents[0] = 0;
-  if (length < 1) return;
+  if (length < 2) return;
   const uint8_t count = (uint8_t)buffer[0];
-  if (count == 0 || count > 64 || length != 1 + count * sizeof(uint16_t)) {
+  const uint8_t record_count = (uint8_t)buffer[1];
+  const unsigned indent_size = count * sizeof(uint16_t);
+  const unsigned record_size = record_count * sizeof(uint16_t);
+  if (
+    count == 0 || count > 64 || record_count > 64 ||
+    length != 2 + indent_size + record_size
+  ) {
     return;
   }
   scanner->count = count;
-  memcpy(scanner->indents, buffer + 1, count * sizeof(uint16_t));
+  scanner->record_count = record_count;
+  memcpy(scanner->indents, buffer + 2, indent_size);
+  memcpy(scanner->record_indents, buffer + 2 + indent_size, record_size);
 }
 
 bool tree_sitter_blot_external_scanner_scan(
@@ -143,6 +184,11 @@ bool tree_sitter_blot_external_scanner_scan(
   const bool *valid_symbols
 ) {
   Scanner *scanner = payload;
+  // Tree-sitter enables every external token during error recovery.
+  if (
+    valid_symbols[LAYOUT_NEWLINE] && valid_symbols[LAYOUT_INDENT] &&
+    valid_symbols[LAYOUT_DEDENT]
+  ) return false;
   lexer->mark_end(lexer);
 
   bool found_newline = false;
@@ -164,7 +210,7 @@ bool tree_sitter_blot_external_scanner_scan(
       continue;
     }
     if (lexer->lookahead == '\t') {
-      indent += 8;
+      indent += 8 - indent % 8;
       skip(lexer);
       continue;
     }
@@ -178,24 +224,55 @@ bool tree_sitter_blot_external_scanner_scan(
     break;
   }
 
-  if (!found_newline && !lexer->eof(lexer)) return false;
-  const uint16_t current = scanner->indents[scanner->count - 1];
-  if (
-    indent > current &&
-    (lexer->lookahead == '.' || lexer->lookahead == '}')
-  ) {
-    return false;
+  if (valid_symbols[RECORD_OPEN] && lexer->lookahead == '{') {
+    if (scanner->record_count == 64) return false;
+    lexer->advance(lexer, false);
+    lexer->mark_end(lexer);
+    scanner->record_indents[scanner->record_count++] = record_indent(lexer);
+    lexer->result_symbol = RECORD_OPEN;
+    return true;
   }
+  if (valid_symbols[RECORD_SEPARATOR] && lexer->lookahead == ';') {
+    lexer->advance(lexer, false);
+    lexer->mark_end(lexer);
+    lexer->result_symbol = RECORD_SEPARATOR;
+    return true;
+  }
+  const uint16_t current = scanner->indents[scanner->count - 1];
   const bool closes_delimiter = lexer->lookahead == '}' ||
     lexer->lookahead == ']' || lexer->lookahead == ')' ||
     (lexer->lookahead == '<' && indent < current);
   if (
-    valid_symbols[LAYOUT_DEDENT] && scanner->count > 1 && closes_delimiter
+    found_newline && valid_symbols[LAYOUT_DEDENT] && scanner->count > 1 &&
+    closes_delimiter && indent <= current
   ) {
     scanner->count -= 1;
     lexer->result_symbol = LAYOUT_DEDENT;
     return true;
   }
+  if (
+    found_newline && valid_symbols[RECORD_SEPARATOR] &&
+    scanner->record_count > 0 &&
+    (lexer->lookahead == '}' ||
+      (lexer->lookahead == '.' &&
+        indent == scanner->record_indents[scanner->record_count - 1]))
+  ) {
+    lexer->result_symbol = RECORD_SEPARATOR;
+    return true;
+  }
+  if (valid_symbols[RECORD_CLOSE] && lexer->lookahead == '}') {
+    if (scanner->record_count == 0) return false;
+    scanner->record_count -= 1;
+    lexer->advance(lexer, false);
+    lexer->mark_end(lexer);
+    lexer->result_symbol = RECORD_CLOSE;
+    return true;
+  }
+  if (!found_newline && !lexer->eof(lexer)) return false;
+  if (
+    indent > current &&
+    (lexer->lookahead == '.' || lexer->lookahead == '}')
+  ) return false;
   const unsigned valid_layout_tokens = valid_symbols[LAYOUT_NEWLINE] +
     valid_symbols[LAYOUT_INDENT] + valid_symbols[LAYOUT_DEDENT];
   if (valid_layout_tokens != 1) return false;

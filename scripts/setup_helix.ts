@@ -10,6 +10,7 @@
 // editor is lying about the language.
 
 import { dirname, fromFileUrl, join } from "@std/path";
+import { parseGrammar } from "@mewhhaha/baba";
 
 const repository = dirname(fromFileUrl(new URL("../", import.meta.url) + "x"));
 const grammarDirectory = join(repository, "tree-sitter-blot");
@@ -96,30 +97,22 @@ await runCommand("deno", [
 //
 // `scripts/check_grammar.ts` proves the two agree; it is the reason to trust
 // this patch rather than the patch itself.
-const RESERVED_TOKENS = [
-  "module",
-  "with",
-  "import",
-  "operators",
-  "infixl",
-  "infixr",
-  "infix",
-  "prefix",
-  "let",
-  "const",
-  "return",
-  "use",
-  "if",
-  "else",
-  "case",
-  "of",
-  "rec",
-  "open",
-  "for",
-  "in",
-  "break",
-  "do",
-  "fn",
+const grammar = parseGrammar(
+  await Deno.readTextFile(join(repository, "grammar.baba")),
+);
+const keywordRule = grammar.declarations.find((declaration) =>
+  declaration.kind === "rule" && declaration.name === "keyword"
+);
+if (keywordRule?.kind !== "rule" || keywordRule.expression.kind !== "choice") {
+  throw new Error("grammar.baba must declare keyword as a choice of literals");
+}
+const reservedTokens = [
+  ...keywordRule.expression.options.map((expression) => {
+    if (expression.kind !== "literal") {
+      throw new Error("grammar.baba keyword alternatives must be literals");
+    }
+    return expression.value;
+  }),
   "=",
   "=>",
   ":=",
@@ -135,17 +128,22 @@ if (at < 0) {
   throw new Error("grammar.js has no `name:` declaration to anchor to");
 }
 const cut = at + anchor.length;
-const spelled = RESERVED_TOKENS.map((token) => `"${token}"`).join(", ");
+const spelled = reservedTokens.map((token) => JSON.stringify(token)).join(", ");
 const externalLayout = `
 
   externals: $ => [
     $.LAYOUT_NEWLINE,
     $.LAYOUT_INDENT,
     $.LAYOUT_DEDENT,
+    "{",
+    "}",
+    ";",
   ],`;
 const layoutConflicts = `
 
   conflicts: $ => [
+    [$.signature, $.pattern_core],
+    [$.constructor_pattern],
     [$.conditional_statement_branches],
     [$.expression],
     [$.postfix_expression],

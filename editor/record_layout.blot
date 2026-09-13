@@ -1,0 +1,28 @@
+open import "blot:prelude"
+
+const base = { .value = 1; }
+const field_name = "computed"
+const record = {
+  // The first field's line establishes the record indentation.
+  ...base
+  .nested = {
+    .value = 2
+  }
+  .read = fn () => do:
+    return {
+      .value = 3
+    }
+  .projected = base
+    .value
+  .tuple = (
+    base
+      .value,
+    { .value = 4; }
+  )
+  .[field_name] = 5 // The next line closes this field.
+}
+const {
+  .nested
+  .projected
+} = record
+return { .record; .nested; .projected; }

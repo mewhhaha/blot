@@ -244,14 +244,21 @@ editor grammar that lies.
 Adding `word: $ => $.IDENT` is not enough; keyword extraction still falls back
 to the word token, and OPERATOR can absorb structural `=` and `=>` outside their
 grammar rules. A global `reserved` set fixes both, and `scripts/setup_helix.ts`
-patches one into the generated `grammar.js`. Field names keep working, because
-`.return` matches the reserved keyword token and `field_name` admits `keyword`.
+patches one into the generated `grammar.js`, taking its keywords from Baba's
+parsed `keyword` rule. Field names keep working, because `.return` matches the
+reserved keyword token and `field_name` admits `keyword`.
+
+`editor/scanner.c` supplies suite indentation and implicit record separators. It
+tracks each record's first-field indentation, so nested records and `do:` field
+bodies can close before the next field while more-indented projections continue
+the current value. Fields on the same line still need semicolons.
 
 `scripts/check_grammar.ts` is the reason to trust that patch rather than the
 patch itself: it runs every accepted program and every syntax rejection through
-both parsers and fails if they ever disagree. It also checks the assembled
-highlight query against `editor/highlights.blot`, where statement `use` must be
-a keyword while `.use` remains a member.
+both parsers and requires the expected acceptance or rejection. The compiler
+side uses Blot's I64-aware Baba ingestion, matching ordinary compiler commands.
+It also checks the assembled highlight query against `editor/highlights.blot`,
+where statement `use` must be a keyword while `.use` remains a member.
 
 ```bash
 just grammar-check

@@ -12,11 +12,13 @@
 import { basename } from "@std/path";
 import { CpuFrontend } from "@mewhhaha/baba/runtime/webgpu";
 import { elaborateLayout } from "../src/syntax/layout.ts";
+import { ingestCpuSource } from "../src/syntax/cpu_ingest.ts";
 
 const ACCEPTED = [
   "examples",
   "examples/lib",
   "src/prelude",
+  "editor",
 ];
 const REJECTED = "examples/rejected/syntax";
 const GRAMMAR = "tree-sitter-blot";
@@ -94,14 +96,12 @@ for (const directory of ACCEPTED) {
     const source = await Deno.readTextFile(path);
     const elaborated = await elaborateLayout(source);
     const compiler = elaborated.ok &&
-      frontend.ingest(elaborated.layout.source).ok;
+      ingestCpuSource(frontend, elaborated.layout.source).ok;
     const editor = await treeSitterAccepts(`../${path}`);
-    if (compiler !== editor) {
+    if (!compiler || !editor) {
       disagreements += 1;
       console.error(
-        `${path}: compiler ${compiler ? "accepts" : "rejects"}, editor ${
-          editor ? "accepts" : "rejects"
-        }`,
+        `${path}: expected both to accept; compiler accepted: ${compiler}, editor accepted: ${editor}`,
       );
       continue;
     }
@@ -113,14 +113,12 @@ for (const path of await blotFiles(REJECTED)) {
   const source = await Deno.readTextFile(path);
   const elaborated = await elaborateLayout(source);
   const compiler = elaborated.ok &&
-    frontend.ingest(elaborated.layout.source).ok;
+    ingestCpuSource(frontend, elaborated.layout.source).ok;
   const editor = await treeSitterAccepts(`../${path}`);
   if (compiler || editor) {
     disagreements += 1;
     console.error(
-      `${path}: expected both to reject, compiler ${
-        compiler ? "accepted" : "rejected"
-      }, editor ${editor ? "accepted" : "rejected"}`,
+      `${path}: expected both to reject; compiler accepted: ${compiler}, editor accepted: ${editor}`,
     );
     continue;
   }
