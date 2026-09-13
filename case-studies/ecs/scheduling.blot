@@ -5,15 +5,16 @@ const Planning = import "./planning.blot"
 const Entity =
   { .Position = Int; .Velocity = Int; .Age = Int; .Distance = Int; .Label = Text; }
 const S = Systems Entity
+const C = S.components
 
 const integrate =
   S.define (
-    { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+    { .reads = [C.Position, C.Velocity]; .writes = [C.Position]; },
     fn read => { .Position = read.Position + read.Velocity; }
   )
 const bounce =
   S.define (
-    { .reads = ["Position", "Velocity"]; .writes = ["Velocity"]; },
+    { .reads = [C.Position, C.Velocity]; .writes = [C.Velocity]; },
     fn read => { .Velocity = case read.Position >= 10 of
       #True => 0 - read.Velocity
       #False => read.Velocity
@@ -21,17 +22,17 @@ const bounce =
   )
 const age =
   S.define (
-    { .reads = ["Age"]; .writes = ["Age"]; },
+    { .reads = [C.Age]; .writes = [C.Age]; },
     fn read => { .Age = read.Age + 1; }
   )
 const distance =
   S.define (
-    { .reads = ["Position"]; .writes = ["Distance"]; },
+    { .reads = [C.Position]; .writes = [C.Distance]; },
     fn read => { .Distance = Int.abs read.Position; }
   )
 const label =
   S.define (
-    { .reads = ["Position"]; .writes = ["Label"]; },
+    { .reads = [C.Position]; .writes = [C.Label]; },
     fn read => { .Label = Text.of_int read.Position; }
   )
 const registry = { .integrate; .bounce; .age; .distance; .label; }

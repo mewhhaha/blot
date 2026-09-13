@@ -1,0 +1,21 @@
+open import "blot:prelude"
+
+const component = fn (name, T) => do:
+  const Read = @effect { .get = Unit -> T; }
+  return {
+    .Type = T;
+    .name = name;
+    .Read = Read;
+    .get = Read.get;
+    .supply = fn value => { .get = fn ((), ?resume) => resume (@satisfies value T); };
+    .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
+    }
+
+const Components = fn schema => do:
+  let components = Unit
+  for name in Iter.items (@shape.names schema):
+    components := @type.attach components name (component (name, @shape.get schema name))
+
+  return components
+
+return Components

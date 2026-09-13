@@ -1,9 +1,9 @@
 # Compiler findings from the ECS prototypes
 
 The case study exercises the compiler as well as the library design. The
-compiler defects below are fixed by the query/message, scheduling, and SIMD
-extensions. The remaining effect findings were observed at `ab2cfc8`; their
-workarounds remain explicit in the runnable study.
+compiler defects below are fixed by the query/message, scheduling, SIMD, and
+component-descriptor examples. The remaining representation boundaries are
+listed at the end; they do not prevent empty streams or explicitly seeded folds.
 
 ## Fixed: one algebra specialization replaced another's body representation
 
@@ -24,22 +24,39 @@ instructions. Runtime tests run both ECS implementations on changing arrays over
 several frames against an independent matrix model. The fix also regenerates the
 checked prelude snapshot.
 
-## SIMD ergonomics and current boundaries
+## Fixed: nested declarations defaulted a callback's F32 literals too early
 
-- Contextual F32 literals inside a generic iterator callback did not acquire the
-  intended numeric domain from the surrounding result signature. Giving the
-  entity-producing `spawn` function an explicit signature supplies that
-  evidence.
-- A conditional append formulation of block unpacking produced an unhelpful
-  array type mismatch whose printed source and destination types were identical.
-  This diagnostic remains unresolved. Unpacking with a map over the known live
-  entity count is accepted and keeps the padding rule visible.
-- The TypeScript host adapter refuses indirect parameter blocks. A direct pair
-  of 4×4 matrices exceeds its flat-parameter limit; an array of pairs has a
-  supported public representation. The matrix kernels use that batch interface.
-- Block components are vectors, but the outer storage remains an array of Blot
-  records. Native SIMD instructions alone do not imply flat world columns,
-  allocation-free updates, or parallel workers.
+A generic iterator callback returned an entity record under an F32 result
+signature. Checking an internal declaration resolved all pending literals,
+including the caller's literal `1`, before that result signature constrained it.
+Numeric defaulting now resolves the declaration's own literals. The enclosing
+literal remains available for contextual constraints. The transform seed no
+longer needs a separately signed `spawn` function; native and runtime tests
+exercise its record-valued callback.
+
+## Fixed: wide matrix calls lacked canonical parameter adapters
+
+ABI 4 already specifies parameter blocks for more than 16 flat lanes, but the
+compiler still emitted flat export/import signatures and the host refused these
+calls. Both now implement the existing layout, including resumable exports and
+development links. Parameter order is source order, not lexicographic ordering
+of numeric field names. The compiler validates the block before loading values.
+
+Matrix kernels expose direct `product` and `point` calls alongside their batch
+interfaces. Tests cover mixed aligned fields, strings, arrays, effect requests,
+separate module memories, and malformed pointers. Vectors stay internal to the
+matrix implementation; callback starts retain their separate 16-lane policy.
+
+## Conditional SIMD unpacking now passes
+
+The earlier identical-looking array type mismatch no longer reproduces.
+[simd/partial-blocks.blot](simd/partial-blocks.blot) retains that conditional
+append formulation as an executable regression. Tests compare complete rows for
+empty input, every tail length, and multiple blocks. This closes the observed
+failure without attributing it to an unisolated earlier compiler change.
+
+Packed components still live in an array of Blot records. Native SIMD alone does
+not imply flat world columns, allocation-free updates, or worker execution.
 
 ## Fixed: local signatures could not depend on a constructor's type argument
 
@@ -184,72 +201,34 @@ unions, and the complete checked constructor set determines the layout. Later
 branches coerce into that fixed layout. The regression compiles two arena ticks
 with runtime input, retaining all three world snapshots for summaries.
 
-## A constructed handler cannot currently capture a runtime argument
+## Fixed: handler constructors could not capture runtime values
 
-Saving this source and running `pnpm blot check <path>` reports
-`BLOT_UNBOUND: value is not in scope` at `supply value`:
+`@handle (Read, work, supply value)` used to report an unbound `value` while
+inspecting the handler, even though it was a declared runtime parameter. Clause
+discovery now lets the ordinary evaluator suspend a constructor argument that is
+only captured by source clauses. Runtime-dependent clause selection remains
+rejected. The discovered clauses keep their defining module and continuation
+ownership checks.
 
-```blot
-open import "blot:prelude"
-const Read = @effect { .get = Unit -> Int; }
-const supply = fn value => { .get = fn ((), ?resume) => resume value; }
-const run :: Int -> Int
-const run = fn value => @handle (Read, fn () => Read.get (), supply value)
-return run
-```
+[constructed-handler.blot](constructed-handler.blot) exercises the minimal case.
+Generated components now expose `supply`, and the main ECS resolver uses
+`C.Position.supply row.Position` with the effect still explicit at `@handle`.
 
-Writing the clause directly in the `@handle` call works. Constructed handlers
-with compile-time answers also work, as demonstrated by
-[`schema_effects.blot`](../../examples/schema_effects.blot). The ECS resolver
-therefore keeps its runtime captures in literal clauses.
+## Fixed: merging stateful computations skipped a later row
 
-## Merging stateful computations can skip work on a later row
+Adding Velocity and then doubling should turn Positions `[1, 20]` into
+`[8, 44]`. The prototype instead produced `[8, 20]` in both executions.
+Rechecking a computed closure's captures discarded the effects already inferred
+at its call site, and evaluation attached the generic pure result signature.
+Call-result caching then reused its first `Unit` result and skipped the work.
 
-This prototype checks successfully. Both evaluation and emitted Wasm produce
-Positions `[8, 20]`; sequentially adding Velocity and doubling should produce
-`[8, 44]`. Replacing the `merge` call with a directly written computation that
-sequences `move` and `double` produces the expected result in the evaluator.
-
-```blot
-open import "blot:prelude"
-const Row = { .Position = Int; .Velocity = Int; }
-const State = @effect { .get = Unit -> Row; .set = Row -> Unit; }
-const state = {
-  .get = fn ((), ?resume) => fn row => do:
-    use next <- resume (@satisfies row Row)
-    return next row
-  ;
-  .set = fn (row, ?resume) => fn previous => do:
-    use next <- resume ()
-    return next row
-  ;
-  .return = fn () => fn row => row;
-}
-const merge = fn (left, right) => fn () => do:
-  use left ()
-  use right ()
-  return ()
-const move = fn () => do:
-  use row <- State.get ()
-  use State.set { .Position = row.Position + row.Velocity; .Velocity = row.Velocity; }
-  return ()
-const double = fn () => do:
-  use row <- State.get ()
-  use State.set { .Position = row.Position * 2; .Velocity = row.Velocity; }
-  return ()
-const movement = merge (move, double)
-let apply :: Int -> [Row]
-let apply = fn position => map (
-  [{ .Position = position; .Velocity = 3; }, { .Position = 20; .Velocity = 2; }],
-  fn row => (@handle (State, movement, state)) row
-)
-return { .default = apply 1; .apply = apply; }
-```
-
-The case study instead merges pure `Entity -> Entity` stages after resolving
-their reader queries. Tests compare multiple rows and repeated ticks against an
-independent model, rather than relying only on agreement between the evaluator
-and Wasm.
+Capture rechecking now preserves the original effect contribution, and a
+returned closure retains its closed call-site signature. Selecting an imported
+closed effectful function also retains its instance's effect identities, so a
+merged reader query and its component handlers refer to the same readers. The
+[stateful example](stateful.blot) checks varying runtime rows and repeated
+invocations against an independent model. Calling the merged computation without
+its State handler retains that effect and is rejected during checking.
 
 ## Returning an optional iterator closure still hits a target boundary
 

@@ -666,6 +666,17 @@ unimplemented.
 `RUNTIME.md` owns the semantic source/caller relation. `docs/abi.md` owns exact
 ABI 4 bytes and caller ownership.
 
+Canonical adapter planning counts source-parameter lanes independently of the
+scope token. More than 16 lanes use one parameter-block pointer for direct and
+resumable exports, synchronous imports, and development links. Logical values
+are aligned in source argument order, with final block padding; argument indices
+are not sorted as text field names. Entry validates the entire block's non-null
+pointer, alignment, and memory32 extent before projecting and validating each
+logical argument. Validation precedes continuation-frame allocations, whose
+memory growth must not admit a previously out-of-bounds pointer. Callback starts
+retain their explicit 16-lane target policy. This implements the existing ABI 4
+contract without changing its major version.
+
 The validated owned continuation graph supplies function entries, call
 transitions, successor parameters, captures, and suspension/framing flags to
 both development partitioning and emission. Suspension propagates through the

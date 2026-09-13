@@ -244,6 +244,9 @@ test("the ECS case study uses canonical Blot formatting", async () => {
   for (
     const name of [
       "ecs",
+      "components",
+      "constructed-handler",
+      "stateful",
       "simulation",
       "main",
       "streams",
@@ -258,6 +261,7 @@ test("the ECS case study uses canonical Blot formatting", async () => {
       "simd/matrices",
       "simd/transforms",
       "simd/particles",
+      "simd/partial-blocks",
       "simd/main",
       "kernels/scalar-matrix",
       "kernels/simd-matrix",

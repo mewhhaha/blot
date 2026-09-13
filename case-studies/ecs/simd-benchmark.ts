@@ -16,6 +16,7 @@ const frameCounts = [1, 32];
 const samples = 7;
 const warmupCalls = 16;
 const sourcePaths = [
+  "case-studies/ecs/components.blot",
   "case-studies/ecs/systems.blot",
   "case-studies/ecs/planning.blot",
   ...["matrix", "transforms", "particles"].map((name) =>

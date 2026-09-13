@@ -1498,7 +1498,9 @@ function invokeLink(
     provider.manifest,
     provider.artifact.name,
   );
-  const parameterWidth = function_.parameters.flatMap(flattenedAbiType).length;
+  let parameterWidth = function_.parameters.flatMap(flattenedAbiType).length;
+  const indirectParameters = parameterWidth > 16;
+  if (indirectParameters) parameterWidth = 1;
   const resultWidth = flattenedAbiType(function_.result).length;
   let expectedArguments = parameterWidth + 1;
   if (resultWidth > 1) expectedArguments += 1;
@@ -1536,20 +1538,51 @@ function invokeLink(
   try {
     let providerResultPointer: number | undefined;
     try {
-      let offset = 1;
       const providerArguments: WasmValue[] = [providerScope];
-      for (const parameter of function_.parameters) {
-        const width = flattenedAbiType(parameter).length;
-        providerArguments.push(...copyFlatValue(
-          parameter,
-          arguments_.slice(offset, offset + width),
+      if (indirectParameters) {
+        const layout = memoryLayouts.parameters(function_.parameters);
+        const source = requiredPointer(
+          arguments_[1],
+          "development parameter block",
+        );
+        requireMemoryRange(
           consumerMemory,
-          providerMemory,
-          providerReallocate,
-          undefined,
-          context?.scope,
-        ));
-        offset += width;
+          source,
+          layout.size,
+          "development parameter block",
+        );
+        if (source === 0 || source % layout.alignment !== 0) {
+          throw new RangeError("invalid development parameter block alignment");
+        }
+        const target = providerReallocate(0, 0, layout.alignment, layout.size);
+        for (const parameter of layout.parameters) {
+          copyMemoryValue(
+            parameter.type,
+            consumerMemory,
+            source + parameter.offset,
+            providerMemory,
+            target + parameter.offset,
+            providerReallocate,
+            undefined,
+            context?.scope,
+          );
+        }
+        providerArguments.push(target);
+      } else {
+        let offset = 1;
+        for (const parameter of function_.parameters) {
+          const width = flattenedAbiType(parameter).length;
+          providerArguments.push(...copyFlatValue(
+            parameter,
+            arguments_.slice(offset, offset + width),
+            consumerMemory,
+            providerMemory,
+            providerReallocate,
+            undefined,
+            context?.scope,
+          ));
+          offset += width;
+        }
       }
 
       const callable = requiredExportedFunction(provider.instance, exportName);

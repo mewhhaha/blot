@@ -127,7 +127,6 @@ export async function instantiateArtifact(
         "linear host transfers require registered scope cleanup",
       );
     }
-    requireParameters(imported.function.parameters);
     const operation = supplied.get(imported.capability)?.get(
       imported.sourceName,
     );
@@ -172,16 +171,16 @@ export async function instantiateArtifact(
           activeContext.development,
         ),
       );
-      let position = 1;
-      const arguments_ = imported.function.parameters.map((type) => {
-        const width = flattenedAbiType(type).length;
-        const value = marshaller.lift(
-          type,
-          raw.slice(position, position + width),
-        );
-        position += width;
-        return value;
-      });
+      let parameterLanes = imported.function.parameters.reduce(
+        (width, type) => width + flattenedAbiType(type).length,
+        0,
+      );
+      if (parameterLanes > 16) parameterLanes = 1;
+      const position = 1 + parameterLanes;
+      const arguments_ = marshaller.liftParameters(
+        imported.function.parameters,
+        raw.slice(1, position),
+      );
       const indirect = flattenedAbiType(imported.function.result).length > 1;
       let expected = position;
       if (indirect) expected += 1;
@@ -230,7 +229,6 @@ export async function instantiateArtifact(
     if (exports.has(exported.sourceName)) {
       throw new TypeError("duplicate export name");
     }
-    requireParameters(exported.function.parameters);
     if (exported.execution !== "direct" && exported.execution !== "resumable") {
       throw new TypeError("invalid export execution contract");
     }
@@ -409,8 +407,9 @@ export async function instantiateArtifact(
         );
         let argumentMarshaller = marshaller;
         if (options.linked) argumentMarshaller = linkMarshaller;
-        const lowered = arguments_.flatMap((value, index) =>
-          argumentMarshaller.lower(exported.function.parameters[index], value)
+        const lowered = argumentMarshaller.lowerParameters(
+          exported.function.parameters,
+          arguments_,
         );
         frame = Number(invoke(execution, exported.name, token, ...lowered)) >>>
           0;
@@ -682,8 +681,9 @@ export async function instantiateArtifact(
             Number(realloc(allocationScope, 0, 0, alignment, size)) >>> 0,
           moduleScope,
         );
-        const lowered = arguments_.flatMap((value, index) =>
-          codec.lower(exported.function.parameters[index], value)
+        const lowered = codec.lowerParameters(
+          exported.function.parameters,
+          arguments_,
         );
         const raw = invoke(
           execution,
@@ -778,16 +778,6 @@ export async function instantiateArtifact(
   };
   const detach = options.scope?.own(() => hosted.close());
   return Object.freeze(hosted);
-}
-
-function requireParameters(types: readonly BlotAbiType[]): void {
-  if (
-    types.reduce((count, type) => count + flattenedAbiType(type).length, 0) > 16
-  ) {
-    throw new TypeError(
-      "host adapter does not marshal indirect parameter blocks",
-    );
-  }
 }
 
 function hasLinear(ownership: BlotEffectOwnership): boolean {

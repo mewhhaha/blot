@@ -95,17 +95,22 @@ const resolve = fn (row, work) => @handle (
   fn () => @handle (
     C.Velocity.Read,
     work,
-    { .get = fn ((), ?resume) => resume row.Velocity; }
+    C.Velocity.supply row.Velocity
   ),
-  { .get = fn ((), ?resume) => resume row.Position; }
+  C.Position.supply row.Position
 )
 ```
 
 The compiler can see the exact effects and clauses. Repeated reads return the
 same component of that snapshot. Reading Age in this resolver leaves an
 unhandled effect and is rejected. Adding another reader requires its explicit
-handler at this boundary. The current compiler limitation behind keeping these
-clauses explicit is recorded in [compiler-findings.md](compiler-findings.md).
+handler at this boundary. Each component generates `supply` from its type;
+ordinary handler constructors capture runtime values while the effect remains
+visible at `@handle`. The
+[constructed-handler example](constructed-handler.blot) shows the underlying
+language feature. [stateful.blot](stateful.blot) goes further: it merges
+stateful computations and threads each entity through them, with both executions
+checked against the intended result.
 
 ## Select archetypes, guard rows, and fold streams
 
@@ -268,8 +273,9 @@ system's function type from the entity schema:
 ```blot
 const Entity = { .Position = Int; .Velocity = Int; .Age = Int; .Distance = Int; .Label = Text; }
 const S = ECS.Systems Entity
+const C = S.components
 const integrate = S.define (
-  { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+  { .reads = [C.Position, C.Velocity]; .writes = [C.Position]; },
   fn read => { .Position = read.Position + read.Velocity; }
 )
 ```
@@ -282,9 +288,15 @@ generated `step` applies that patch to the original row and preserves all other
 fields. A multi-field patch reads one snapshot, so exchanging Position and
 Velocity works without one update affecting the next read.
 
-`define` rejects unknown component names, undeclared reads, missing or
-additional patch fields, wrong component values, and unhandled effects. Repeated
-access names collapse to one field. An empty read set permits a constant
+`C.Position` is ordinary field projection into generated descriptors. Each
+contains its name, `Type`, reader effect, `get`, `supply`, and `replace`. An
+archetype's `Entity.components` can also supply these descriptors. A descriptor
+from another schema is accepted when both name and type match; a same-named
+component with a different type is rejected. There is no new field-name syntax.
+
+`define` rejects unknown descriptors, undeclared reads, missing or additional
+patch fields, wrong component values, and unhandled effects. Repeated component
+descriptors collapse to one field. An empty read set permits a constant
 replacement; empty read and write sets permit an identity system. These
 contracts are ordinary type values, reflection predicates, signatures, and
 `@satisfies` in [systems.blot](systems.blot). There is no ECS compiler
@@ -453,4 +465,4 @@ Those are extensions to investigate, rather than promises made by the current
 library. Types derive the component interface, effects describe reader and guard
 requirements, and ordinary function composition merges work before traversal.
 The [compiler findings](compiler-findings.md) distinguish the compiler defects
-fixed by this extension from the remaining effect and closure limitations.
+fixed by these examples from the remaining closure and storage boundaries.

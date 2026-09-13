@@ -87,12 +87,16 @@ undo journal as other transactional solver choices. It commits the first viable
 candidate, so an unconstrained integer keeps its singleton type and an
 unconstrained float defaults to `F64`, then records the chosen runtime
 representation as an expression-type fact. Failed probes leave no bounds or
-fresh variables behind. A compile-time consumer that must decide on a type
-containing an unresolved literal resolves those literals first: predicates
-observe the committed types rather than an uninformative bottom, and computed
-record names keep their text requirement instead of failing later as dynamic.
-This elaboration rule adds no cross-domain subtype edge: a value already bound
-in one numeric domain still needs an explicit conversion to another.
+fresh variables behind. A declaration resolves only literals introduced while
+checking that declaration: nested bindings do not default a caller's still-open
+literal variables. Enclosing result constraints can therefore reach literals in
+generic iterator callbacks before their declaration commits a numeric domain. A
+compile-time consumer that must decide on a type containing an unresolved
+literal resolves those literals first: predicates observe the committed types
+rather than an uninformative bottom, and computed record names keep their text
+requirement instead of failing later as dynamic. This elaboration rule adds no
+cross-domain subtype edge: a value already bound in one numeric domain still
+needs an explicit conversion to another.
 
 ## 1. Type algebra
 
@@ -624,6 +628,24 @@ parameter, effect, and representation flow reaches the defining module. This
 side condition prevents partial evaluation from changing the principal type of
 an already precise ordinary call merely because its arguments happen to be
 constants.
+
+Rechecking the captures of a computed closure preserves the effect contribution
+established by ordinary call inference. That contribution is constrained into
+the rechecked closure's effect row before its type replaces the earlier result.
+A fresh capture variable cannot turn an effectful computation into a pure one.
+Selecting a closed effectful function from a compile-time record uses its
+checked instance signature, which carries the instance's generative effect
+identities. A module template's earlier identities cannot replace those of the
+actual captured reader operations.
+
+Handler clause discovery follows ordinary inference of the handler expression.
+The source evaluator may inspect a constructor with its unavailable argument
+suspended when that argument is only captured inside clauses. Demanding the
+argument while choosing clauses must obtain a real value; otherwise the handler
+is not statically selected and checking reports a source diagnostic. These
+suspended arguments belong only to clause discovery, not to the checked program.
+Each clause certificate retains its defining source module, parameter pattern,
+and body, including when its constructor captures runtime values.
 
 When a callable belongs to an ordinary compile-time record and one premise is
 unavailable, checking falls back to the record's settled arrow. An attached

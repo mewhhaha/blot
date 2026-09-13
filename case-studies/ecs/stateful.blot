@@ -1,0 +1,37 @@
+open import "blot:prelude"
+const Row = { .Position = Int; .Velocity = Int; }
+const State = @effect { .get = Unit -> Row; .set = Row -> Unit; }
+const state =
+  {
+    .get = fn ((), ?resume) => fn row => do:
+      use next <- resume (@satisfies row Row)
+      return next row
+    ;
+    .set = fn (row, ?resume) => fn previous => do:
+      use next <- resume ()
+      return next row
+    ;
+    .return = fn () => fn row => row;
+  }
+const merge = fn (left, right) => fn () => do:
+  use left ()
+  use right ()
+  return ()
+const move = fn () => do:
+  use row <- State.get ()
+  use State.set { .Position = row.Position + row.Velocity; .Velocity = row.Velocity; }
+  return ()
+const double = fn () => do:
+  use row <- State.get ()
+  use State.set { .Position = row.Position * 2; .Velocity = row.Velocity; }
+  return ()
+const movement = merge (move, double)
+let apply :: Int -> [Row]
+let apply = fn position => map (
+  [
+    { .Position = position; .Velocity = 3; },
+    { .Position = 20; .Velocity = 2; }
+  ],
+  fn row => @handle (State, movement, state) row
+)
+return { .default = apply 1; .apply = apply; }

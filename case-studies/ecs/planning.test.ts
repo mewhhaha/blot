@@ -304,13 +304,15 @@ test("generated system views restrict reads and apply a simultaneous typed patch
       `
 open import "blot:prelude"
 const Systems = import "./systems.blot"
-const Entity = { .Position = Int; .Velocity = Int; .Age = Int; }
+const ECS = import "./ecs.blot"
+const Entity = ECS.archetype { .Position = Int; .Velocity = Int; .Age = Int; }
 const S = Systems Entity
-const reset = S.define ({ .reads = []; .writes = ["Position"]; }, fn read => { .Position = 0; })
+const C = Entity.components
+const reset = S.define ({ .reads = []; .writes = [C.Position]; }, fn read => { .Position = 0; })
 const noop = S.define ({ .reads = []; .writes = []; }, fn read => {})
-const swap = S.define ({ .reads = ["Position", "Velocity"]; .writes = ["Position", "Velocity"]; }, fn read => { .Position = read.Velocity; .Velocity = read.Position; })
-const duplicate = S.define ({ .reads = ["Position", "Position"]; .writes = ["Position", "Position"]; }, fn read => { .Position = read.Position + 1; })
-const reflective = S.define ({ .reads = ["Position"]; .writes = ["Position"]; }, fn read => { .Position = @shape.get read (case @shape.has read "Age" of
+const swap = S.define ({ .reads = [C.Position, C.Velocity]; .writes = [C.Position, C.Velocity]; }, fn read => { .Position = read.Velocity; .Velocity = read.Position; })
+const duplicate = S.define ({ .reads = [C.Position, C.Position]; .writes = [C.Position, C.Position]; }, fn read => { .Position = read.Position + 1; })
+const reflective = S.define ({ .reads = [C.Position]; .writes = [C.Position]; }, fn read => { .Position = @shape.get read (case @shape.has read "Age" of
   #True => "Age"
   #False => "Position"
 ); })
@@ -361,6 +363,22 @@ test("systems reject undeclared reads, invalid patches, and host effects at chec
     for (
       const [source, code] of [
         [
+          'const unused = S.define ({ ...access; .reads = ["Position"]; }, fn read => { .Position = 1; })',
+          "BLOT_NO_FIELD",
+        ],
+        [
+          "const unused = S.define ({ ...access; .reads = [C.Missing]; }, fn read => { .Position = 1; })",
+          "BLOT_NO_FIELD",
+        ],
+        [
+          "const unused = S.define ({ ...access; .reads = [Other.Position]; }, fn read => { .Position = 1; })",
+          "BLOT_REFUSED",
+        ],
+        [
+          "const unused = S.define ({ ...access; .writes = [Other.Position]; }, fn read => { .Position = 1; })",
+          "BLOT_REFUSED",
+        ],
+        [
           "const unused = S.define (access, fn read => { .Position = read.Velocity; })",
           "BLOT_TYPE_ERROR",
         ],
@@ -377,11 +395,11 @@ test("systems reject undeclared reads, invalid patches, and host effects at chec
           "BLOT_DOES_NOT_SATISFY",
         ],
         [
-          'const unused = S.define ({ ...access; .reads = ["Missing"]; }, fn read => { .Position = 1; })',
+          'const unused = S.define ({ ...access; .reads = [Other.Missing]; }, fn read => { .Position = 1; })',
           "BLOT_REFUSED",
         ],
         [
-          'const unused = S.define ({ ...access; .writes = ["Missing"]; }, fn read => { .Missing = 1; })',
+          'const unused = S.define ({ ...access; .writes = [Other.Missing]; }, fn read => { .Missing = 1; })',
           "BLOT_REFUSED",
         ],
         [
@@ -401,7 +419,9 @@ const unused = S.define (access, fn read => do:
 open import "blot:prelude"
 const Systems = import "./systems.blot"
 const S = Systems { .Position = Int; .Velocity = Int; .Age = Int; }
-const access = { .reads = ["Position"]; .writes = ["Position"]; }
+const C = S.components
+const Other = (Systems { .Position = Text; .Missing = Int; }).components
+const access = { .reads = [C.Position]; .writes = [C.Position]; }
 ${source}
 return 0
 `,

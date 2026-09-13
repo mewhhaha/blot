@@ -115,6 +115,9 @@ that contains it, or select `F64` or `F32`. A float literal can select `F64` or
 singleton type and a float literal defaults to `F64`. This applies only while
 checking the literal expression: once a value has been bound as `Int`, `F64`, or
 `F32`, crossing to another numeric domain still requires an explicit conversion.
+A surrounding function result signature can constrain literals inside a generic
+iterator callback. Checking a nested declaration does not default unrelated
+literals from the enclosing expression before that context reaches them.
 
 Floats are IEEE 754 values: `F64` is double precision and `F32` is single
 precision. They do not trap: an operation that overflows produces an infinity
@@ -3124,7 +3127,10 @@ aliased, and passed directly to `@handle`. Each selected clause retains the
 module that defined its parameter pattern and its checked ownership contract.
 The same continuation, operation-input, and operation-result rules apply to
 literal and constructed handlers. Importing a handler does not weaken its affine
-or linear obligations.
+or linear obligations. A constructor may capture runtime arguments in its
+clauses, as in `supply value` where `supply` returns a clause closing over
+`value`. Selecting which source clauses to use must remain static: inspecting an
+unavailable runtime argument to choose the handler record is rejected.
 
 The operation argument pattern must exactly match the operation's input
 ownership summary. A handler may pass a fresh unrestricted value to `resume`; if
@@ -4332,15 +4338,18 @@ use that token. The host drains admitted work and releases its context before
 suspended siblings.
 
 At most 16 flat source-parameter lanes and one flat result are used. Larger
-parameter lists and results use canonical record memory. Entry validates and
-copies canonical parameters into private values, then releases their temporary
-buffers. Indirect results and nested buffers remain readable until post-return.
-Private values use last-use reference transfers and reusable backing
-allocations; interior Text slices and nested arrays retain their owners. Scope
-exit also reclaims remaining guest memory after cancellation or a trap. This
-allocation lifetime does not replace source ownership or the host's resource
-cleanup. Malformed UTF-8, booleans, discriminants, lengths, pointers, and
-alignments trap.
+parameter lists and results use canonical record memory. Parameter blocks place
+logical arguments in source order, respecting each value's alignment and final
+block padding; the scope token is separate. Direct and resumable exports, host
+imports, and development links use this rule. Callback starts retain their
+16-lane limit. Entry validates and copies canonical parameters into private
+values, then releases their temporary buffers. Indirect results and nested
+buffers remain readable until post-return. Private values use last-use reference
+transfers and reusable backing allocations; interior Text slices and nested
+arrays retain their owners. Scope exit also reclaims remaining guest memory
+after cancellation or a trap. This allocation lifetime does not replace source
+ownership or the host's resource cleanup. Malformed UTF-8, booleans,
+discriminants, lengths, pointers, and alignments trap.
 
 `@branch.likely condition` and `@branch.unlikely condition` are boolean
 identities. In an `if` condition they additionally emit WebAssembly branch-hint

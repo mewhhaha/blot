@@ -224,7 +224,13 @@ fn mem(offset: u64) -> wasm_encoder::MemArg {
     }
 }
 
-fn extent(ins: &mut InstructionSink<'_>, pointer: u32, length: u32, stride: u32, alignment: u32) {
+pub(super) fn extent(
+    ins: &mut InstructionSink<'_>,
+    pointer: u32,
+    length: u32,
+    stride: u32,
+    alignment: u32,
+) {
     if stride == 0 {
         return;
     }

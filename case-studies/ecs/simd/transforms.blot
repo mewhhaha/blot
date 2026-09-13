@@ -15,19 +15,20 @@ const Transforms = fn Algebra => do:
       .Age = Int;
     }
   const S = Systems Entity
+  const C = S.components
   const compose =
     S.define (
-      { .reads = ["Parent", "Local"]; .writes = ["World"]; },
+      { .reads = [C.Parent, C.Local]; .writes = [C.World]; },
       fn read => { .World = Algebra.multiply (read.Parent, read.Local); }
     )
   const project =
     S.define (
-      { .reads = ["World", "Point"]; .writes = ["Projected"]; },
+      { .reads = [C.World, C.Point]; .writes = [C.Projected]; },
       fn read => { .Projected = Algebra.transform (read.World, read.Point); }
     )
   const age =
     S.define (
-      { .reads = ["Age"]; .writes = ["Age"]; },
+      { .reads = [C.Age]; .writes = [C.Age]; },
       fn read => { .Age = read.Age + 1; }
     )
   const registry = { .compose; .project; .age; }
@@ -65,17 +66,19 @@ const unpack = fn row => {
 const tick :: [Scalar.Entity] -> [Scalar.Entity]
 const tick = fn rows => map (Simd.tick (map (rows, pack)), unpack)
 
-const spawn :: Int -> Scalar.Entity
-const spawn = fn index => {
-  .Id = index;
-  .Parent = { ...Mat4.identity; .c3 = { .x = 10; .y = 20; .z = 30; .w = 1; }; };
-  .Local = { ...Mat4.identity; .c0 = { .x = 2; .y = 0; .z = 0; .w = 0; }; .c1 = { .x = 0; .y = 3; .z = 0; .w = 0; }; };
-  .World = Mat4.identity;
-  .Point = { .x = F32.of_int index; .y = 1; .z = 2; .w = 1; };
-  .Projected = { .x = 0; .y = 0; .z = 0; .w = 0; };
-  .Age = 0;
-}
 const seed :: Int -> [Scalar.Entity]
-const seed = fn count => Iter.collect (Iter.map (Iter.range (0, count), spawn))
+const seed =
+  fn count => Iter.collect (Iter.map (
+    Iter.range (0, count),
+    fn index => {
+      .Id = index;
+      .Parent = { ...Mat4.identity; .c3 = { .x = 10; .y = 20; .z = 30; .w = 1; }; };
+      .Local = { ...Mat4.identity; .c0 = { .x = 2; .y = 0; .z = 0; .w = 0; }; .c1 = { .x = 0; .y = 3; .z = 0; .w = 0; }; };
+      .World = Mat4.identity;
+      .Point = { .x = F32.of_int index; .y = 1; .z = 2; .w = 1; };
+      .Projected = { .x = 0; .y = 0; .z = 0; .w = 0; };
+      .Age = 0;
+    }
+  ))
 
 return { .Scalar; .Simd; .pack; .unpack; .tick; .seed; }

@@ -53,12 +53,13 @@ matrices, signed zero, and fractional inputs.
 then generates the systems:
 
 ```blot
+const C = S.components
 const compose = S.define (
-  { .reads = ["Parent", "Local"]; .writes = ["World"]; },
+  { .reads = [C.Parent, C.Local]; .writes = [C.World]; },
   fn read => { .World = Algebra.multiply (read.Parent, read.Local); }
 )
 const project = S.define (
-  { .reads = ["World", "Point"]; .writes = ["Projected"]; },
+  { .reads = [C.World, C.Point]; .writes = [C.Projected]; },
   fn read => { .Projected = Algebra.transform (read.World, read.Point); }
 )
 ```
@@ -121,12 +122,15 @@ columns or authorize concurrent component writes.
 ## Runtime boundaries and measurements
 
 The public kernels in [`../kernels`](../kernels) accept scalar records and
-arrays; the vectors stay internal. Matrix kernels accept batches of matrix pairs
-or matrix/point pairs. Besides being useful for bulk work, that interface fits
-the current TypeScript host adapter: a direct pair of 4×4 matrices exceeds its
-flat parameter limit and needs an indirect parameter block, which that adapter
-currently refuses. This is a host-adapter limitation, not a matrix size limit in
-the language.
+arrays; the vectors stay internal. `product` takes one matrix pair directly, and
+`point` takes one matrix/point pair. Their wide records cross the boundary
+through canonical parameter blocks. `multiply` and `transform` retain batch
+interfaces for bulk work. Tests cover all four exports with runtime inputs.
+
+The seed callback uses F32 literals under its enclosing result signature.
+[`partial-blocks.blot`](partial-blocks.blot) also demonstrates conditional
+appends when unpacking a block: only live lanes are emitted, including every
+possible tail length and empty input.
 
 The [runtime tests](../simd.test.ts) verify results and principal types, then
 inspect Runtime HIR for native vector operations, direct dispatch, and

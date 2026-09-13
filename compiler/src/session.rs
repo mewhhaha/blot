@@ -7807,6 +7807,16 @@ return F32.add (-1) 2.5
                     "F32",
                     "1.75f32",
                 ),
+                (
+                    r#"open import "blot:prelude"
+const Row = { .x = F32; .y = F32; }
+const seed :: Int -> [Row]
+const seed = fn count => Iter.collect (Iter.map (Iter.range (0, count), fn index => { .x = F32.of_int index; .y = 1; }))
+return seed 2
+"#,
+                    "[{ .x = F32; .y = F32 }]",
+                    "[{ .x = 0f32; .y = 1f32; }, { .x = 1f32; .y = 1f32; }]",
+                ),
             ];
             for (index, (text, expected_type, expected_display)) in accepted.into_iter().enumerate()
             {
@@ -8327,6 +8337,10 @@ return F32.add (-1) 2.5
                 .unwrap();
             for (path, contents) in [
                 (
+                    "components.blot",
+                    include_str!("../../case-studies/ecs/components.blot"),
+                ),
+                (
                     "systems.blot",
                     include_str!("../../case-studies/ecs/systems.blot"),
                 ),
@@ -8348,6 +8362,9 @@ return F32.add (-1) 2.5
                     .unwrap();
                 let mut imports =
                     BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
+                if path == "systems.blot" {
+                    imports.insert("./components.blot".to_owned(), "components.blot".to_owned());
+                }
                 if path == "scheduling.blot" {
                     imports.insert("./systems.blot".to_owned(), "systems.blot".to_owned());
                     imports.insert("./planning.blot".to_owned(), "planning.blot".to_owned());
@@ -8608,6 +8625,10 @@ return F32.add (-1) 2.5
                     include_str!("../../case-studies/ecs/messages.blot"),
                 ),
                 (
+                    "components.blot",
+                    include_str!("../../case-studies/ecs/components.blot"),
+                ),
+                (
                     "systems.blot",
                     include_str!("../../case-studies/ecs/systems.blot"),
                 ),
@@ -8616,6 +8637,20 @@ return F32.add (-1) 2.5
                     include_str!("../../case-studies/ecs/planning.blot"),
                 ),
                 ("ecs.blot", include_str!("../../case-studies/ecs/ecs.blot")),
+                (
+                    "simulation.blot",
+                    include_str!("../../case-studies/ecs/simulation.blot"),
+                ),
+                (
+                    "query.blot",
+                    r#"open import "blot:prelude"
+const s = import "./simulation.blot"
+const ECS = import "./ecs.blot"
+const combined = ECS.Query.merge (s.motion, s.C.Position.get)
+let row = { .Position = { .x = 1; .y = 2; }; .Velocity = { .x = 3; .y = 4; }; .Age = 0; .Label = "kept"; }
+return s.resolve (row, combined)
+"#,
+                ),
                 (
                     "arena.blot",
                     include_str!("../../case-studies/ecs/arena.blot"),
@@ -8642,12 +8677,15 @@ return F32.add (-1) 2.5
                     BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
                 for dependency in match path {
                     "ecs.blot" => vec![
+                        "components.blot",
                         "streams.blot",
                         "messages.blot",
                         "systems.blot",
                         "planning.blot",
                     ],
-                    "arena.blot" => vec!["ecs.blot"],
+                    "systems.blot" => vec!["components.blot"],
+                    "arena.blot" | "simulation.blot" => vec!["ecs.blot"],
+                    "query.blot" => vec!["ecs.blot", "simulation.blot"],
                     "main.blot" => vec!["arena.blot"],
                     _ => vec![],
                 } {
@@ -8657,10 +8695,12 @@ return F32.add (-1) 2.5
                     .configure_module(path, imports, BTreeMap::new())
                     .unwrap();
             }
-            let checked = session.check_module("main.blot");
-            assert_eq!(checked["ok"], true, "{checked}");
-            let prepared = session.prepare_runtime_hir("main.blot");
-            assert_eq!(prepared["ok"], true, "{prepared}");
+            for path in ["main.blot", "query.blot"] {
+                let checked = session.check_module(path);
+                assert_eq!(checked["ok"], true, "{path}: {checked}");
+                let prepared = session.prepare_runtime_hir(path);
+                assert_eq!(prepared["ok"], true, "{path}: {prepared}");
+            }
         });
     }
 
@@ -10632,20 +10672,46 @@ return { .pick = pick; }
                     .install_trusted_module_snapshot("prelude.blot", &snapshot)
                     .expect("prelude snapshot should install");
                 for (path, contents) in [
-                    ("systems.blot", include_str!("../../case-studies/ecs/systems.blot")),
-                    ("planning.blot", include_str!("../../case-studies/ecs/planning.blot")),
-                    ("matrix.blot", include_str!("../../case-studies/ecs/simd/matrix.blot")),
+                    (
+                        "components.blot",
+                        include_str!("../../case-studies/ecs/components.blot"),
+                    ),
+                    (
+                        "systems.blot",
+                        include_str!("../../case-studies/ecs/systems.blot"),
+                    ),
+                    (
+                        "planning.blot",
+                        include_str!("../../case-studies/ecs/planning.blot"),
+                    ),
+                    (
+                        "matrix.blot",
+                        include_str!("../../case-studies/ecs/simd/matrix.blot"),
+                    ),
                     ("transforms.blot", transforms.as_str()),
-                    ("particles.blot", include_str!("../../case-studies/ecs/simd/particles.blot")),
-                    ("scalar.blot", "const T = import \"./transforms.blot\"\nreturn T.Scalar.tick\n"),
-                    ("simd.blot", "const T = import \"./transforms.blot\"\nreturn T.tick\n"),
-                    ("blocks.blot", "const P = import \"./particles.blot\"\nreturn P.run\n"),
+                    (
+                        "particles.blot",
+                        include_str!("../../case-studies/ecs/simd/particles.blot"),
+                    ),
+                    (
+                        "scalar.blot",
+                        "const T = import \"./transforms.blot\"\nreturn T.Scalar.tick\n",
+                    ),
+                    (
+                        "simd.blot",
+                        "const T = import \"./transforms.blot\"\nreturn T.tick\n",
+                    ),
+                    (
+                        "blocks.blot",
+                        "const P = import \"./particles.blot\"\nreturn P.run\n",
+                    ),
                 ] {
                     session
                         .add_source(path.to_owned(), source(contents))
                         .expect("SIMD fixture should load");
                     let imports = [
                         ("blot:prelude", "prelude.blot"),
+                        ("./components.blot", "components.blot"),
                         ("../systems.blot", "systems.blot"),
                         ("../planning.blot", "planning.blot"),
                         ("./matrix.blot", "matrix.blot"),
@@ -11352,6 +11418,104 @@ return { .pick = pick; }
             session
                 .compile_module("main.blot")
                 .expect("frame loop should emit Wasm");
+        });
+    }
+
+    #[test]
+    fn handler_constructors_capture_runtime_arguments_without_inspecting_them() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!(
+                        "../../case-studies/ecs/constructed-handler.blot"
+                    )),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["type"], "Int -> Int", "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("constructed handlers must emit Wasm");
+        });
+    }
+
+    #[test]
+    fn merged_stateful_queries_execute_for_every_entity() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../case-studies/ecs/stateful.blot")),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let prefix = include_str!("../../case-studies/ecs/stateful.blot")
+                .split_once("let apply ::")
+                .unwrap()
+                .0;
+            session
+                .add_source(
+                    "unhandled.blot".to_owned(),
+                    source(&format!("{prefix}\nuse movement ()\nreturn ()\n")),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "unhandled.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let unhandled = session.check_module("unhandled.blot");
+            assert_eq!(
+                unhandled["diagnostic"]["code"], "BLOT_UNHANDLED_EFFECT",
+                "{unhandled}"
+            );
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let evaluated = session.evaluate_module("main.blot");
+            assert_eq!(
+                evaluated["display"],
+                "{ .default = [{ .Position = 8; .Velocity = 3; }, { .Position = 44; .Velocity = 2; }]; .apply = <function>; }",
+                "{evaluated}"
+            );
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            session
+                .compile_module("main.blot")
+                .expect("state query must emit Wasm");
         });
     }
 

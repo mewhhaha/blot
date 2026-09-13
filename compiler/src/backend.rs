@@ -1648,13 +1648,7 @@ fn emit_dynamic_module(
     let mut types = FunctionTypes::new();
     let mut imports = ImportSection::new();
     for imported in &manifest.imports {
-        let mut parameters = imported
-            .function
-            .parameters
-            .iter()
-            .flat_map(flattened_type)
-            .collect::<Vec<_>>();
-        parameters.insert(0, ValType::I32);
+        let mut parameters = ParameterLayout::new(&imported.function.parameters).wasm_types();
         let flattened_results = flattened_type(&imported.function.result);
         let results = if flattened_results.len() <= 1 {
             flattened_results
@@ -1670,13 +1664,7 @@ fn emit_dynamic_module(
         );
     }
     for link in &manifest.links {
-        let mut parameters = link
-            .function
-            .parameters
-            .iter()
-            .flat_map(flattened_type)
-            .collect::<Vec<_>>();
-        parameters.insert(0, ValType::I32);
+        let mut parameters = ParameterLayout::new(&link.function.parameters).wasm_types();
         let flattened_results = flattened_type(&link.function.result);
         let results = if flattened_results.len() <= 1 {
             flattened_results
@@ -2005,9 +1993,7 @@ fn emit_dynamic_module(
         } else {
             vec![ValType::I32]
         };
-        let wasm_parameters = std::iter::once(ValType::I32)
-            .chain(public_function.parameters.iter().flat_map(flattened_type))
-            .collect();
+        let wasm_parameters = ParameterLayout::new(&public_function.parameters).wasm_types();
         let type_index = types.intern(wasm_parameters, wasm_results);
         let function_index = imported_function_count + functions.len();
         functions.function(type_index);
@@ -2576,11 +2562,8 @@ fn dynamic_export_function(
     runtime_function_indices: &HashMap<FunctionId, u32>,
 ) -> Result<Function, String> {
     let DynamicExport { function, public } = exported;
-    let parameter_count = 1 + public
-        .parameter_types
-        .iter()
-        .map(|type_| flattened_type(type_).len() as u32)
-        .sum::<u32>();
+    let parameters = ParameterLayout::new(public.parameter_types);
+    let parameter_count = parameters.wasm_types().len() as u32;
     let pointer = parameter_count;
     let mut local_types = vec![ValType::I32];
     let mut arguments = Vec::new();
@@ -2599,13 +2582,31 @@ fn dynamic_export_function(
     let mut ins = body.instructions();
     ins.local_get(0).call(helpers.allocator.select);
     begin_call(&mut ins, public.call_id, helpers);
+    if parameters.indirect() {
+        parameters.validate(&mut ins, 1, pointer);
+    }
     let mut first = 1;
-    for ((type_id, public_type), private) in public
+    for (((type_id, public_type), private), offset) in public
         .parameter_runtime_types
         .iter()
         .zip(public.parameter_types)
         .zip(&arguments)
+        .zip(&parameters.offsets)
     {
+        if parameters.indirect() {
+            ins.local_get(1)
+                .i32_const(*offset as i32)
+                .i32_add()
+                .local_tee(pointer)
+                .i32_const(*type_id as i32)
+                .call(helpers.canonical_validator)
+                .local_get(pointer)
+                .call(helpers.canonical.types[type_id].lower);
+            for local in private.iter().rev() {
+                ins.local_set(*local);
+            }
+            continue;
+        }
         let width = flattened_type(public_type).len() as u32;
         let incoming = (first..first + width).collect::<Vec<_>>();
         first += width;
@@ -2766,26 +2767,54 @@ fn emit_call(
     instructions
         .global_get(helpers.allocation_globals.current_scope)
         .i32_load(allocation_mem(allocation::SCOPE_TOKEN));
-    for (argument, type_id) in arguments.iter().zip(&signature.parameters) {
-        let public = canonical_type(module, *type_id, &mut Vec::new())?;
-        let layout = memory_layout(&public);
+    let parameters = ParameterLayout::new(&imported.parameters);
+    if parameters.indirect() {
         instructions
             .i32_const(0)
             .i32_const(0)
-            .i32_const(layout.alignment as i32)
-            .i32_const(layout.size.max(1) as i32)
+            .i32_const(parameters.memory.alignment as i32)
+            .i32_const(parameters.memory.size as i32)
             .call(helpers.allocator.alloc)
             .local_tee(scratch_length)
-            .call(helpers.allocator.temporary)
-            .local_get(scratch_length);
-        emit_local_values(
-            instructions,
-            locals_for(module, facts.value_locals, *argument)?,
-        );
-        instructions
-            .call(helpers.canonical.types[type_id].upper)
-            .local_get(scratch_length)
-            .call(helpers.canonical.types[type_id].read);
+            .call(helpers.allocator.temporary);
+        for ((argument, type_id), offset) in arguments
+            .iter()
+            .zip(&signature.parameters)
+            .zip(&parameters.offsets)
+        {
+            instructions
+                .local_get(scratch_length)
+                .i32_const(*offset as i32)
+                .i32_add();
+            emit_local_values(
+                instructions,
+                locals_for(module, facts.value_locals, *argument)?,
+            );
+            instructions.call(helpers.canonical.types[type_id].upper);
+        }
+        instructions.local_get(scratch_length);
+    } else {
+        for (argument, type_id) in arguments.iter().zip(&signature.parameters) {
+            let public = canonical_type(module, *type_id, &mut Vec::new())?;
+            let layout = memory_layout(&public);
+            instructions
+                .i32_const(0)
+                .i32_const(0)
+                .i32_const(layout.alignment as i32)
+                .i32_const(layout.size.max(1) as i32)
+                .call(helpers.allocator.alloc)
+                .local_tee(scratch_length)
+                .call(helpers.allocator.temporary)
+                .local_get(scratch_length);
+            emit_local_values(
+                instructions,
+                locals_for(module, facts.value_locals, *argument)?,
+            );
+            instructions
+                .call(helpers.canonical.types[type_id].upper)
+                .local_get(scratch_length)
+                .call(helpers.canonical.types[type_id].read);
+        }
     }
     if !direct {
         instructions.local_get(scratch_pointer);
@@ -6986,6 +7015,59 @@ fn finish_call(ins: &mut InstructionSink<'_>, helpers: DynamicHelpers) {
 struct MemoryLayout {
     alignment: u32,
     size: u32,
+}
+
+struct ParameterLayout {
+    flat: Vec<ValType>,
+    offsets: Vec<u32>,
+    memory: MemoryLayout,
+}
+
+impl ParameterLayout {
+    fn new(types: &[AbiType]) -> Self {
+        let mut alignment = 1;
+        let mut size = 0;
+        let mut offsets = Vec::new();
+        for type_ in types {
+            let layout = memory_layout(type_);
+            alignment = alignment.max(layout.alignment);
+            size = align_to(size, layout.alignment);
+            offsets.push(size);
+            size += layout.size;
+        }
+        Self {
+            flat: types.iter().flat_map(flattened_type).collect(),
+            offsets,
+            memory: MemoryLayout {
+                alignment,
+                size: align_to(size, alignment),
+            },
+        }
+    }
+
+    fn indirect(&self) -> bool {
+        self.flat.len() > 16
+    }
+
+    fn wasm_types(&self) -> Vec<ValType> {
+        if self.indirect() {
+            return vec![ValType::I32; 2];
+        }
+        std::iter::once(ValType::I32)
+            .chain(self.flat.iter().copied())
+            .collect()
+    }
+
+    fn validate(&self, ins: &mut InstructionSink<'_>, pointer: u32, length: u32) {
+        ins.i32_const(1).local_set(length);
+        boundary_validation::extent(
+            ins,
+            pointer,
+            length,
+            self.memory.size,
+            self.memory.alignment,
+        );
+    }
 }
 
 #[derive(Clone, Copy)]

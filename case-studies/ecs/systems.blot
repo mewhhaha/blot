@@ -1,17 +1,23 @@
 open import "blot:prelude"
+const Components = import "./components.blot"
 
 const Systems = fn Row => do:
   const schema = case @type.reflect Row of
     #Shape fields => fields
     _ => @fail "systems require a record type"
   return {
+    .components = Components schema;
     .define = fn (access, work) => do:
-      for name in Iter.items (Array.append access.reads access.writes):
+      for component in Iter.items (Array.append access.reads access.writes):
+        const name = component.name
         if not (@shape.has schema name):
           return @fail ("unknown system component: " <> name)
 
-      const Read = Reflect.pick (schema, access.reads)
-      const Write = Reflect.pick (schema, access.writes)
+        if not (type_equal (@shape.get schema name, component.Type)):
+          return @fail ("system component type differs: " <> name)
+
+      const Read = Reflect.pick (schema, map (access.reads, fn component => component.name))
+      const Write = Reflect.pick (schema, map (access.writes, fn component => component.name))
       const reads = freeze (@shape.names Read)
       const writes = freeze (@shape.names Write)
       const Work = Read -> Write

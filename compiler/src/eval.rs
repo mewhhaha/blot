@@ -4957,6 +4957,7 @@ fn apply_with_expected(
             // it cannot recover this application's generic result by itself.
             if closure_runtime.residual.is_some() {
                 closure_runtime.result_context = expected_result
+                    .clone()
                     .filter(|expected| !contains_type_variables(expected))
                     .or_else(|| {
                         let Value::Arrow { codomain, .. } =
@@ -4998,10 +4999,22 @@ fn apply_with_expected(
                         {
                             return Computation::error(error);
                         }
-                        if let Some(Value::Arrow { codomain, .. }) =
-                            signature.as_deref().map(signature_body)
-                        {
-                            attach_signature(&mut value, codomain);
+                        let result_signature = expected_result
+                            .as_ref()
+                            .filter(|expected| {
+                                matches!(value, Value::Closure { .. })
+                                    && !contains_type_variables(expected)
+                            })
+                            .or_else(|| {
+                                let Value::Arrow { codomain, .. } =
+                                    signature.as_deref().map(signature_body)?
+                                else {
+                                    return None;
+                                };
+                                Some(codomain.as_ref())
+                            });
+                        if let Some(result_signature) = result_signature {
+                            attach_signature(&mut value, result_signature);
                         }
                         if let Some(span) = reuse_assertion
                             && let Value::Closure {

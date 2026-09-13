@@ -22,9 +22,38 @@ export interface AbiVariantLayout extends AbiMemoryLayout {
   readonly cases: VariantType["cases"];
 }
 
+export interface AbiParameterLayout extends AbiMemoryLayout {
+  readonly parameters: readonly {
+    readonly type: BlotAbiType;
+    readonly offset: number;
+  }[];
+}
+
 /** Layouts are keyed by immutable, parsed ABI descriptors, never guest memory. */
 export class AbiMemoryLayouts {
   readonly #layouts = new WeakMap<BlotAbiType, AbiMemoryLayout>();
+  readonly #parameters = new WeakMap<
+    readonly BlotAbiType[],
+    AbiParameterLayout
+  >();
+
+  parameters(types: readonly BlotAbiType[]): AbiParameterLayout {
+    const cached = this.#parameters.get(types);
+    if (cached !== undefined) return cached;
+    let offset = 0;
+    let alignment = 1;
+    const parameters = types.map((type) => {
+      const layout = this.get(type);
+      offset = alignTo(offset, layout.alignment);
+      const parameter = { type, offset };
+      offset += layout.size;
+      alignment = Math.max(alignment, layout.alignment);
+      return parameter;
+    });
+    const layout = { parameters, alignment, size: alignTo(offset, alignment) };
+    this.#parameters.set(types, layout);
+    return layout;
+  }
 
   get(type: RecordType): AbiRecordLayout;
   get(type: VariantType): AbiVariantLayout;

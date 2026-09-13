@@ -14,6 +14,7 @@ const sizes = [64, 512, 4096];
 const samples = 7;
 const warmupCalls = 16;
 const sourcePaths = [
+  "case-studies/ecs/components.blot",
   "case-studies/ecs/ecs.blot",
   "case-studies/ecs/streams.blot",
   "case-studies/ecs/messages.blot",

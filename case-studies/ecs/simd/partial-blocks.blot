@@ -1,0 +1,26 @@
+open import "blot:prelude"
+const Particles = import "./particles.blot"
+
+const unpack :: Particles.Table -> [Particles.Entity]
+const unpack = fn table => do:
+  let rows :: [Particles.Entity]
+  let rows = []
+  for index in Iter.range (0, Array.length table.blocks):
+    let block = Array.expect_get (table.blocks, index)
+    if index * 4 < table.count:
+      rows := @array.push rows { .Position = F32x4.x block.Position; .Velocity = F32x4.x block.Velocity; }
+
+    if index * 4 + 1 < table.count:
+      rows := @array.push rows { .Position = F32x4.y block.Position; .Velocity = F32x4.y block.Velocity; }
+
+    if index * 4 + 2 < table.count:
+      rows := @array.push rows { .Position = F32x4.z block.Position; .Velocity = F32x4.z block.Velocity; }
+
+    if index * 4 + 3 < table.count:
+      rows := @array.push rows { .Position = F32x4.w block.Position; .Velocity = F32x4.w block.Velocity; }
+
+  return rows
+
+const roundtrip :: [Particles.Entity] -> [Particles.Entity]
+const roundtrip = fn rows => unpack (Particles.pack rows)
+return roundtrip

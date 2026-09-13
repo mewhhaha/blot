@@ -34,9 +34,9 @@ const resolve = fn (row, work) => @handle (
   fn () => @handle (
     C.Velocity.Read,
     work,
-    { .get = fn ((), ?resume) => resume row.Velocity; }
+    C.Velocity.supply row.Velocity
   ),
-  { .get = fn ((), ?resume) => resume row.Position; }
+  C.Position.supply row.Position
 )
 
 const integrate :: Entity -> Entity

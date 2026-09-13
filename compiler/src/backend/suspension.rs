@@ -553,9 +553,7 @@ pub(super) fn emit(
             .function
             .as_ref()
             .expect("runtime export function");
-        let parameters = std::iter::once(ValType::I32)
-            .chain(public.parameters.iter().flat_map(flattened_type))
-            .collect::<Vec<_>>();
+        let parameters = ParameterLayout::new(&public.parameters).wasm_types();
         let type_id = types.intern(parameters, vec![ValType::I32]);
         let index = imports + functions.len();
         functions.function(type_id);
@@ -598,9 +596,7 @@ pub(super) fn emit(
             .find(|callback| callback.name == format!("blot:callback:{}", function_id.0))
             .expect("checked callback adapter")
             .function;
-        let parameters = std::iter::once(ValType::I32)
-            .chain(public.parameters.iter().flat_map(flattened_type))
-            .collect();
+        let parameters = ParameterLayout::new(&public.parameters).wasm_types();
         let type_id = types.intern(parameters, vec![ValType::I32]);
         let index = imports + functions.len();
         functions.function(type_id);
@@ -1039,7 +1035,8 @@ fn start(
     signature: &crate::hir::RuntimeSignature,
     helpers: DynamicHelpers,
 ) -> Result<Function, String> {
-    let count = 1 + public.parameters.iter().flat_map(flattened_type).count() as u32;
+    let parameters = ParameterLayout::new(&public.parameters);
+    let count = parameters.wasm_types().len() as u32;
     let context = count;
     let pointer = count + 1;
     let temporary = count + 2;
@@ -1049,6 +1046,9 @@ fn start(
     let mut ins = body.instructions();
     ins.local_get(0).call(helpers.allocator.select);
     begin_call(&mut ins, u32::MAX, helpers);
+    if parameters.indirect() {
+        parameters.validate(&mut ins, 1, temporary);
+    }
     allocate(&mut ins, helpers.allocator.alloc, CONTEXT_SIZE, context);
     for offset in (0..CONTEXT_SIZE).step_by(4) {
         constant_word(&mut ins, context, offset, 0);
@@ -1082,23 +1082,31 @@ fn start(
     constant_word(&mut ins, pointer, 12, 0);
     let entry = &function.continuations[function.entry.0];
     let mut first = 1;
-    for ((parameter, type_id), public_type) in entry
+    for (((parameter, type_id), public_type), offset) in entry
         .parameters
         .iter()
         .zip(&signature.parameters)
         .zip(&public.parameters)
+        .zip(&parameters.offsets)
     {
-        let layout = memory_layout(public_type);
-        allocate(
-            &mut ins,
-            helpers.allocator.alloc,
-            layout.size.max(1),
-            temporary,
-        );
         let width = flattened_type(public_type).len() as u32;
-        let sources = (first..first + width).collect::<Vec<_>>();
-        let mut flat = 0;
-        emit_store_canonical_result(&mut ins, public_type, &sources, &mut flat, temporary, 0)?;
+        if parameters.indirect() {
+            ins.local_get(1)
+                .i32_const(*offset as i32)
+                .i32_add()
+                .local_set(temporary);
+        } else {
+            let layout = memory_layout(public_type);
+            allocate(
+                &mut ins,
+                helpers.allocator.alloc,
+                layout.size.max(1),
+                temporary,
+            );
+            let sources = (first..first + width).collect::<Vec<_>>();
+            let mut flat = 0;
+            emit_store_canonical_result(&mut ins, public_type, &sources, &mut flat, temporary, 0)?;
+        }
         ins.local_get(temporary)
             .i32_const(*type_id as i32)
             .call(helpers.canonical_validator)
@@ -1118,7 +1126,9 @@ fn start(
             &translated,
             pointer,
         );
-        ins.local_get(temporary).call(helpers.allocator.release);
+        if !parameters.indirect() {
+            ins.local_get(temporary).call(helpers.allocator.release);
+        }
         first += width;
     }
     ins.local_get(0)

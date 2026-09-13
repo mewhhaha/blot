@@ -71,7 +71,7 @@ test("SIMD matrices agree with scalar F32 arithmetic for runtime inputs", async 
         await compiler.check(`case-studies/ecs/kernels/${variant}-matrix.blot`),
         {
           type:
-            `{ .multiply = [{ .0 = ${matrixType}; .1 = ${matrixType} }] -> [${matrixType}]; .transform = [{ .0 = ${matrixType}; .1 = ${vectorType} }] -> [${vectorType}] }`,
+            `{ .multiply = [{ .0 = ${matrixType}; .1 = ${matrixType} }] -> [${matrixType}]; .transform = [{ .0 = ${matrixType}; .1 = ${vectorType} }] -> [${vectorType}]; .product = { .0 = ${matrixType}; .1 = ${matrixType} } -> ${matrixType}; .point = { .0 = ${matrixType}; .1 = ${vectorType} } -> ${vectorType} }`,
           effects: "",
         },
       );
@@ -123,12 +123,16 @@ test("SIMD matrices agree with scalar F32 arithmetic for runtime inputs", async 
           const args = [[tuple(matrix(left), matrix(right))]];
           assert.deepEqual(simd.call("multiply", args), expected);
           assert.deepEqual(scalar.call("multiply", args), expected);
+          assert.deepEqual(simd.call("product", [args[0][0]]), expected[0]);
+          assert.deepEqual(scalar.call("product", [args[0][0]]), expected[0]);
         }
         for (const point of points) {
           const args = [[tuple(matrix(left), vector(point))]];
           const expected = [vector(transform(left, point))];
           assert.deepEqual(simd.call("transform", args), expected);
           assert.deepEqual(scalar.call("transform", args), expected);
+          assert.deepEqual(simd.call("point", [args[0][0]]), expected[0]);
+          assert.deepEqual(scalar.call("point", [args[0][0]]), expected[0]);
         }
       }
       assert.notDeepEqual(
@@ -324,6 +328,28 @@ test("SIMD kernels retain vector arithmetic and owned Store updates", async () =
           ) assert.equal(operation.update, "owned-reuse");
         }
       }
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("conditional SIMD unpacking preserves empty tables and every partial block", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = "case-studies/ecs/simd/partial-blocks.blot";
+    const guest = await instantiateArtifact(await compiler.compile(path));
+    try {
+      for (const count of [0, 1, 2, 3, 4, 5, 6, 7, 8, 17, 129]) {
+        const rows = Array.from(
+          { length: count },
+          (_, index) =>
+            record({ Position: Math.fround(index / 4), Velocity: -0 }),
+        );
+        assert.deepEqual(guest.call("default", [rows]), rows);
+      }
+    } finally {
+      guest.destroy();
     }
   } finally {
     compiler.destroy();

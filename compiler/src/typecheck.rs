@@ -3868,7 +3868,7 @@ impl Checker {
             &dependency_types,
         )?;
         effects = self.join_effects(effects, inferred.effects)?;
-        self.resolve_numeric_literals()?;
+        self.resolve_numeric_literals(0)?;
         if let Some(diagnostic) = self.editor_hole_diagnostics(path).into_iter().next() {
             return Err(diagnostic);
         }
@@ -4882,6 +4882,7 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         signatures: &mut BTreeMap<String, Type>,
     ) -> Result<Type, Diagnostic> {
+        let first_literal = self.variables.borrow().len() as VariableId;
         match declaration {
             Declaration::Signature {
                 name, value, span, ..
@@ -5198,7 +5199,7 @@ impl Checker {
                     })?;
                     inferred.effects = Type::Effects(BTreeSet::new());
                 }
-                self.resolve_numeric_literals()?;
+                self.resolve_numeric_literals(first_literal)?;
                 let evaluated = if kind == DeclarationKind::Const {
                     match self.evaluate_binding(
                         path,
@@ -5313,7 +5314,21 @@ impl Checker {
                         None,
                     );
                     self.phase.set(previous_phase);
-                    inferred.type_ = selected?;
+                    let selected = selected?;
+                    if let (
+                        Type::Function {
+                            effects: checked, ..
+                        },
+                        Type::Function {
+                            effects: captured, ..
+                        },
+                    ) = (self.settle(inferred.type_.clone(), true), &selected)
+                    {
+                        // Rechecking a closure's captures may refine its layout;
+                        // it cannot erase effects established at its call site.
+                        self.constrain(Rc::unwrap_or_clone(checked), (**captured).clone(), span)?;
+                    }
+                    inferred.type_ = selected;
                 }
                 if kind == DeclarationKind::Const
                     && type_exposes_generative_effect(&inferred.type_)
@@ -5571,7 +5586,7 @@ impl Checker {
                             span,
                         )
                     })?;
-                self.resolve_numeric_literals()?;
+                self.resolve_numeric_literals(first_literal)?;
                 let exact_record = self.exact_record_expression(module, value, types);
                 let exact_record_order =
                     self.exact_record_order_expression(module, value, types, values);
@@ -5604,7 +5619,7 @@ impl Checker {
             Declaration::Open { value, span } => {
                 *recursive_bindings = None;
                 let inferred = self.infer(path, module, value, types, values, dependencies)?;
-                self.resolve_numeric_literals()?;
+                self.resolve_numeric_literals(first_literal)?;
                 let opened = self.evaluate(path, value, values, Phase::Comptime)?;
                 let Some(fields) = opened_members(&opened) else {
                     return Err(Diagnostic::new(
@@ -6613,7 +6628,7 @@ impl Checker {
                     if contains_bottom(&settled)
                         && self.mentions_pending_numeric_literal(&subject.type_)
                     {
-                        self.resolve_numeric_literals()?;
+                        self.resolve_numeric_literals(0)?;
                     }
                     let Some(settled) = self.member_lookup_subject(&subject.type_) else {
                         self.defer_current_closure();
@@ -6680,14 +6695,16 @@ impl Checker {
                             if let Some(type_) = self.bridge(&member) {
                                 return Some(type_);
                             }
-                            if matches!(target_value, Value::Extended { .. })
-                                || is_resolve_member_closure(&self.context, &member)
+                            let attached = matches!(target_value, Value::Extended { .. })
+                                || is_resolve_member_closure(&self.context, &member);
+                            if let Some(signature) = self.bridge_closed_attached_signature(&member)
+                                && (attached || type_exposes_generative_effect(&signature))
                             {
-                                if let Some(signature) =
-                                    self.bridge_closed_attached_signature(&member)
-                                {
-                                    return Some(signature);
-                                }
+                                // A closed effectful member carries this module
+                                // instance's effect identities, not its template's.
+                                return Some(signature);
+                            }
+                            if attached {
                                 return Some(self.fresh());
                             }
                         }
@@ -6844,7 +6861,7 @@ impl Checker {
                                 dependencies,
                             )?;
                             if self.mentions_pending_numeric_literal(&inferred_name.type_) {
-                                self.resolve_numeric_literals()?;
+                                self.resolve_numeric_literals(0)?;
                             }
                             self.constrain(inferred_name.type_, text_type(), span)?;
                             let inferred =
@@ -7767,7 +7784,7 @@ impl Checker {
                 if contains_bottom(&settled)
                     && self.mentions_pending_numeric_literal(&subject.type_)
                 {
-                    self.resolve_numeric_literals()?;
+                    self.resolve_numeric_literals(0)?;
                     settled = self.settle(subject.type_.clone(), true);
                 }
                 if contains_bottom(&settled) && self.active_closure_contains_computed_field() {
@@ -7901,7 +7918,22 @@ impl Checker {
         else {
             return self.type_error(Type::Unit, Type::Opaque("Effect".to_owned()), span);
         };
-        let handler_value = self.evaluate(path, handler_expression, values, Phase::Runtime)?;
+        let handler = self.infer(
+            path,
+            module,
+            handler_expression,
+            environment,
+            values,
+            dependencies,
+        )?;
+        let handler_value = self.evaluate_handler_clauses(path, module, handler_expression, values)
+            .map_err(|mut error| {
+                if error.code == "BLOT_UNBOUND" {
+                    error.code = "BLOT_TYPE_ERROR";
+                    error.message = "Handler clauses must be selected statically. Runtime arguments may be captured, but cannot be inspected to choose clauses.".to_owned();
+                }
+                error
+            })?;
         let Value::Shape(handler_fields) = &handler_value else {
             return Err(Diagnostic::new(
                 "BLOT_TYPE_ERROR",
@@ -7952,14 +7984,6 @@ impl Checker {
             path,
             module,
             thunk_expression,
-            environment,
-            values,
-            dependencies,
-        )?;
-        let handler = self.infer(
-            path,
-            module,
-            handler_expression,
             environment,
             values,
             dependencies,
@@ -8364,12 +8388,12 @@ impl Checker {
         result
     }
 
-    fn resolve_numeric_literals(&self) -> Result<(), Diagnostic> {
+    fn resolve_numeric_literals(&self, first_variable: VariableId) -> Result<(), Diagnostic> {
         debug_assert!(self.bound_insertions.borrow().is_empty());
         let literals = self
             .numeric_literals
             .borrow()
-            .iter()
+            .range(first_variable..)
             .map(|(variable, literal)| (*variable, literal.clone()))
             .collect::<Vec<_>>();
         for (variable, literal) in literals {
@@ -10774,6 +10798,45 @@ impl Checker {
                 types.remove(path, &expression);
             }
         }
+    }
+
+    fn evaluate_handler_clauses(
+        &self,
+        path: &str,
+        module: &Module,
+        expression: ExpressionId,
+        values: &ValueEnvironment,
+    ) -> Result<Value, Diagnostic> {
+        let error = match self.evaluate(path, expression, values, Phase::Runtime) {
+            Ok(value) => return Ok(value),
+            Err(error) if error.code == "BLOT_UNBOUND" => error,
+            Err(error) => return Err(error),
+        };
+        let Expression::Apply {
+            function,
+            argument,
+            span,
+        } = module.arena.expressions[expression.0 as usize]
+        else {
+            return Err(error);
+        };
+        let constructor = self.evaluate_handler_clauses(path, module, function, values)?;
+        // Inspect only the clauses' source identities. Runtime arguments may be
+        // captured, but demanding one while choosing clauses still fails.
+        let argument = Value::Deferred {
+            module: Rc::new(path.to_owned()),
+            expression: argument,
+            environment: values.clone(),
+            demands: Rc::new(RefCell::new(crate::value::DeferredDemands::default())),
+        };
+        run(crate::eval::apply(
+            self.context.clone(),
+            constructor,
+            argument,
+            span,
+            Runtime::new(Phase::Runtime, path.to_owned()),
+            ApplicationSite::for_expression(&self.context, path, expression)?,
+        ))
     }
 
     fn evaluate(

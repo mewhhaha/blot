@@ -4,22 +4,10 @@ const Stream = import "./streams.blot"
 const Messages = import "./messages.blot"
 const Systems = import "./systems.blot"
 const Planning = import "./planning.blot"
-
-const component = fn (name, T) => do:
-  const Read = @effect { .get = Unit -> T; }
-  return {
-    .Type = T;
-    .name = name;
-    .Read = Read;
-    .get = Read.get;
-    .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
-  }
+const Components = import "./components.blot"
 
 const archetype = fn schema => do:
-  let components = Unit
-  for name in Iter.items (@shape.names schema):
-    components := @type.attach components name (component (name, @shape.get schema name))
-
+  const components = Components schema
   return schema <+ { .components = components; }
 
 const Guard = @effect { .require = Bool -> Unit; }

@@ -147,6 +147,12 @@ that execution and therefore cannot outlive a revision or substitute one module
 occurrence for another. This changes evaluation work only; the exported runtime
 body retains the source algorithm.
 
+A returned source closure receives the closed result signature recorded at its
+call site in preference to an unspecialized codomain. Its effects remain those
+established by checking, including when the closure captures other computations.
+A generic representation signature that omits those effects cannot certify
+purity for call-result caching.
+
 Memo-key admission visits at most 256 value nodes and admits at most 4,096
 variable-size payload bytes per argument or result. The byte budget includes
 UTF-8 Text and field or constructor names, integer magnitude bytes, and integer

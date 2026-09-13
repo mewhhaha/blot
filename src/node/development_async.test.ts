@@ -233,3 +233,65 @@ return { .apply = apply; }
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("development links copy wide parameter blocks between separate memories", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blot-wide-development-"));
+  const manifest = join(directory, "blot.json");
+  const fields = Array.from({ length: 12 }, (_, index) => `.n${index} = Int;`)
+    .join(" ");
+  await writeFile(
+    manifest,
+    JSON.stringify({
+      schema: "blot-project",
+      version: 1,
+      entryUnit: "app",
+      units: { app: "./main.blot", formula: "./formula.blot" },
+    }),
+  );
+  await writeFile(
+    join(directory, "formula.blot"),
+    `open import "blot:prelude"
+const Payload = { ${fields} .label = Text; .active = Bool; .values = [Int]; }
+const echo :: Payload -> Payload
+const echo = fn payload => { ...payload; .label = payload.label <> "!"; }
+return { .Payload; .echo; }
+`,
+  );
+  await writeFile(
+    join(directory, "main.blot"),
+    `const formula = import "./formula.blot"
+const run :: formula.Payload -> formula.Payload
+const run = fn payload => formula.echo payload
+return { .run; }
+`,
+  );
+  const project = await DevelopmentProject.create(manifest);
+  const runtime = new DevelopmentRuntime(undefined, {
+    capabilities: () => new Map(),
+  });
+  try {
+    await project.activate(runtime);
+    const payload = {
+      kind: "record" as const,
+      fields: new Map<string, import("../abi_values.ts").RuntimeValue>([
+        ...Array.from(
+          { length: 12 },
+          (_, index): [string, bigint] => [`n${index}`, BigInt(index - 6)],
+        ),
+        ["label", "wide — 🐈"],
+        ["active", true],
+        ["values", [1n, -2n, 3n]],
+      ]),
+    };
+    for (let index = 0; index < 4; index += 1) {
+      assert.deepEqual(await runtime.callAsync("run", [payload]), {
+        kind: "record",
+        fields: new Map([...payload.fields, ["label", "wide — 🐈!"]]),
+      });
+    }
+  } finally {
+    await runtime.close();
+    project.destroy();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

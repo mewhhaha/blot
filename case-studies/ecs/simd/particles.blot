@@ -41,12 +41,14 @@ const unpack = fn table => Iter.collect (Iter.map (
 ))
 
 const S = Systems Block
+
+const C = S.components
 const integrate = S.define (
-  { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+  { .reads = [C.Position, C.Velocity]; .writes = [C.Position]; },
   fn read => { .Position = F32x4.add read.Position read.Velocity; }
 )
 const bounce = S.define (
-  { .reads = ["Position", "Velocity"]; .writes = ["Velocity"]; },
+  { .reads = [C.Position, C.Velocity]; .writes = [C.Velocity]; },
   fn read => { .Velocity = F32x4.select (F32x4.less read.Position (F32x4.splat 10)) read.Velocity (F32x4.sub zero read.Velocity); }
 )
 const plan = Planning.compile (Block, { .integrate; .bounce; }, Planning.before ("integrate", "bounce"))

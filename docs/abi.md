@@ -163,7 +163,8 @@ Canonical ABI for values. Direct signatures use these rules:
 
 - at most 16 flat parameters;
 - at most one flat result;
-- excess parameters become one pointer to their canonical record layout;
+- excess parameters become one pointer to a block of logical arguments in source
+  order, with each value aligned and the final block padded;
 - excess results become one returned pointer for exports;
 - an imported excess result adds a final result pointer parameter and returns
   nothing.
@@ -371,9 +372,11 @@ reported for that path and excluded before emission. An emitter failure discards
 completed sibling misses and returns no admitted miss artifact. Batching changes
 compiler scheduling only and never executes a declared host effect.
 
-The host adapter admits canonical scalar and aggregate values and at most 16
-flat parameters. It admits affine canonical transfers and refuses split units
-and linear host transfers without a supported registered cleanup protocol. The
+The host adapter admits canonical scalar and aggregate values, using a parameter
+block when an export or import exceeds 16 flat lanes. Direct and resumable
+exports and development links share this layout; callback starts retain the
+16-lane limit. It admits affine canonical transfers and refuses split units and
+linear host transfers without a supported registered cleanup protocol. The
 direct path permits only one outstanding indirect result; resumable calls have
 separate result destinations. For every boundary the compiler does accept, all
 ABI-required range, representation, UTF-8, discriminant, boolean, pointer,

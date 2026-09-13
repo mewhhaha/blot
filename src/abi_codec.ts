@@ -25,6 +25,73 @@ export class AbiCodec {
     ) => RuntimeValue,
   ) {}
 
+  lowerParameters(
+    types: readonly BlotAbiType[],
+    values: readonly RuntimeValue[],
+  ): Lane[] {
+    if (types.length !== values.length) {
+      throw new TypeError("canonical argument arity mismatch");
+    }
+    if (
+      types.reduce((width, type) => width + flattenedAbiType(type).length, 0) <=
+        16
+    ) {
+      return types.flatMap((type, index) => this.lower(type, values[index]));
+    }
+    const layout = this.layouts.parameters(types);
+    if (layout.size > 0xffffffff) {
+      throw new RangeError("parameter block exceeds memory32");
+    }
+    const pointer = this.allocate(layout.size, layout.alignment);
+    for (const [index, parameter] of layout.parameters.entries()) {
+      this.write(parameter.type, values[index], pointer + parameter.offset);
+    }
+    return [pointer];
+  }
+
+  liftParameters(
+    types: readonly BlotAbiType[],
+    lanes: readonly Lane[],
+  ): RuntimeValue[] {
+    const width = types.reduce(
+      (width, type) => width + flattenedAbiType(type).length,
+      0,
+    );
+    if (width > 16) {
+      if (lanes.length !== 1) {
+        throw new TypeError("canonical argument arity mismatch");
+      }
+      const pointer = memory32(lanes[0]);
+      const layout = this.layouts.parameters(types);
+      if (
+        pointer === 0 || pointer % layout.alignment !== 0 ||
+        pointer + layout.size > this.memory.buffer.byteLength
+      ) {
+        throw new RangeError("invalid canonical parameter block");
+      }
+      return layout.parameters.map(({ type, offset }) =>
+        readMemory(
+          type,
+          new DataView(this.memory.buffer),
+          pointer + offset,
+          this.layouts,
+          this.resources,
+          this.callbacks,
+        )
+      );
+    }
+    if (lanes.length !== width) {
+      throw new TypeError("canonical argument arity mismatch");
+    }
+    let position = 0;
+    return types.map((type) => {
+      const width = flattenedAbiType(type).length;
+      const value = this.lift(type, lanes.slice(position, position + width));
+      position += width;
+      return value;
+    });
+  }
+
   lower(type: BlotAbiType, value: RuntimeValue): Lane[] {
     if (type.kind === "callback") {
       if (this.callbackInputs === undefined) {
