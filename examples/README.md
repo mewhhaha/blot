@@ -39,6 +39,7 @@ typing, while deliberately failing `Monoid` because no `.empty` value can exist.
 Its focused test also locks down rejection of a headless value.
 | [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
 | [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
+| [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -81,6 +82,11 @@ The validation example treats a check as `Input -> Result (Value, [Error])`.
 `zip_with` shares one input and error carrier across independent checks, so
 failures accumulate instead of short-circuiting. Successful leaves strengthen
 ordinary integer fields into refinements before the final config is built.
+
+The middleware example keeps its callback row
+open: `traced` and `counted` add named observability effects while direct
+composition preserves any unrelated callback effects instead of hiding them
+behind a runtime registry.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,

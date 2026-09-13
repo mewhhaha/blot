@@ -1,0 +1,12 @@
+open import "blot:prelude"
+
+const Middleware = import "../../../examples/lib/effect_middleware.blot"
+const Fetch = @effect { .get = Int -> Int; }
+
+let service :: Int -> Int ~ { Fetch }
+let service = fn key => Fetch.get key
+
+let invalid :: Int -> Int ~ { Middleware.Trace, Middleware.Metrics }
+let invalid = Middleware.traced (Middleware.counted service)
+
+return invalid 20
