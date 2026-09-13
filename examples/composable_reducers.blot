@@ -1,0 +1,99 @@
+// Build one reusable aggregation plan from tiny typed reducers. The same Int
+// sum reducer is projected over different line-item fields, then independent
+// reducers are zipped so one fold computes a complete report.
+open import "blot:prelude"
+const R = import "./lib/reducer.blot"
+
+const Line =
+  {
+    .sku = Text;
+    .quantity = Int;
+    .unit_cents = Int;
+  }
+
+const Report =
+  {
+    .revenue_cents = Int;
+    .unit_count = Int;
+    .line_count = Int;
+    .average_unit_cents = Option Int;
+  }
+
+const sum_int :: R.Reducer (Int, Int, Int)
+const sum_int =
+  {
+    .initial = 0;
+    .step = fn (state, value) => state + value;
+    .finish = fn state => state;
+  }
+
+const count_lines :: R.Reducer (Line, Int, Int)
+const count_lines =
+  {
+    .initial = 0;
+    .step = fn (state, _) => state + 1;
+    .finish = fn state => state;
+  }
+
+const revenue :: R.Reducer (Line, Int, Int)
+const revenue =
+  R.contramap (
+    sum_int,
+    fn line => line.quantity * line.unit_cents
+  )
+
+const units :: R.Reducer (Line, Int, Int)
+const units = R.contramap (sum_int, fn line => line.quantity)
+
+const money =
+  R.zip_with (
+    revenue,
+    units,
+    fn (revenue_cents, unit_count) => {
+      .revenue_cents = revenue_cents;
+      .unit_count = unit_count;
+    }
+  )
+
+const summary =
+  R.zip_with (
+    money,
+    count_lines,
+    fn (totals, line_count) => {
+      ...totals;
+      .line_count = line_count;
+    }
+  )
+
+const report =
+  R.map_output (
+    summary,
+    fn totals => do:
+      let average_unit_cents = case totals.unit_count == 0 of
+        #True => #None
+        #False => #Some (Int.div totals.revenue_cents totals.unit_count)
+      return {
+        ...totals;
+        .average_unit_cents = average_unit_cents;
+        }
+  )
+
+// A concrete public boundary closes the generic input type, so callers of
+// `analyze` must provide actual `Line` values even though `R.run` is generic.
+const analyze :: [Line] -> Report
+const analyze = fn values => R.run (report, values)
+
+const lines =
+  [
+    { .sku = "notebook"; .quantity = 2; .unit_cents = 1200; },
+    { .sku = "shipping"; .quantity = 1; .unit_cents = 500; },
+    { .sku = "pen"; .quantity = 3; .unit_cents = 200; }
+  ]
+
+return {
+  .default = {
+    .full = analyze lines;
+    .empty = analyze [];
+    .single = analyze [{ .sku = "marker"; .quantity = 4; .unit_cents = 175; }];
+  };
+  }

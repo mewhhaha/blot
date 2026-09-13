@@ -17,12 +17,13 @@ These examples build APIs from ordinary type values and interpret computations
 with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
-| Example                                                      | Abstraction                                                                                                       | Observations                                                 |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
-| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
-| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
-| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| Example                                                      | Abstraction                                                                                                       | Observations                                                      |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"`      |
+| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                               |
+| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                        |
+| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`              |
+| [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -38,10 +39,11 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation.
 
-`src/node/effect_abstractions.test.ts` checks principal types, both executions,
-the singleton and early-exit cases, and rejection of nonpositive emissions,
-missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+`src/node/effect_abstractions.test.ts` checks the four effect-focused examples'
+principal types, both executions, and rejection cases.
+`src/node/composable_reducers.test.ts` checks the reducer's principal type,
+evaluator/emitted-Wasm agreement, canonical source, and static input/projection
+rejections. `deno task verify:showcase` includes all five abstractions.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with

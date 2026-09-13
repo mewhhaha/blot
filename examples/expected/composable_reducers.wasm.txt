@@ -1,0 +1,1 @@
+{ .empty = { .average_unit_cents = #None; .line_count = 0; .revenue_cents = 0; .unit_count = 0 }; .full = { .average_unit_cents = #Some 583; .line_count = 3; .revenue_cents = 3500; .unit_count = 6 }; .single = { .average_unit_cents = #Some 175; .line_count = 1; .revenue_cents = 700; .unit_count = 4 } }
