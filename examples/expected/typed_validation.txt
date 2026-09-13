@@ -1,0 +1,1 @@
+{ .default = { .good = { .ok = #True; .errors = []; .port = 8080; .replicas = 3; .timeout_ms = 5000; }; .bad = { .ok = #False; .errors = ["port", "replicas", "timeout_ms"]; .port = 0; .replicas = 0; .timeout_ms = 0; }; .boundary = { .ok = #True; .errors = []; .port = 65535; .replicas = 32; .timeout_ms = 60000; }; .good_capacity = 15000; .bad_capacity = 0; }; }
