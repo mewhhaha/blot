@@ -8315,6 +8315,162 @@ return F32.add (-1) 2.5
     }
 
     #[test]
+    fn generated_requirements_recheck_the_captured_type() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session.add_source("factory.blot".to_owned(), source(concat!(
+                "const make = fn T => { .check = fn value => @satisfies value T; .send = fn (?outbox, envelope) => @array.push outbox { .payload = @satisfies envelope.payload T; }; }\n",
+                "return make\n",
+            ))).unwrap();
+            session
+                .configure_module("factory.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            for call in [
+                "C.check \"wrong\"",
+                "C.send ([], { .payload = \"wrong\"; })",
+            ] {
+                session.add_source("main.blot".to_owned(), source(&format!(
+                    "const make = import \"./factory.blot\"\nconst C = make @type.int\nreturn {call}\n"
+                ))).unwrap();
+                session
+                    .configure_module(
+                        "main.blot",
+                        BTreeMap::from([("./factory.blot".to_owned(), "factory.blot".to_owned())]),
+                        BTreeMap::new(),
+                    )
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], false, "{checked}");
+                assert_eq!(
+                    checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                    "{checked}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn conditional_array_updates_preserve_loop_carried_authority() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const run :: Int -> Int\n",
+                        "const run = fn count => do:\n",
+                        "  let heads = [0, 1]\n",
+                        "  for index in Iter.range (0, count):\n",
+                        "    heads := case index % 2 == 0 of\n",
+                        "      #True => Array.expect_set (heads, 0, index)\n",
+                        "      #False => heads\n",
+                        "  return Array.expect_get (heads, 0)\n",
+                        "return { .default = run 10; .run; }\n",
+                    )),
+                )
+                .expect("conditional array source should load");
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .expect("conditional array source should configure");
+
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{}", checked["diagnostic"]);
+            assert_eq!(checked["type"], "{ .default = Int; .run = Int -> Int }");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+            let mut writes = 0;
+            for function in prepared["module"]["functions"].as_array().unwrap() {
+                for block in function["continuations"].as_array().unwrap() {
+                    for instruction in block["instructions"].as_array().unwrap() {
+                        let operation = &instruction["operation"];
+                        if operation["kind"] == "store.write" {
+                            writes += 1;
+                            assert_eq!(operation["update"], "owned-reuse", "{operation}");
+                        }
+                    }
+                }
+            }
+            assert!(writes > 0, "the conditional update must reach Runtime HIR");
+        });
+    }
+
+    #[test]
+    fn ecs_queries_and_messages_prepare_with_shared_delivery_snapshots() {
+        run_with_compiler_test_stack(|| {
+            let prelude_snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &prelude_snapshot)
+                .expect("prelude snapshot should install");
+            for (path, contents) in [
+                (
+                    "streams.blot",
+                    include_str!("../../case-studies/ecs/streams.blot"),
+                ),
+                (
+                    "messages.blot",
+                    include_str!("../../case-studies/ecs/messages.blot"),
+                ),
+                ("ecs.blot", include_str!("../../case-studies/ecs/ecs.blot")),
+                (
+                    "arena.blot",
+                    include_str!("../../case-studies/ecs/arena.blot"),
+                ),
+                (
+                    "main.blot",
+                    concat!(
+                        "open import \"blot:prelude\"\n",
+                        "const a = import \"./arena.blot\"\n",
+                        "const run :: Int -> { .before = a.Summary; .after = a.Summary; .again = a.Summary; }\n",
+                        "const run = fn health => do:\n",
+                        "  let world = a.seed health\n",
+                        "  let next = a.tick (world, [])\n",
+                        "  let again = a.tick (next.world, [])\n",
+                        "  return { .before = a.summary world; .after = a.summary next.world; .again = a.summary again.world; }\n",
+                        "return run\n",
+                    ),
+                ),
+            ] {
+                session
+                    .add_source(path.to_owned(), source(contents))
+                    .unwrap();
+                let mut imports =
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
+                for dependency in match path {
+                    "ecs.blot" => vec!["streams.blot", "messages.blot"],
+                    "arena.blot" => vec!["ecs.blot"],
+                    "main.blot" => vec!["arena.blot"],
+                    _ => vec![],
+                } {
+                    imports.insert(format!("./{dependency}"), dependency.to_owned());
+                }
+                session
+                    .configure_module(path, imports, BTreeMap::new())
+                    .unwrap();
+            }
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
     fn array_iterator_accepts_a_shared_runtime_array() {
         run_with_compiler_test_stack(|| {
             let prelude_snapshot = snapshot_from_source(

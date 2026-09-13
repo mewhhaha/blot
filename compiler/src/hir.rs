@@ -3894,20 +3894,66 @@ impl ResidualTrace {
         if !self.pending_recursive_types.contains(&indirect_type) {
             return Ok(false);
         }
-        let RuntimeType::Indirect { target_type } = self.types[indirect_type] else {
+        let RuntimeType::Indirect { .. } = self.types[indirect_type] else {
             return Err(hir_error(
                 "A pending recursive result lost its indirect representation.",
             ));
         };
         if self.settled_recursive_types.contains(&indirect_type) {
-            if target_type != concrete_type {
-                return Err(hir_error(&format!(
-                    "A recursive result first settled to runtime type {} {:?}, then produced incompatible runtime type {} {:?}.",
-                    target_type, self.types[target_type], concrete_type, self.types[concrete_type],
-                )));
-            }
             return Ok(true);
         }
+        let concrete_type = if matches!(self.types[concrete_type], RuntimeType::Sum { .. }) {
+            let identity = self
+                .recursive_result_ids
+                .iter()
+                .find(|identity| identity.type_id == indirect_type)
+                .ok_or_else(|| {
+                    hir_error("A pending recursive result lost its checked signature.")
+                })?;
+            let signature = identity.signature.clone();
+            let argument_type = identity.argument_type;
+            let Value::Arrow {
+                domain, codomain, ..
+            } = signature
+            else {
+                return Err(hir_error("A recursive result signature is not a function."));
+            };
+            let RuntimeType::Sum { cases, .. } = &self.types[concrete_type] else {
+                unreachable!("guarded recursive sum representation");
+            };
+            let mut pending = vec![codomain.as_ref()];
+            let mut missing_case = false;
+            while let Some(member) = pending.pop() {
+                match member {
+                    Value::Union(members) => pending.extend(members.iter()),
+                    Value::Extended { inner, .. } | Value::Forall { body: inner, .. } => {
+                        pending.push(inner)
+                    }
+                    Value::Tag { name, .. } => {
+                        missing_case |= !cases.iter().any(|case_| case_.name == *name);
+                    }
+                    _ => {}
+                }
+            }
+            if missing_case {
+                let mut substitutions = HashMap::new();
+                self.record_runtime_type_substitutions(&domain, argument_type, &mut substitutions)?;
+                self.record_runtime_type_substitutions(
+                    &codomain,
+                    concrete_type,
+                    &mut substitutions,
+                )?;
+                self.specialized_type_from_type_value(
+                    &codomain,
+                    &mut substitutions,
+                    &RepresentationFacts::default(),
+                )?
+            } else {
+                concrete_type
+            }
+        } else {
+            concrete_type
+        };
         self.types[indirect_type] = RuntimeType::Indirect {
             target_type: concrete_type,
         };
@@ -5976,6 +6022,9 @@ impl ResidualTrace {
                 let value = self.coerce_runtime_value(value, target_type, span)?;
                 Ok(self.operation("indirect.make", expected_type, vec![value.id], span, None))
             }
+            (RuntimeType::Indirect { target_type }, _) if target_type == expected_type => {
+                Ok(self.load_indirect(value, span))
+            }
             (
                 RuntimeType::Product {
                     fields: source_fields,
@@ -7200,20 +7249,22 @@ impl ResidualTrace {
             ) => {
                 self.record_runtime_type_substitutions(expected, *target_type, substitutions)?;
             }
-            (Value::Union(expected_members), RuntimeType::Sum { cases, .. }) => {
-                for expected_member in expected_members {
-                    let Value::Tag { name, payload } = expected_member else {
-                        continue;
-                    };
-                    let Some(actual_case) = cases.iter().find(|case_| case_.name == *name) else {
-                        continue;
-                    };
+            (Value::Tag { name, payload }, RuntimeType::Sum { cases, .. }) => {
+                if let Some(actual_case) = cases.iter().find(|case_| case_.name == *name) {
                     let payload = compiler_tag_payload(payload.as_deref());
                     self.record_runtime_type_substitutions(
                         &payload,
                         actual_case.payload_type,
                         substitutions,
                     )?;
+                }
+            }
+            (Value::Union(expected_members), RuntimeType::Sum { .. }) => {
+                for member in expected_members {
+                    if matches!(member, Value::TypeVariable(_)) {
+                        continue;
+                    }
+                    self.record_runtime_type_substitutions(member, actual_type, substitutions)?;
                 }
             }
             (Value::Union(expected_members), _) => {

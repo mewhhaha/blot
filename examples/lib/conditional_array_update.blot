@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const case_update :: Int -> [Int]
+const case_update = fn count => do:
+  let heads = [0, 1]
+  for index in Iter.range (0, count):
+    heads := case index % 2 == 0 of
+      #True => Array.expect_set (heads, 0, index)
+      #False => heads
+
+  return heads
+
+const statement_update :: Int -> [Int]
+const statement_update = fn count => do:
+  let heads = [0, 1]
+  for index in Iter.range (0, count):
+    if index % 2 == 0:
+      heads := Array.expect_set (heads, 0, index)
+
+  return heads
+
+return { .case_update; .statement_update; }

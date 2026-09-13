@@ -1,0 +1,36 @@
+open import "blot:prelude"
+
+
+const Iterator = fn (State, Element) => { .state = State; .step = State -> Option (Element, State); }
+
+const choose = fn (source, select) => {
+  .state = source.state;
+  .step = fn state => do:
+    let rec advance = fn current => case source.step current of
+      #None => #None
+      #Some (value, next) => case select value of
+        #None => advance next
+        #Some selected => #Some (selected, next)
+
+    return advance state
+  ;
+}
+
+// The right iterator is first advanced after the left one finishes. Neither
+// input's values are collected, and their state types may differ.
+const append = fn (left, right) => {
+  .state = #Left left.state;
+  .step = fn state => case state of
+    #Left current => case left.step current of
+      #Some (value, next) => #Some (value, #Left next)
+      #None => case right.step right.state of
+        #None => #None
+        #Some (value, next) => #Some (value, #Right next)
+
+    #Right current => case right.step current of
+      #None => #None
+      #Some (value, next) => #Some (value, #Right next)
+  ;
+}
+
+return { .Iterator; .choose; .append; }

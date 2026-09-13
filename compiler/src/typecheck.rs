@@ -2658,7 +2658,7 @@ pub struct Checker {
     phase: Cell<Phase>,
     specialization_depth: Cell<u32>,
     active_closures: RefCell<Vec<(String, ExpressionId)>>,
-    deferred_predicate_closures: RefCell<HashSet<(String, ExpressionId)>>,
+    deferred_requirement_closures: RefCell<HashSet<(String, ExpressionId)>>,
     synthetic_calls: RefCell<HashMap<(String, u64, String, usize), SyntheticCallFact>>,
     synthetic_call_context: Cell<u64>,
     next_synthetic_call_context: Cell<u64>,
@@ -2756,7 +2756,7 @@ impl Checker {
             phase: Cell::new(Phase::Runtime),
             specialization_depth: Cell::new(0),
             active_closures: RefCell::new(Vec::new()),
-            deferred_predicate_closures: RefCell::new(HashSet::new()),
+            deferred_requirement_closures: RefCell::new(HashSet::new()),
             synthetic_calls: RefCell::new(HashMap::new()),
             synthetic_call_context: Cell::new(0),
             next_synthetic_call_context: Cell::new(1),
@@ -3123,7 +3123,7 @@ impl Checker {
         self.member_constraints.borrow_mut().clear();
         self.empty_array_elements.borrow_mut().clear();
         self.active_closures.borrow_mut().clear();
-        self.deferred_predicate_closures.borrow_mut().clear();
+        self.deferred_requirement_closures.borrow_mut().clear();
         self.synthetic_calls.borrow_mut().clear();
         self.synthetic_call_context.set(0);
         self.next_synthetic_call_context.set(1);
@@ -6209,6 +6209,8 @@ impl Checker {
                             span,
                         ));
                     }
+                    self.defer_current_closure();
+                    return Ok(subject);
                 }
                 if member_arguments.len() == 2
                     && matches!(&module.arena.expressions[member_callee.0 as usize],
@@ -6480,7 +6482,7 @@ impl Checker {
                         return false;
                     };
                     if self
-                        .deferred_predicate_closures
+                        .deferred_requirement_closures
                         .borrow()
                         .contains(&(module.as_ref().clone(), *body))
                     {
@@ -6492,6 +6494,11 @@ impl Checker {
                         .get(module.as_ref())
                         .is_some_and(|loaded| {
                             expression_contains_computed_field(&loaded.module, *body)
+                                || expression_contains_intrinsic(
+                                    &loaded.module,
+                                    *body,
+                                    "@satisfies",
+                                )
                         })
                 });
                 let mut selected_effects = None;
@@ -7474,6 +7481,7 @@ impl Checker {
         dependencies: &BTreeMap<String, Type>,
         parameter_type: Option<Type>,
     ) -> Result<Type, Diagnostic> {
+        let diagnostic_module = closure.module_path;
         let previous_synthetic_call_context = self.synthetic_call_context.get();
         let synthetic_call_context = self.next_synthetic_call_context.get();
         self.next_synthetic_call_context.set(
@@ -7639,7 +7647,7 @@ impl Checker {
         })();
         self.synthetic_call_context
             .set(previous_synthetic_call_context);
-        inferred
+        inferred.map_err(|diagnostic: Diagnostic| diagnostic.at(diagnostic_module))
     }
 
     fn static_member_type(&self, member: &Value, subject: Option<&Type>) -> Option<Type> {
@@ -7779,7 +7787,7 @@ impl Checker {
 
     fn defer_current_closure(&self) {
         if let Some(closure) = self.active_closures.borrow().last() {
-            self.deferred_predicate_closures
+            self.deferred_requirement_closures
                 .borrow_mut()
                 .insert(closure.clone());
         }
@@ -12434,10 +12442,17 @@ fn ownership_uses_expression_type(type_: &Type) -> bool {
         Type::Variable(_) | Type::Rigid(_) | Type::Top => true,
         Type::Forall { body, .. } => ownership_uses_expression_type(body),
         Type::Function { .. } | Type::Array(_) => true,
+        Type::Record(fields) => fields
+            .iter()
+            .any(|(_, field)| ownership_uses_expression_type(field)),
+        Type::RecordUpdate { base, fields } => {
+            ownership_uses_expression_type(base)
+                || fields
+                    .iter()
+                    .any(|(_, field)| ownership_uses_expression_type(field))
+        }
         Type::Range { .. }
         | Type::Unit
-        | Type::Record(_)
-        | Type::RecordUpdate { .. }
         | Type::Region(_)
         | Type::Scratch(_)
         | Type::Resource { .. }

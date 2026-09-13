@@ -117,6 +117,26 @@ that ownership meaning on its block parameter: the ownership certificate has
 already proved that only one arm executes and that their outgoing states agree.
 A join with a shared arm is not reusable.
 
+Branch snapshots include bindings whose Store authority has not yet been
+discovered. Each alternative starts with the same incoming ownership tree,
+qualifier, consumed paths, and ownership demand. Discovering an Array parameter
+inside one arm cannot mark that parameter consumed in a sibling arm. The join
+then combines those independently checked demands, including newly discovered
+`Unique` access.
+
+Input-authority requirements accumulate separately from the live tree restored
+between alternatives. Moving a parameter field or rebinding its successor does
+not remove the entry requirement. An explicitly consuming callee propagates a
+destructive requirement back to the symbolic Array path supplied by its caller.
+Later shared uses cannot weaken that requirement. A record of shared Stores can
+occupy a non-consuming input position beside a consuming position; argument
+validation checks their obligations independently.
+
+A fresh empty Store and a fresh populated Store can join as one owned array. The
+resulting element tree retains every populated alternative's obligations,
+including linear obligations. A shared Store alternative cannot participate in
+this owned join.
+
 At a module or host result boundary, an otherwise valid owned Store is frozen
 implicitly. The boundary already transfers no source-visible destructive
 authority, and the transition performs no copy. Linear resources remain

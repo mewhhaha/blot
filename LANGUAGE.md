@@ -2664,6 +2664,19 @@ When both arms of a runtime branch return a successor carrying the same affine
 Store authority, the joined value carries that authority. The arms are
 exclusive, so joining them does not create an alias. If either arm shares or
 loses the Store, the join is shared or rejected by the ordinary agreement rule.
+This also applies to an array carried by a `for` fold: conditionally updating
+the array and otherwise returning it preserves its one authority. A component of
+the accumulator first recognized as an array inside an arm follows the same
+branch rule as a directly bound array. Joining a fresh empty array with a fresh
+populated array likewise retains one Store authority and the populated
+alternative's element obligations. A shared alternative never acquires
+destructive authority through this join.
+
+A function's ownership requirements describe the authority needed on entry, even
+when a branch subsequently moves a field or replaces the parameter's current
+value. Passing a record of shared arrays to a non-consuming parameter position
+is valid beside an owned argument; each position must independently satisfy its
+consuming or non-consuming contract.
 
 Every fresh array has one affine Store authority even though its type is still
 ordinary `[T]`. An unqualified Array parameter begins as an authority candidate
@@ -3746,7 +3759,11 @@ A false predicate is `BLOT_DOES_NOT_SATISFY`. An open subject given to a
 predicate is `BLOT_TYPE_NOT_REIFIABLE`; use the canonical record, array, arrow,
 or scalar type value as the requirement when the purpose is to constrain that
 subject. A requirement unavailable until generic specialization is deferred and
-checked when the concrete call supplies it.
+checked when the concrete call supplies it. Deferring a requirement preserves
+the subject's inferred type. Generated methods and imported closures retain
+their captured requirement; specializing a call must check that requirement even
+when the ordinary result already has a structural type such as an array or
+record.
 
 `@type.of` is different: it evaluates a compile-time value and returns that
 value's type. `@satisfies` can inspect the inferred type of an ordinary runtime

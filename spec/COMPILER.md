@@ -441,7 +441,20 @@ witness lineage, and destructive-reuse certificates.
 For a symbolic Array parameter, element shareability and backing-Store access
 are separate certificate fields. Type specialization may refine only element
 shareability. Destructive operations and calls propagate `Unique` Store access;
-a branch join uses `Unique` when any continuing alternative requires it.
+a branch join uses `Unique` when any continuing alternative requires it. Branch
+snapshots cover all visible bindings, including parameters whose Store authority
+is discovered only while checking an alternative. Restoring an alternative
+restores both the ownership tree and its qualifier before checking the next one;
+discoveries contribute to the joined contract without sharing consumption state
+between alternatives. The parameter's input-authority tree accumulates
+monotonically, separately from its live ownership tree. Projecting, consuming,
+or rebinding a live value cannot erase the input requirement. A later discovery
+of shared access cannot weaken an earlier destructive requirement, including
+through an explicitly qualified callee parameter. This accumulated tree supplies
+the published input contract and the caller/callee intersection used for
+Runtime-HIR reuse evidence. Array type facts nested inside records and tuples
+remain available to this pass, so concrete call arguments can refine a generic
+element-shareability requirement without changing its Store access requirement.
 
 When a recursive closure's result relation is initially lazy, checking its call
 argument may reveal the Store authority carried by a synthetic fold accumulator.

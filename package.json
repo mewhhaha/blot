@@ -45,7 +45,7 @@
     "test": "pnpm test:node && pnpm test:web-workers && pnpm test:regression",
     "test:node": "tsx --test --test-timeout=300000 src/node/*.test.ts",
     "test:live-actor": "node --import tsx --test --test-timeout=60000 case-studies/spark-browser/browser_contract.test.ts src/node/development_async.test.ts",
-    "test:ecs": "tsx --test --test-timeout=300000 case-studies/ecs/ecs.test.ts",
+    "test:ecs": "tsx --test --test-timeout=300000 case-studies/ecs/*.test.ts",
     "test:refinements": "node scripts/check_refinements.mjs",
     "test:suspension": "node scripts/check_suspension.mjs",
     "test:guest-abi": "node scripts/check_guest_abi.mjs",

@@ -49,11 +49,14 @@ cancellation, and source cleanup during reload.
 
 The [ECS case study](ecs/README.md) derives components from a record of types,
 composes reader queries with `use`, and merges pure schedules into one dense
-table traversal. It includes a direct implementation, a separate-pass baseline,
-and a benchmark over emitted Wasm.
+table traversal. It also selects archetypes with component predicates, filters
+rows with effectful guards, folds combined entity streams, and delivers typed
+messages through indexed inboxes. It includes a direct implementation, a
+separate-pass baseline, and a benchmark over emitted Wasm.
 
 ```bash
 pnpm blot run case-studies/ecs/main.blot
+pnpm blot run case-studies/ecs/queries-and-messages.blot
 pnpm test:ecs
 pnpm benchmark:ecs
 ```

@@ -357,6 +357,9 @@ struct Binding {
     /// The current binding may be live again after `:=`; the function contract
     /// still remembers whether any predecessor authority was consumed.
     ownership_demanded: bool,
+    /// Input requirements accumulate across arms even after a projection moves
+    /// the corresponding live authority out of this binding.
+    parameter_authority: Produced,
     function_parameter: bool,
     parameter_source: Option<(PatternId, Vec<String>)>,
 }
@@ -603,6 +606,7 @@ fn declare(pattern: PatternId, produced: Produced, scope: &ScopeRef, analysis: &
                 last_use: None,
                 partial: false,
                 ownership_demanded: false,
+                parameter_authority: Produced::None,
                 function_parameter: false,
                 parameter_source: None,
             }));
@@ -829,6 +833,7 @@ fn install_capture(
             last_use: source.last_use,
             partial: source.partial,
             ownership_demanded: source.ownership_demanded,
+            parameter_authority: source.parameter_authority.clone(),
             function_parameter: source.function_parameter,
             parameter_source: source.parameter_source.clone(),
         })),
@@ -982,6 +987,7 @@ fn assign_parameter_source(
         Pattern::Name { name, .. } => {
             if let Some(binding) = scope.borrow().bindings.get(name) {
                 let mut binding = binding.borrow_mut();
+                binding.parameter_authority = binding.owned.clone();
                 binding.function_parameter = true;
                 binding.parameter_source = Some((source, path.to_vec()));
             }
@@ -1063,6 +1069,7 @@ fn walk_recursive_group(declarations: &[DeclarationId], scope: &ScopeRef, analys
             last_use: None,
             partial: false,
             ownership_demanded: false,
+            parameter_authority: Produced::None,
             function_parameter: false,
             parameter_source: None,
         }));
@@ -1543,6 +1550,7 @@ fn mark_function_parameters(pattern: PatternId, scope: &ScopeRef, module: &Modul
         Pattern::Name { name, .. } => {
             if let Some(binding) = scope.borrow().bindings.get(name) {
                 let mut binding = binding.borrow_mut();
+                binding.parameter_authority = binding.owned.clone();
                 binding.function_parameter = true;
                 binding.parameter_source = Some((pattern, Vec::new()));
             }
@@ -1576,7 +1584,7 @@ fn scope_pattern_owned(pattern: PatternId, scope: &ScopeRef, module: &Module) ->
             .map(|binding| {
                 let binding = binding.borrow();
                 if binding.ownership_demanded || spendable(*qualifier) {
-                    binding.owned.clone()
+                    binding.parameter_authority.clone()
                 } else {
                     Produced::None
                 }
@@ -1624,7 +1632,11 @@ fn visible_pattern_owned(
                     || spendable(*qualifier)
                     || spendable(binding.qualifier)
                 {
-                    binding.owned.clone()
+                    if binding.function_parameter {
+                        binding.parameter_authority.clone()
+                    } else {
+                        binding.owned.clone()
+                    }
                 } else {
                     Produced::None
                 }
@@ -3022,6 +3034,11 @@ fn require_contract_store_access(
             Produced::StoreParameter {
                 access: StoreAccess::Unique,
                 ..
+            }
+            | Produced::Leaf(Qualifier::Affine | Qualifier::Linear)
+            | Produced::Parameter {
+                qualifier: Qualifier::Affine | Qualifier::Linear,
+                ..
             },
             actual,
         ) => require_unique_store_access(actual, analysis),
@@ -3184,6 +3201,9 @@ fn record_unique_store_access(source: PatternId, path: &[String], analysis: &Ana
         }
         let mut binding = binding.borrow_mut();
         binding.owned = set_unique_store_access(binding.owned.clone(), source, path);
+        binding.parameter_authority =
+            set_unique_store_access(binding.parameter_authority.clone(), source, path);
+        binding.ownership_demanded = true;
     }
 }
 
@@ -3414,6 +3434,8 @@ fn record_store_parameter_authority(
         access: StoreAccess::Shared,
     };
     let mut root = root.borrow_mut();
+    root.parameter_authority =
+        insert_parameter_authority(root.parameter_authority.clone(), path, authority.clone());
     root.owned = insert_parameter_authority(root.owned.clone(), path, authority);
     root.qualifier = inherited(root.qualifier, &root.owned);
     if !path.is_empty() {
@@ -3427,7 +3449,7 @@ fn insert_parameter_authority(
     authority: Produced,
 ) -> Produced {
     let Some((name, rest)) = path.split_first() else {
-        return authority;
+        return merge_store_access_requirements(authority, &produced);
     };
     let mut fields = match produced {
         Produced::Shape(fields) => fields,
@@ -4347,6 +4369,7 @@ fn close_scope(scope: &ScopeRef, analysis: &mut Analysis) {
 struct BindingSnapshot {
     id: usize,
     binding: BindingRef,
+    qualifier: Qualifier,
     moved: Option<Span>,
     owned: Produced,
     partial: bool,
@@ -4375,12 +4398,16 @@ fn snapshot(scope: &ScopeRef) -> Snapshot {
         let scope = scope.borrow();
         for binding in scope.bindings.values() {
             let id = binding.borrow().id;
-            if seen.insert(id) && spendable(binding.borrow().qualifier) {
+            // An arm can discover a symbolic Store authority for a previously
+            // unrestricted parameter. Its mode and consumption must not leak
+            // into a sibling arm.
+            if seen.insert(id) {
                 let binding_state = binding.borrow();
                 positions.insert(id, bindings.len());
                 bindings.push(BindingSnapshot {
                     id,
                     binding: binding.clone(),
+                    qualifier: binding_state.qualifier,
                     moved: binding_state.moved,
                     owned: binding_state.owned.clone(),
                     partial: binding_state.partial,
@@ -4399,6 +4426,7 @@ fn snapshot(scope: &ScopeRef) -> Snapshot {
 fn restore(snapshot: &Snapshot) {
     for state in &snapshot.bindings {
         let mut binding = state.binding.borrow_mut();
+        binding.qualifier = state.qualifier;
         binding.moved = state.moved;
         binding.owned = state.owned.clone();
         binding.partial = state.partial;
@@ -4430,7 +4458,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
             .collect::<Vec<_>>();
         let some = states.iter().any(|state| state.0.is_some());
         let every = states.iter().all(|state| state.0.is_some());
-        if some && !every && binding.borrow().qualifier == Qualifier::Linear {
+        if some && !every && prior.qualifier == Qualifier::Linear {
             analysis.report(
                 "BLOT_LINEAR_BRANCH_DISAGREEMENT",
                 format!(
@@ -4441,7 +4469,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
             );
         }
         let first = &states[0];
-        if binding.borrow().qualifier == Qualifier::Linear
+        if prior.qualifier == Qualifier::Linear
             && states
                 .iter()
                 .any(|state| state.1 != first.1 || state.2 != first.2)
@@ -4463,6 +4491,7 @@ fn agree(outcomes: &[Snapshot], before: &Snapshot, span: Span, analysis: &mut An
             merge_store_access_requirements(owned, state.1)
         });
         let mut binding = binding.borrow_mut();
+        binding.qualifier = inherited(prior.qualifier, &owned);
         binding.moved = chosen.0;
         binding.owned = owned;
         binding.partial = chosen.2;
@@ -5156,6 +5185,20 @@ fn join_alternatives(values: Vec<Produced>) -> Produced {
     let first = values[0].clone();
     if values.iter().all(|value| value == &first) {
         return first;
+    }
+    if values
+        .iter()
+        .all(|value| matches!(value, Produced::EmptyStore | Produced::Store(_)))
+    {
+        let elements = values
+            .into_iter()
+            .filter_map(|value| match value {
+                Produced::Store(elements) => Some(*elements),
+                Produced::EmptyStore => None,
+                _ => unreachable!(),
+            })
+            .collect();
+        return Produced::Store(Box::new(join_alternatives(elements)));
     }
     if values
         .iter()
@@ -5865,6 +5908,60 @@ mod store_access_tests {
             &Produced::SharedStore,
         ));
     }
+
+    #[test]
+    fn shared_record_beside_a_store_obeys_each_parameter_position() {
+        let snapshot = Produced::Shape(BTreeMap::from([
+            ("heads".to_owned(), Produced::SharedStore),
+            ("messages".to_owned(), Produced::SharedStore),
+        ]));
+        let argument = Produced::Sequence(vec![snapshot, Produced::SharedStore]);
+        assert!(parameter_accepts_ownership(
+            &Produced::Sequence(vec![Produced::None, store_parameter(StoreAccess::Shared)]),
+            &argument,
+        ));
+        assert!(!parameter_accepts_ownership(
+            &Produced::Sequence(vec![Produced::None, store_parameter(StoreAccess::Unique)]),
+            &argument,
+        ));
+    }
+
+    #[test]
+    fn empty_array_alternative_preserves_element_obligations() {
+        let joined = join_alternatives(vec![
+            Produced::EmptyStore,
+            Produced::Store(Box::new(Produced::Leaf(Qualifier::Linear))),
+        ]);
+        assert!(matches!(joined, Produced::Store(_)));
+        assert!(matches!(obligation(&joined), Obligation::Linear));
+
+        let shared = join_alternatives(vec![Produced::EmptyStore, Produced::SharedStore]);
+        assert!(!contains_concrete_store(&shared));
+        assert!(contains_shared(&shared));
+    }
+
+    #[test]
+    fn sibling_array_discovery_does_not_weaken_a_destructive_requirement() {
+        let path = vec!["heads".to_owned()];
+        let unique = Produced::StoreParameter {
+            source: PatternId(7),
+            path: path.clone(),
+            elements_shareable: true,
+            access: StoreAccess::Unique,
+        };
+        let authority = insert_parameter_authority(Produced::None, &path, unique.clone());
+        let shared = Produced::StoreParameter {
+            source: PatternId(7),
+            path: path.clone(),
+            elements_shareable: true,
+            access: StoreAccess::Shared,
+        };
+        let authority = insert_parameter_authority(authority, &path, shared);
+        let Produced::Shape(fields) = authority else {
+            panic!("the discovered Store must retain its parameter path");
+        };
+        assert!(fields.get("heads").is_some_and(|value| value == &unique));
+    }
 }
 
 fn combine_adjacent_regions(left: Produced, right: Produced) -> Produced {
@@ -6153,7 +6250,9 @@ fn pattern_binds(pattern: PatternId, module: &Module) -> bool {
 }
 
 fn parameter_accepts_ownership(input: &Produced, argument: &Produced) -> bool {
-    if obligation(argument) == Obligation::None && !contains_shared(argument) {
+    if obligation(argument) == Obligation::None
+        && (!contains_shared(argument) || !demands_ownership(input))
+    {
         return true;
     }
     match (input, argument) {

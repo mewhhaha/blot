@@ -1,0 +1,5 @@
+const updates = import "./lib/conditional_array_update.blot"
+let empty = updates.case_update 0
+let conditional = updates.case_update 10
+let statement = updates.statement_update 10
+return (empty, conditional, statement)

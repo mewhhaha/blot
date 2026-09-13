@@ -1,0 +1,124 @@
+open import "blot:prelude"
+const ECS = import "./ecs.blot"
+const Query = ECS.Query
+const Stream = ECS.Stream
+
+const Character = { .Id = Int; .Name = Text; .Health = Int; .Target = Int; }
+const Fighter = ECS.archetype { ...Character; .Damage = Int; }
+const Medic = ECS.archetype { ...Character; .Healing = Int; }
+const Sleeper = ECS.archetype { ...Character; .Sleeping = Unit; }
+const Scenery = ECS.archetype { .Id = Int; .Name = Text; }
+const World = { .fighters = [Fighter]; .medics = [Medic]; .sleepers = [Sleeper]; .scenery = [Scenery]; }
+const Mail = ECS.Messages (#Damage Int | #Heal Int)
+const Summary = { .count = Int; .health = Int; .names = Text; }
+
+const eligible = Query.all (
+  Query.has "Health",
+  Query.all (
+    Query.without "Sleeping",
+    Query.any (Query.has "Damage", Query.has "Healing")
+  )
+)
+
+const select_fighters = Query.table (Fighter, eligible)
+const select_medics = Query.table (Medic, eligible)
+const select_sleepers = Query.table (Sleeper, eligible)
+const select_scenery = Query.table (Scenery, eligible)
+
+const inspect_character = fn row => Query.run (fn () => do:
+  use Query.guard (row.Health > 0)
+  return { .id = row.Id; .health = row.Health; .name = row.Name; }
+)
+
+const summary :: World -> Summary
+const summary = fn world => do:
+  let fighters = select_fighters (world.fighters, inspect_character)
+  let medics = select_medics (world.medics, inspect_character)
+  let sleepers = select_sleepers (world.sleepers, inspect_character)
+  let scenery = select_scenery (world.scenery, inspect_character)
+  let selected = Stream.append (
+    Stream.append (fighters, medics),
+    Stream.append (sleepers, scenery)
+  )
+  return Iter.fold_with (fn (summary, character) => do:
+    let names = case summary.count == 0 of
+      #True => character.name
+      #False => Text.append (Text.append summary.names ", ") character.name
+    return { .count = summary.count + 1; .health = summary.health + character.health; .names; }
+  ) { .count = 0; .health = 0; .names = ""; } selected
+
+const F = Fighter.components
+const attack = fn () => do:
+  use health <- F.Health.get ()
+  use Query.guard (health > 0)
+  use damage <- F.Damage.get ()
+  use Query.guard (damage > 0)
+  return #Damage damage
+
+const attacks :: [Fighter] -> Stream.Iterator (Int, Mail.Envelope)
+const attacks = fn rows => select_fighters (rows, fn row => do:
+  let payload = @handle (
+    F.Health.Read,
+    fn () => @handle (
+      F.Damage.Read,
+      fn () => Query.run attack,
+      { .get = fn ((), ?resume) => resume row.Damage; }
+    ),
+    { .get = fn ((), ?resume) => resume row.Health; }
+  )
+  return Option.map (fn payload => { .sender = row.Id; .recipient = row.Target; .payload; }) payload
+)
+
+const heals :: [Medic] -> Stream.Iterator (Int, Mail.Envelope)
+const heals = fn rows => select_medics (rows, fn row => Query.run (fn () => do:
+  use Query.guard (row.Health > 0)
+  use Query.guard (row.Healing > 0)
+  return { .sender = row.Id; .recipient = row.Target; .payload = #Heal row.Healing; }
+))
+
+const receive_health :: (Mail.Delivery, Int, Int) -> Int
+const receive_health = fn (delivery, recipient, health) => Iter.fold_with (fn (health, envelope) => case envelope.payload of
+  #Damage amount => Int.max 0 (health - amount)
+  #Heal amount => health + amount
+) health (Mail.expect_inbox (delivery, recipient))
+
+const receive_fighter :: (Mail.Delivery, Fighter) -> Fighter
+const receive_fighter = fn (delivery, row) => F.Health.replace (row, receive_health (delivery, row.Id, row.Health))
+const receive_medic :: (Mail.Delivery, Medic) -> Medic
+const receive_medic = fn (delivery, row) => Medic.components.Health.replace (row, receive_health (delivery, row.Id, row.Health))
+const receive_sleeper :: (Mail.Delivery, Sleeper) -> Sleeper
+const receive_sleeper = fn (delivery, row) => Sleeper.components.Health.replace (row, receive_health (delivery, row.Id, row.Health))
+
+const tick :: (World, [Mail.Envelope]) -> { .world = World; .undelivered = [Mail.Envelope]; }
+const tick = fn (world, outbox) => do:
+  let recipient_count = Array.length world.fighters + Array.length world.medics + Array.length world.sleepers + Array.length world.scenery
+  let sent = Stream.append (
+    Stream.append (attacks world.fighters, heals world.medics),
+    Iter.items outbox
+  )
+  let delivery = Mail.deliver (recipient_count, sent)
+  return {
+    .world = {
+      .fighters = freeze (map (world.fighters, fn row => receive_fighter (delivery, row)));
+      .medics = freeze (map (world.medics, fn row => receive_medic (delivery, row)));
+      .sleepers = freeze (map (world.sleepers, fn row => receive_sleeper (delivery, row)));
+      .scenery = world.scenery;
+    };
+    .undelivered = freeze (Iter.collect (Mail.undelivered delivery));
+  }
+
+const seed :: Int -> World
+const seed = fn health => {
+  .fighters = freeze [
+    { .Id = 0; .Name = "Ada"; .Health = health; .Target = 2; .Damage = 8; },
+    { .Id = 1; .Name = "Bram"; .Health = 0; .Target = 0; .Damage = 99; }
+  ];
+  .medics = freeze [
+    { .Id = 2; .Name = "Cy"; .Health = 6; .Target = 0; .Healing = 4; },
+    { .Id = 3; .Name = "Dee"; .Health = 5; .Target = 0; .Healing = 3; }
+  ];
+  .sleepers = freeze [{ .Id = 4; .Name = "Eve"; .Health = 100; .Target = 0; .Sleeping = (); }];
+  .scenery = freeze [{ .Id = 5; .Name = "Rock"; }];
+}
+
+return { .Fighter; .Medic; .Sleeper; .Scenery; .World; .Mail; .Summary; .eligible; .summary; .attacks; .heals; .tick; .seed; }

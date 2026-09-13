@@ -1,0 +1,91 @@
+open import "blot:prelude"
+
+const Messages = fn Payload => do:
+  const Envelope = { .sender = Int; .recipient = Int; .payload = Payload; }
+  const Delivery =
+    {
+      .heads = [Int];
+      .links = [Int];
+      .messages = [Envelope];
+      .undelivered = [Int];
+    }
+
+  return {
+    .Envelope = Envelope;
+    .Delivery = Delivery;
+    .send = fn (?outbox, envelope) => do:
+      let checked =
+        { .sender = @satisfies envelope.sender Int; .recipient = @satisfies envelope.recipient Int; .payload = @satisfies envelope.payload Payload; }
+      return @array.push (@satisfies outbox [Envelope]) checked
+    ;
+    // Entity addresses are dense integers in [0, recipient_count). Links
+    // append to each recipient's tail, preserving the source's send order.
+    .deliver = fn (recipient_count, source) => do:
+      if recipient_count < 0:
+        return @panic "message delivery requires a nonnegative recipient count"
+
+      let heads =
+        Iter.collect (Iter.map (Iter.range (0, recipient_count), fn _ => -1))
+      let tails =
+        Iter.collect (Iter.map (Iter.range (0, recipient_count), fn _ => -1))
+      let links = @satisfies [] [Int]
+      let messages = @satisfies [] [Envelope]
+      let undelivered = @satisfies [] [Int]
+      for sent in source:
+        let envelope = @satisfies sent Envelope
+        let recipient = envelope.recipient
+        let index = Array.length (&links)
+        messages := @array.push messages envelope
+        links := @array.push links (-1)
+        let valid = recipient >= 0 && recipient < recipient_count
+        let previous = case valid of
+          #True => Array.expect_get ((&tails), recipient)
+          #False => -1
+        heads := case valid && previous < 0 of
+          #True => Array.expect_set (heads, recipient, index)
+          #False => heads
+        links := case valid && previous >= 0 of
+          #True => Array.expect_set (links, previous, index)
+          #False => links
+        tails := case valid of
+          #True => Array.expect_set (tails, recipient, index)
+          #False => tails
+        undelivered := case valid of
+          #True => undelivered
+          #False => @array.push undelivered index
+
+      return @satisfies {
+        .heads = freeze heads;
+        .links = freeze links;
+        .messages = freeze messages;
+        .undelivered = freeze undelivered;
+        } Delivery
+    ;
+    .undelivered = fn snapshot => do:
+      let delivery = @satisfies snapshot Delivery
+      return Iter.map (
+        Iter.items delivery.undelivered,
+        fn index => Array.expect_get (delivery.messages, index)
+        )
+    ;
+    .expect_inbox = fn (snapshot, recipient) => do:
+      let delivery = @satisfies snapshot Delivery
+      let head = case Array.get (delivery.heads, recipient) of
+        #None => @panic "inbox recipient is outside the delivery address space"
+        #Some head => head
+      return {
+        .state = head;
+        .step = fn index => do:
+          if index < 0:
+            return #None
+          else:
+            return #Some (
+              Array.expect_get (delivery.messages, index),
+              Array.expect_get (delivery.links, index)
+              )
+        ;
+        }
+    ;
+    }
+
+return Messages

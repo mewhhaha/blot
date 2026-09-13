@@ -710,6 +710,80 @@ test("Unicode-scalar Text operations agree in evaluation and emitted Wasm", asyn
   }
 });
 
+test("conditional loop updates preserve one Store authority on both paths", async () => {
+  const compiler = await Compiler.create();
+  try {
+    const path = "examples/lib/conditional_array_update.blot";
+    assert.deepEqual(await compiler.check(path), {
+      type: "{ .case_update = Int -> [Int]; .statement_update = Int -> [Int] }",
+      effects: "",
+    });
+    const runtime = await compiler.prepare(path);
+    const writes = runtime.functions.flatMap((function_) =>
+      function_.continuations.flatMap((continuation) =>
+        continuation.instructions.filter((instruction) =>
+          instruction.operation.kind === "store.write"
+        )
+      )
+    );
+    assert.ok(writes.length > 0);
+    for (const { operation } of writes) {
+      assert.equal(operation.kind, "store.write");
+      if (operation.kind !== "store.write") {
+        throw new Error("expected Store write");
+      }
+      assert.equal(operation.update, "owned-reuse");
+    }
+    const guest = await instantiateArtifact(await compiler.compile(path));
+    try {
+      for (const count of [0n, 1n, 2n, 3n, 10n, 100_000n]) {
+        let last = 0n;
+        if (count > 0n) last = ((count - 1n) / 2n) * 2n;
+        for (const name of ["case_update", "statement_update"]) {
+          assert.deepEqual(guest.call(name, [count]), [last, 1n]);
+        }
+      }
+    } finally {
+      guest.destroy();
+    }
+  } finally {
+    compiler.destroy();
+  }
+});
+
+test("branch restoration still rejects two moves along one path", async () => {
+  const compiler = await Compiler.create();
+  try {
+    await assert.rejects(
+      compiler.checkSource(
+        "examples/double_move.test.blot",
+        `
+open import "blot:prelude"
+const bad :: Int -> [Int]
+const bad = fn count => do:
+  let heads = [0, 1]
+  for index in Iter.range (0, count):
+    heads := case index % 2 == 0 of
+      #True => do:
+        let first = Array.expect_set (heads, 0, index)
+        return Array.append first (Array.expect_set (heads, 1, index))
+      #False => heads
+  return heads
+return bad
+`,
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof BlotError);
+        assert.equal(error.diagnostic.code, "BLOT_LINEAR_CONSUMED_TWICE");
+        assert.ok(error.diagnostic.span.end > error.diagnostic.span.start);
+        return true;
+      },
+    );
+  } finally {
+    compiler.destroy();
+  }
+});
+
 test("reuse assertion tags publish only discharged Store updates", async () => {
   const compiler = await Compiler.create();
   try {

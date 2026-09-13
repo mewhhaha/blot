@@ -1,0 +1,21 @@
+open import "blot:prelude"
+const arena = import "./arena.blot"
+
+let world = arena.seed 10
+let outbox =
+  arena.Mail.send (
+    [],
+    {
+      .sender = 0; .recipient = 99; .payload = #Damage 1;
+    }
+  )
+let next = arena.tick (world, freeze outbox)
+let report =
+  {
+    .before = arena.summary world;
+    .after = arena.summary next.world;
+    .fighters = next.world.fighters;
+    .medics = next.world.medics;
+    .undelivered = next.undelivered;
+  }
+return { .default = report; }

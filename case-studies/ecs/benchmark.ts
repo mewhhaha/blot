@@ -15,6 +15,8 @@ const samples = 7;
 const warmupCalls = 16;
 const sourcePaths = [
   "case-studies/ecs/ecs.blot",
+  "case-studies/ecs/streams.blot",
+  "case-studies/ecs/messages.blot",
   "case-studies/ecs/simulation.blot",
   ...variants.map((name) => `case-studies/ecs/bench/${name}.blot`),
   "case-studies/ecs/bench/boundary.blot",

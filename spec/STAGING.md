@@ -30,6 +30,12 @@ A run-time binding cannot occur free in a compile-time type, effect descriptor,
 layout, declaration tag, reflection decision, specialization choice, or public
 ABI shape.
 
+A requirement unavailable while a closure is generic preserves the subject's
+inferred type and remains an obligation at specialization. This applies to
+generated and imported methods even when their ordinary result already has a
+structural type. A requirement failure inside a specialized body retains the
+defining module as the origin of its source span.
+
 ## 2. Compile-time authority
 
 When a checked type or branch join requests a closed variant whose constructor
@@ -417,6 +423,17 @@ or borrowing the layout of an equal-looking staged value when checked views
 disagree, violates `closedRep` and is an invariant failure. A decoded immutable
 aggregate may reuse a structural memo only when every recorded checked view has
 the same closed representation.
+
+When a finite recursive variant result omits constructors present in its checked
+codomain, settlement completes that constructor set from the finite result's
+payload representations. Complete variants and non-variant results retain their
+already established representation. Nested unions contribute substitutions by
+constructor name. Settlement closes the complete checked constructor set,
+including alternatives absent from that first result; it must not choose the
+layout of an inner branch before an enclosing branch contributes its
+constructors. Later results are coerced into that fixed representation. Loading
+an indirect result whose pointee already has the expected type preserves that
+representation.
 
 The checked-aggregate memo is queried online while Runtime HIR is constructed.
 Equality of its structural keys must therefore imply equality of the complete

@@ -1,24 +1,28 @@
-# ECS: component readers and fused schedules
+# ECS: typed queries, fused schedules, and entity messages
 
 A component schema generates typed readers and replacements. Queries compose
 their effects; handling those effects produces pure row transformations.
 Schedules compose those transformations before choosing where to traverse the
-table.
+table. Component predicates select entire archetypes at compile time; runtime
+guards filter rows, lazy streams combine reductions, and typed messages connect
+entities across an explicit delivery phase.
 
-The example moves particles, reflects their horizontal velocity after crossing a
-boundary, and increments their age. The reflection stage sees the position
-written by the movement stage. Position and Velocity deliberately share the same
-vector type while retaining distinct reader identities.
+The particle example moves particles, reflects their horizontal velocity after
+crossing a boundary, and increments their age. The reflection stage sees the
+position written by the movement stage. Position and Velocity deliberately share
+the same vector type while retaining distinct reader identities.
 
 ```bash
 pnpm blot run case-studies/ecs/main.blot
+pnpm blot run case-studies/ecs/queries-and-messages.blot
 pnpm test:ecs
 pnpm benchmark:ecs
 ```
 
 This case study runs with Node and the Rust/Wasm compiler. Its library is
 ordinary Blot source in [ecs.blot](ecs.blot); [simulation.blot](simulation.blot)
-contains the complete application.
+contains the particle application. [arena.blot](arena.blot) adds fighters,
+medics, sleeping entities, scenery, and messages.
 
 ## Generate components from types
 
@@ -95,6 +99,111 @@ unhandled effect and is rejected. Adding another reader requires its explicit
 handler at this boundary. The current compiler limitation behind keeping these
 clauses explicit is recorded in [compiler-findings.md](compiler-findings.md).
 
+## Select archetypes, guard rows, and fold streams
+
+The arena builds this predicate from ordinary functions on type values:
+
+```blot
+const eligible = Query.all (
+  Query.has "Health",
+  Query.all (
+    Query.without "Sleeping",
+    Query.any (Query.has "Damage", Query.has "Healing")
+  )
+)
+```
+
+`has`, `without`, `all`, `any`, and `not` inspect the record schema at compile
+time. `Query.table (Row, predicate)` constructs a query specialized on that
+decision; bind that query with `const`, then supply `(rows, select)` at runtime.
+An excluded archetype contributes an empty iterator and never applies `select`.
+The same selection can therefore cover scenery without trying to read a Health
+field that scenery does not have. These are explicit schema predicates; the
+library does not infer them from arbitrary field reads.
+
+Runtime conditions belong inside the query:
+
+```blot
+const inspect_character = fn row => Query.run (fn () => do:
+  use Query.guard (row.Health > 0)
+  return { .health = row.Health; .name = row.Name; }
+)
+const select_fighters = Query.table (Fighter, eligible)
+const select_medics = Query.table (Medic, eligible)
+let fighters = select_fighters (world.fighters, inspect_character)
+let medics = select_medics (world.medics, inspect_character)
+let selected = Stream.append (fighters, medics)
+return Iter.fold_with (fn (total, character) => total + character.health) 0 selected
+```
+
+`guard` is an effect operation. Its handler resumes with Unit on success and
+returns `None` without resuming on failure. Subsequent reads and calculations
+are skipped. The arena's attack query combines these guards with the generated
+Health and Damage readers using `use`.
+
+`Stream.Iterator (State, Element)` constructs the ordinary iterator record type.
+`Stream.choose` adapts an `Option` selection to that protocol. `Stream.append`
+runs its left stream, then its right stream, with a tagged state that
+accommodates different iterator state types. Grouping does not change order. The
+final fold visits selected rows without collecting a combined array; rejected
+rows advance in a tail-recursive loop. There is still ordinary iterator state
+and closure representation, so this is not a zero-allocation claim.
+
+Every fold supplies an explicit seed. The complete arena summary uses
+`{ .count = 0; .health = 0; .names = ""; }`, so an empty world has a defined
+text result. It adds a separator only after the first selected name. The seed
+world summarizes as three living eligible characters, 21 health, and
+`"Ada, Cy, Dee"`. Sleeping Eve and scenery are excluded by schema; dead Bram is
+excluded by the runtime guard.
+
+## Deliver typed messages between phases
+
+```blot
+const Mail = ECS.Messages (#Damage Int | #Heal Int)
+let outbox = Mail.send ([], {
+  .sender = 0;
+  .recipient = 2;
+  .payload = #Damage 8;
+})
+let delivery = Mail.deliver (recipient_count, Stream.append (
+  attacks world.fighters,
+  Stream.append (heals world.medics, Iter.items outbox)
+))
+let health = Iter.fold_with (fn (health, envelope) => case envelope.payload of
+  #Damage amount => Int.max 0 (health - amount)
+  #Heal amount => health + amount
+) row.Health (Mail.expect_inbox (delivery, row.Id))
+```
+
+The type constructor derives the envelope and delivery snapshot types from the
+payload type. An outbox starts with `[]` and remains owned while being built.
+Delivery accepts an iterator, allowing independently generated message streams
+to merge without an intermediate outbox. It freezes its completed arrays so many
+entities can read the same snapshot.
+
+Addresses are dense integers in `[0, recipient_count)`. The application must
+assign distinct addresses in that range; this study has no entity allocator,
+generations, deletion, or migration. Negative or out-of-range destinations are
+returned by `Mail.undelivered`, in source order. `expect_inbox` requires a valid
+address and traps otherwise. Delivery does not check sender membership or
+whether an entity implements a particular gameplay reaction. Scenery in this
+application has an address but no damage/healing reaction.
+
+A delivery builds head and tail indices per recipient and a next index per
+message. Each inbox walks only its own links in FIFO order. Building the index
+costs O(entity count + message count); visiting all inboxes costs O(message
+count), with O(entity count + message count) storage. The compiler tests require
+every index update and append to retain its `owned-reuse` proof. There is no
+scan of every message for every entity.
+
+`arena.tick` first generates every attack and heal from the incoming world, then
+delivers them, then produces the successor world. Cy can send a heal in the same
+phase in which an attack kills Cy. After one tick Ada has 17 health, Cy has
+zero, and Dee has five: the new summary is two characters, 22 health, and
+`"Ada, Dee"`. The executable also returns a message addressed to 99 as
+undelivered. Reusing a delivery snapshot replays it; advancing phases and
+preventing accidental replay remain explicit application responsibilities.
+
 ## Merge schedules before traversing
 
 ```blot
@@ -145,10 +254,10 @@ boundaries; this library does not move them across a traversal.
 
 ## Storage and cost
 
-The table is a dense `[Entity]`: an array of row records, with every component
-present in every row. There are no per-entity optional component tests. Empty
-tables produce empty tables. A component whose domain is optional can explicitly
-use `Option T` and choose a default in its query.
+Each archetype table is a dense `[Entity]`: an array of row records, with every
+component present in every row. There are no per-entity optional component
+tests. Empty tables produce empty tables. A component whose domain is optional
+can explicitly use `Option T` and choose a default in its query.
 
 This layout keeps the case study small enough to inspect. It does not implement
 columnar storage, entity allocation, deletion, archetype migration, or automatic
@@ -187,9 +296,11 @@ execution environment. To save a report without package-runner output:
 node --import tsx case-studies/ecs/benchmark.ts > ecs-results.json
 ```
 
-The [recorded local run](benchmark-results.json) on 2026-09-13 used Node
-24.12.0, V8 13.6, and a Ryzen 7 7800X3D. Median microseconds per call, over
-seven samples:
+The [recorded local run](benchmark-results.json) is the particle baseline from
+`7b4bc9b`, before the ownership fixes and messaging extension below. Its source
+and compiler hashes identify that historical run; these timings do not measure
+the new messaging workload. On 2026-09-13 it used Node 24.12.0, V8 13.6, and a
+Ryzen 7 7800X3D. Median microseconds per call, over seven samples:
 
 | Rows |  Fused | Separate passes | Direct | Setup and checksum |
 | ---- | -----: | --------------: | -----: | -----------------: |
@@ -211,9 +322,9 @@ A broader ECS can preserve these boundaries:
 1. Generate column types and accessors from the same schema, with equal column
    lengths established when a table is constructed. Change the row-loading and
    storage boundary while keeping the query bodies.
-2. Match a query's required components against each archetype once, then run its
-   specialized kernel over the matching dense tables. Avoid an entity-by-entity
-   registry lookup.
+2. Extend the explicit archetype predicates into a world registry while
+   retaining specialization per matching table. Add entity identity and
+   migration rules before allowing structural changes.
 3. Give systems explicit read and write capabilities before inferring
    independent work. A query's reader effects describe its reads; the pure row
    arrow alone does not describe its writes. A planner must not invent a write
@@ -223,6 +334,7 @@ A broader ECS can preserve these boundaries:
    separate ownership evidence for the storage being written.
 
 Those are extensions to investigate, rather than promises made by the current
-library. The executable result here is the smaller composition law: types derive
-the component interface, effectful queries become pure row functions, and those
-functions merge before the array loop exists.
+library. Types derive the component interface, effects describe reader and guard
+requirements, and ordinary function composition merges work before traversal.
+The [compiler findings](compiler-findings.md) distinguish the compiler defects
+fixed by this extension from the remaining effect and closure limitations.

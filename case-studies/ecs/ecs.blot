@@ -1,5 +1,8 @@
 open import "blot:prelude"
 
+const Stream = import "./streams.blot"
+const Messages = import "./messages.blot"
+
 const component = fn (name, T) => do:
   const Read = @effect { .get = Unit -> T; }
   return {
@@ -8,7 +11,7 @@ const component = fn (name, T) => do:
     .Read = Read;
     .get = Read.get;
     .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
-    }
+  }
 
 const archetype = fn schema => do:
   let components = Unit
@@ -17,8 +20,42 @@ const archetype = fn schema => do:
 
   return schema <+ { .components = components; }
 
+const Guard = @effect { .require = Bool -> Unit; }
+const run_query = fn work => @handle (
+  Guard,
+  work,
+  {
+    .require = fn (condition, ?resume) => case condition of
+      #True => resume ()
+      #False => #None
+    ;
+    .return = fn value => #Some value;
+  }
+)
+
+const has = fn name => fn Row => case @type.reflect Row of
+  #Shape fields => @shape.has fields name
+  _ => @fail "component queries require a record type"
+
 const Query =
   {
+    .has = has;
+    .without = fn name => fn Row => not (has name Row);
+    .all = fn (first, second) => fn Row => first Row && second Row;
+    .any = fn (first, second) => fn Row => first Row || second Row;
+    .not = fn predicate => fn Row => not (predicate Row);
+    .guard = Guard.require;
+    .run = run_query;
+    .table = fn (Row, predicate) => do:
+      const matches = predicate Row
+      if matches:
+        return fn (rows, select) => Stream.choose (
+          Iter.items (@satisfies rows [Row]),
+          select
+        )
+      else:
+        return fn (rows, select) => { .state = 0; .step = fn _ => #None; }
+    ;
     .merge = fn (left, right) => fn () => do:
       use first <- left ()
       use second <- right ()
@@ -50,6 +87,6 @@ const Schedule = fn Row => do:
       let step = @satisfies system System
       return @satisfies (fn rows => map (rows, step)) ([Row] -> [Row])
     ;
-    }
+  }
 
-return { .archetype; .Query; .Schedule; }
+return { .archetype; .Query; .Stream; .Messages; .Schedule; }
