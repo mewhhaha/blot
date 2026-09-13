@@ -13,8 +13,8 @@ that has not been implemented are four different claims about the language.
 
 ## Effect and type abstractions
 
-These examples build APIs from ordinary type values and interpret computations
-with ordinary handler records. Each runs with
+These examples build APIs from ordinary type values. Effect-oriented examples
+interpret computations with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
 [`record_view_results.blot`](record_view_results.blot) exercises a related
@@ -27,6 +27,18 @@ record and return fresh integer and text records with their own layouts.
 | [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
 | [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
 | [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a nominal quantity type to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
+| [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
+| [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
+| [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
+
+`typed_nonempty.blot` represents a nonempty collection directly as a required
+`.head` plus an array `.tail`. The same implementation record satisfies concrete
+`Semigroup`, `Mappable`, `Foldable`, and `Length` interfaces through structural
+typing, while deliberately failing `Monoid` because no `.empty` value can exist.
+Its focused test also locks down rejection of a headless value.
+| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
+| [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -40,12 +52,41 @@ The schema example derives the effect interface and implements its clauses in
 not rely on the current generic handler's resume-result inference to enforce the
 port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
-database durability or isolation.
+database durability or isolation. The quantity example keeps its operation
+dictionary explicit because attached type namespaces are intentionally outside
+the structural type lattice; its `.type` member carries the nominal type into
+generic checked signatures without runtime dispatch.
+
+The lens example treats a path as a pair of ordinary functions plus the type
+relationship between its whole and focused part. Composition reuses the same
+middle type on both sides, so a non-adjacent path is rejected statically while
+`Shape.update` preserves fields outside each local focus.
+
+The ordering example treats an ordering policy as an ordinary structural record.
+`on` uses two quantified types to connect a projection result to its key order,
+`reverse` changes direction without changing the subject, and `then` composes
+tie-breakers. The concrete `Order Ticket` signature closes the subject type
+after composition; the stable merge sort preserves source order when every
+configured key compares equal.
+
+The structural-reader example is deliberately pure. Tax, shipping, and currency
+computations name only the record capabilities they consume. `zip_with` closes
+those narrower function inputs at a wider structural boundary, while `local`
+lifts pricing under an application field. A refined percentage field and two
+negative fixtures make missing or invalid capabilities type errors before
+execution; extra outer and nested record fields remain valid through width and
+depth subtyping.
+
+The validation example treats a check as `Input -> Result (Value, [Error])`.
+`zip_with` shares one input and error carrier across independent checks, so
+failures accumulate instead of short-circuiting. Successful leaves strengthen
+ordinary integer fields into refinements before the final config is built.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. Focused Node tests cover runtime results, formatting, type
+boundaries, and rejected programs. `deno task verify:showcase` runs the catalog.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
@@ -68,6 +109,7 @@ language rather than studying one compiler feature at a time.
 | [`shader_metadata.blot`](shader_metadata.blot)           | read WGSL at compile time and project filename plus struct metadata         |
 | [`retry_policy.blot`](retry_policy.blot)                 | carry retry state through a bounded loop and stop on the first final result |
 | [`shopping_cart.blot`](shopping_cart.blot)               | calculate checkout totals from immutable tuples and collection operations   |
+| [`typed_transitions.blot`](typed_transitions.blot)       | compose tagged protocol states through a rank-polymorphic transition alias  |
 | [`validation_pipeline.blot`](validation_pipeline.blot)   | accumulate accepted values and typed rejection reasons                      |
 | [`word_frequency.blot`](word_frequency.blot)             | tokenize text, count sorted runs, and build an ordered text map             |
 
@@ -90,18 +132,26 @@ return a `.default` value so each runs directly through the Node CLI.
 - [`sensor_units.blot`](sensor_units.blot): explicit Int/F64 conversion, typed
   float accumulation, an optional empty mean, and a named-operation workaround
   for the current generic float-loop inference limitation.
+- [`stream_offsets.blot`](stream_offsets.blot): monotonic consumer checkpoints,
+  duplicate/stale/gapped deliveries, empty input, and an Int-maximum checkpoint
+  whose successor test is guarded so runtime addition cannot overflow.
+- [`typed_transitions.blot`](typed_transitions.blot): a reusable `Transition`
+  type constructor plus rank-polymorphic composition, tagged protocol states,
+  one exhaustive error union, and valid/invalid/limit fixtures.
 
 ```sh
 pnpm blot run examples/paginated_feed.blot
 pnpm blot run examples/unicode_preview.blot
 pnpm blot run examples/idempotent_events.blot
 pnpm blot run examples/sensor_units.blot
+pnpm blot run examples/stream_offsets.blot
+pnpm blot run examples/typed_transitions.blot
 ```
 
-Run `deno task verify:showcase` to evaluate the everyday programs, these four
+Run `deno task verify:showcase` to evaluate the everyday programs, these five
 boundary examples, and the graph showcases against their golden results and
 compile each one through the semantic compiler. `pnpm test:node` also checks the
-four new examples' exact emitted-Wasm outputs and canonical formatting.
+five boundary examples' exact emitted-Wasm outputs and canonical formatting.
 
 See [the current-state review](../docs/review-2026-09-05-examples.md) for
 findings, reproduction details, and the distinction between fixes and

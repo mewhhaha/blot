@@ -1,0 +1,25 @@
+open import "blot:prelude"
+
+const Trace = @effect { .event = Text -> Unit; }
+const Metrics = @effect { .increment = Text -> Unit; }
+
+let traced :: @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Trace, ..e }))
+let traced = fn operation => fn input => do:
+  use Trace.event "start"
+  use output <- operation input
+  use Trace.event "finish"
+  return output
+
+let counted :: @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Metrics, ..e }))
+let counted = fn operation => fn input => do:
+  use Metrics.increment "call"
+  return operation input
+
+let instrument :: @forall (fn Input => @forall (fn Output => (Input -> Output ~ { ..e }) -> Input -> Output ~ { Trace, Metrics, ..e }))
+let instrument = fn operation => traced (counted operation)
+return { .instrument = instrument;
+  .Trace = Trace;
+  .Metrics = Metrics;
+  .traced = traced;
+  .counted = counted;
+  }

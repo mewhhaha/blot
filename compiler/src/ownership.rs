@@ -1368,6 +1368,18 @@ fn walk_expression(
                     captured.qualifier = Qualifier::None;
                     continue;
                 }
+                if matches!(
+                    analysis.module.arena.patterns[captured.borrow().pattern.0 as usize],
+                    Pattern::Name { qualifier: Qualifier::None, .. }
+                ) && matches!(captured.borrow().owned, Produced::StoreParameter { .. })
+                {
+                    // A generic Store cannot be frozen before its element
+                    // obligations are known. Carry its authority into the
+                    // closure; call-site substitution decides shareability.
+                    consume(&captured, span, analysis);
+                    produced = combine(produced, captured.borrow().owned.clone());
+                    continue;
+                }
                 produced = combine(produced, borrowed(captured.borrow().owned.clone()));
             }
             if relevant(&produced) {

@@ -1,0 +1,119 @@
+// Compose a checkout workflow from state-specific transitions. The tags are the
+// protocol states: a later step cannot be called with an earlier state by
+// accident, while the transition combinator stays reusable across domains.
+
+open import "blot:prelude"
+
+const Flow = import "./lib/transition.blot"
+const Step = Flow.Transition
+
+const Request =
+  {
+    .sku = Text;
+    .quantity = Int;
+    .unit_price = Int;
+  }
+const Draft = #Draft Request
+const Priced =
+  #Priced {
+    .request = Request;
+    .subtotal = Int;
+  }
+const Approved =
+  #Approved {
+    .subtotal = Int;
+    .reference = Text;
+  }
+const Receipt =
+  #Receipt {
+    .subtotal = Int;
+    .reference = Text;
+  }
+const CheckoutError =
+  #InvalidQuantity Int | #InvalidUnitPrice Int | #LimitExceeded Int
+
+let price :: Step (Draft, Priced, CheckoutError)
+let price = fn draft => case draft of
+  #Draft request => do:
+    if request.quantity <= 0:
+      return Error (#InvalidQuantity request.quantity)
+
+    if request.unit_price <= 0:
+      return Error (#InvalidUnitPrice request.unit_price)
+
+    return Ok (#Priced {
+      .request = request;
+      .subtotal = request.quantity * request.unit_price;
+    })
+
+let authorize :: Step (Priced, Approved, CheckoutError)
+let authorize = fn priced => case priced of
+  #Priced order => do:
+    if order.subtotal > 100:
+      return Error (#LimitExceeded order.subtotal)
+
+    return Ok (#Approved {
+      .subtotal = order.subtotal;
+      .reference = "approved";
+    })
+
+let capture :: Step (Approved, Receipt, CheckoutError)
+let capture = fn approved => case approved of
+  #Approved payment => Ok (#Receipt {
+    .subtotal = payment.subtotal;
+    .reference = payment.reference;
+})
+
+// Pain point: the generic transition helper needs four explicit nested @forall
+// binders in `lib/transition.blot`; factoring the alias keeps application code
+// compact without weakening the state relationship.
+// The only composition rule is adjacency: the first step's output must be the
+// second step's input. `CheckoutError` stays one exhaustively matched union.
+let checkout :: Step (Draft, Receipt, CheckoutError)
+let checkout = Flow.and_then (price, Flow.and_then (authorize, capture))
+
+const Outcome =
+  {
+    .status = Text;
+    .total = Int;
+    .detail = Int;
+  }
+
+let summarize :: Result (Receipt, CheckoutError) -> Outcome
+let summarize = fn result => case result of
+  #Ok receipt => case receipt of
+    #Receipt value => {
+      .status = value.reference;
+      .total = value.subtotal;
+      .detail = 0;
+    }
+
+  #Error error => case error of
+    #InvalidQuantity value => {
+      .status = "invalid-quantity";
+      .total = 0;
+      .detail = value;
+    }
+
+    #InvalidUnitPrice value => {
+      .status = "invalid-unit-price";
+      .total = 0;
+      .detail = value;
+    }
+
+    #LimitExceeded value => {
+      .status = "limit-exceeded";
+      .total = 0;
+      .detail = value;
+}
+
+let run = fn request => summarize (checkout (#Draft request))
+
+return {
+  .default = {
+    .valid = run { .sku = "pen"; .quantity = 3; .unit_price = 12; };
+    .invalid_quantity = run { .sku = "pen"; .quantity = 0; .unit_price = 12; };
+    .invalid_price = run { .sku = "pen"; .quantity = 2; .unit_price = -1; };
+    .over_limit = run { .sku = "desk"; .quantity = 2; .unit_price = 75; };
+  };
+  }

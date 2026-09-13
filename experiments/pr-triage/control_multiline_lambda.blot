@@ -1,0 +1,4 @@
+open import "blot:prelude"
+const twice = fn value => do:
+  return value + value
+return twice 3

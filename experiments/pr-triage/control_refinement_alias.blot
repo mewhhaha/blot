@@ -1,0 +1,9 @@
+open import "blot:prelude"
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+const validate :: { .port = Int; } -> Option Port
+const validate = fn raw => do:
+  let port = raw.port
+  if port >= 1 && port <= 65535:
+    return #Some port
+  return #None
+return validate { .port = 42; }

@@ -1179,4 +1179,7 @@ mod tests {
 #[cfg(test)]
 mod relational_inference_tests;
 
+#[cfg(test)]
+mod abstraction_tests;
+
 mod refinement_evidence;

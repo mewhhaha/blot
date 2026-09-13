@@ -1,0 +1,71 @@
+// Pure dependency injection from ordinary functions and structural records.
+// Independent readers name only the capabilities they need; composition closes
+// those requirements at a concrete public boundary without a service registry.
+open import "blot:prelude"
+const R = import "./lib/reader.blot"
+
+const Percent = refine (Int, fn value => value >= 0 && value <= 100)
+const Cart = { .subtotal = Int; .zone = #Local | #Remote; }
+const TaxPolicy = { .tax_percent = Percent; }
+const ShippingPolicy = { .local_shipping = Int; .remote_shipping = Int; }
+const Pricing = TaxPolicy & ShippingPolicy
+const PricingCapability = { .pricing = Pricing; }
+const CurrencyCapability = { .currency = Text; }
+const App = PricingCapability & CurrencyCapability
+
+const tax :: Cart -> R.Reader (TaxPolicy, Int)
+const tax = fn cart => fn policy => cart.subtotal * policy.tax_percent / 100
+
+const shipping :: Cart -> R.Reader (ShippingPolicy, Int)
+const shipping = fn cart => fn policy => case cart.zone of
+  #Local => policy.local_shipping
+  #Remote => policy.remote_shipping
+
+// `zip_with` has one Environment parameter. Function-input contravariance,
+// structural intersection, and record width subtyping let the narrower readers
+// flow into one Pricing requirement without wrappers, casts, or field copying.
+const pricing_total :: Cart -> R.Reader (Pricing, Int)
+const pricing_total = fn cart => do:
+  let extras = R.zip_with (
+    fn (tax_value, shipping_value) => tax_value + shipping_value,
+    tax cart,
+    shipping cart
+  )
+  return R.map (fn extra => cart.subtotal + extra, extras)
+
+// Pain point: lifting through one nested field still needs an explicit
+// projection lambda; there is no field-section shorthand for `local` to reuse.
+const lifted_total :: Cart -> R.Reader (PricingCapability, Int)
+const lifted_total = fn cart => R.local (fn environment => environment.pricing, pricing_total cart)
+
+const currency :: R.Reader (CurrencyCapability, Text)
+const currency = fn environment => environment.currency
+
+const quote_for :: Cart -> R.Reader (App, Text)
+const quote_for = fn cart => R.zip_with (
+  fn (total, unit) => unit <> " " <> Text.of_int total,
+  lifted_total cart,
+  currency
+)
+
+const environment = {
+  .pricing = {
+    .tax_percent = 20;
+    .local_shipping = 500;
+    .remote_shipping = 1500;
+    .rounding = "bankers";
+  };
+  .currency = "EUR";
+  .trace_id = "checkout-42";
+}
+
+const local_cart = { .subtotal = 10000; .zone = #Local; }
+const remote_cart = { .subtotal = 8000; .zone = #Remote; }
+
+return {
+  .default = {
+    .local = R.provide (environment, quote_for local_cart);
+    .remote = R.provide (environment, quote_for remote_cart);
+    .trace = environment.trace_id;
+  };
+}

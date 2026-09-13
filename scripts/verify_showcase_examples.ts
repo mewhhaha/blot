@@ -17,6 +17,8 @@ const everydayExamples = [
   "sensor_units.blot",
   "shader_metadata.blot",
   "shopping_cart.blot",
+  "stream_offsets.blot",
+  "typed_transitions.blot",
   "unicode_preview.blot",
   "validation_pipeline.blot",
   "word_frequency.blot",
@@ -34,6 +36,12 @@ const abstractionExamples = [
   "typed_effect_pipeline.blot",
   "schema_effects.blot",
   "linear_transaction.blot",
+  "typed_quantities.blot",
+  "typed_lenses.blot",
+  "composable_ordering.blot",
+  "typed_nonempty.blot",
+  "structural_readers.blot",
+  "typed_validation.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

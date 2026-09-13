@@ -1,0 +1,26 @@
+open import "blot:prelude"
+
+const Validation = fn (value, error) => Result (value, [error])
+const Validator = fn (input, value, error) => input -> Validation (value, error)
+
+const map :: @forall (fn Input => @forall (fn Value => @forall (fn Mapped => @forall (fn Error => ((Value -> Mapped), Validator (Input, Value, Error)) -> Validator (Input, Mapped, Error)))))
+const map = fn (transform, validator) => fn input => case validator input of
+  #Ok value => #Ok (transform value)
+  #Error errors => #Error errors
+
+const zip_with :: @forall (fn Input => @forall (fn Left => @forall (fn Right => @forall (fn Output => @forall (fn Error => (((Left, Right) -> Output), Validator (Input, Left, Error), Validator (Input, Right, Error)) -> Validator (Input, Output, Error))))))
+const zip_with = fn (combine, left, right) => fn input => case left input of
+  #Ok left_value => case right input of
+    #Ok right_value => #Ok (combine (left_value, right_value))
+    #Error right_errors => #Error right_errors
+
+  #Error left_errors => case right input of
+    #Ok _ => #Error left_errors
+    #Error right_errors => #Error (Array.append left_errors right_errors)
+
+return {
+  .Validation = Validation;
+  .Validator = Validator;
+  .map = map;
+  .zip_with = zip_with;
+}

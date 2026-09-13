@@ -1,0 +1,84 @@
+open import "blot:prelude"
+
+// A nonempty collection is represented by its unavoidable head plus an ordinary
+// array tail. There is no tag, runtime check, or special constructor: the
+// representation itself makes an empty value unrepresentable.
+const nonempty_type = fn value => {
+  .head = value;
+  .tail = [value];
+}
+
+const singleton :: @forall (fn T => T -> nonempty_type T)
+const singleton = fn value => {
+  .head = value;
+  .tail = [];
+}
+
+const prepend :: @forall (fn T => (T, nonempty_type T) -> nonempty_type T)
+const prepend = fn (value, values) => {
+  .head = value;
+  .tail = fold (
+    values.tail,
+    [values.head],
+    fn (result, item) => @array.push result item
+  );
+}
+
+const to_array :: @forall (fn T => nonempty_type T -> [T])
+const to_array = fn values => fold (
+  values.tail,
+  [values.head],
+  fn (result, item) => @array.push result item
+)
+
+// Pain point: `left.tail` is still shared through the immutable input record, so
+// destructive `@array.push` correctly refuses it. `append` copies that tail
+// before extending it rather than hiding mutation behind the abstraction.
+const append :: @forall (fn T => nonempty_type T -> nonempty_type T -> nonempty_type T)
+const append = fn left => fn right => {
+  .head = left.head;
+  .tail = fold (
+    right.tail,
+    @array.push (@array.copy (&left.tail)) right.head,
+    fn (result, item) => @array.push result item
+  );
+}
+
+const map_nonempty :: @forall (fn T => @forall (fn U => (nonempty_type T, (T -> U)) -> nonempty_type U))
+const map_nonempty = fn (values, transform) => {
+  .head = transform values.head;
+  .tail = map (values.tail, transform);
+}
+
+const fold_nonempty :: @forall (fn T => @forall (fn S => (nonempty_type T, S, ((S, T) -> S)) -> S))
+const fold_nonempty = fn (values, initial, visit) => do:
+  let after_head = visit (initial, values.head)
+  return fold (values.tail, after_head, visit)
+
+const reduce :: @forall (fn T => (nonempty_type T, ((T, T) -> T)) -> T)
+const reduce = fn (values, combine) => fold (
+  values.tail,
+  values.head,
+  combine
+)
+
+// This implementation is deliberately inferred: it only needs `.tail`, so its
+// principal input type is wider than `nonempty_type T`. Structural interface
+// matching still lets it satisfy `Length (nonempty_type T)` at each use site.
+const length = fn values => Array.length (&values.tail) + 1
+
+// Pain point: Blot's structural collection interfaces are intentionally
+// first-order. This polymorphic record satisfies Mappable/Foldable/Semigroup at
+// concrete instantiations, but there is no higher-kinded "NonEmpty is
+// mappable" proposition to state once for every element type.
+return {
+  .of = nonempty_type;
+  .singleton = singleton;
+  .prepend = prepend;
+  .append = append;
+  .map = map_nonempty;
+  .fold = fold_nonempty;
+  .reduce = reduce;
+  .length = length;
+  .to_array = to_array;
+  }

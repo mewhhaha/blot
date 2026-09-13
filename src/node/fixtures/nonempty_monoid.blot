@@ -1,0 +1,6 @@
+open import "blot:prelude"
+const NonEmpty = import "../../../examples/lib/nonempty.blot"
+
+let needs_identity :: Monoid (NonEmpty.of Int) -> Int
+let needs_identity = fn _ => 0
+return needs_identity NonEmpty

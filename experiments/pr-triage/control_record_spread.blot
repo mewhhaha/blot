@@ -1,0 +1,5 @@
+open import "blot:prelude"
+const Left = { .left = Int; }
+const Right = { .right = Int; }
+const Both = { ...Left; ...Right; }
+return @satisfies { .left = 1; .right = 2; } Both
