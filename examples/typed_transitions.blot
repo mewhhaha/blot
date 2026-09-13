@@ -66,6 +66,9 @@ let capture = fn approved => case approved of
     .reference = payment.reference;
   })
 
+// Pain point: the generic transition helper needs four explicit nested @forall
+// binders in `lib/transition.blot`; factoring the alias keeps application code
+// compact without weakening the state relationship.
 // The only composition rule is adjacency: the first step's output must be the
 // second step's input. `CheckoutError` stays one exhaustively matched union.
 let checkout :: Step (Draft, Receipt, CheckoutError)
