@@ -1,0 +1,19 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/reader.blot"
+
+const Left = { .left = Int; }
+const Right = { .right = Int; }
+const Both = { .left = Int; .right = Int; }
+
+const left :: R.Reader (Left, Int)
+const left = fn environment => environment.left
+
+const right :: R.Reader (Right, Int)
+const right = fn environment => environment.right
+
+const total :: R.Reader (Both, Int)
+const total = R.zip_with (fn (a, b) => a + b, left, right)
+
+// Composition requires both structural capabilities; width subtyping may add
+// fields, but it cannot invent the missing `.right` field.
+return total { .left = 1; }
