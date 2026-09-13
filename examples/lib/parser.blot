@@ -77,21 +77,20 @@ const literal = fn expected => fn input => do:
 const take_while1 :: (Text, (Text -> Bool)) -> Parser Text
 const take_while1 = fn (expected, accepts) => fn input => do:
   let rec visit :: (Text.Cursor, [Text]) -> Result (Parsed Text, ParseError)
-  let rec visit = fn (cursor, scalars) => case Text.next cursor of
-    #None => do:
+  let rec visit = fn (cursor, scalars) => do:
+    if let #Some (scalar, next) = Text.next cursor else:
       if Array.length (&scalars) == 0:
         return #Error (error_at (cursor, expected))
 
       return #Ok { .value = @text.join scalars; .rest = cursor; }
 
-    #Some (scalar, next) => do:
-      if accepts scalar:
-        return visit (next, @array.push scalars scalar)
+    if accepts scalar:
+      return visit (next, @array.push scalars scalar)
 
-      if Array.length (&scalars) == 0:
-        return #Error (error_at (cursor, expected))
+    if Array.length (&scalars) == 0:
+      return #Error (error_at (cursor, expected))
 
-      return #Ok { .value = @text.join scalars; .rest = cursor; }
+    return #Ok { .value = @text.join scalars; .rest = cursor; }
 
   let scalars :: [Text]
   let scalars = []
