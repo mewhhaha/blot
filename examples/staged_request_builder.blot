@@ -1,0 +1,29 @@
+const Request = import "./lib/staged_request.blot"
+
+// Authorize first, then add the body. Every stage is linear so the old state is
+// spent when the next state is produced.
+let !auth_draft = Request.begin "/users"
+let !authorized = Request.authorize (!auth_draft, "Bearer Ada")
+let !ready_auth = Request.with_body (!authorized, "name=Ada")
+let !ready_auth = Request.with_retries (!ready_auth, 2)
+let auth_first = Request.submit (!ready_auth)
+
+// The same API also permits the independent requirements in the other order.
+// `with_retries` runs while both slots are still missing and preserves that
+// state, so the later setters remain available with their exact types.
+let !body_draft = Request.begin "/projects"
+let !tuned = Request.with_retries (!body_draft, 5)
+let !with_body = Request.with_body (!tuned, "name=compiler")
+let !ready_body = Request.authorize (!with_body, "Bearer Grace")
+let body_first = Request.submit (!ready_body)
+
+// Pain point: the types make premature submission and duplicate setters
+// impossible, but first-class structural typestate still exposes every state in
+// inferred types. Keep concrete workflow boundaries small when the intermediate
+// construction states are implementation details.
+return {
+  .default = {
+    .auth_first = auth_first;
+    .body_first = body_first;
+  };
+  }

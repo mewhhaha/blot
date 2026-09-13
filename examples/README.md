@@ -46,6 +46,7 @@ Its focused test also locks down rejection of a headless value.
 | [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
 | [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records            | changed field names, exact equality, and refined-field bounds |
+| [`staged_request_builder.blot`](staged_request_builder.blot) | Required slots are type parameters; consuming setters advance either order while preserving the other slot        | Two receipts; invalid stages reject statically               |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,

@@ -1,0 +1,1 @@
+{ .default = { .auth_first = { .credential = "Bearer Ada"; .endpoint = "/users"; .payload = "name=Ada"; .retries = 2; }; .body_first = { .credential = "Bearer Grace"; .endpoint = "/projects"; .payload = "name=compiler"; .retries = 5; }; }; }
