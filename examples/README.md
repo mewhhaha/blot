@@ -17,12 +17,19 @@ These examples build APIs from ordinary type values and interpret computations
 with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
-| Example                                                      | Abstraction                                                                                                       | Observations                                                 |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
-| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
-| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
-| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
+| Example                                                      | Abstraction                                                                                                       | Observations                                                  |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"`  |
+| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                           |
+| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                    |
+| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`          |
+| [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
+
+`typed_nonempty.blot` represents a nonempty collection directly as a required
+`.head` plus an array `.tail`. The same implementation record satisfies concrete
+`Semigroup`, `Mappable`, `Foldable`, and `Length` interfaces through structural
+typing, while deliberately failing `Monoid` because no `.empty` value can exist.
+Its focused test also locks down rejection of a headless value.
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
@@ -41,7 +48,9 @@ database durability or isolation.
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `deno task verify:showcase` includes all four examples.
+transactions. `src/node/typed_nonempty.test.ts` checks evaluator/Wasm agreement,
+canonical source, and the nonempty/Monoid rejections. `deno task verify:showcase`
+includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
