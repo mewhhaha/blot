@@ -1,0 +1,40 @@
+open import "blot:prelude"
+
+// A quantity descriptor keeps the nominal type and the operations that know
+// how to construct and inspect it together. The record is compile-time data;
+// concrete quantity values lower as the sealed Int carrier.
+const Quantity = fn (name, symbol) => do:
+  const T = seal (name, Int)
+
+  let of :: Int -> T
+  let of = fn value => seal (name, value)
+
+  let value :: T -> Int
+  let value = fn quantity => unseal quantity
+
+  let add :: T -> T -> T
+  let add = fn left => fn right => of (value left + value right)
+
+  return {
+    .type = T;
+    .of = of;
+    .value = value;
+    .add = add;
+    .symbol = symbol;
+  }
+
+// A conversion is generated from two descriptors. `From.type` and `To.type`
+// make the relationship part of the resulting function's checked signature.
+const scale = fn (From, To, factor) => do:
+  let convert :: From.type -> To.type
+  let convert = fn quantity => To.of (From.value quantity * factor)
+  return convert
+
+// Pain point: attached type namespaces are deliberately invisible to typing,
+// so a generic helper cannot accept a bare type and then call its attached
+// `.of`/`.value` members. Passing this explicit comptime descriptor preserves
+// the same operations as first-class data without weakening nominal types.
+return {
+  .Quantity = Quantity;
+  .scale = scale;
+}
