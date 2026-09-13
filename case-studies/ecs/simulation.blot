@@ -1,0 +1,107 @@
+open import "blot:prelude"
+const ECS = import "./ecs.blot"
+const Query = ECS.Query
+
+const Vec2 = { .x = Int; .y = Int; }
+const Entity = ECS.archetype {
+  .Position = Vec2;
+  .Velocity = Vec2;
+  .Age = Int;
+  .Label = Text;
+}
+const C = Entity.components
+const Schedule = ECS.Schedule Entity
+
+const motion = Query.merge (C.Position.get, C.Velocity.get)
+const next_position = Query.map (motion, fn (position, velocity) => {
+  .x = position.x + velocity.x;
+  .y = position.y + velocity.y;
+})
+
+// This second query observes the updated position when scheduled after motion.
+const next_velocity = Query.and_then (C.Position.get, fn position => fn () => do:
+  use velocity <- C.Velocity.get ()
+  if position.x >= 10:
+    return { .x = 0 - velocity.x; .y = velocity.y; }
+  else:
+    return velocity
+)
+
+// Keep each effect visible to @handle. Supplying the current row turns a
+// query into a pure value; every read in that query sees the same snapshot.
+const resolve = fn (row, work) => @handle (
+  C.Position.Read,
+  fn () => @handle (
+    C.Velocity.Read,
+    work,
+    { .get = fn ((), ?resume) => resume row.Velocity; }
+  ),
+  { .get = fn ((), ?resume) => resume row.Position; }
+)
+
+const integrate :: Entity -> Entity
+const integrate = fn row => C.Position.replace (row, resolve (row, next_position))
+
+const bounce :: Entity -> Entity
+const bounce = fn row => C.Velocity.replace (row, resolve (row, next_velocity))
+
+const age :: Entity -> Entity
+const age = fn row => C.Age.replace (row, row.Age + 1)
+
+const physics = Schedule.merge (integrate, bounce)
+const bookkeeping = Schedule.merge (Schedule.empty, age)
+const tick = Schedule.merge (physics, bookkeeping)
+const reassociated = Schedule.merge (integrate, Schedule.merge (bounce, age))
+const reversed = Schedule.merge (bounce, Schedule.merge (integrate, age))
+
+const fused :: [Entity] -> [Entity]
+const fused = Schedule.each tick
+const regrouped :: [Entity] -> [Entity]
+const regrouped = Schedule.each reassociated
+const wrong_order :: [Entity] -> [Entity]
+const wrong_order = Schedule.each reversed
+const separate :: [Entity] -> [Entity]
+const separate = fn rows => Schedule.each age (
+  Schedule.each bounce (Schedule.each integrate rows)
+)
+
+// A direct counterpart makes the comparison about composition and traversal.
+const direct :: [Entity] -> [Entity]
+const direct = fn rows => map (rows, fn row => do:
+  let position = {
+    .x = row.Position.x + row.Velocity.x;
+    .y = row.Position.y + row.Velocity.y;
+  }
+  let velocity = case position.x >= 10 of
+    #True => { .x = 0 - row.Velocity.x; .y = row.Velocity.y; }
+    #False => row.Velocity
+  return {
+    .Position = position;
+    .Velocity = velocity;
+    .Age = row.Age + 1;
+    .Label = row.Label;
+  }
+)
+
+const seed :: (Int, Int) -> [Entity]
+const seed = fn (count, offset) => Iter.collect (Iter.map (
+  Iter.range (0, count),
+  fn index => {
+    .Position = { .x = index + offset; .y = index; };
+    .Velocity = { .x = 3; .y = 2; };
+    .Age = 0;
+    .Label = "particle";
+  }
+))
+
+const checksum :: [Entity] -> Int
+const checksum = fn rows => fold (rows, 0, fn (total, row) => do:
+  return total + row.Position.x * 3 + row.Position.y * 5 + row.Velocity.x * 7 + row.Velocity.y * 11 + row.Age
+)
+
+return {
+  .Entity; .C; .Schedule; .motion; .resolve;
+  .integrate; .bounce; .age; .tick;
+  .fused; .regrouped; .separate; .direct; .wrong_order;
+  .seed; .checksum;
+}

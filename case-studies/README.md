@@ -45,6 +45,19 @@ Run `pnpm example:spark-browser` for the
 [event actor example](spark-browser/README.md) with explicit I/O, subscriptions,
 cancellation, and source cleanup during reload.
 
+## ECS
+
+The [ECS case study](ecs/README.md) derives components from a record of types,
+composes reader queries with `use`, and merges pure schedules into one dense
+table traversal. It includes a direct implementation, a separate-pass baseline,
+and a benchmark over emitted Wasm.
+
+```bash
+pnpm blot run case-studies/ecs/main.blot
+pnpm test:ecs
+pnpm benchmark:ecs
+```
+
 ## grep
 
 `grep/main.blot` owns matching, iteration, output selection, and the exit count.

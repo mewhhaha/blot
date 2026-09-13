@@ -152,6 +152,23 @@ a boundary-matched minimal artifact. The complete size is the shipping cost; the
 marginal size answers how much one workload adds without conflating a nullary
 host adapter with a first-order function adapter.
 
+The ECS generated-execution case study (`pnpm benchmark:ecs`) compares a fused
+row schedule, three separate passes, and a direct single-pass implementation.
+Each scalar call constructs the same dense input table from a runtime count,
+applies its row work, and computes a checksum. Input construction, checksum, and
+scalar ABI scope entry/exit remain inside the measured boundary. A fourth
+workload reports construction and checksum alone without subtracting them. Every
+variant must agree with an independent model on the bounded workload inputs
+before timing. Compilation, instantiation, warmup, and validation are outside
+the clock; variant order rotates across samples. The report retains raw samples,
+memory pages, artifact sizes relative to a matching scalar ABI baseline, and
+source/compiler/environment provenance checked before and after the run.
+Separate kernel inspection counts static Store read sites and output builders,
+requires owned-reuse appends, and rejects residual indirect query machinery.
+Static sites are not dynamic operation counts. Fusion equivalence concerns
+normally terminating row work; merging partial functions explicitly chooses
+per-row failure order instead of whole-pass failure order.
+
 Scaling comparisons keep source and generated artifacts fixed while varying a
 runtime input. A semantic counterpart must preserve traps as well as returned
 values: Rust integer workloads enable overflow checks because Blot `Int` traps

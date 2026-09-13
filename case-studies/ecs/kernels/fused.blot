@@ -1,0 +1,2 @@
+const simulation = import "../simulation.blot"
+return simulation.fused

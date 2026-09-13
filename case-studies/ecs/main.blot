@@ -1,0 +1,12 @@
+open import "blot:prelude"
+const simulation = import "./simulation.blot"
+
+let rows = simulation.seed (3, 6)
+return {
+  .default = simulation.fused rows;
+  .fused = simulation.fused;
+  .separate = simulation.separate;
+  .direct = simulation.direct;
+  .regrouped = simulation.regrouped;
+  .wrong_order = simulation.wrong_order;
+  }

@@ -43,6 +43,10 @@ the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
 transactions. `deno task verify:showcase` includes all four examples.
 
+The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
+generated components, composable reader queries, and fused row schedules, with
+an executable cost comparison.
+
 ## Everyday programs
 
 These examples are good starting points when evaluating Blot as a programming

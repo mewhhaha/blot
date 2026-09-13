@@ -1,0 +1,55 @@
+open import "blot:prelude"
+
+const component = fn (name, T) => do:
+  const Read = @effect { .get = Unit -> T; }
+  return {
+    .Type = T;
+    .name = name;
+    .Read = Read;
+    .get = Read.get;
+    .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
+    }
+
+const archetype = fn schema => do:
+  let components = Unit
+  for name in Iter.items (@shape.names schema):
+    components := @type.attach components name (component (name, @shape.get schema name))
+
+  return schema <+ { .components = components; }
+
+const Query =
+  {
+    .merge = fn (left, right) => fn () => do:
+      use first <- left ()
+      use second <- right ()
+      return (first, second)
+    ;
+    .map = fn (source, transform) => fn () => do:
+      use value <- source ()
+      return transform value
+    ;
+    .and_then = fn (source, choose) => fn () => do:
+      use value <- source ()
+      use result <- choose value ()
+      return result
+    ;
+  }
+
+// Only pure functions of one row enter a fused schedule. The arrow also
+// requires every stage to preserve the archetype's complete component shape.
+const Schedule = fn Row => do:
+  const System = Row -> Row
+  return {
+    .empty = @satisfies identity System;
+    .merge = fn (left, right) => do:
+      let first = @satisfies left System
+      let second = @satisfies right System
+      return @satisfies (fn row => second (first row)) System
+    ;
+    .each = fn system => do:
+      let step = @satisfies system System
+      return @satisfies (fn rows => map (rows, step)) ([Row] -> [Row])
+    ;
+    }
+
+return { .archetype; .Query; .Schedule; }
