@@ -1,0 +1,14 @@
+open import "blot:prelude"
+const Store = import "../../../examples/lib/nominal_index.blot"
+
+const UserIds = Store.Keyspace "user"
+const ProjectIds = Store.Keyspace "project"
+
+const users :: Store.Index (UserIds.type, Text)
+const users = Store.from_entries (UserIds.equal, [
+  { .key = UserIds.of 1; .value = "Ada"; },
+])
+
+return {
+  .default = Store.lookup (users, ProjectIds.of 1);
+}
