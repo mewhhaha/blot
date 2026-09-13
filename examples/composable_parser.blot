@@ -59,7 +59,7 @@ return {
     .health = parse_route "/health";
     .unicode_user = parse_route "/users/ada🐱";
     .asset = parse_route "/assets/logo.svg";
-    .missing_user = P.run (user, "/users/");
+    .missing_user = parse_route "/users/";
     .trailing = parse_route "/health/extra";
   };
   }
