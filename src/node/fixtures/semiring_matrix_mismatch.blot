@@ -1,0 +1,23 @@
+open import "blot:prelude"
+
+const Matrix = import "../../../examples/lib/semiring_matrix.blot"
+
+const ints :: Matrix.Semiring Int
+const ints =
+  {
+    .zero = 0;
+    .one = 1;
+    .add = fn (left, right) => left + right;
+    .multiply = fn (left, right) => left * right;
+  }
+
+const texts :: Matrix.Matrix2 Text
+const texts =
+  {
+    .m00 = "a";
+    .m01 = "b";
+    .m10 = "c";
+    .m11 = "d";
+  }
+
+return Matrix.multiply (ints, texts, texts)

@@ -8,6 +8,8 @@ import { runArtifact } from "./run.ts";
 const example = "examples/typed_semiring_matrices.blot";
 const library = "examples/lib/semiring_matrix.blot";
 const mismatchFixture = "src/node/fixtures/semiring_carrier_mismatch.blot";
+const matrixMismatchFixture =
+  "src/node/fixtures/semiring_matrix_mismatch.blot";
 
 test(
   "typed semiring matrices preserve one carrier in both executions",
@@ -49,14 +51,13 @@ test(
 );
 
 test(
-  "typed semiring matrices reject a dictionary with a mixed carrier",
+  "typed semiring matrices reject mixed carriers",
   async () => {
     const compiler = await Compiler.create();
     try {
-      await assert.rejects(
-        () => compiler.check(mismatchFixture),
-        /BLOT_TYPE_ERROR/,
-      );
+      for (const path of [mismatchFixture, matrixMismatchFixture]) {
+        await assert.rejects(() => compiler.check(path), /BLOT_TYPE_ERROR/);
+      }
     } finally {
       compiler.destroy();
     }
