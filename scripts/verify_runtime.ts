@@ -38,6 +38,7 @@ const cases = [
   "examples/owned_radix_sort_unstable.blot",
   "examples/higher_order_owned_fold.blot",
   "examples/conditional_array_update.blot",
+  "examples/record_view_results.blot",
   "examples/higher_order_owned_quicksort.blot",
   "examples/region_zipper_quicksort.blot",
 ];

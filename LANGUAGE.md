@@ -679,6 +679,13 @@ A signature:
 - must evaluate at compile time; and
 - must evaluate to a value that can be interpreted as a type.
 
+A local signature inside a generic compile-time constructor may depend on a
+declared type argument or a local type derived from it. Checking retains that
+obligation until the constructor is specialized with the argument's value; the
+concrete binding must satisfy it even when the constructed result is unused. An
+undeclared name remains an error. Supplying a callback alongside a type value
+does not erase that value or exempt the callback from its concrete requirements.
+
 Within a signature value, `_` denotes a fresh inferred type for that occurrence.
 The following binding constrains the hole exactly as it constrains an explicitly
 written signature type. Separate `_` occurrences are independent, so a function

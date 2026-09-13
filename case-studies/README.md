@@ -52,11 +52,15 @@ composes reader queries with `use`, and merges pure schedules into one dense
 table traversal. It also selects archetypes with component predicates, filters
 rows with effectful guards, folds combined entity streams, and delivers typed
 messages through indexed inboxes. It includes a direct implementation, a
-separate-pass baseline, and a benchmark over emitted Wasm.
+separate-pass baseline, and a benchmark over emitted Wasm. Explicit read/write
+views also drive a compile-time dependency planner that merges stable system
+identities, reports compatible batches, and fuses work between traversal
+barriers.
 
 ```bash
 pnpm blot run case-studies/ecs/main.blot
 pnpm blot run case-studies/ecs/queries-and-messages.blot
+pnpm blot run case-studies/ecs/schedule-plan.blot
 pnpm test:ecs
 pnpm benchmark:ecs
 ```

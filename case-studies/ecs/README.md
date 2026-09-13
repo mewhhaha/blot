@@ -15,6 +15,7 @@ the same vector type while retaining distinct reader identities.
 ```bash
 pnpm blot run case-studies/ecs/main.blot
 pnpm blot run case-studies/ecs/queries-and-messages.blot
+pnpm blot run case-studies/ecs/schedule-plan.blot
 pnpm test:ecs
 pnpm benchmark:ecs
 ```
@@ -23,6 +24,8 @@ This case study runs with Node and the Rust/Wasm compiler. Its library is
 ordinary Blot source in [ecs.blot](ecs.blot); [simulation.blot](simulation.blot)
 contains the particle application. [arena.blot](arena.blot) adds fighters,
 medics, sleeping entities, scenery, and messages.
+[scheduling.blot](scheduling.blot) adds explicit component access, dependency
+graphs, compatible batches, and traversal barriers.
 
 ## Generate components from types
 
@@ -252,6 +255,117 @@ whole-pass failure order matters. Global reductions, neighbor queries over an
 updated world, and structural entity changes likewise require explicit phase
 boundaries; this library does not move them across a traversal.
 
+## Derive read views and write patches from access declarations
+
+The planner needs trustworthy access sets. `Systems` derives both sides of a
+system's function type from the entity schema:
+
+```blot
+const Entity = { .Position = Int; .Velocity = Int; .Age = Int; .Distance = Int; .Label = Text; }
+const S = ECS.Systems Entity
+const integrate = S.define (
+  { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+  fn read => { .Position = read.Position + read.Velocity; }
+)
+```
+
+Here the callback's boundary is
+`{ .Position = Int; .Velocity = Int; } -> { .Position = Int; }`. The callback
+receives only the declared read view, including when it reflects on its fields.
+It returns exactly the declared write fields, with their schema types. The
+generated `step` applies that patch to the original row and preserves all other
+fields. A multi-field patch reads one snapshot, so exchanging Position and
+Velocity works without one update affecting the next read.
+
+`define` rejects unknown component names, undeclared reads, missing or
+additional patch fields, wrong component values, and unhandled effects. Repeated
+access names collapse to one field. An empty read set permits a constant
+replacement; empty read and write sets permit an identity system. These
+contracts are ordinary type values, reflection predicates, signatures, and
+`@satisfies` in [systems.blot](systems.blot). There is no ECS compiler
+primitive.
+
+The returned descriptor has `reads`, `writes`, and `step`. Use descriptors from
+`Systems.define` when the access report must describe actual work: an arbitrary
+handwritten descriptor can lie about its function. Captured values are fixed
+snapshots; access names describe the current row's components.
+
+## Merge dependency graphs and inspect the plan
+
+The registry assigns stable names to those descriptors. Independent libraries
+can build graphs using the same names and combine them:
+
+```blot
+const P = ECS.Planning
+const registry = { .integrate; .bounce; .age; .distance; .label; }
+const physics = P.before ("integrate", "bounce")
+const update = P.merge (physics, P.group ["age"])
+const observers = P.group ["distance", "label"]
+const graph = P.then (
+  P.then (update, P.barrier "publish"),
+  observers
+)
+const plan = P.compile (Entity, registry, graph)
+const tick :: [Entity] -> [Entity]
+const tick = plan.each
+```
+
+The complete [executable](schedule-plan.blot) reports:
+
+```text
+Systems [integrate, age]
+Systems [bounce]
+Barrier publish
+Systems [distance, label]
+
+passes: [[integrate, age, bounce], [distance, label]]
+```
+
+Integrate and age touch different components. Bounce must see integrate's new
+Position, and their Velocity accesses also conflict. Distance and label both
+read Position and write different components, so they share a batch.
+
+| Operation                        | Meaning                                                       |
+| -------------------------------- | ------------------------------------------------------------- |
+| `group names`                    | Add systems without dependency edges                          |
+| `before (first, second)`         | Require one system to finish before another                   |
+| `merge (left, right)`            | Union identities and edges, retaining first occurrence order  |
+| `then (left, right)`             | Add dependencies from every left node to every right node     |
+| `barrier name`                   | Add a named boundary between table traversals                 |
+| `conflicts (left, right)`        | Report write/read, read/write, and write/write intersections  |
+| `analyze (registry, graph)`      | Return compatible batches, system order, and traversal passes |
+| `compile (Row, registry, graph)` | Generate `each` in addition to that report                    |
+
+Graph merge is associative and idempotent: shared identities execute once.
+Left-first order supplies a deterministic priority, so swapping merge operands
+can change the plan. The planner repeatedly considers dependency-ready nodes in
+that order and greedily selects a pairwise-compatible batch. Read/read overlap
+is compatible; every overlap involving a write is a conflict. This is a greedy
+plan, without a claim of globally optimal batching. Add explicit edges whenever
+a reader must observe a particular version: ordering label before integrate
+records the old Position, while ordering it after records the new Position.
+Access sets alone cannot decide which version the application intends.
+
+Cycles, unknown systems, missing dependency endpoints, and conflicting barrier
+identities fail at compile time with the offending name. `then` can expose a
+cycle when its inputs share a system identity. Empty graphs are identity; empty
+or consecutive barrier phases generate no empty traversals.
+
+The registry, graph, access analysis, and composition run at compile time.
+Runtime HIR retains direct specialized row calls and one output-array builder
+per nonempty pass. Removing `publish` from this example yields one traversal;
+keeping it yields two. Tests require these counts, zero traversals for an empty
+plan, owned appends, no indirect dispatch, and no runtime component or system
+name lookup. Compatible batches currently execute sequentially. Running them in
+parallel requires separate storage ownership evidence: disjoint component names
+do not split the authority of a dense row array.
+
+A traversal barrier completes all rows before the following pass. It does not
+itself deliver messages, perform reductions, or allow effectful systems; those
+world-level operations still belong between explicit application calls such as
+the arena's delivery phase. Fused row work retains the termination and failure
+ordering caveats described above.
+
 ## Storage and cost
 
 Each archetype table is a dense `[Entity]`: an array of row records, with every
@@ -260,8 +374,8 @@ tests. Empty tables produce empty tables. A component whose domain is optional
 can explicitly use `Option T` and choose a default in its query.
 
 This layout keeps the case study small enough to inspect. It does not implement
-columnar storage, entity allocation, deletion, archetype migration, or automatic
-parallel scheduling. Rows and intermediate records still have their normal Blot
+columnar storage, entity allocation, deletion, archetype migration, or parallel
+execution. Rows and intermediate records still have their normal Blot
 representation. Input snapshots remain valid; the implementation constructs a
 successor array with appends checked as `owned-reuse`.
 
@@ -299,8 +413,9 @@ node --import tsx case-studies/ecs/benchmark.ts > ecs-results.json
 The [recorded local run](benchmark-results.json) is the particle baseline from
 `7b4bc9b`, before the ownership fixes and messaging extension below. Its source
 and compiler hashes identify that historical run; these timings do not measure
-the new messaging workload. On 2026-09-13 it used Node 24.12.0, V8 13.6, and a
-Ryzen 7 7800X3D. Median microseconds per call, over seven samples:
+the new messaging or dependency-planning workloads. On 2026-09-13 it used Node
+24.12.0, V8 13.6, and a Ryzen 7 7800X3D. Median microseconds per call, over
+seven samples:
 
 | Rows |  Fused | Separate passes | Direct | Setup and checksum |
 | ---- | -----: | --------------: | -----: | -----------------: |
@@ -325,13 +440,9 @@ A broader ECS can preserve these boundaries:
 2. Extend the explicit archetype predicates into a world registry while
    retaining specialization per matching table. Add entity identity and
    migration rules before allowing structural changes.
-3. Give systems explicit read and write capabilities before inferring
-   independent work. A query's reader effects describe its reads; the pure row
-   arrow alone does not describe its writes. A planner must not invent a write
-   set from that arrow.
-4. Merge dependency graphs by stable system identity, preserve barriers, reject
-   cycles, and fuse only compatible ordered row work. Parallel execution needs
-   separate ownership evidence for the storage being written.
+3. Connect compatible batches to column ownership evidence before introducing
+   worker execution. The planner already groups component accesses, but a pure
+   row arrow and component names do not authorize concurrent Store writes.
 
 Those are extensions to investigate, rather than promises made by the current
 library. Types derive the component interface, effects describe reader and guard

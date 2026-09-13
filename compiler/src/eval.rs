@@ -4242,16 +4242,23 @@ fn evaluate_declarations(
                 }
             })
             .and_then(move |mut value| {
+                let module = match module(&binding_context, &binding_module) {
+                    Ok(module) => module,
+                    Err(error) => return Computation::error(error),
+                };
                 if binding_context
                     .captured_binding_modules
                     .borrow()
                     .contains(binding_module.as_str())
                 {
-                    let environment_identity = if reusable_across_module_instances(&value) {
-                        0
-                    } else {
-                        binding_environment_identity
-                    };
+                    let module_binding =
+                        module.parameter.is_none() && module.declarations.contains(&declaration_id);
+                    let environment_identity =
+                        if module_binding && reusable_across_module_instances(&value) {
+                            0
+                        } else {
+                            binding_environment_identity
+                        };
                     binding_context
                         .evaluated_bindings
                         .borrow_mut()
@@ -4265,10 +4272,6 @@ fn evaluate_declarations(
                             },
                         );
                 }
-                let module = match module(&binding_context, &binding_module) {
-                    Ok(module) => module,
-                    Err(error) => return Computation::error(error),
-                };
                 let bound_environment = if recursive {
                     next_environment.clone()
                 } else {

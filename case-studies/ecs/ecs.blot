@@ -2,6 +2,8 @@ open import "blot:prelude"
 
 const Stream = import "./streams.blot"
 const Messages = import "./messages.blot"
+const Systems = import "./systems.blot"
+const Planning = import "./planning.blot"
 
 const component = fn (name, T) => do:
   const Read = @effect { .get = Unit -> T; }
@@ -89,4 +91,5 @@ const Schedule = fn Row => do:
     ;
   }
 
-return { .archetype; .Query; .Stream; .Messages; .Schedule; }
+return
+  { .archetype; .Query; .Stream; .Messages; .Schedule; .Systems; .Planning; }

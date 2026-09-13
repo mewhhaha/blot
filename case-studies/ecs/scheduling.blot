@@ -1,0 +1,75 @@
+open import "blot:prelude"
+const Systems = import "./systems.blot"
+const Planning = import "./planning.blot"
+
+const Entity =
+  { .Position = Int; .Velocity = Int; .Age = Int; .Distance = Int; .Label = Text; }
+const S = Systems Entity
+
+const integrate =
+  S.define (
+    { .reads = ["Position", "Velocity"]; .writes = ["Position"]; },
+    fn read => { .Position = read.Position + read.Velocity; }
+  )
+const bounce =
+  S.define (
+    { .reads = ["Position", "Velocity"]; .writes = ["Velocity"]; },
+    fn read => { .Velocity = case read.Position >= 10 of
+      #True => 0 - read.Velocity
+      #False => read.Velocity
+    ; }
+  )
+const age =
+  S.define (
+    { .reads = ["Age"]; .writes = ["Age"]; },
+    fn read => { .Age = read.Age + 1; }
+  )
+const distance =
+  S.define (
+    { .reads = ["Position"]; .writes = ["Distance"]; },
+    fn read => { .Distance = Int.abs read.Position; }
+  )
+const label =
+  S.define (
+    { .reads = ["Position"]; .writes = ["Label"]; },
+    fn read => { .Label = Text.of_int read.Position; }
+  )
+const registry = { .integrate; .bounce; .age; .distance; .label; }
+
+const physics = Planning.before ("integrate", "bounce")
+const bookkeeping = Planning.group ["age"]
+const observers = Planning.group ["distance", "label"]
+const update = Planning.merge (physics, bookkeeping)
+const graph =
+  Planning.then (
+    Planning.then (update, Planning.barrier "publish"),
+    observers
+  )
+const plan = Planning.compile (Entity, registry, graph)
+const fused_plan =
+  Planning.compile (Entity, registry, Planning.then (update, observers))
+const old_label_plan =
+  Planning.compile (
+    Entity,
+    registry,
+    Planning.then (Planning.group ["label"], physics)
+  )
+
+const tick :: [Entity] -> [Entity]
+const tick = plan.each
+const fused :: [Entity] -> [Entity]
+const fused = fused_plan.each
+const old_label :: [Entity] -> [Entity]
+const old_label = old_label_plan.each
+const empty_plan = Planning.compile (Entity, registry, Planning.group [])
+const unchanged :: [Entity] -> [Entity]
+const unchanged = empty_plan.each
+
+const seed :: Int -> [Entity]
+const seed = fn offset => [
+  { .Position = offset; .Velocity = 4; .Age = 2; .Distance = 0; .Label = "before"; },
+  { .Position = 0; .Velocity = 1; .Age = 0; .Distance = 0; .Label = "before"; }
+]
+
+return
+  { .Entity; .registry; .physics; .bookkeeping; .observers; .update; .graph; .plan; .fused_plan; .empty_plan; .tick; .fused; .old_label; .unchanged; .seed; }

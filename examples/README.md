@@ -17,6 +17,10 @@ These examples build APIs from ordinary type values and interpret computations
 with ordinary handler records. Each runs with
 `pnpm blot run examples/<name>.blot`.
 
+[`record_view_results.blot`](record_view_results.blot) exercises a related
+representation boundary: functions consume a `{ .count = Int; }` view of a wider
+record and return fresh integer and text records with their own layouts.
+
 | Example                                                      | Abstraction                                                                                                       | Observations                                                 |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |

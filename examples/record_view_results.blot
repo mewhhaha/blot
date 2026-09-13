@@ -1,0 +1,2 @@
+const run = import "./lib/record_view_results.blot"
+return run 41

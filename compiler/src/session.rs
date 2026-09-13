@@ -8315,6 +8315,187 @@ return F32.add (-1) 2.5
     }
 
     #[test]
+    fn ecs_access_plans_specialize_typed_patches() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            for (path, contents) in [
+                (
+                    "systems.blot",
+                    include_str!("../../case-studies/ecs/systems.blot"),
+                ),
+                (
+                    "planning.blot",
+                    include_str!("../../case-studies/ecs/planning.blot"),
+                ),
+                (
+                    "scheduling.blot",
+                    include_str!("../../case-studies/ecs/scheduling.blot"),
+                ),
+                (
+                    "main.blot",
+                    "const s = import \"./scheduling.blot\"\nreturn { .tick = s.tick; .fused = s.fused; .old_label = s.old_label; .unchanged = s.unchanged; }\n",
+                ),
+            ] {
+                session
+                    .add_source(path.to_owned(), source(contents))
+                    .unwrap();
+                let mut imports =
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
+                if path == "scheduling.blot" {
+                    imports.insert("./systems.blot".to_owned(), "systems.blot".to_owned());
+                    imports.insert("./planning.blot".to_owned(), "planning.blot".to_owned());
+                }
+                if path == "main.blot" {
+                    imports.insert("./scheduling.blot".to_owned(), "scheduling.blot".to_owned());
+                }
+                session
+                    .configure_module(path, imports, BTreeMap::new())
+                    .unwrap();
+            }
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn callback_arguments_retain_their_comptime_requirements() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session.add_source("main.blot".to_owned(), source(
+                "const check = fn (T, work) => @satisfies work (T -> T)\nconst unused = check (@type.int, fn value => \"wrong\")\nreturn 0\n"
+            )).unwrap();
+            session
+                .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], false, "{checked}");
+            assert_eq!(
+                checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                "{checked}"
+            );
+        });
+    }
+
+    #[test]
+    fn callback_specializations_keep_empty_and_nonempty_views_independent() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session.add_source("main.blot".to_owned(), source(
+                "const check = fn (T, work) => do:\n  const View = T\n  return @satisfies work (View -> View)\nconst reset = check ({}, fn value => {})\nconst increment = check ({ .count = @type.int; }, fn value => { .count = @int.add value.count 1; })\nreturn 0\n"
+            )).unwrap();
+            session
+                .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+        });
+    }
+
+    #[test]
+    fn staged_empty_arrays_of_variants_keep_the_checked_element_layout() {
+        run_with_compiler_test_stack(|| {
+            let mut session = CompilerSession::default();
+            session.add_source("main.blot".to_owned(), source(
+                "const Batch = @type.union (#Systems [@type.text]) (#Barrier @type.text)\nconst empty :: [Batch]\nconst empty = []\nreturn { .empty; }\n"
+            )).unwrap();
+            session
+                .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
+    fn generated_local_signatures_wait_for_their_type_argument() {
+        run_with_compiler_test_stack(|| {
+            for (body, accepted) in [("value", true), ("\"wrong\"", false)] {
+                let mut session = CompilerSession::default();
+                session.add_source("main.blot".to_owned(), source(&format!(
+                    "const make = fn T => do:\n  const Step = T -> T\n  let step :: Step\n  let step = fn value => {body}\n  return step\nconst identity :: @type.int -> @type.int\nconst identity = make @type.int\nreturn {{ .identity; .default = identity 42; }}\n"
+                ))).unwrap();
+                session
+                    .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], accepted, "{checked}");
+                if accepted {
+                    let prepared = session.prepare_runtime_hir("main.blot");
+                    assert_eq!(prepared["ok"], true, "{prepared}");
+                } else {
+                    assert_eq!(
+                        checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                        "{checked}"
+                    );
+                }
+            }
+            for (contents, code) in [
+                (
+                    "const make = fn T => do:\n  let step :: T -> T\n  let step = fn value => \"wrong\"\n  return step\nconst unused = make @type.int\nreturn 0\n",
+                    "BLOT_TYPE_ERROR",
+                ),
+                (
+                    "const make = fn T => do:\n  let step :: Missing\n  let step = fn value => value\n  return step\nconst unused = make @type.int\nreturn 0\n",
+                    "BLOT_UNBOUND",
+                ),
+            ] {
+                let mut session = CompilerSession::default();
+                session
+                    .add_source("main.blot".to_owned(), source(contents))
+                    .unwrap();
+                session
+                    .configure_module("main.blot", BTreeMap::new(), BTreeMap::new())
+                    .unwrap();
+                let checked = session.check_module("main.blot");
+                assert_eq!(checked["ok"], false, "{checked}");
+                assert_eq!(checked["diagnostic"]["code"], code, "{checked}");
+            }
+        });
+    }
+
+    #[test]
+    fn closed_record_results_do_not_reuse_a_wider_arguments_layout() {
+        run_with_compiler_test_stack(|| {
+            let snapshot = snapshot_from_source(
+                "prelude.blot",
+                include_str!("../../src/prelude/prelude.blot"),
+            );
+            let mut session = CompilerSession::default();
+            session
+                .install_trusted_module_snapshot("prelude.blot", &snapshot)
+                .unwrap();
+            session
+                .add_source(
+                    "main.blot".to_owned(),
+                    source(include_str!("../../examples/lib/record_view_results.blot")),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        });
+    }
+
+    #[test]
     fn generated_requirements_recheck_the_captured_type() {
         run_with_compiler_test_stack(|| {
             let mut session = CompilerSession::default();
@@ -8426,6 +8607,14 @@ return F32.add (-1) 2.5
                     "messages.blot",
                     include_str!("../../case-studies/ecs/messages.blot"),
                 ),
+                (
+                    "systems.blot",
+                    include_str!("../../case-studies/ecs/systems.blot"),
+                ),
+                (
+                    "planning.blot",
+                    include_str!("../../case-studies/ecs/planning.blot"),
+                ),
                 ("ecs.blot", include_str!("../../case-studies/ecs/ecs.blot")),
                 (
                     "arena.blot",
@@ -8452,7 +8641,12 @@ return F32.add (-1) 2.5
                 let mut imports =
                     BTreeMap::from([("blot:prelude".to_owned(), "prelude.blot".to_owned())]);
                 for dependency in match path {
-                    "ecs.blot" => vec!["streams.blot", "messages.blot"],
+                    "ecs.blot" => vec![
+                        "streams.blot",
+                        "messages.blot",
+                        "systems.blot",
+                        "planning.blot",
+                    ],
                     "arena.blot" => vec!["ecs.blot"],
                     "main.blot" => vec!["arena.blot"],
                     _ => vec![],

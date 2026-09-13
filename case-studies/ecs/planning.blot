@@ -1,0 +1,165 @@
+open import "blot:prelude"
+
+const Access = { .reads = [Text]; .writes = [Text]; }
+const Edge = { .before = Text; .after = Text; }
+const Graph = { .nodes = [Text]; .edges = [Edge]; .barriers = [Text]; }
+const Batch = #Systems [Text] | #Barrier Text
+const Report = { .batches = [Batch]; .order = [Text]; .passes = [[Text]]; }
+const Conflict = { .write_read = [Text]; .read_write = [Text]; .write_write = [Text]; }
+
+const contains :: ([Text], Text) -> Bool
+const contains = fn (&names, name) => any ((&names), fn candidate => candidate == name)
+const union_names :: ([Text], [Text]) -> [Text]
+const union_names = fn (left, right) => do:
+  let combined = Array.copy left
+  for name in Iter.items right:
+    if not (contains ((&combined), name)):
+      combined := @array.push combined name
+
+  return freeze combined
+
+const group :: [Text] -> Graph
+const group = fn names => { .nodes = union_names ([], names); .edges = freeze []; .barriers = freeze []; }
+const barrier :: Text -> Graph
+const barrier = fn name => { .nodes = freeze [name]; .edges = freeze []; .barriers = freeze [name]; }
+const before :: (Text, Text) -> Graph
+const before = fn (first, second) => {
+  .nodes = union_names ([first], [second]);
+  .edges = freeze [{ .before = first; .after = second; }];
+  .barriers = freeze [];
+}
+
+const merge :: (Graph, Graph) -> Graph
+const merge = fn (left, right) => do:
+  for name in Iter.items left.nodes:
+    let left_barrier = contains (left.barriers, name)
+    let right_barrier = contains (right.barriers, name)
+    let different = left_barrier && not right_barrier || right_barrier && not left_barrier
+    if contains (right.nodes, name) && different:
+      return @fail ("schedule identity is both a system and a barrier: " <> name)
+
+  let edges = Array.copy left.edges
+  for edge in Iter.items right.edges:
+    if not (any ((&edges), fn existing => existing.before == edge.before && existing.after == edge.after)):
+      edges := @array.push edges edge
+
+  return {
+    .nodes = union_names (left.nodes, right.nodes);
+    .edges = freeze edges;
+    .barriers = union_names (left.barriers, right.barriers);
+    }
+
+// A dependency orders row work. A barrier node additionally ends a traversal.
+const then :: (Graph, Graph) -> Graph
+const then = fn (left, right) => do:
+  let combined = merge (left, right)
+  let edges = Array.copy combined.edges
+  for first in Iter.items left.nodes:
+    for second in Iter.items right.nodes:
+      if not (any ((&edges), fn existing => existing.before == first && existing.after == second)):
+        edges := @array.push edges { .before = first; .after = second; }
+
+  return { ...combined; .edges = freeze edges; }
+
+const conflicts :: (Access, Access) -> Conflict
+const conflicts = fn (left, right) => {
+  .write_read = freeze (filter (left.writes, fn name => contains (right.reads, name)));
+  .read_write = freeze (filter (left.reads, fn name => contains (right.writes, name)));
+  .write_write = freeze (filter (left.writes, fn name => contains (right.writes, name)));
+}
+
+const compatible :: (Access, Access) -> Bool
+const compatible = fn (left, right) => do:
+  let overlap = conflicts (left, right)
+  return Array.length overlap.write_read + Array.length overlap.read_write + Array.length overlap.write_write == 0
+
+const analyze = fn (registry, graph) => do:
+  let graph = @satisfies graph Graph
+  const nodes :: [Text]
+  const nodes = union_names ([], graph.nodes)
+  for name in Iter.items nodes:
+    if contains (graph.barriers, name):
+      if @shape.has registry name:
+        return @fail ("schedule barrier has a system definition: " <> name)
+    else:
+      if not (@shape.has registry name):
+        return @fail ("unknown scheduled system: " <> name)
+
+  for name in Iter.items graph.barriers:
+    if not (contains (nodes, name)):
+      return @fail ("barrier is absent from the schedule: " <> name)
+
+  for edge in Iter.items graph.edges:
+    if not (contains (nodes, edge.before)):
+      return @fail ("dependency source is absent from the schedule: " <> edge.before)
+
+    if not (contains (nodes, edge.after)):
+      return @fail ("dependency target is absent from the schedule: " <> edge.after)
+
+  let pending = nodes
+  let finished :: [Text]
+  let finished = freeze []
+  let batches :: [Batch]
+  let batches = freeze []
+  let order :: [Text]
+  let order = freeze []
+  let passes :: [[Text]]
+  let passes = freeze []
+  let current :: [Text]
+  let current = freeze []
+  for Iter.range (0, Array.length nodes):
+    if Array.length pending == 0:
+      break
+
+    let ready :: [Text]
+    let ready = freeze (filter (pending, fn name => every (graph.edges, fn edge => edge.after != name || contains (finished, edge.before))))
+    if Array.length ready == 0:
+      return @fail ("schedule contains a dependency cycle at: " <> Array.expect_get (pending, 0))
+
+    let selected :: [Text]
+    let selected = []
+    for name in Iter.items ready:
+      if contains (graph.barriers, name):
+        if Array.length (&selected) == 0:
+          selected := @array.push selected name
+      else:
+        if every ((&selected), fn previous => not (contains (graph.barriers, previous)) && compatible (@shape.get registry previous, @shape.get registry name)):
+          selected := @array.push selected name
+
+    let chosen :: [Text]
+    let chosen = freeze selected
+    if contains (graph.barriers, Array.expect_get (chosen, 0)):
+      batches := freeze (@array.push (Array.copy batches) (#Barrier (Array.expect_get (chosen, 0))))
+      if Array.length current > 0:
+        passes := freeze (@array.push (Array.copy passes) current)
+        current := freeze []
+    else:
+      batches := freeze (@array.push (Array.copy batches) (#Systems chosen))
+      current := union_names (current, chosen)
+      order := union_names (order, chosen)
+
+    finished := union_names (finished, chosen)
+    pending := freeze (filter (pending, fn name => not (contains (chosen, name))))
+
+  if Array.length current > 0:
+    passes := freeze (@array.push (Array.copy passes) current)
+
+  return @satisfies { .batches; .order; .passes; } Report
+
+const compile = fn (Row, registry, graph) => do:
+  const plan = analyze (registry, graph)
+  let each = @satisfies identity ([Row] -> [Row])
+  for names in Iter.items (@satisfies plan.passes [[Text]]):
+    let step = @satisfies identity (Row -> Row)
+    for name in Iter.items names:
+      let previous = step
+      let next = @satisfies (@shape.get registry name).step (Row -> Row)
+      step := fn row => next (previous row)
+
+    let previous = each
+    let run = step
+    each := fn rows => map (previous rows, run)
+
+  return { ...plan; .each = @satisfies each ([Row] -> [Row]); }
+
+return { .Access; .Edge; .Graph; .Batch; .Report; .Conflict; .group; .barrier; .before; .merge; .then; .conflicts; .compatible; .analyze; .compile; }

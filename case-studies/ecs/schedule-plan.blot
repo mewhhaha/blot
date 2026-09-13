@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const s = import "./scheduling.blot"
+const Planning = import "./planning.blot"
+
+return { .default = {
+  .batches = s.plan.batches;
+  .passes = s.plan.passes;
+  .movement_conflicts = Planning.conflicts (
+    s.registry.integrate,
+    s.registry.bounce
+  );
+  .rows = s.tick (s.seed 7);
+  }; }

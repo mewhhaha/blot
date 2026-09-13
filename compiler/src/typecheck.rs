@@ -4897,7 +4897,25 @@ impl Checker {
                     value,
                     values.clone(),
                     Runtime::new(Phase::Comptime, path.to_owned()).signature(hole_values.clone()),
-                ))?;
+                ));
+                let signature_value = match signature_value {
+                    Ok(value) => value,
+                    Err(error)
+                        if error.code == "BLOT_UNBOUND"
+                            && self.phase.get() == Phase::Comptime
+                            && !self.active_closures.borrow().is_empty()
+                            && module.arena.expressions.iter().any(|expression| {
+                                matches!(expression, Expression::Var { name, span }
+                                    if *span == error.span
+                                        && types.lookup(name, self).is_some()
+                                        && lookup(values, name).is_none())
+                            }) =>
+                    {
+                        self.defer_current_closure();
+                        return Ok(Type::Effects(BTreeSet::new()));
+                    }
+                    Err(error) => return Err(error),
+                };
                 let Requirement::Type(mut signature) = self.requirement(signature_value) else {
                     return Err(Diagnostic::new(
                         "BLOT_SIGNATURE_NOT_A_TYPE",
@@ -6340,11 +6358,14 @@ impl Checker {
                     && contains_function(&self.settle(argument.type_.clone(), true))
                 {
                     self.record_specialization(closure_module, *body, &argument.type_, path, span)?;
+                    let argument_value = self
+                        .evaluate(path, argument_expression, values, Phase::Comptime)
+                        .ok();
                     let function = self.infer_evaluated_closure(
                         path,
                         module,
                         EvaluatedClosure {
-                            argument_value: None,
+                            argument_value: argument_value.as_ref(),
                             checked_captures: None,
                             module_path: closure_module,
                             parameter: *parameter,
@@ -10840,7 +10861,14 @@ impl Checker {
         ));
         self.restore_evaluation_expression_types(path, saved);
         if let Ok(value) = &evaluated {
-            let key = if reusable_across_module_instances(value) {
+            let module_binding = module.parameter.is_none()
+                && module.declarations.iter().any(|declaration| {
+                    matches!(&module.arena.declarations[declaration.0 as usize],
+                        Declaration::Binding { pattern: candidate_pattern, value: candidate_value, .. }
+                            if *candidate_pattern == pattern && *candidate_value == expression)
+                });
+            // A reusable value can still depend on this closure's argument.
+            let key = if module_binding && reusable_across_module_instances(value) {
                 (pattern, expression, phase, 0)
             } else {
                 key

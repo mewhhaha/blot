@@ -7290,7 +7290,11 @@ impl ResidualTrace {
         substitutions: &mut HashMap<u32, usize>,
         representation_facts: &RepresentationFacts,
     ) -> Result<usize, Diagnostic> {
-        if let Some(type_id) = representation_facts.get(value) {
+        // A wider argument can inhabit this type without defining the layout of
+        // a fresh result. Closed result types carry their own representation.
+        if crate::value::contains_type_variables(value)
+            && let Some(type_id) = representation_facts.get(value)
+        {
             return Ok(type_id);
         }
         match value {
@@ -13435,20 +13439,21 @@ impl HirBuilder {
                 "A live Region rejoin witness is compiler-private and cannot cross the runtime export boundary.",
             )),
             Type::Array(element) => {
-                let (elements, element_value) = match value {
-                    Value::Array(elements) => (
-                        elements.as_slice(),
-                        elements.first().unwrap_or(&Value::Unit),
-                    ),
-                    Value::EmptyArray { element } => (&[] as &[Value], element.as_ref()),
+                let elements = match value {
+                    Value::Array(elements) => elements.as_slice(),
+                    Value::EmptyArray { .. } => &[],
                     _ => return Err(self.mismatch(value, "array")),
                 };
-                let element_type =
-                    if elements.is_empty() && matches!(element.as_ref(), Type::Bottom) {
-                        0
-                    } else {
-                        self.runtime_type(element, element_value)?
-                    };
+                let element_type = if let Some(first) = elements.first() {
+                    self.runtime_type(element, first)?
+                } else if matches!(element.as_ref(), Type::Bottom) {
+                    0
+                } else {
+                    let representative = representative_value(element).ok_or_else(|| {
+                        hir_error("The staged empty array has no closed element representation.")
+                    })?;
+                    self.runtime_type(element, &representative)?
+                };
                 Ok(self.insert_type(
                     format!("store:{element_type}"),
                     RuntimeType::Store { element_type },

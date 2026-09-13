@@ -36,6 +36,15 @@ generated and imported methods even when their ordinary result already has a
 structural type. A requirement failure inside a specialized body retains the
 defining module as the origin of its source span.
 
+Local signatures follow the same obligation discipline when a declared generic
+binding has no compile-time value yet. Deferral requires evidence of that
+binding in the type environment; an undeclared name is a source error. A
+callback-bearing argument retains any known compile-time argument value during
+contextual specialization, including type values supplied beside the callback.
+Neither deferral nor contextual inference may skip a concrete requirement on an
+unused constructed result. These observations do not promote runtime bindings
+into compile-time scope.
+
 ## 2. Compile-time authority
 
 When a checked type or branch join requests a closed variant whose constructor
@@ -445,12 +454,30 @@ already emitted with the wrong layout. This online concrete-value memo is
 distinct from call-specialization representation facts, whose observations are
 collected before their coarser structural keys are read.
 
+Call-specialization representation facts fill unresolved type variables. They
+must not override a closed result type's own layout: a wider record accepted as
+an input view does not prescribe the representation of a fresh result of that
+view type. Recursive structural lowering still applies the specialized storage
+rules, including Region representations, while resolving that closed result.
+
+For a staged empty array, its stored element type is not a runtime element
+value. The checked element type determines the Store representation through the
+same representative-value construction used for absent variant alternatives; no
+synthetic element is emitted.
+
 A validation failure caused only by unresolved representation for a closed
 accepted internal program is an `InvariantFailure`. An explicitly unsupported
 public ABI type or experimental target feature may return `TargetRefusal` at its
 stated policy boundary.
 
 ## 10. Artifact and cache coherence
+
+An evaluated declaration may omit environment identity from its cache key only
+when it is a top-level binding in a parameterless module and its value is safe
+to reuse across module instances. Reusability of the result alone does not prove
+that a local expression is independent of its constructor's arguments. Local and
+parameterized-module bindings retain environment identity in both checker
+evaluation and captured evaluator caches.
 
 A staged or specialized cache entry includes every input observed by its phase:
 

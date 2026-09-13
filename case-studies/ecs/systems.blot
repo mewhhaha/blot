@@ -1,0 +1,46 @@
+open import "blot:prelude"
+
+const Systems = fn Row => do:
+  const schema = case @type.reflect Row of
+    #Shape fields => fields
+    _ => @fail "systems require a record type"
+  return {
+    .define = fn (access, work) => do:
+      for name in Iter.items (Array.append access.reads access.writes):
+        if not (@shape.has schema name):
+          return @fail ("unknown system component: " <> name)
+
+      const Read = Reflect.pick (schema, access.reads)
+      const Write = Reflect.pick (schema, access.writes)
+      const reads = freeze (@shape.names Read)
+      const writes = freeze (@shape.names Write)
+      const Work = Read -> Write
+      const Step = Row -> Row
+      const Apply = (Row, Write) -> Row
+      let checked = @satisfies work Work
+      let checked = @satisfies checked (fn Function => case @type.reflect Function of
+        #Arrow arrow => case @type.reflect arrow.codomain of
+          #Shape fields => every (@shape.names fields, fn name => @shape.has Write name)
+          _ => False
+
+        _ => False
+      )
+      let execute :: Work
+      let execute = fn selected => checked selected
+      let apply :: Apply
+      let apply = fn (row, patch) => row
+      for name in Iter.items writes:
+        let previous = apply
+        let replace :: Apply
+        let replace = fn (row, patch) => { ...previous (row, patch); .[name] = @shape.get patch name; }
+        apply := replace
+
+      let step :: Step
+      let step = fn row => do:
+        let patch = execute row
+        return apply (row, patch)
+      return { .reads; .writes; .step = @satisfies step Step; }
+    ;
+    }
+
+return Systems

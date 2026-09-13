@@ -1,9 +1,69 @@
 # Compiler findings from the ECS prototypes
 
 The case study exercises the compiler as well as the library design. The
-compiler defects below are fixed by the query/message extension. The remaining
-effect findings were observed at `ab2cfc8`; their workarounds remain explicit in
-the runnable study.
+compiler defects below are fixed by the query/message and scheduling extensions.
+The remaining effect findings were observed at `ab2cfc8`; their workarounds
+remain explicit in the runnable study.
+
+## Fixed: local signatures could not depend on a constructor's type argument
+
+The system generator needs `const Step = Row -> Row` followed by
+`let step :: Step`. While checking the still-generic constructor, evaluating
+that signature reported `BLOT_UNBOUND` before Row was available. Such a
+signature now remains a specialization obligation when its missing value belongs
+to a declared generic binding. An actually undeclared name still fails. The
+concrete body must satisfy its signature even when its constructed result is
+unused.
+
+The scheduler can consequently derive signed read, patch, and row boundaries
+inside ordinary Blot functions. Public runtime exports still use concrete
+signatures; this does not solve every open record-update inference problem.
+
+## Fixed: callback specialization discarded accompanying type values
+
+Passing `(Type, callback)` took a contextual inference path that retained the
+callback's inferred type but discarded the argument's available compile-time
+value. A requirement such as `@satisfies callback (Type -> Type)` could remain
+deferred even at a concrete call, accepting an invalid unused callback.
+
+That path now retains known argument values without changing the runtime phase
+of source parameters. System definition tests reject undeclared reads, wrong
+patch types, and host effects during checking, with source spans from the
+defining module. A reflection predicate also rejects additional write fields.
+
+## Fixed: a cached empty view leaked into another system definition
+
+Defining a system with no reads, then one that reads Position, falsely reported
+that `{}` lacked Position. Declaration caching treated a reusable result value
+as evidence that its expression was independent of its environment. The first
+empty `Read` record was reused in a different invocation of the constructor.
+
+Environment-independent entries are now restricted to top-level declarations of
+parameterless modules. Local declarations retain their environment identity even
+when their result is an integer, empty record, or another reusable value. Both
+checker evaluation and captured evaluator bindings enforce that rule.
+
+## Fixed: a fresh patch inherited the wider input record's layout
+
+A function can consume an Age-only view of an Entity and construct a fresh
+Age-only patch. Call-specialization representation facts incorrectly used the
+wider Entity argument to prescribe the patch's layout too. The backend then
+attempted to turn the fresh patch into an Entity before applying its update.
+
+Closed result types now determine their own representations; argument facts fill
+unresolved variables. The standalone
+[`record_view_results.blot`](../../examples/record_view_results.blot) exercises
+fresh integer and text results after wider record inputs, including runtime
+arguments in the Wasm tests. Region specialization retains its storage rules.
+
+## Fixed: empty arrays of variants could not be emitted as constants
+
+An empty schedule has a typed `[Batch]` report, where Batch is a Systems/Barrier
+variant. Constant lowering treated the empty array's element _type_ as though it
+were an element _value_, and refused the union. Empty arrays now obtain their
+element representation from the checked type using the existing representative
+value mechanism. Nested empty arrays and the empty plan retain their declared
+ABI layouts while emitting no elements.
 
 ## Fixed: conditional array updates lost ownership between branches
 
