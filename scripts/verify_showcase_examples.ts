@@ -17,6 +17,7 @@ const everydayExamples = [
   "sensor_units.blot",
   "shader_metadata.blot",
   "shopping_cart.blot",
+  "typed_transitions.blot",
   "unicode_preview.blot",
   "validation_pipeline.blot",
   "word_frequency.blot",
