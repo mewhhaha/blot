@@ -86,9 +86,9 @@ return Request.with_retries (!draft, 2)`,
       await assert.rejects(
         () =>
           compiler.checkSource(
-            `/tmp/staged-request-${name.replaceAll(" ", "-")}.blot`,
+            `examples/staged_request_${name.replaceAll(" ", "_")}.blot`,
             `open import "blot:prelude"
-const Request = import "${process.cwd()}/examples/lib/staged_request.blot"
+const Request = import "./lib/staged_request.blot"
 ${body}
 `,
           ),
