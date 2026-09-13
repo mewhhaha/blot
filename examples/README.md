@@ -30,6 +30,13 @@ record and return fresh integer and text records with their own layouts.
 | [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a nominal quantity type to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
 | [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
 | [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
+| [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
+
+`typed_nonempty.blot` represents a nonempty collection directly as a required
+`.head` plus an array `.tail`. The same implementation record satisfies concrete
+`Semigroup`, `Mappable`, `Foldable`, and `Length` interfaces through structural
+typing, while deliberately failing `Monoid` because no `.empty` value can exist.
+Its focused test also locks down rejection of a headless value.
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,

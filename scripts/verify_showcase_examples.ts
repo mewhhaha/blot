@@ -39,6 +39,7 @@ const abstractionExamples = [
   "typed_quantities.blot",
   "typed_lenses.blot",
   "composable_ordering.blot",
+  "typed_nonempty.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
