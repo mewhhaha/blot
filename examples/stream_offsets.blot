@@ -47,7 +47,7 @@ let reconcile = fn (start, &offsets) => do:
     .duplicates = duplicates;
     .gaps = gaps;
     .stale = stale;
-  }
+    }
 
 let normal = [41, 41, 43, 40, 42, 43]
 let descending = [-1, 1, 0, 2]
@@ -61,4 +61,4 @@ return {
     .at_max = reconcile (9223372036854775807, at_max);
     .empty = reconcile (7, []);
   };
-}
+  }
