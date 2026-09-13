@@ -40,6 +40,7 @@ Its focused test also locks down rejection of a headless value.
 | [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
 | [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
 | [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
+| [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
 
 The nonempty stream's final `return` supplies its last element. Its result
 signature requires that element even when the producer makes no `emit` calls,
