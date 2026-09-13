@@ -8,7 +8,7 @@ import { runArtifact } from "./run.ts";
 const path = "examples/derived_structural_diff.blot";
 
 const expectedType =
-  "{ .default = { .deployment_changed = [Text]; .deployment_equal = #False | #True; .same_changed = [Text]; .same_equal = #False | #True; .boundary_changed = [Text]; .account_changed = [Text]; .account_equal = #False | #True } }";
+  "{ .default = { .deployment_changed = [Text]; .deployment_equal = #True | #False; .same_changed = [Text]; .same_equal = #True | #False; .boundary_changed = [Text]; .account_changed = [Text]; .account_equal = #True | #False } }";
 
 test("derived structural diff preserves its type and both executions", async () => {
   const compiler = await Compiler.create();
