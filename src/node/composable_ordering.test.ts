@@ -9,7 +9,9 @@ test("composable ordering executes through emitted Wasm", async () => {
   const compiler = await Compiler.create();
   try {
     await compiler.check("examples/composable_ordering.blot");
-    const artifact = await compiler.compile("examples/composable_ordering.blot");
+    const artifact = await compiler.compile(
+      "examples/composable_ordering.blot",
+    );
     const expected = await readFile(
       "examples/expected/composable_ordering.wasm.txt",
       "utf8",
@@ -21,10 +23,12 @@ test("composable ordering executes through emitted Wasm", async () => {
 });
 
 test("composable ordering sources stay canonical", async () => {
-  for (const path of [
-    "examples/lib/order.blot",
-    "examples/composable_ordering.blot",
-  ]) {
+  for (
+    const path of [
+      "examples/lib/order.blot",
+      "examples/composable_ordering.blot",
+    ]
+  ) {
     const source = await readFile(path, "utf8");
     assert.match(source, /Pain point:/);
     const formatted = await formatSource(source);
