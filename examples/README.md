@@ -46,9 +46,9 @@ database durability or isolation.
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
 missing final elements, invalid ports, duplicate commits, and abandoned
-transactions. `src/node/staged_request_builder.test.ts` checks its principal type,
-both executions, and invalid-stage rejection. `deno task verify:showcase` includes
-all five examples.
+transactions. `src/node/staged_request_builder.test.ts` checks its principal
+type, both executions, and invalid-stage rejection. `deno task verify:showcase`
+includes all five examples.
 
 The [ECS case study](../case-studies/ecs/README.md) develops these ideas into
 generated components, composable reader queries, and fused row schedules, with
