@@ -38,12 +38,13 @@ test("typed codec preserves carrier relationships in both executions", async () 
   }
 });
 
-test("typed codec rejects invalid domain values and one-way remaps", async () => {
+test("typed codec rejects invalid models, one-way remaps, and dropped product errors", async () => {
   const compiler = await Compiler.create();
   try {
     for (const fixture of [
       "src/node/fixtures/codec_invalid_reservation.blot",
       "src/node/fixtures/codec_backward_mismatch.blot",
+      "src/node/fixtures/codec_error_union_mismatch.blot",
     ]) {
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
