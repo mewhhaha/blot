@@ -33,8 +33,8 @@ const pricing_total = fn cart => do:
   )
   return R.map (fn extra => cart.subtotal + extra, extras)
 
-// `local` moves a computation under one field instead of making every inner
-// reader know about the application record that happens to contain pricing.
+// Pain point: lifting through one nested field still needs an explicit
+// projection lambda; there is no field-section shorthand for `local` to reuse.
 const lifted_total :: Cart -> R.Reader (PricingCapability, Int)
 const lifted_total = fn cart => R.local (fn environment => environment.pricing, pricing_total cart)
 
