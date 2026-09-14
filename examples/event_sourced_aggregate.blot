@@ -1,0 +1,219 @@
+open import "blot:prelude"
+
+const A = import "./lib/event_sourced_aggregate.blot"
+const N = import "./lib/nonempty.blot"
+
+const SeatState = {
+  .allocated = Int;
+  .available = Int;
+}
+
+const SeatCommand =
+  #Allocate Int |
+  #Grant Int |
+  #GrantAndAllocate { .allocated = Int; .granted = Int; } |
+  #Release Int
+
+const SeatEvent =
+  #SeatsAllocated Int |
+  #SeatsGranted Int |
+  #SeatsReleased Int
+
+const SeatError =
+  #CannotRelease { .allocated = Int; .requested = Int; } |
+  #InsufficientSeats { .available = Int; .requested = Int; } |
+  #InvalidCount Int
+
+const evolve :: (SeatState, SeatEvent) -> SeatState
+const evolve = fn (state, event) => case event of
+  #SeatsAllocated count => {
+    .allocated = state.allocated + count;
+    .available = state.available - count;
+  }
+  #SeatsGranted count => {
+    .allocated = state.allocated;
+    .available = state.available + count;
+  }
+  #SeatsReleased count => {
+    .allocated = state.allocated - count;
+    .available = state.available + count;
+  }
+
+const decide :: (SeatState, SeatCommand) -> Result (N.of SeatEvent, SeatError)
+const decide = fn (state, command) => case command of
+  #Allocate count => do:
+    if count <= 0:
+      return #Error #InvalidCount count
+    if count > state.available:
+      return #Error #InsufficientSeats {
+        .available = state.available;
+        .requested = count;
+      }
+
+    let event :: SeatEvent
+    let event = #SeatsAllocated count
+    return #Ok (N.singleton event)
+  #Grant count => do:
+    if count <= 0:
+      return #Error #InvalidCount count
+
+    let event :: SeatEvent
+    let event = #SeatsGranted count
+    return #Ok (N.singleton event)
+  #GrantAndAllocate request => do:
+    if request.granted <= 0:
+      return #Error #InvalidCount request.granted
+    if request.allocated <= 0:
+      return #Error #InvalidCount request.allocated
+
+    let after_grant = state.available + request.granted
+    if request.allocated > after_grant:
+      return #Error #InsufficientSeats {
+        .available = after_grant;
+        .requested = request.allocated;
+      }
+
+    let granted :: SeatEvent
+    let granted = #SeatsGranted request.granted
+    let allocated :: SeatEvent
+    let allocated = #SeatsAllocated request.allocated
+    return #Ok (N.prepend (granted, N.singleton allocated))
+  #Release count => do:
+    if count <= 0:
+      return #Error #InvalidCount count
+    if count > state.allocated:
+      return #Error #CannotRelease {
+        .allocated = state.allocated;
+        .requested = count;
+      }
+
+    let event :: SeatEvent
+    let event = #SeatsReleased count
+    return #Ok (N.singleton event)
+
+const seats :: A.Aggregate (SeatState, SeatCommand, SeatEvent, SeatError)
+const seats = {
+  .initial = {
+    .allocated = 0;
+    .available = 0;
+  };
+  .decide = decide;
+  .evolve = evolve;
+}
+
+let history :: [SeatEvent]
+let history = [
+  #SeatsGranted 5,
+  #SeatsAllocated 2,
+  #SeatsReleased 1
+]
+
+let replayed :: SeatState
+let replayed = A.replay (seats, history)
+
+let accepted :: Result (A.Change (SeatState, SeatEvent), SeatError)
+let accepted = A.handle (seats, replayed, #Allocate 3)
+
+let batch :: Result (A.Change (SeatState, SeatEvent), SeatError)
+let batch = A.handle (
+  seats,
+  replayed,
+  #GrantAndAllocate { .allocated = 2; .granted = 3; }
+)
+
+let invalid :: Result (A.Change (SeatState, SeatEvent), SeatError)
+let invalid = A.handle (seats, replayed, #Grant 0)
+
+let rejected :: Result (A.Change (SeatState, SeatEvent), SeatError)
+let rejected = A.handle (seats, replayed, #Allocate 7)
+
+let accepted_state :: SeatState
+let accepted_state = case accepted of
+  #Ok change => change.state
+  #Error _ => replayed
+
+let accepted_events :: Int
+let accepted_events = case accepted of
+  #Ok change => N.length change.events
+  #Error _ => 0
+
+let batch_state :: SeatState
+let batch_state = case batch of
+  #Ok change => change.state
+  #Error _ => replayed
+
+let batch_events :: Int
+let batch_events = case batch of
+  #Ok change => N.length change.events
+  #Error _ => 0
+
+let invalid_count :: Int
+let invalid_count = case invalid of
+  #Ok _ => -1
+  #Error error => case error of
+    #InvalidCount count => count
+    #InsufficientSeats _ => -1
+    #CannotRelease _ => -1
+
+let rejected_available :: Int
+let rejected_available = case rejected of
+  #Ok _ => -1
+  #Error error => case error of
+    #InsufficientSeats detail => detail.available
+    #InvalidCount _ => -1
+    #CannotRelease _ => -1
+
+let rejected_requested :: Int
+let rejected_requested = case rejected of
+  #Ok _ => -1
+  #Error error => case error of
+    #InsufficientSeats detail => detail.requested
+    #InvalidCount _ => -1
+    #CannotRelease _ => -1
+
+let round_trip :: SeatState
+let round_trip = case accepted of
+  #Ok change => N.fold (change.events, replayed, seats.evolve)
+  #Error _ => replayed
+
+let empty :: SeatState
+let empty = A.replay (seats, [])
+
+const Observation = {
+  .accepted_allocated = Int;
+  .accepted_available = Int;
+  .accepted_events = Int;
+  .batch_allocated = Int;
+  .batch_available = Int;
+  .batch_events = Int;
+  .empty_allocated = Int;
+  .empty_available = Int;
+  .invalid_count = Int;
+  .rejected_available = Int;
+  .rejected_requested = Int;
+  .replayed_allocated = Int;
+  .replayed_available = Int;
+  .round_trip_allocated = Int;
+  .round_trip_available = Int;
+}
+
+let observation :: Observation
+let observation = {
+  .accepted_allocated = accepted_state.allocated;
+  .accepted_available = accepted_state.available;
+  .accepted_events = accepted_events;
+  .batch_allocated = batch_state.allocated;
+  .batch_available = batch_state.available;
+  .batch_events = batch_events;
+  .empty_allocated = empty.allocated;
+  .empty_available = empty.available;
+  .invalid_count = invalid_count;
+  .rejected_available = rejected_available;
+  .rejected_requested = rejected_requested;
+  .replayed_allocated = replayed.allocated;
+  .replayed_available = replayed.available;
+  .round_trip_allocated = round_trip.allocated;
+  .round_trip_available = round_trip.available;
+}
+
+return { .default = observation; }
