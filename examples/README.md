@@ -51,6 +51,7 @@ enumerates runtime field values in insertion order.
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records                               | changed field names, exact equality, and refined-field bounds     |
 | [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
+| [`deferred_fallback.blot`](deferred_fallback.blot)             | Affine deferred fallback expressions preserve one success carrier while replacing or pairing independently typed errors              | cache hit skips fallback; store hit; paired errors remain typed   |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -119,6 +120,14 @@ widens those errors to the application-level union at the product boundary.
 `imap` requires both directions of a representation change, so a one-way remap
 cannot masquerade as a codec. Product decoding is intentionally left-biased on
 errors; the example records that behavior rather than claiming accumulation.
+
+The deferred-fallback example treats recovery as a typed control-flow boundary
+rather than an eager value. `recover` can replace the primary error carrier,
+while `recover_with_context` proves that any final failure contains both
+independent errors. Its affine `~>` parameter means an already-successful
+primary result does not evaluate the fallback expression; the effectful case
+also demonstrates that static effect rows conservatively include a fallback
+effect even when one runtime branch skips it.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,

@@ -1,0 +1,10 @@
+open import "blot:prelude"
+const Fallback = import "../../../examples/lib/deferred_fallback.blot"
+
+const CacheError = #CacheMiss Text
+const StoreError = #StoreMiss Text
+
+const invalid :: Result (Int, StoreError)
+const invalid =
+  Fallback.recover_with_context (#Error (#StoreMiss "x")) (#Error (#CacheMiss "x"))
+return invalid
