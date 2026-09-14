@@ -1,17 +1,20 @@
-const { .Type; } = import "blot:prelude"
-
 // A reversible protocol step changes both its state carrier and its runtime
-// output carrier. The undo evidence produced by forward is exactly what backward
-// accepts for the resulting state.
-const Transition = fn (from, input, to, output, undo) => {
-  .forward = (from, input) -> (to, output, undo);
-  .backward = (to, undo) -> from;
+// output carrier. A named descriptor keeps the five related carriers readable.
+// The undo evidence produced by forward is exactly what backward accepts for the
+// resulting state.
+const Transition = fn spec => {
+  .forward = (spec.from, spec.input) -> (spec.to, spec.output, spec.undo);
+  .backward = (spec.to, spec.undo) -> spec.from;
 }
 
 // Composition shares both the intermediate state and the value handed from one
 // step to the next. Undo evidence is paired in forward order and consumed in the
 // opposite order, so an invalid protocol adjacency cannot be composed.
-const compose :: @forall (fn From => @forall (fn Input => @forall (fn Middle => @forall (fn Through => @forall (fn To => @forall (fn Output => @forall (fn LeftUndo => @forall (fn RightUndo => (Transition (From, Input, Middle, Through, LeftUndo), Transition (Middle, Through, To, Output, RightUndo)) -> Transition (From, Input, To, Output, (LeftUndo, RightUndo))))))))))
+const compose ::
+  @forall (fn From => @forall (fn Input => @forall (fn Middle => @forall (fn Through => @forall (fn To => @forall (fn Output => @forall (fn LeftUndo => @forall (fn RightUndo => (
+    Transition { .from = From; .input = Input; .to = Middle; .output = Through; .undo = LeftUndo; },
+    Transition { .from = Middle; .input = Through; .to = To; .output = Output; .undo = RightUndo; }
+  ) -> Transition { .from = From; .input = Input; .to = To; .output = Output; .undo = (LeftUndo, RightUndo); }))))))))
 const compose = fn (left, right) => {
   .forward = fn (from, input) => do:
     let (middle, through, left_undo) = left.forward (from, input)
