@@ -1,0 +1,45 @@
+open import "blot:prelude"
+
+// A witness is an ordinary function packaged with the relationship it proves.
+// `Source` may be more precise than `Target`; applying the witness performs no
+// runtime conversion, it only exposes the statically safe view.
+const Witness = fn (Source, Target) => {
+  .apply = Source -> Target;
+}
+
+// Derivation happens at compile time because types and `refines` are ordinary
+// compile-time values. Invalid directions fail while specializing the program
+// rather than introducing a runtime branch or unchecked cast.
+const derive = fn (Source, Target) => do:
+  if refines (Source, Target):
+    let apply :: Source -> Target
+    let apply = fn value => value
+    return { .apply = apply; }
+
+  return @fail "subtyping witness requires Source to refine Target"
+
+const identity :: @forall (fn Value => Witness (Value, Value))
+const identity = {
+  .apply = fn value => value;
+}
+
+// Composition shares the exact middle type. A pair of unrelated coercions
+// cannot be joined merely because their runtime representations happen to fit.
+const compose :: @forall (fn Source => @forall (fn Middle => @forall (fn Target => (Witness (Source, Middle), Witness (Middle, Target)) -> Witness (Source, Target))))
+const compose = fn (first, second) => {
+  .apply = fn value => second.apply (first.apply value);
+}
+
+// Consumers can be adapted contravariantly without knowing why the source is a
+// subtype. This is the practical payoff: APIs written against the least
+// capability can consume richer values through reusable checked evidence.
+const adapt :: @forall (fn Source => @forall (fn Target => @forall (fn Output => (Witness (Source, Target), (Target -> Output)) -> Source -> Output)))
+const adapt = fn (witness, consume) => fn value => consume (witness.apply value)
+
+return {
+  .Witness = Witness;
+  .derive = derive;
+  .identity = identity;
+  .compose = compose;
+  .adapt = adapt;
+}
