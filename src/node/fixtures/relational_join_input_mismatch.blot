@@ -1,0 +1,25 @@
+open import "blot:prelude"
+const Join = import "../../../examples/lib/relational_join.blot"
+
+const CustomerId = #CustomerId Int
+const Customer = { .id = CustomerId; }
+const customer_id_value :: CustomerId -> Int
+const customer_id_value = fn id => case id of
+  #CustomerId value => value
+const customer_id_equal :: (CustomerId, CustomerId) -> Bool
+const customer_id_equal =
+  fn (left, right) => customer_id_value left == customer_id_value right
+const Order = { .customer_id = CustomerId; }
+const Product = { .name = Text; }
+
+const customer_orders :: Join.On (Customer, Order, CustomerId)
+const customer_orders =
+  {
+    .left_key = fn customer => customer.id;
+    .right_key = fn order => order.customer_id;
+    .equal = customer_id_equal;
+  }
+
+const customers = [{ .id = #CustomerId 1; }]
+const products = [{ .name = "compiler"; }]
+return Join.group (customer_orders, customers, products)
