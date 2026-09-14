@@ -1,0 +1,26 @@
+open import "blot:prelude"
+const L = import "../../../examples/lib/lens.blot"
+const S = import "../../../examples/lib/state_action.blot"
+
+const Profile = { .name = Text; }
+const Metrics = { .requests = Int; }
+const App = { .profile = Profile; .metrics = Metrics; }
+
+const metrics :: L.Lens (App, Metrics)
+const metrics =
+  {
+    .view = fn app => app.metrics;
+    .set = fn (app, value) => Shape.update (app, { .metrics = value; });
+  }
+
+const rename :: S.Action (Profile, Text)
+const rename =
+  S.zoom (
+    {
+      .view = fn profile => profile.name;
+      .set = fn (profile, value) => Shape.update (profile, { .name = value; });
+    },
+    S.replace "Grace"
+  )
+
+return S.zoom (metrics, rename)
