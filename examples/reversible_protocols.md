@@ -7,18 +7,26 @@ Reviewing also produces an `Approval`, and publishing consumes exactly that
 carrier; the composed transition therefore checks both the state boundary and
 the value boundary between the two steps.
 
-The reusable abstraction is:
+The reusable abstraction takes one named compile-time descriptor:
 
 ```blot
-Transition (From, Input, To, Output, Undo)
+Transition {
+  .from = From;
+  .input = Input;
+  .to = To;
+  .output = Output;
+  .undo = Undo;
+}
 ```
 
-A transition's `forward` operation returns the new state, its output value, and
-operation-specific undo evidence. `backward` accepts exactly the resulting state
-and that same evidence. `compose` quantifies over the whole relationship and
-shares the intermediate `Middle` state plus `Through` value between adjacent
-steps. The resulting transition pairs the two undo carriers and runs them in
-reverse order when rolling back.
+The descriptor is ordinary Blot data whose fields are type values. Named fields
+make five related carriers readable without turning the API into a large
+positional type tuple. A transition's `forward` operation returns the new state,
+its output value, and operation-specific undo evidence. `backward` accepts
+exactly the resulting state and that same evidence. `compose` quantifies over
+the whole relationship and shares the intermediate `Middle` state plus
+`Through` value between adjacent steps. The resulting transition pairs the two
+undo carriers and runs them in reverse order when rolling back.
 
 This is stronger than a same-state reversible update: the compiler rejects
 publishing from a `Draft`, feeding a `Reviewed` value to the full workflow, or
