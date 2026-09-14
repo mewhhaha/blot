@@ -1,0 +1,56 @@
+// Compose zero-or-more array focuses with an exactly-one record focus. The final
+// traversal can observe or update every probe label across deployment waves
+// without exposing nested loops to callers.
+
+open import "blot:prelude"
+
+const T = import "./lib/traversal.blot"
+
+const Probe =
+  {
+    .url = Text;
+    .label = Text;
+  }
+const Wave = [Probe]
+const Plan = [Wave]
+
+const probe_label :: T.Traversal (Probe, Text)
+const probe_label =
+  T.one (
+    fn probe => probe.label,
+    fn (probe, label) => Shape.update (probe, { .label = label; })
+  )
+
+const probes :: T.Traversal (Plan, Probe)
+const probes = T.compose (T.each, T.each)
+const labels :: T.Traversal (Plan, Text)
+const labels = T.compose (probes, probe_label)
+
+let plan :: Plan
+let plan =
+  [
+    [
+      { .url = "/ready"; .label = "ready"; },
+      { .url = "/users"; .label = "users"; }
+    ],
+    [],
+    [{ .url = "/metrics"; .label = "métriques"; }]
+  ]
+
+let before = labels.collect plan
+let updated = T.over (labels, plan, fn label => label <> "-prod")
+let after = labels.collect updated
+
+let empty :: Plan
+let empty = []
+let empty_updated = T.over (labels, empty, fn label => label <> "!")
+
+return {
+  .default = {
+    .before = before;
+    .after = after;
+    .empty_labels = labels.collect empty_updated;
+    .first_url = (Array.expect_get (Array.expect_get ((&updated), 0), 0)).url;
+    .waves = Array.length (&updated);
+  };
+  }

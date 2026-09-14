@@ -37,6 +37,7 @@ const suites = [
   "src/node/typed_relational_join.test.ts",
   "src/node/typed_coordinate_spaces.test.ts",
   "src/node/reversible_updates.test.ts",
+  "src/node/typed_traversals.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 
