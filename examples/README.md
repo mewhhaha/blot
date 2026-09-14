@@ -51,6 +51,7 @@ enumerates runtime field values in insertion order.
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records                               | changed field names, exact equality, and refined-field bounds     |
 | [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
+| [`residual_command_router.blot`](residual_command_router.blot) | Typed routing stages forward exact residual variants; composition can only pass cases the previous stage left unresolved             | create, rename, delete, and final health resolution               |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -119,6 +120,14 @@ widens those errors to the application-level union at the product boundary.
 `imap` requires both directions of a representation change, so a one-way remap
 cannot masquerade as a codec. Product decoding is intentionally left-biased on
 errors; the example records that behavior rather than claiming accumulation.
+
+The residual-router example makes a decision list's remainder explicit in its
+type. Each stage returns `Result (Output, Remaining)`, while closed type
+difference computes `AfterCreate`, `AfterRename`, and `AfterDelete`. `then`
+shares each residual with the next stage, so an already handled constructor
+cannot be forwarded again and `finish` requires a resolver for every final
+remaining case. Blot has no surface empty type, so the chain ends with one
+concrete final resolver rather than subtracting the last alternative to empty.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
