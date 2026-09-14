@@ -1,0 +1,3 @@
+open import "blot:prelude"
+const Fallback = import "../../../examples/lib/deferred_fallback.blot"
+return { .default = Fallback.recover_with_context; }

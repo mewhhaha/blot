@@ -1,0 +1,1 @@
+{ .cached = #Ok { .name = "Ada"; .source_score = 1 }; .cached_remote = #Ok { .name = "Ada"; .source_score = 1 }; .missing = #Error { .fallback = #StoreMiss "missing"; .primary = #CacheMiss "missing" }; .missing_remote = #Ok { .name = "Remote"; .source_score = 142 }; .replaced = #Error #StoreMiss "missing"; .stored = #Ok { .name = "Grace"; .source_score = 42 } }
