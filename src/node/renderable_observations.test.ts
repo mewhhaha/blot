@@ -12,8 +12,7 @@ const rendererMismatchPath =
 const specializedConsumerPath =
   "src/node/fixtures/renderable_specialized_consumer.blot";
 
-const principalType =
-  "{ .default = { .plain = [Text]; .empty = [Text] } }";
+const principalType = "{ .default = { .plain = [Text]; .empty = [Text] } }";
 
 const formattedPaths = [
   libraryPath,
