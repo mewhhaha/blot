@@ -1,11 +1,11 @@
 # Renderable observations
 
-This example solves a concrete reporting problem: one deployment summary needs to
-keep ports, replica counts, health states, owner text, and optional zones in one
-homogeneous collection even though those values have unrelated types. Converting
-every value to `Text` before collection would work, but it would also throw away
-the useful relationship between each source value and the renderer that knows
-how to format it.
+This example solves a concrete reporting problem: one deployment summary needs
+to keep ports, replica counts, health states, owner text, and optional zones in
+one homogeneous collection even though those values have unrelated types.
+Converting every value to `Text` before collection would work, but it would also
+throw away the useful relationship between each source value and the renderer
+that knows how to format it.
 
 `lib/renderable.blot` keeps that relationship with a small Church-encoded
 existential:
