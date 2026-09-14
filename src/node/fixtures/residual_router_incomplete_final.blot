@@ -1,0 +1,20 @@
+open import "blot:prelude"
+const Router = import "../../../examples/lib/residual_router.blot"
+
+const Input = #A | #B | #C
+const Remaining = Input \ #A
+
+const first :: Router.Stage (Input, Text, Remaining)
+const first = fn input => case input of
+  #A => #Ok "a"
+  #B => #Error #B
+  #C => #Error #C
+
+const only_c :: #C -> Text
+const only_c = fn value => case value of
+  #C => "c"
+
+// Remaining still contains #B, so a final resolver for only #C is insufficient.
+const invalid :: Input -> Text
+const invalid = Router.finish (first, only_c)
+return invalid
