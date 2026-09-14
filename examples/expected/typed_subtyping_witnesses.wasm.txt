@@ -1,0 +1,1 @@
+{ .endpoint = "/v1/🐱:65535"; .route = "/v1/🐱"; .degraded = "degraded: cache warmup"; .ready = "ready" }

@@ -1,0 +1,68 @@
+open import "blot:prelude"
+const W = import "./lib/subtyping_witness.blot"
+
+// Rich internal requests carry fields that narrower consumers do not need, and
+// their port is statically restricted to the valid TCP range.
+const Port = 1..65535
+const InternalRequest = {
+  .path = Text;
+  .port = Port;
+  .trace = Text;
+  .retry = 0..3;
+}
+const PublicRequest = {
+  .path = Text;
+  .port = Int;
+}
+const PathRequest = { .path = Text; }
+
+// These witnesses are generated from the actual subtype relation rather than
+// restating record-copying code. Refinement weakening and record width
+// subtyping compose through one exact intermediate type.
+const internal_to_public = W.derive (InternalRequest, PublicRequest)
+const public_to_path = W.derive (PublicRequest, PathRequest)
+const internal_to_path = W.compose (internal_to_public, public_to_path)
+
+let endpoint :: PublicRequest -> Text
+let endpoint = fn request => request.path <> ":" <> Text.of_int request.port
+
+let route_name :: PathRequest -> Text
+let route_name = fn request => request.path
+
+let endpoint_from_internal = W.adapt (internal_to_public, endpoint)
+let route_from_internal = W.adapt (internal_to_path, route_name)
+
+let request :: InternalRequest
+let request = {
+  .path = "/v1/🐱";
+  .port = 65535;
+  .trace = "trace-α";
+  .retry = 3;
+}
+
+// The same abstraction also witnesses closed-sum widening; it is not specific
+// to records. `Healthy` values can be consumed by APIs that handle every status.
+const Healthy = #Ready | #Degraded Text
+const Status = Healthy | #Failed Text
+const healthy_to_status = W.derive (Healthy, Status)
+
+let describe_status :: Status -> Text
+let describe_status = fn status => case status of
+  #Ready => "ready"
+  #Degraded reason => "degraded: " <> reason
+  #Failed reason => "failed: " <> reason
+
+let describe_healthy = W.adapt (healthy_to_status, describe_status)
+
+// Pain point: `refines` proves representational/subtyping compatibility only.
+// It cannot establish domain claims such as “this Int is milliseconds” versus
+// “this Int is seconds”; semantic version/unit changes still need an explicit
+// conversion rather than a witness derived solely from the type relation.
+return {
+  .default = {
+    .endpoint = endpoint_from_internal request;
+    .route = route_from_internal request;
+    .degraded = describe_healthy (#Degraded "cache warmup");
+    .ready = describe_healthy #Ready;
+  };
+}
