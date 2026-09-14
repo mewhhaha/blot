@@ -10,21 +10,21 @@ The concrete configuration example starts with two intentionally identical
 record shapes whose `.timeout` field has different semantics: seconds in V1 and
 milliseconds in V2. Explicit `#V1` and `#V2` constructors make that semantic
 version part of the type even though the payload shape is unchanged. V3 then
-renames the field to `.timeout_ms` and strengthens `.retry_limit` to the
-`1..5` refinement. Composition therefore checks both schema adjacency and the
-refined final payload without casts or an unchecked runtime registry.
+renames the field to `.timeout_ms` and strengthens `.retry_limit` to the `1..5`
+refinement. Composition therefore checks both schema adjacency and the refined
+final payload without casts or an unchecked runtime registry.
 
 The executable covers a successful two-stage upgrade, a first-stage invalid
 seconds failure, a second-stage invalid retry-limit failure, and the inclusive
-upper boundaries. Focused rejection fixtures prove that V2 cannot be passed to
-a V1 migration, that migrations cannot be composed in reverse order, and that
+upper boundaries. Focused rejection fixtures prove that V2 cannot be passed to a
+V1 migration, that migrations cannot be composed in reverse order, and that
 `retry_limit = 8` cannot inhabit the V3 refinement.
 
 The compiler guarantees carrier compatibility and the refinement boundary. It
 does not prove domain laws such as whether multiplying seconds by 1000 is the
-correct business conversion, whether a migration preserves every intended
-field, or whether independent migrations form a lawful historical chain. Those
-remain executable library contracts.
+correct business conversion, whether a migration preserves every intended field,
+or whether independent migrations form a lawful historical chain. Those remain
+executable library contracts.
 
 A more representation-efficient design would use distinct `seal` values for V1
 and V2, avoiding runtime variant tags while retaining nominal separation. The
