@@ -38,6 +38,7 @@ test("typed record projections preserve selected types in both executions", asyn
     assert.deepEqual(await compiler.check(examplePath), {
       type: principalType,
       effects: "",
+      interfaceKey: JSON.stringify([principalType, ""]),
     });
 
     const evaluated = await compiler.evaluate(examplePath);
