@@ -51,6 +51,7 @@ const abstractionExamples = [
   "derived_structural_diff.blot",
   "staged_request_builder.blot",
   "typed_codec.blot",
+  "residual_command_router.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
