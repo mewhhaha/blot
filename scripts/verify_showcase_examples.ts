@@ -52,6 +52,7 @@ const abstractionExamples = [
   "staged_request_builder.blot",
   "typed_codec.blot",
   "deferred_fallback.blot",
+  "residual_command_router.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

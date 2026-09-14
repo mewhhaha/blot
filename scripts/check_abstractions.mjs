@@ -33,6 +33,7 @@ const suites = [
   "src/node/staged_request_builder.test.ts",
   "src/node/typed_codec.test.ts",
   "src/node/deferred_fallback.test.ts",
+  "src/node/residual_command_router.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

@@ -57,6 +57,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
 | [`deferred_fallback.blot`](deferred_fallback.blot)             | Affine deferred fallback expressions preserve one success carrier while replacing or pairing independently typed errors              | cache hit skips fallback; store hit; paired errors remain typed   |
+| [`residual_command_router.blot`](residual_command_router.blot) | Typed routing stages forward exact residual variants; composition can only pass cases the previous stage left unresolved             | create, rename, delete, and final health resolution               |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -133,6 +134,14 @@ independent errors. Its affine `~>` parameter means an already-successful
 primary result does not evaluate the fallback expression; the effectful case
 also demonstrates that static effect rows conservatively include a fallback
 effect even when one runtime branch skips it.
+
+The residual-router example makes a decision list's remainder explicit in its
+type. Each stage returns `Result (Output, Remaining)`, while closed type
+difference computes `AfterCreate`, `AfterRename`, and `AfterDelete`. `then`
+shares each residual with the next stage, so an already handled constructor
+cannot be forwarded again and `finish` requires a resolver for every final
+remaining case. Blot has no surface empty type, so the chain ends with one
+concrete final resolver rather than subtracting the last alternative to empty.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
