@@ -1,0 +1,49 @@
+open import "blot:prelude"
+
+// A projection packages a selected structural view together with the inverse
+// replacement operation for exactly that view.
+const Projection = fn (whole, part) => {
+  .get = whole -> part;
+  .put = (whole, part) -> whole;
+}
+
+// Derive a projection from a concrete record type and a compile-time list of
+// field names. `Reflect.pick` computes Part once; the generated getter and
+// setter are then checked against the same Whole/Part relationship.
+// Pain point: Blot intentionally has no record row variable, so this subset
+// relation is staged from concrete Whole/names instead of quantified as a row.
+const fields = fn (Whole, names) => do:
+  const Part = Reflect.pick (Whole, names)
+  const selected = freeze (@shape.names Part)
+  const Get = Whole -> Part
+  const Put = (Whole, Part) -> Whole
+
+  let get :: Get
+  let get = fn whole => Reflect.pick (whole, selected)
+
+  let put :: Put
+  let put = fn (whole, _) => whole
+  for name in Iter.items selected:
+    let previous = put
+    let next :: Put
+    let next = fn (whole, patch) => {
+      ...previous (whole, patch);
+      .[name] = @shape.get patch name;
+    }
+    put := next
+
+  let projection :: Projection (Whole, Part)
+  let projection = { .get; .put; }
+  return {
+    .Part = Part;
+    .projection = projection;
+  }
+
+const over :: @forall (fn Whole => @forall (fn Part => (Projection (Whole, Part), Whole, (Part -> Part)) -> Whole))
+const over = fn (projection, whole, change) => projection.put (whole, change (projection.get whole))
+
+return {
+  .Projection = Projection;
+  .fields = fields;
+  .over = over;
+}

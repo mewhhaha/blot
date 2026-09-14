@@ -1,0 +1,5 @@
+open import "blot:prelude"
+const Projection = import "../../../examples/lib/record_projection.blot"
+
+const Deployment = { .host = Text; .port = Int; }
+return Projection.fields (Deployment, ["missing"])

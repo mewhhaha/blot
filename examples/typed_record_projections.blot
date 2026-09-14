@@ -1,0 +1,69 @@
+// Derive reusable multi-field record views from one source schema. The selected
+// field types are computed once and shared by observation, replacement, and
+// modification, so callers do not duplicate a second "patch" schema.
+
+open import "blot:prelude"
+const Projection = import "./lib/record_projection.blot"
+
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+const Replicas = refine (Int, fn value => value >= 1 && value <= 32)
+const Deployment =
+  {
+    .host = Text;
+    .port = Port;
+    .replicas = Replicas;
+    .owner = Text;
+  }
+
+const network = Projection.fields (Deployment, ["host", "port"])
+const capacity = Projection.fields (Deployment, ["replicas"])
+const no_fields = Projection.fields (Deployment, [])
+
+const Network = network.Part
+
+let initial :: Deployment
+let initial =
+  {
+    .host = "api.internal";
+    .port = 8080;
+    .replicas = 3;
+    .owner = "Ada";
+  }
+
+let before :: Network
+let before = network.projection.get initial
+let relocated =
+  network.projection.put (
+    initial,
+    { .host = "edge-🐱"; .port = 443; }
+  )
+let scaled =
+  Projection.over (
+    capacity.projection,
+    relocated,
+    fn _ => { .replicas = 5; }
+  )
+
+// The same generator is independent of the deployment domain.
+const Profile = { .name = Text; .locale = Text; .revision = Int; }
+const identity = Projection.fields (Profile, ["name", "locale"])
+let profile :: Profile
+let profile = { .name = "Grace"; .locale = "pl-PL"; .revision = 7; }
+let identity_view = identity.projection.get profile
+
+// The empty selection is a lawful identity replacement rather than a special
+// runtime case: it observes `{}` and leaves every field of Whole untouched.
+let empty_view = no_fields.projection.get initial
+let unchanged = no_fields.projection.put (initial, {})
+
+return {
+  .default = {
+    .before = before;
+    .after = network.projection.get scaled;
+    .capacity = capacity.projection.get scaled;
+    .owner = scaled.owner;
+    .identity = identity_view;
+    .empty = empty_view;
+    .unchanged_owner = unchanged.owner;
+  };
+  }

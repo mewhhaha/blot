@@ -1,0 +1,1 @@
+{ .default = { .before = { .host = "api.internal"; .port = 8080; }; .after = { .host = "edge-🐱"; .port = 443; }; .capacity = { .replicas = 5; }; .owner = "Ada"; .identity = { .name = "Grace"; .locale = "pl-PL"; }; .empty = { }; .unchanged_owner = "Ada"; }; }

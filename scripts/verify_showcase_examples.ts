@@ -56,6 +56,7 @@ const abstractionExamples = [
   "typed_relational_join.blot",
   "reversible_updates.blot",
   "typed_traversals.blot",
+  "typed_record_projections.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [
