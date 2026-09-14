@@ -53,6 +53,7 @@ const abstractionExamples = [
   "typed_codec.blot",
   "deferred_fallback.blot",
   "residual_command_router.blot",
+  "typed_relational_join.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

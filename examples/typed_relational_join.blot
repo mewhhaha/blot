@@ -1,0 +1,124 @@
+open import "blot:prelude"
+const Join = import "./lib/relational_join.blot"
+
+const CustomerId = #CustomerId Int
+const ProductId = #ProductId Int
+
+const Customer = { .id = CustomerId; .name = Text; }
+const Order = { .id = Int; .customer_id = CustomerId; .total = Int; }
+const Product = { .id = ProductId; .name = Text; }
+const Line = { .product_id = ProductId; .quantity = Int; }
+
+const customer_id_value :: CustomerId -> Int
+const customer_id_value = fn id => case id of
+  #CustomerId value => value
+
+const product_id_value :: ProductId -> Int
+const product_id_value = fn id => case id of
+  #ProductId value => value
+
+const customer_id_equal :: (CustomerId, CustomerId) -> Bool
+const customer_id_equal =
+  fn (left, right) => customer_id_value left == customer_id_value right
+
+const product_id_equal :: (ProductId, ProductId) -> Bool
+const product_id_equal =
+  fn (left, right) => product_id_value left == product_id_value right
+
+const customer_orders :: Join.On (Customer, Order, CustomerId)
+const customer_orders =
+  {
+    .left_key = fn customer => customer.id;
+    .right_key = fn order => order.customer_id;
+    .equal = customer_id_equal;
+  }
+
+const product_lines :: Join.On (Product, Line, ProductId)
+const product_lines =
+  {
+    .left_key = fn product => product.id;
+    .right_key = fn line => line.product_id;
+    .equal = product_id_equal;
+  }
+
+const customers =
+  [
+    { .id = #CustomerId 1; .name = "Ada"; },
+    { .id = #CustomerId 2; .name = "Grace"; },
+    { .id = #CustomerId 3; .name = "Linus"; }
+  ]
+const orders =
+  [
+    { .id = 10; .customer_id = #CustomerId 1; .total = 120; },
+    { .id = 11; .customer_id = #CustomerId 1; .total = 80; },
+    { .id = 12; .customer_id = #CustomerId 2; .total = 200; },
+    { .id = 13; .customer_id = #CustomerId 99; .total = 5; }
+  ]
+const products =
+  [
+    { .id = #ProductId 7; .name = "compiler"; },
+    { .id = #ProductId 8; .name = "runtime"; }
+  ]
+const lines =
+  [
+    { .product_id = #ProductId 7; .quantity = 2; },
+    { .product_id = #ProductId 7; .quantity = 3; },
+    { .product_id = #ProductId 8; .quantity = 1; }
+  ]
+
+const CustomerSummary = { .customer = Text; .order_count = Int; .total = Int; }
+const summarize_customer :: Join.Group (Customer, Order) -> CustomerSummary
+const summarize_customer = fn group => {
+  .customer = group.left.name;
+  .order_count = Array.length (&group.matches);
+  .total = fold (group.matches, 0, fn (total, order) => total + order.total);
+}
+
+const ProductSummary = { .product = Text; .line_count = Int; .quantity = Int; }
+const summarize_product :: Join.Group (Product, Line) -> ProductSummary
+const summarize_product = fn group => {
+  .product = group.left.name;
+  .line_count = Array.length (&group.matches);
+  .quantity = fold (
+    group.matches,
+    0,
+    fn (total, line) => total + line.quantity
+  );
+}
+
+const OrderSummary = { .order = Int; .customer_count = Int; }
+const summarize_order :: Join.Group (Order, Customer) -> OrderSummary
+const summarize_order = fn group => {
+  .order = group.left.id;
+  .customer_count = Array.length (&group.matches);
+}
+
+const customer_groups :: [Join.Group (Customer, Order)]
+const customer_groups = Join.group (customer_orders, customers, orders)
+
+const product_groups :: [Join.Group (Product, Line)]
+const product_groups = Join.group (product_lines, products, lines)
+
+const order_groups :: [Join.Group (Order, Customer)]
+const order_groups = Join.group (Join.flip customer_orders, orders, customers)
+
+const empty_right :: [Join.Group (Customer, Order)]
+const empty_right = Join.group (customer_orders, customers, [])
+
+// Pain point: without this boundary, the fully empty left input currently makes
+// `check` publish `⊥` even though the relation and right side fix both row types.
+const empty_left :: [Join.Group (Customer, Order)]
+const empty_left = Join.group (customer_orders, [], orders)
+
+return {
+  .default = {
+    .customers = map (customer_groups, summarize_customer);
+    .products = map (product_groups, summarize_product);
+    .orders = map (order_groups, summarize_order);
+    .empty_right_counts = map (
+      empty_right,
+      fn group => Array.length (&group.matches)
+    );
+    .empty_left = empty_left;
+  };
+}
