@@ -32,7 +32,8 @@ let route_name = fn request => request.path
 let endpoint_from_internal = W.adapt (internal_to_public, endpoint)
 let route_from_internal = W.adapt (internal_to_path, route_name)
 
-const request :: InternalRequest = {
+let request :: InternalRequest
+let request = {
   .path = "/v1/🐱";
   .port = 65535;
   .trace = "trace-α";
