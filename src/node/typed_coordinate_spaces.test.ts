@@ -29,11 +29,15 @@ test("typed coordinate spaces preserve frame relationships in both executions", 
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/typed_coordinate_spaces.txt", "utf8")).trim(),
+      (await readFile("examples/expected/typed_coordinate_spaces.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(path)),
-      (await readFile("examples/expected/typed_coordinate_spaces.wasm.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/typed_coordinate_spaces.wasm.txt",
+        "utf8",
+      )).trim(),
     );
   } finally {
     compiler.destroy();
