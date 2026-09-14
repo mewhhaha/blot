@@ -1,0 +1,15 @@
+const Article = import "../../../examples/lib/article_protocol.blot"
+
+let draft = #Draft {
+  .title = "Compiler notes";
+  .body = "rough";
+}
+let request = {
+  .reviewer = "Ada";
+  .approved_body = "polished";
+  .slug = "compiler-notes";
+}
+let (published, _receipt, undo) = Article.Workflow.forward (draft, request)
+let (review_undo, publish_undo) = undo
+
+return Article.Workflow.backward (published, (publish_undo, review_undo))
