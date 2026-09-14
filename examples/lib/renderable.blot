@@ -1,0 +1,20 @@
+const P = import "blot:prelude"
+
+// Church-encoded existential: the hidden Value may differ for every packed
+// element, while its renderer must accept that exact Value type.
+const Renderable = @forall (fn Result => @forall (fn Value => (Value, (Value -> P.Text)) -> Result) -> Result)
+
+const make :: @forall (fn Value => (Value, (Value -> P.Text)) -> Renderable)
+const make = fn (value, render) => fn consumer => consumer (value, render)
+
+const render_consumer :: @forall (fn Value => (Value, (Value -> P.Text)) -> P.Text)
+const render_consumer = fn (value, render) => render value
+
+const render :: Renderable -> P.Text
+const render = fn packed => packed render_consumer
+
+return {
+  .Renderable;
+  .make;
+  .render;
+}

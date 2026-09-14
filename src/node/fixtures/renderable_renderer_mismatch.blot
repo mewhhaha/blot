@@ -1,0 +1,7 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/renderable.blot"
+
+const show_text :: Text -> Text
+const show_text = fn value => value
+
+return R.make (443, show_text)
