@@ -34,7 +34,7 @@ node --import tsx --test src/node/composable_event_aggregates.test.ts
 ```
 
 The executable covers successful deposits and withdrawals, an insufficient
-withdrawal, duplicate gate opening, both product command branches, a mixed event
-history, and empty-history replay. Separate fixtures verify that a foreign event
-cannot be replayed and that a command cannot be sent through the wrong product
-side.
+withdrawal, duplicate gate opening, both product command branches, tagged
+failures from both product sides, a mixed event history, and empty-history
+replay. Separate fixtures verify that a foreign event cannot be replayed and
+that a command cannot be sent through the wrong product side.

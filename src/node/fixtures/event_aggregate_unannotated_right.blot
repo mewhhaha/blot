@@ -23,5 +23,7 @@ const right =
     .evolve = fn (_, #Enabled) => #True;
   }
 
+// Pain point: this natural unannotated right branch currently checks as bottom
+// even though evaluator and emitted-Wasm execution produce an Ok value.
 const system = A.product (left, right)
 return { .value = A.execute (system, (0, #False), #Right #Enable); }

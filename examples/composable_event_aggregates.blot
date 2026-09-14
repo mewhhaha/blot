@@ -62,6 +62,16 @@ const system_right ::
   Result (A.Execution (SystemState, SystemEvent), SystemError)
 const system_right = A.execute (system, (8, #Closed), #Right #OpenGate)
 
+const system_left_error ::
+  Result (A.Execution (SystemState, SystemEvent), SystemError)
+const system_left_error =
+  A.execute (system, (2, #Closed), #Left (#Withdraw 5))
+
+const system_right_error ::
+  Result (A.Execution (SystemState, SystemEvent), SystemError)
+const system_right_error =
+  A.execute (system, (0, #Open), #Right #OpenGate)
+
 const history :: [SystemEvent]
 const history =
   [#Left (#Deposited 8), #Right #Opened, #Left (#Withdrawn 3)]
@@ -75,6 +85,8 @@ return {
     .duplicate_open = A.execute (gate, #Open, #OpenGate);
     .system_left;
     .system_right;
+    .system_left_error;
+    .system_right_error;
     .replayed = A.replay (system, history);
     .empty = A.replay (system, []);
   };
