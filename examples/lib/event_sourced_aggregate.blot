@@ -22,6 +22,10 @@ const replay_from = fn (aggregate, state, events) => fold (
   aggregate.evolve
 )
 
+// Pain point: delegating this wrapper to `replay_from` forwards a generic State
+// through another polymorphic call and currently trips the ownership contract.
+// Keeping the same pure fold here preserves the public relationship without an
+// unchecked escape hatch.
 const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
 const replay = fn (aggregate, events) => fold (
   events,
