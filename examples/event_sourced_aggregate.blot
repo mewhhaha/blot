@@ -46,7 +46,6 @@ const decide = fn (state, command) => case command of
         .requested = count;
       })
 
-    let event :: SeatEvent
     let event = #SeatsAllocated count
     return #Ok (N.singleton event)
 
@@ -54,7 +53,6 @@ const decide = fn (state, command) => case command of
     if count <= 0:
       return #Error (#InvalidCount count)
 
-    let event :: SeatEvent
     let event = #SeatsGranted count
     return #Ok (N.singleton event)
 
@@ -72,9 +70,7 @@ const decide = fn (state, command) => case command of
         .requested = request.allocated;
       })
 
-    let granted :: SeatEvent
     let granted = #SeatsGranted request.granted
-    let allocated :: SeatEvent
     let allocated = #SeatsAllocated request.allocated
     return #Ok (N.prepend (granted, N.singleton allocated))
 
@@ -88,7 +84,6 @@ const decide = fn (state, command) => case command of
         .requested = count;
       })
 
-    let event :: SeatEvent
     let event = #SeatsReleased count
     return #Ok (N.singleton event)
 
