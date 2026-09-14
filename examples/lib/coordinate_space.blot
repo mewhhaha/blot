@@ -1,0 +1,71 @@
+open import "blot:prelude"
+
+// Coordinate markers are ordinary singleton type values. The marker is carried
+// by the data so points/vectors in otherwise identical integer spaces remain
+// distinguishable to the checker.
+const Point = fn Frame => { .frame = Frame; .x = Int; .y = Int; }
+const Vector = fn Frame => { .frame = Frame; .dx = Int; .dy = Int; }
+
+// Generate the operations that must stay inside one exact coordinate space.
+// Pain point: a repeated quantified Frame is a shared subtype constraint, not
+// nominal equality; two covariant markers can widen to their common union.
+// Specializing this descriptor first gives each local operation an exact frame.
+const space = fn frame => do:
+  const P = Point frame
+  const V = Vector frame
+
+  let point :: (Int, Int) -> P
+  let point = fn (x, y) => { .frame; .x; .y; }
+
+  let vector :: (Int, Int) -> V
+  let vector = fn (dx, dy) => { .frame; .dx; .dy; }
+
+  let between :: (P, P) -> V
+  let between = fn (from, to) => vector (to.x - from.x, to.y - from.y)
+
+  let move :: (P, V) -> P
+  let move = fn (current, offset) => point (current.x + offset.dx, current.y + offset.dy)
+
+  return {
+    .tag = frame;
+    .Point = P;
+    .Vector = V;
+    .point;
+    .vector;
+    .between;
+    .move;
+    }
+
+// A transform changes coordinate space while keeping positions distinct from
+// displacement vectors. Translation belongs in `.point`, never `.vector`.
+const Transform = fn (From, To) => {
+  .point = Point From -> Point To;
+  .vector = Vector From -> Vector To;
+}
+
+const identity :: @forall (fn Frame => Transform (Frame, Frame))
+const identity = {
+  .point = fn point => point;
+  .vector = fn vector => vector;
+}
+
+// The shared Middle appears as both an output and an input through Transform's
+// arrows. Incompatible adjacent coordinate spaces are therefore rejected.
+const compose :: @forall (fn From => @forall (fn Middle => @forall (fn To => (Transform (From, Middle), Transform (Middle, To)) -> Transform (From, To))))
+const compose = fn (first, second) => {
+  .point = fn point => second.point (first.point point);
+  .vector = fn vector => second.vector (first.vector vector);
+}
+
+const map_points :: @forall (fn From => @forall (fn To => (Transform (From, To), [Point From]) -> [Point To]))
+const map_points = fn (transform, points) => map (points, transform.point)
+
+return {
+  .Point;
+  .Vector;
+  .space;
+  .Transform;
+  .identity;
+  .compose;
+  .map_points;
+  }

@@ -1,0 +1,71 @@
+open import "blot:prelude"
+const Space = import "./lib/coordinate_space.blot"
+
+const Model = Space.space #Model
+const World = Space.space #World
+const Screen = Space.space #Screen
+
+const model_to_world :: Space.Transform (Model.tag, World.tag)
+const model_to_world =
+  {
+    .point = fn point => {
+      .frame = #World;
+      .x = point.x + 100;
+      .y = point.y + 50;
+    };
+    .vector = fn vector => {
+      .frame = #World;
+      .dx = vector.dx;
+      .dy = vector.dy;
+    };
+  }
+
+const world_to_screen :: Space.Transform (World.tag, Screen.tag)
+const world_to_screen =
+  {
+    .point = fn point => {
+      .frame = #Screen;
+      .x = point.x * 2;
+      .y = 0 - point.y * 2;
+    };
+    .vector = fn vector => {
+      .frame = #Screen;
+      .dx = vector.dx * 2;
+      .dy = 0 - vector.dy * 2;
+    };
+  }
+
+const model_to_screen :: Space.Transform (Model.tag, Screen.tag)
+const model_to_screen = Space.compose (model_to_world, world_to_screen)
+
+const origin :: Model.Point
+const origin = Model.point (0, 0)
+const target :: Model.Point
+const target = Model.point (3, 2)
+const offset :: Model.Vector
+const offset = Model.between (origin, target)
+
+const vertices :: [Model.Point]
+const vertices = [origin, target, Model.point (0 - 4, 1)]
+
+const screen_vertices :: [Screen.Point]
+const screen_vertices = Space.map_points (model_to_screen, vertices)
+
+const screen_origin :: Screen.Point
+const screen_origin = model_to_screen.point origin
+const screen_offset :: Screen.Vector
+const screen_offset = model_to_screen.vector offset
+const moved :: Screen.Point
+const moved = Screen.move (screen_origin, screen_offset)
+
+const same_target :: Model.Point
+const same_target = Space.identity.point target
+
+return {
+  .default = {
+    .screen_vertices;
+    .screen_offset;
+    .moved;
+    .same_target;
+  };
+  }

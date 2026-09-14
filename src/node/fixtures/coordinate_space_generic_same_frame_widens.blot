@@ -1,0 +1,14 @@
+open import "blot:prelude"
+const Space = import "../../../examples/lib/coordinate_space.blot"
+
+const generic_move :: @forall (fn Frame => (Space.Point Frame, Space.Vector Frame) -> Space.Point Frame)
+const generic_move = fn (point, vector) => {
+  .frame = point.frame;
+  .x = point.x + vector.dx;
+  .y = point.y + vector.dy;
+}
+
+return generic_move (
+  { .frame = #Model; .x = 1; .y = 2; },
+  { .frame = #World; .dx = 3; .dy = 4; }
+  )

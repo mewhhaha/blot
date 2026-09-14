@@ -1,0 +1,7 @@
+open import "blot:prelude"
+const Space = import "../../../examples/lib/coordinate_space.blot"
+const Model = Space.space #Model
+const World = Space.space #World
+const point = Model.point (1, 2)
+const vector = World.vector (3, 4)
+return Model.move (point, vector)
