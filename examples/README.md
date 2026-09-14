@@ -51,6 +51,7 @@ enumerates runtime field values in insertion order.
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records                               | changed field names, exact equality, and refined-field bounds     |
 | [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
+| [`typed_coordinate_spaces.blot`](typed_coordinate_spaces.blot) | Generated space descriptors and composable transforms keep points and vectors in matched coordinate frames                           | model/world/screen composition, vector semantics, static mismatches |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -119,6 +120,13 @@ widens those errors to the application-level union at the product boundary.
 `imap` requires both directions of a representation change, so a one-way remap
 cannot masquerade as a codec. Product decoding is intentionally left-biased on
 errors; the example records that behavior rather than claiming accumulation.
+
+The coordinate-space example specializes a small descriptor per singleton frame,
+so within-space operations are monomorphic while reusable transforms quantify
+over their source and destination frames. `compose` shares its middle frame in
+both function-result and function-input positions, and points stay distinct from
+vectors so translation cannot accidentally affect a displacement. The explicit
+frame marker is runtime data; the example does not claim a zero-cost phantom type.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
