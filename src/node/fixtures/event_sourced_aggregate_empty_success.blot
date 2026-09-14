@@ -1,0 +1,17 @@
+open import "blot:prelude"
+
+const A = import "../../../examples/lib/event_sourced_aggregate.blot"
+
+const State = { .value = Int; }
+const Command = #Tick
+const Event = #Ticked
+const Error = #Never
+
+const invalid :: A.Aggregate (State, Command, Event, Error)
+const invalid = {
+  .initial = { .value = 0; };
+  .decide = fn _ => #Ok [];
+  .evolve = fn (state, _) => state;
+}
+
+return invalid
