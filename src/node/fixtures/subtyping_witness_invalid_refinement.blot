@@ -1,0 +1,8 @@
+open import "blot:prelude"
+
+const Port = 1..65535
+const Request = { .path = Text; .port = Port; }
+
+let invalid :: Request
+let invalid = { .path = "/overflow"; .port = 65536; }
+return invalid
