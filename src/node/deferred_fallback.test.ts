@@ -37,7 +37,8 @@ test("deferred fallback preserves typed errors and skips unused work", async () 
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/deferred_fallback.txt", "utf8")).trim(),
+      (await readFile("examples/expected/deferred_fallback.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(example)),
