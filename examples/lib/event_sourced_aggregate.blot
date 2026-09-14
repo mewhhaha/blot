@@ -23,10 +23,10 @@ const replay_from = fn (aggregate, state, events) => fold (
 )
 
 const replay :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), [Event]) -> State))))
-const replay = fn (aggregate, events) => replay_from (
-  aggregate,
+const replay = fn (aggregate, events) => fold (
+  events,
   aggregate.initial,
-  events
+  aggregate.evolve
 )
 
 const handle :: @forall (fn State => @forall (fn Command => @forall (fn Event => @forall (fn Error => (Aggregate (State, Command, Event, Error), State, Command) -> Result (Change (State, Event), Error)))))
@@ -35,7 +35,7 @@ const handle = fn (aggregate, state, command) => case aggregate.decide (state, c
   #Ok events => #Ok {
     .events = events;
     .state = N.fold (events, state, aggregate.evolve);
-  }
+}
 
 return {
   .Aggregate = Aggregate;
