@@ -10,4 +10,4 @@ let initial = { .host = "api"; .port = 8080; .owner = "Ada"; }
 return network.projection.put (
   initial,
   { .host = "edge"; .port = 70000; }
-  )
+)
