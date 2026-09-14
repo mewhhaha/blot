@@ -1,0 +1,1 @@
+{ .changed = { .name = "Grace"; .quota = 40 }; .committed = #Committed { .name = "Grace"; .quota = 40 }; .restored = { .name = "Ada"; .quota = 20 }; .rolled_back = #RolledBack { .error = #QuotaTooHigh 80; .state = { .name = "Ada"; .quota = 20 } } }

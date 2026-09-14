@@ -1,0 +1,60 @@
+open import "blot:prelude"
+
+// A reversible update relates one state type, one input type, and the exact undo
+// evidence produced by applying that input. Undo evidence stays operation-specific
+// instead of becoming an untyped snapshot or callback.
+const Reversible = fn (state, input, undo) => {
+  .apply = (state, input) -> (state, undo);
+  .revert = (state, undo) -> state;
+}
+
+// Lift an immutable projection/setter pair into a reversible replacement. The
+// previous focused value becomes precisely the undo evidence.
+// Pain point: this type relates apply/revert carriers, but it cannot prove the
+// semantic inverse law; concrete plans still need round-trip tests.
+const replace :: @forall (fn State => @forall (fn Part => ((State -> Part), ((State, Part) -> State)) -> Reversible (State, Part, Part)))
+const replace = fn (view, set) => {
+  .apply = fn (state, part) => (set (state, part), view state);
+  .revert = fn (state, previous) => set (state, previous);
+}
+
+// Sequential composition preserves both input types and both undo types. Revert
+// runs in the opposite order, so the paired evidence mirrors the composed plan.
+// Pain point: longer heterogeneous compositions expose tuple association in both
+// their input and undo evidence; keep that tree-shaped detail behind domain APIs.
+const compose :: @forall (fn State => @forall (fn LeftInput => @forall (fn RightInput => @forall (fn LeftUndo => @forall (fn RightUndo => (Reversible (State, LeftInput, LeftUndo), Reversible (State, RightInput, RightUndo)) -> Reversible (State, (LeftInput, RightInput), (LeftUndo, RightUndo)))))))
+const compose = fn (left, right) => {
+  .apply = fn (state, (left_input, right_input)) => do:
+    let (state, left_undo) = left.apply (state, left_input)
+    let (state, right_undo) = right.apply (state, right_input)
+    return (state, (left_undo, right_undo))
+  .revert = fn (state, (left_undo, right_undo)) => do:
+    let state = right.revert (state, right_undo)
+    return left.revert (state, left_undo)
+  ;
+}
+
+const Outcome = fn (state, error) => #Committed state | #RolledBack {
+  .state = state;
+  .error = error;
+}
+
+// Apply one plan, validate the resulting state, and use only the undo evidence
+// produced by that exact plan when validation fails.
+const commit_if :: @forall (fn State => @forall (fn Input => @forall (fn Undo => @forall (fn Error => (Reversible (State, Input, Undo), (State -> Result (Unit, Error)), State, Input) -> Outcome (State, Error)))))
+const commit_if = fn (update, validate, state, input) => do:
+  let (changed, undo) = update.apply (state, input)
+  return case validate changed of
+    #Ok _ => #Committed changed
+    #Error error => #RolledBack {
+      .state = update.revert (changed, undo);
+      .error;
+    }
+
+return {
+  .Reversible
+  .Outcome
+  .replace
+  .compose
+  .commit_if
+  }

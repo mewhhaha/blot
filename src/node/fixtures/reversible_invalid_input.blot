@@ -1,0 +1,14 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/reversible_update.blot"
+
+const Quota = range (1, 100)
+const Profile = { .name = Text; .quota = Quota; }
+const set_quota :: R.Reversible (Profile, Quota, Quota)
+const set_quota =
+  R.replace (
+    fn profile => profile.quota,
+    fn (profile, quota) => Shape.update (profile, { .quota; })
+  )
+const profile :: Profile
+const profile = { .name = "Ada"; .quota = 20; }
+return set_quota.apply (profile, 0)

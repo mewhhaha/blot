@@ -32,6 +32,7 @@ const suites = [
   "src/node/derived_structural_diff.test.ts",
   "src/node/staged_request_builder.test.ts",
   "src/node/typed_codec.test.ts",
+  "src/node/reversible_updates.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

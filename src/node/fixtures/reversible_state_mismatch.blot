@@ -1,0 +1,21 @@
+open import "blot:prelude"
+const R = import "../../../examples/lib/reversible_update.blot"
+
+const NameState = { .name = Text; }
+const QuotaState = { .quota = Int; }
+
+const rename :: R.Reversible (NameState, Text, Text)
+const rename =
+  R.replace (
+    fn state => state.name,
+    fn (_, name) => { .name; }
+  )
+
+const set_quota :: R.Reversible (QuotaState, Int, Int)
+const set_quota =
+  R.replace (
+    fn state => state.quota,
+    fn (_, quota) => { .quota; }
+  )
+
+return R.compose (rename, set_quota)
