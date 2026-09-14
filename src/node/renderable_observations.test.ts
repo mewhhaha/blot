@@ -43,11 +43,17 @@ test("renderable observations preserve hidden value/renderer relationships", asy
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/renderable_observations.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/renderable_observations.txt",
+        "utf8",
+      )).trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(examplePath)),
-      (await readFile("examples/expected/renderable_observations.wasm.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/renderable_observations.wasm.txt",
+        "utf8",
+      )).trim(),
     );
   } finally {
     compiler.destroy();
