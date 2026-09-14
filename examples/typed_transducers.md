@@ -34,8 +34,8 @@ The API has four operations:
   leaving the downstream accumulator untouched on `#None`;
 - `compose` shares the exact middle carrier between two transducers.
 
-The executable specializes `Reading -> Classified -> Alert`. `Reading.score`
-is refined to `0..100` and `.limit` to `1..100`. Classification retains those
+The executable specializes `Reading -> Classified -> Alert`. `Reading.score` is
+refined to `0..100` and `.limit` to `1..100`. Classification retains those
 fields and adds a boolean. `choose_map` then emits only readings above their
 limit. The resulting `Reading -> Alert` transducer is applied to a reducer that
 zips an alert count with total excess. The same transducer shape can be applied
