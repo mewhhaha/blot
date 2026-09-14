@@ -1,0 +1,23 @@
+open import "blot:prelude"
+
+const Port = import "./shared_service_port.blot"
+
+const Directory = Port.unary (
+  "example.directory.lookup.v1",
+  Int,
+  Option Text,
+)
+const Quota = Port.unary (
+  "example.directory.quota.v1",
+  Text,
+  Int,
+)
+
+const directory = fn answer => {
+  .call = fn (_, ?resume) => resume answer;
+}
+const quota = fn answer => {
+  .call = fn (_, ?resume) => resume answer;
+}
+
+return { .Directory; .Quota; .directory; .quota; }
