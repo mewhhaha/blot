@@ -46,7 +46,7 @@ node --import tsx --test src/node/reversible_updates.test.ts
 node scripts/check_abstractions.mjs
 ```
 
-Expected observations are a changed profile `{ name = "Grace", quota = 40 }`,
-a restored original profile, a committed valid change, and a rejected
-`quota = 80` change whose returned state is the original `{ name = "Ada",
+Expected observations are a changed profile `{ name = "Grace", quota = 40 }`, a
+restored original profile, a committed valid change, and a rejected `quota = 80`
+change whose returned state is the original `{ name = "Ada",
 quota = 20 }`.
