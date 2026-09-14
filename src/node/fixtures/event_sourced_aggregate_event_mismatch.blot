@@ -8,14 +8,15 @@ const Event = #Ticked
 const Error = #Never
 
 const invalid :: A.Aggregate (State, Command, Event, Error)
-const invalid = {
-  .initial = { .value = 0; };
-  .decide = fn _ => #Ok {
-    .head = #Wrong;
-    .tail = [];
-  };
-  .evolve = fn (state, event) => case event of
-    #Ticked => { .value = state.value + 1; }
-}
+const invalid =
+  {
+    .initial = { .value = 0; };
+    .decide = fn _ => #Ok {
+      .head = #Wrong;
+      .tail = [];
+    };
+    .evolve = fn (state, event) => case event of
+      #Ticked => { .value = state.value + 1; }
+  }
 
 return invalid
