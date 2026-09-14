@@ -458,6 +458,13 @@ policy. This decision is made before lowering a call argument, so declining
 sharing does not emit duplicate argument work. It is not a new source rejection
 or an excuse to fall back to a type-only key.
 
+Immutable record evidence uses shared chunks once all contained closure
+references are stable. The encoder retains record storage while indexing its
+identity, and copy-on-write changes produce distinct evidence. Key comparison
+ignores allocation sharing and memoizes compared chunk pairs; portable encoding
+retains the original structural sequence. Completed keys share immutable storage
+when cloned, so repeated captures and key cloning do not duplicate record trees.
+
 Recursive result placeholders use the same environment evidence as function
 identities. A placeholder for one static environment cannot be settled by a
 branch from another. The evidence is local to one residual trace and is neither

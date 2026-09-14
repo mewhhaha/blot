@@ -32,7 +32,7 @@ emitter.
 | Node      | 22.16.0 or newer |
 | pnpm      |          11.21.0 |
 | Rust      |           1.97.1 |
-| Baba      |            9.0.0 |
+| Baba      |            9.0.1 |
 | @std/path |            1.1.6 |
 
 ## Use it

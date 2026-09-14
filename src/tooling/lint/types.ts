@@ -17,10 +17,15 @@ export interface AstPath<Node extends AstNode = AstNode> {
 
 export type LintSeverity = "warning" | "hint";
 
-export interface LintFix {
-  readonly title: string;
+export interface LintEdit {
   readonly span: Span;
   readonly replacement: string;
+}
+
+export interface LintFix {
+  readonly title: string;
+  readonly edits: readonly LintEdit[];
+  readonly kind: "quickfix" | "refactor.rewrite";
   readonly validation: "parse" | "check" | "check-interface";
 }
 
@@ -49,7 +54,9 @@ export interface LintRuleContext {
     title: string,
     replacement: string,
     validation?: "parse" | "check" | "check-interface",
+    kind?: "quickfix" | "refactor.rewrite",
   ): LintFix | null;
+  fixEdits(options: LintFix): LintFix | null;
   hasConcreteOrigin(
     node: { readonly span: Span },
     ruleName: string,

@@ -38,4 +38,4 @@ return {
     .elapsed = Seconds.value elapsed;
     .elapsed_unit = Seconds.symbol;
   };
-  }
+}

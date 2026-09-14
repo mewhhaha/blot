@@ -31,6 +31,18 @@ export function sourceEditSpan(source: string, span: Span): Span {
   return { start: span.start, end };
 }
 
+export function statementRemovalSpan(source: string, span: Span): Span {
+  const edit = sourceEditSpan(source, span);
+  const lineStart = source.lastIndexOf("\n", edit.start - 1) + 1;
+  if (
+    source.slice(edit.start, edit.end).endsWith("\n") &&
+    /^[ \t]*$/.test(source.slice(lineStart, edit.start))
+  ) {
+    return { start: lineStart, end: edit.end };
+  }
+  return edit;
+}
+
 function inspectSource(
   source: string,
 ): {

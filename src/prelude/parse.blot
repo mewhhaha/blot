@@ -13,7 +13,7 @@ const digit_value = fn scalar => case Text.find_from (
   "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
   scalar,
   0
-) of
+  ) of
   #None => -1
   #Some index => do:
     if index >= 36:

@@ -18,4 +18,4 @@ return {
   .raw = raw;
   .normal_json = normal_json;
   .exact_json = exact_json;
-  }
+}

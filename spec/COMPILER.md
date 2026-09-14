@@ -98,10 +98,10 @@ immediately again with `WebAssembly.compile`. Artifact download verification
 remains independently usable and therefore performs standalone structural
 validation.
 
-The Node-to-compiler transport is compiler-host ABI 9. Paths are registered once
-as UTF-8 and receive stable session-local module identities. A graph update is a
-length-delimited binary frame containing changed UTF-8 source or compact AST
-bytes, direct edges, includes, and removals. A trusted compiler-distributed
+The Node-to-compiler transport is compiler-host ABI 10. Paths are registered
+once as UTF-8 and receive stable session-local module identities. A graph update
+is a length-delimited binary frame containing changed UTF-8 source or compact
+AST bytes, direct edges, includes, and removals. A trusted compiler-distributed
 snapshot uses a separate explicitly named installation operation and is never a
 generic graph-delta payload. The decoder validates the complete frame before
 mutation, rejects unknown identities and trailing bytes, and reconstructs UTF-16
@@ -234,16 +234,15 @@ application becomes a Core computation; an empty effect row does not create a
 second pure-application artifact.
 
 A rebinding target has one unqualified root and an optional sequence of fields
-and array indices. Elaboration emits one ordinary `Shadow` of that root with
-a pure block as its value. Hygienic bindings evaluate indices in source order,
+and array indices. Elaboration emits one ordinary `Shadow` of that root with a
+pure block as its value. Hygienic bindings evaluate indices in source order,
 then the replacement, then retain each path prefix once. This keeps reads of the
 original root before ownership transfers. Reverse reconstruction uses record
-spreads and saturated
-`@array.set (@array.copy (&prefix)) index replacement` calls. A field projection
-also checks the old leaf, so width subtyping cannot admit a misspelled field.
-The lexical-frame validator checks the root and visits index expressions before
-elaboration. Loop accumulator discovery collects the root. No path-update node
-or backend operation is introduced.
+spreads and saturated `@array.set (@array.copy (&prefix)) index replacement`
+calls. A field projection also checks the old leaf, so width subtyping cannot
+admit a misspelled field. The lexical-frame validator checks the root and visits
+index expressions before elaboration. Loop accumulator discovery collects the
+root. No path-update node or backend operation is introduced.
 
 `continue` elaborates to the nearest loop's ordinary accumulator constructor.
 Conditional forwarding preserves rebindings made before departure and skips the
@@ -409,6 +408,28 @@ most one payload for each `(kind, expression)` pair. The host may combine a fact
 with syntax-local premises and recheck a proposed edit; it must not infer these
 semantic premises itself. Readability facts enter neither Runtime HIR nor an
 emitted artifact.
+
+Compiler-host ABI 10 adds an opaque `interfaceKey` to successful binary check
+summaries and JSON analysis summaries. Rust constructs it from the checked
+result and effect row, canonicalizing union/variant order and empty effect-row
+representations. Ordered record fields and generative identities remain
+distinct. The key is a conservative editor comparison, not a semantic
+equivalence proof, ABI manifest, or incremental cache identity. Hosts require it
+and do not rebuild it from printed type strings.
+
+Certificate schema 24 extends readability evidence with `source-operations`.
+Each payload records which supported prelude operations are actually available
+in that lexical scope, the resolved callee when recognized, an exact public
+primitive alias, strict unary forwarding evidence, and a total integer
+comparison predicate when proved. Library evidence compares the resolved closure
+and its declaration in the source graph's ordinary `blot:prelude` module;
+matching names or types alone are insufficient. Primitive aliases must have the
+same descriptor and no applied arguments. Predicate evidence admits only
+recognized integer comparisons over integer literals and checked integer
+variables, with no intervening computation. Looking for these opportunities must
+not count unused opened names as source reads. Conflicting observations across
+specializations withhold evidence. The host combines these premises with source
+syntax, demand, scope, and comment constraints, then rechecks edits.
 
 ## 7. Safety checking
 
@@ -708,24 +729,27 @@ contract for a polymorphic host operation. The host binds its source name once;
 each concrete import marshals against its own checked type. No host performs
 type inference or selects a source specialization.
 
-Checked-module certificate schema 23 records the checking contract with last-use
+Checked-module certificate schema 24 records the checking contract with last-use
 borrow lifetimes and per-proof refinement limits. Borrow liveness uses demanded
 declarations, lexical identities, aliases, closure dependencies, and held
 operands; it does not change type inference or consume source bindings. The
 guest ABI layout and suspension protocol are unchanged at this stage. Schema 23
 scopes signature holes to their binding, retains closed signatures when attached
 functions become values, and distinguishes a closed empty effect row from an
-unknown producer. Staging carries a closed checked result contract through the
-current application's result positions; independently instantiated cached
-expression schemes do not replace that contract. Nested case patterns preserve
-their payload variables, and rebinding enforces its existing pure-value rule
-directly. The Runtime HIR and guest ABI schemas do not change. `SUSPENSION.md`
-owns the planning and lifetime obligations shared by closure, emission, and
-hosts. When an inferred callee has no positive type bounds, ownership receives
-its checked upper function constraint. This preserves the open effect row of an
-unannotated callback instead of treating its bottom positive view as proof of
-synchronous execution. Ownership consumes these inference facts without
-reconstructing a function type.
+unknown producer. Compile-time effect instantiation traverses inferred aggregate
+unions. Reflection and closed member signatures apply the closure environment's
+substitutions so generated members retain their instance identities. Staging
+carries a closed checked result contract through the current application's
+result positions; independently instantiated cached expression schemes do not
+replace that contract. Nested case patterns preserve their payload variables,
+and rebinding enforces its existing pure-value rule directly. The Runtime HIR
+and guest ABI schemas do not change. `SUSPENSION.md` owns the planning and
+lifetime obligations shared by closure, emission, and hosts. When an inferred
+callee has no positive type bounds, ownership receives its checked upper
+function constraint. This preserves the open effect row of an unannotated
+callback instead of treating its bottom positive view as proof of synchronous
+execution. Ownership consumes these inference facts without reconstructing a
+function type.
 
 Handler checking records each selected clause's defining module, parameter and
 body identities, and the handled operation's ownership contract. These
@@ -737,6 +761,13 @@ those function contracts. Schema 22 requires these checks for constructed and
 imported handlers as well as literals; old certificates cannot bypass them. The
 transient selections are cleared on request completion and source invalidation.
 They contain no live closure environment or host authority.
+
+When a generic effect parameter is unavailable during checking, the handler site
+receives explicit deferred evidence. Ownership distinguishes that state from
+missing checker evidence. Concrete specialization replaces deferral with checked
+clause provenance and invalidates cached ownership analysis for that module.
+Ownership is checked again before an importer can use the specialization,
+preserving every operation and continuation check.
 
 Runtime HIR schema 13 replaces blocks and call instructions with typed function,
 continuation, value, representation, and signature references. Each continuation

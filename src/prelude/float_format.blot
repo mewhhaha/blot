@@ -29,10 +29,10 @@ const multiply = fn (&limbs :: [Int], factor :: Int) -> [Int] => do:
     else:
       let product = limb (limbs, index) * factor + carry
       return visit (
-          index + 1,
-          @array.push output (product % limb_base),
-          product / limb_base
-        )
+        index + 1,
+        @array.push output (product % limb_base),
+        product / limb_base
+      )
 
   return @linear.freeze (visit (0, [], 0))
 
@@ -163,10 +163,10 @@ const decompose = fn (fraction_bits, minimum_exponent) => fn magnitude => do:
     exponent := minimum_exponent
 
   return (
-      significand,
-      exponent - fraction_bits - 2,
-      significand == implicit && exponent > minimum_exponent
-    )
+    significand,
+    exponent - fraction_bits - 2,
+    significand == implicit && exponent > minimum_exponent
+  )
 
 // Burger/Dybvig's exact rounding interval, with unequal margins at normal
 // powers of two and inclusive boundaries for an even binary significand.

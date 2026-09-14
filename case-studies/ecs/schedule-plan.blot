@@ -10,4 +10,4 @@ return { .default = {
     s.registry.bounce
   );
   .rows = s.tick (s.seed 7);
-  }; }
+}; }

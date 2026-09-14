@@ -46,4 +46,4 @@ return {
     // projection, so one Core record answers for both.
     .agreeing = get_x { .x = 8; .y = 9; };
   };
-  }
+}

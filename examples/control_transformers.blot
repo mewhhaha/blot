@@ -20,8 +20,8 @@ let source = Iter.range (0, 5)
 let rec walk = fn (state, carried) => case source.step state of
   #None => carried
   #Some pair => case pair.0 >= 3 of
-      #True => carried + pair.0
-      #False => walk (pair.1, carried + pair.0)
+    #True => carried + pair.0
+    #False => walk (pair.1, carried + pair.0)
 
 let folded_sum = walk (source.state, 0)
 

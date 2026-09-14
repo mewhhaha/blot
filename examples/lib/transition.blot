@@ -14,4 +14,4 @@ const and_then = fn (first, second) => fn input => first input |> Result.and_the
 return {
   .Transition = Transition;
   .and_then = and_then;
-  }
+}

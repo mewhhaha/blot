@@ -1,10 +1,10 @@
 open import "blot:prelude"
 
 const node = fn (value, previous, next) => {
-    .value = value;
-    .previous = previous;
-    .next = next;
-  }
+  .value = value;
+  .previous = previous;
+  .next = next;
+}
 
 let rec build =
   fn (value, ?nodes) => do:

@@ -25,4 +25,4 @@ return @handle (
       return Text.append (Text.of_int value) (Text.append "," rest)
     .return = fn value => Text.append "result=" (Text.of_int value)
   }
-  )
+)

@@ -29,9 +29,9 @@ alternatives remain available at runtime.
 [`lib/shape_update_runtime.blot`](lib/shape_update_runtime.blot) preserves extra
 record fields through a narrow parameter, applies runtime patches, and
 enumerates runtime field values in insertion order.
-[`deep_rebinding.blot`](deep_rebinding.blot) updates nested record fields,
-array elements, and matrix cells by rebinding the root. Earlier record values
-remain available and a loop carries the updated root.
+[`deep_rebinding.blot`](deep_rebinding.blot) updates nested record fields, array
+elements, and matrix cells by rebinding the root. Earlier record values remain
+available and a loop carries the updated root.
 [`lib/deep_rebinding_runtime.blot`](lib/deep_rebinding_runtime.blot) exercises
 shared array snapshots, guarded runtime indices, and large record-update folds.
 

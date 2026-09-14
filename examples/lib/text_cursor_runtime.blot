@@ -26,4 +26,4 @@ return {
   .step = step;
   .cursor = cursor;
   .next = next;
-  }
+}

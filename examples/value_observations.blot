@@ -7,6 +7,6 @@ const observe = fn () => do:
     .single = [F32.of_float 0.1, F32.negate (F32.of_float 0.0)];
     .double = [negative_zero, F64.div 1.0 0.0, F64.div 0.0 0.0];
     .choice = #Some "é";
-    }
+  }
 
 return [observe ()]

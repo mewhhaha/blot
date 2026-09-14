@@ -18,7 +18,11 @@ test("unrelated affine facts do not exhaust a constant array-index proof", async
       (_, index) => `let value_${index} = ${index}\n`,
     ).join("");
     await writeFile(path, declarations + "return @array.get [1] 0\n");
-    assert.deepEqual(await compiler.check(path), { type: "1", effects: "" });
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, { type: "1", effects: "" });
     assert.equal((await compiler.evaluate(path)).display, "1");
     const cold = await compiler.compile(path);
     assert.equal(await runArtifact(cold), "1");

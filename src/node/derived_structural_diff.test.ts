@@ -19,7 +19,11 @@ test("derived structural diff preserves its type and both executions", async () 
     if (!formatted.ok) throw new Error("accepted example failed to format");
     assert.equal(formatted.source, source);
 
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: expectedType,
       effects: "",
     });

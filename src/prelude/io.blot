@@ -27,4 +27,4 @@ return {
     .Effect = Http;
     .get = fn http => fn path => Http.get (http, path);
   };
-  }
+}

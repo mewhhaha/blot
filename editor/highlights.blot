@@ -1,3 +1,46 @@
-let record = { .use = 42; }
+open import "blot:prelude"
+
+const Number = Int
+let transform = fn value => value + 1
+let combine = fn (left, right) => left + right
+let read = fn { .count = amount; } => amount
+let consume = fn !owned => owned
+let defer = fn ~later => later
+let resume = fn ?once => once
+let borrow = fn &shared => shared
+
+let scan = fn options => do:
+  let total :: Int
+  let total = 0
+  for case #Some value in Iter.items options:
+    if value < 0:
+      continue
+
+    total := transform value
+    if total > 9:
+      break
+
+  return total
+
+let choose = fn option => case option of
+  #Some value if value > 0 => value
+  #Some _ => 0
+  #None => 0
+
+let record = { .use = 42; .return = 1; .case = 2; .const = 3; .continue = 4; }
 use record.use
-return record.use
+let text = "return fn #Some // not a comment"
+return (
+  record.use,
+  record.return,
+  record.case,
+  record.const,
+  record.continue,
+  Number,
+  text,
+  transform 2,
+  combine (1, 2),
+  scan [#Some 1],
+  choose #None,
+  @int.add 1 2
+)

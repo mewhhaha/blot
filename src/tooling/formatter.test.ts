@@ -620,7 +620,12 @@ return left + right
 });
 
 Deno.test("formatting the accepted corpus is idempotent", async () => {
-  const pendingDirectories = ["examples", "src/prelude", "case-studies"];
+  const pendingDirectories = [
+    "examples",
+    "src/prelude",
+    "case-studies",
+    "editor",
+  ];
   const sources: string[] = [];
   while (pendingDirectories.length > 0) {
     const directory = pendingDirectories.pop();
@@ -833,4 +838,40 @@ return value
 `,
   );
   assertEquals(await formatSource(formatted.source), formatted);
+});
+
+Deno.test("formatting normalizes token spacing without changing literals or comments", async () => {
+  await assertStableFormatting(
+    `let increment=fn value=>value+1
+let fields={ .one=1;.two=2; }
+let text = "x+y // keep  two  spaces"
+// x+y keeps its comment spelling
+return (increment(2),fields.one,-42,text)
+`,
+    `let increment = fn value => value + 1
+let fields = { .one = 1; .two = 2; }
+let text = "x+y // keep  two  spaces"
+// x+y keeps its comment spelling
+return (increment 2, fields.one, -42, text)
+`,
+  );
+});
+
+Deno.test("formatting returned records has one style across indentation and line endings", async () => {
+  const expected = `let build = fn () => do:
+  let values = [1, 2, 3]
+  return {
+    .values;
+  }
+return build ()
+`;
+  for (const width of [1, 2, 4, 8]) {
+    for (const lineEnding of ["\n", "\r\n"]) {
+      const source = expected.replace(
+        /^ +/gm,
+        (indent) => " ".repeat(indent.length / 2 * width),
+      ).replaceAll("\n", lineEnding);
+      await assertStableFormatting(source, expected);
+    }
+  }
 });

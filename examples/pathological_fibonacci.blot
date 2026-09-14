@@ -17,4 +17,4 @@ return {
   .ten = fibonacci 10;
   .twenty = fibonacci 20;
   .fibonacci = fibonacci;
-  }
+}

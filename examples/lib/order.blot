@@ -49,4 +49,4 @@ return {
   .then;
   .reverse;
   .sort;
-  }
+}

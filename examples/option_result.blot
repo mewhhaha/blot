@@ -18,6 +18,6 @@ const run :: Int -> [Int] = fn input => do:
     Result.unwrap_or_else (fn _ => 1 / 0) corrected,
     Result.unwrap_or_else Text.length failure,
     Option.unwrap_or_else (1 / 0) (Option.or_else (Some (1 / 0)) present)
-    ]
+  ]
 
 return run 5

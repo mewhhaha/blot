@@ -60,4 +60,4 @@ return {
     .boundary = reservation_codec.decode (1, 30);
     .round_trip = reservation_codec.decode (reservation_codec.encode stored);
   };
-  }
+}

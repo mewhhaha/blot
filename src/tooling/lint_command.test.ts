@@ -59,14 +59,43 @@ return Op.rem 5 2
     );
     assertEquals(
       fixed.source,
-      `open import "blot:prelude"
+      `const { .Op; } = import "blot:prelude"
 return (5 % 2)
 `,
     );
     assertEquals(fixed.diagnostics, []);
-    assertEquals(fixed.appliedFixes, 1);
+    assertEquals(fixed.appliedFixes, 2);
   } finally {
     validationCompiler.destroy();
     analysisCompiler.destroy();
+  }
+});
+
+Deno.test("fix all rechecks scope interactions and excludes refactors", async () => {
+  const analysis = await Compiler.create();
+  const validation = await Compiler.create();
+  const path = resolve("lint-fix-all-interactions.blot");
+  const source = `open import "blot:prelude"
+let twice = fn value => @int.mul value 2
+let values = [1, 2, 3]
+let total = fold (values, 0, fn (sum, value) => sum + value)
+return (twice 21, total)
+`;
+  try {
+    await analysis.checkSource(path, source);
+    const original = await analysis.evaluate(path);
+    const fixed = await fixLintSource({ analysis, validation }, path, source);
+    assert(fixed.appliedFixes > 0);
+    assert(fixed.source.includes("fold ("), "refactors must remain opt-in");
+    await analysis.checkSource(path, fixed.source);
+    assertEquals(await analysis.evaluate(path), original);
+    assertEquals(
+      (await fixLintSource({ analysis, validation }, path, fixed.source))
+        .appliedFixes,
+      0,
+    );
+  } finally {
+    analysis.destroy();
+    validation.destroy();
   }
 });

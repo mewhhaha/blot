@@ -15,7 +15,7 @@ let total_lengths = fn implementation => fn values => do:
     values,
     0,
     fn (total, value) => total + Text.length value
-    )
+  )
 
 let retain_long ::
   Filterable (List.of Text, Text) -> List.of Text -> List.of Text
@@ -86,4 +86,4 @@ return {
   .set_values = colours;
   .set_lengths = colour_lengths;
   .incremented_lengths = incremented_lengths;
-  }
+}

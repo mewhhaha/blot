@@ -1,5 +1,10 @@
 import { LanguageService } from "./language_service.ts";
-import type { ContentChange, Position, Range } from "./language_service.ts";
+import type {
+  CodeAction,
+  ContentChange,
+  Position,
+  Range,
+} from "./language_service.ts";
 
 type RequestId = number | string | null;
 
@@ -40,6 +45,7 @@ interface PositionParams extends TextDocumentParams {
 
 interface CodeActionParams extends TextDocumentParams {
   readonly range: Range;
+  readonly context?: { readonly only?: readonly string[] };
 }
 
 interface ReferenceParams extends PositionParams {
@@ -106,6 +112,7 @@ export async function runLanguageServer(
     });
   };
   let shutdown = false;
+  let resolveCodeActionEdits = false;
   try {
     while (true) {
       const message = await reader.read();
@@ -113,6 +120,18 @@ export async function runLanguageServer(
       if (message.method === "exit") return;
       try {
         if (message.method === "initialize") {
+          const params = message.params as {
+            capabilities?: {
+              textDocument?: {
+                codeAction?: {
+                  resolveSupport?: { properties?: readonly string[] };
+                };
+              };
+            };
+          } | undefined;
+          resolveCodeActionEdits =
+            params?.capabilities?.textDocument?.codeAction?.resolveSupport
+              ?.properties?.includes("edit") === true;
           await respond(writer, message.id, {
             capabilities: {
               textDocumentSync: {
@@ -136,7 +155,14 @@ export async function runLanguageServer(
               documentSymbolProvider: true,
               workspaceSymbolProvider: true,
               documentFormattingProvider: true,
-              codeActionProvider: true,
+              codeActionProvider: {
+                resolveProvider: true,
+                codeActionKinds: [
+                  "quickfix",
+                  "refactor.rewrite",
+                  "source.fixAll.blot",
+                ],
+              },
             },
             serverInfo: { name: "blot", version: "0.1.0" },
           });
@@ -329,12 +355,33 @@ export async function runLanguageServer(
           );
           continue;
         }
+        if (message.method === "codeAction/resolve") {
+          const action = message.params as CodeAction;
+          let uri: string | null = null;
+          if (action.data !== undefined) uri = action.data.uri;
+          enqueueRequest(message, uri, () => service.resolveCodeAction(action));
+          continue;
+        }
         if (message.method === "textDocument/codeAction") {
           const params = message.params as CodeActionParams;
           enqueueRequest(
             message,
             params.textDocument.uri,
-            () => service.codeActions(params.textDocument.uri, params.range),
+            async () => {
+              const actions = await service.codeActions(
+                params.textDocument.uri,
+                params.range,
+                {
+                  ...params.context,
+                  resolveEdits: resolveCodeActionEdits,
+                },
+              );
+              return actions.map((action) => {
+                if (action.data === undefined) return action;
+                // An omitted edit tells clients that selection must resolve it.
+                return { ...action, edit: undefined };
+              });
+            },
           );
           continue;
         }

@@ -16,7 +16,11 @@ for (const item of catalog.accepted) {
     const path = `examples/pathology_values_${item.name}.blot`;
     const compiler = await Compiler.create();
     try {
-      assert.deepEqual(await compiler.check(path), {
+      const checkedInterface1 = await compiler.check(path);
+      assert.deepEqual({
+        type: checkedInterface1.type,
+        effects: checkedInterface1.effects,
+      }, {
         type: item.type,
         effects: "",
       });

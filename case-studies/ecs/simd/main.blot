@@ -12,4 +12,4 @@ return { .default = {
   .simd = map (Transforms.tick (Transforms.seed 3), summarize);
   .scalar = map (Transforms.Scalar.tick (Transforms.seed 3), summarize);
   .particles = Particles.run (Particles.seed 5, 3);
-  }; }
+}; }

@@ -216,16 +216,16 @@ Moving a field changes that leaf and its ancestors. Whole-value use requires a
 live root. Aggregates carry the joined obligations of their children, and
 closures carry captured paths.
 
-Record reconstruction merges statically named ownership fields in member
-order. A spread transfers its known live fields into the result; replacing a
-linear field is rejected. Partial moves retain the affected top-level field
-names. A subsequent spread of that binding can reconstruct the record only
-when later members explicitly replace every moved field. Unknown projection
-provenance or ambiguous computed-field overwrites cannot justify that repair.
-The ownership snapshot carries this partial-move state across branches.
-Possible moved fields are joined by union, even for affine records; replacing
-only one branch's moved fields cannot restore whole-record ownership.
-Copying a borrowed array with concrete linear or affine elements is rejected.
+Record reconstruction merges statically named ownership fields in member order.
+A spread transfers its known live fields into the result; replacing a linear
+field is rejected. Partial moves retain the affected top-level field names. A
+subsequent spread of that binding can reconstruct the record only when later
+members explicitly replace every moved field. Unknown projection provenance or
+ambiguous computed-field overwrites cannot justify that repair. The ownership
+snapshot carries this partial-move state across branches. Possible moved fields
+are joined by union, even for affine records; replacing only one branch's moved
+fields cannot restore whole-record ownership. Copying a borrowed array with
+concrete linear or affine elements is rejected.
 
 An unqualified capture of a symbolic store parameter transfers that parameter's
 ownership authority into the closure. It does not freeze an unknown element type

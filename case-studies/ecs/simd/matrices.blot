@@ -17,4 +17,4 @@ return { .default = {
   .scale_then_translate = Mat4.point (Mat4.product (translation, scale), point);
   .translate_then_scale = Mat4.point (Mat4.product (scale, translation), point);
   .direction = Mat4.point (translation, direction);
-  }; }
+}; }

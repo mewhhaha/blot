@@ -32,13 +32,13 @@ const search = fn (&graph, start) => do:
                 index + 1,
                 !discovered,
                 !queue
-                )
+              )
 
             return enqueue_neighbors (
               index + 1,
               discovered,
               @array.push queue (neighbor, depth + 1)
-              )
+            )
 
       let (discovered, queue) = enqueue_neighbors (0, discovered, queue)
 
@@ -47,7 +47,7 @@ const search = fn (&graph, start) => do:
         cursor + 1,
         discovered,
         @array.push traversal (vertex, depth)
-        )
+      )
 
   return visit ([(start, 0)], 0, discovered, [])
 

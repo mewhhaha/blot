@@ -164,6 +164,7 @@ export interface CompilerSyntaxSnapshot {
 export interface CheckedModule {
   readonly type: string;
   readonly effects: string;
+  readonly interfaceKey: string;
 }
 
 export interface EvaluatedModule {
@@ -1075,7 +1076,14 @@ export class Compiler implements CompilerHost {
       path,
     );
     if (!result.ok) this.#throwFailure(result, path, "checking");
-    return { type: result.type, effects: result.effects };
+    if (typeof result.interfaceKey !== "string") {
+      throw new Error("compiler check omitted its interface key");
+    }
+    return {
+      type: result.type,
+      effects: result.effects,
+      interfaceKey: result.interfaceKey,
+    };
   }
 
   #analyzeResident(path: string): CompilerAnalysis {
@@ -1084,9 +1092,13 @@ export class Compiler implements CompilerHost {
       path,
     );
     if (!result.ok) this.#throwFailure(result, path, "analysis");
+    if (typeof result.interfaceKey !== "string") {
+      throw new Error("compiler analysis omitted its interface key");
+    }
     return {
       type: result.type,
       effects: result.effects,
+      interfaceKey: result.interfaceKey,
       types: result.types.slice(),
       tags: result.tags.slice(),
       ownership: result.ownership.slice(),

@@ -13,7 +13,7 @@ let (!range_region, range_boundary) = case Slice.partition_range (
   1,
   6,
   fn value => value <= 3
-) of
+  ) of
   #Partitioned (!updated, middle) => (updated, middle)
   #PartitionOutOfBounds (!original, fallback) => (original, fallback)
 let range_result = (Slice.freeze (!range_region), range_boundary)

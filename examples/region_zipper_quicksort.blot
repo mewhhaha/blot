@@ -15,7 +15,7 @@ const partition_last = fn (!values, before) => do:
       (!values),
       bounds,
       fn value => before (value, pivot)
-    ) of
+      ) of
       #Partitioned (!next, index) => (!next, index)
       #PartitionOutOfBounds (!original, index) => (!original, index)
     let !values = Slice.swap_or_keep ((!values), boundary, last)

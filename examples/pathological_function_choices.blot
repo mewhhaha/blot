@@ -27,4 +27,4 @@ let run = fn (flag, value) => do:
 return {
   .positive = run (20, 3);
   .negative = run (2, 3);
-  }
+}

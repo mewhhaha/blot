@@ -108,6 +108,12 @@ pub fn check_module(session: &CompilerSession, module_id: u32) -> Result<Vec<u8>
         encoder.u32(1);
         encoder.string(type_);
         encoder.string(effects);
+        encoder.string(
+            checked
+                .get("interfaceKey")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "successful compiler check omitted its interface key".to_owned())?,
+        );
     } else {
         encoder.u32(0);
         encoder.bytes(

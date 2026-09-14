@@ -57,7 +57,7 @@ const sort = fn &graph => do:
                 index + 1,
                 incoming,
                 @array.push ready neighbor
-                )
+              )
             else:
               return decrease_incoming (index + 1, incoming, !ready)
 
@@ -67,12 +67,12 @@ const sort = fn &graph => do:
         cursor + 1,
         incoming,
         @array.push order vertex
-        )
+      )
 
   let order = visit (ready, 0, incoming, [])
   return {
     .order = order;
     .acyclic = Array.length (&order) == vertex_count;
-    }
+  }
 
 return sort

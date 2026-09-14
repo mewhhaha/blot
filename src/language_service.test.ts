@@ -1,9 +1,12 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join, toFileUrl } from "@std/path";
+import { resolvePath } from "./load.ts";
+import { PACKAGE_FORMAT_VERSION, PACKAGE_SCHEMA } from "./package_format.ts";
 import {
   type CodeAction,
   deduplicateCodeActions,
   LanguageService,
+  positionAtOffset,
 } from "./language_service.ts";
 
 Deno.test("ordered range changes update one editor revision", async () => {
@@ -344,6 +347,64 @@ return increment
   }
 });
 
+Deno.test("long inlay hints have a bounded preview and the complete type in their tooltip", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:long-inlay-hint.blot";
+  const source = `let record :: _
+let record = { .first_field = 1; .second_field = 2; .third_field = 3; .last_field = 4; }
+let short :: _
+let short = 42
+return (record, short)
+`;
+  try {
+    service.open(uri, source, 1);
+    const hints = await service.inlayHints(uri);
+    assertEquals(hints.length, 2);
+    assert(hints[0].label.length <= 60, hints[0].label);
+    assert(hints[0].label.endsWith("…"), hints[0].label);
+    assert(hints[0].tooltip !== undefined);
+    assertStringIncludes(hints[0].tooltip, ".first_field =");
+    assertStringIncludes(hints[0].tooltip, ".last_field =");
+    assert(!hints[1].label.endsWith("…"));
+    assertEquals(
+      await service.inlayHints(uri, {
+        start: { line: 2, character: 0 },
+        end: { line: 3, character: 0 },
+      }),
+      [hints[1]],
+    );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("inlay hint truncation respects Unicode and its exact length boundary", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:unicode-inlay-hints.blot";
+  try {
+    for (const length of [55, 56, 57]) {
+      const value = "🙂".repeat(length);
+      const type = JSON.stringify(value);
+      const source =
+        `let caption :: _\nlet caption = ${type}\nreturn caption\n`;
+      service.open(uri, source, length);
+      const [hint] = await service.inlayHints(uri);
+      assert(hint !== undefined);
+      if (length <= 56) {
+        assertEquals(hint.label, `: ${type}`);
+      } else {
+        assertEquals(hint.label, ': "' + "🙂".repeat(56) + "…");
+        assertEquals(
+          hint.tooltip,
+          `Compiler-inferred signature hole\n\n${type}`,
+        );
+      }
+    }
+  } finally {
+    await service.destroy();
+  }
+});
+
 Deno.test("a recursive value receives a recursive signature header", async () => {
   const service = new LanguageService();
   const uri = "untitled:add-recursive-signature.blot";
@@ -489,6 +550,158 @@ return Library.answer
     });
   } finally {
     await service.destroy();
+  }
+});
+
+Deno.test("definition navigates import paths without checking either module", async () => {
+  const directory = await Deno.makeTempDir();
+  const libraryPath = join(directory, 'utility "quoted".blot');
+  const mainUri = toFileUrl(join(directory, "main.blot")).href;
+  const service = new LanguageService();
+  try {
+    await Deno.writeTextFile(libraryPath, "a file with unfinished syntax (\n");
+    const specifier = './utility "quoted".blot';
+    const source = `let input = 1
+const Library = import ${JSON.stringify(specifier)} with input
+return Library.answer
+`;
+    service.open(mainUri, source, 1);
+    const origin = { line: 0, character: 0 };
+    assertEquals(
+      await service.definition(mainUri, {
+        line: 1,
+        character: 30,
+      }),
+      {
+        uri: toFileUrl(libraryPath).href,
+        range: { start: origin, end: origin },
+      },
+    );
+    assertEquals(
+      await service.definition(
+        mainUri,
+        positionAtOffset(source, source.lastIndexOf("input")),
+      ),
+      {
+        uri: mainUri,
+        range: {
+          start: { line: 0, character: 4 },
+          end: { line: 0, character: 9 },
+        },
+      },
+    );
+
+    assertEquals(
+      await service.definition(mainUri, { line: 2, character: 18 }),
+      null,
+    );
+
+    const specifiers = [libraryPath, "blot:prelude", "blot:collections"];
+    for (const [index, imported] of specifiers.entries()) {
+      service.change(
+        mainUri,
+        `open import ${JSON.stringify(imported)}\nreturn missing\n`,
+        index + 2,
+      );
+      const path = resolvePath(imported, join(directory, "main.blot"));
+      assertEquals(
+        await service.definition(mainUri, { line: 0, character: 14 }),
+        {
+          uri: toFileUrl(path).href,
+          range: { start: origin, end: origin },
+        },
+      );
+    }
+    service.change(mainUri, `return ${JSON.stringify(specifier)}\n`, 5);
+    assertEquals(
+      await service.definition(mainUri, { line: 0, character: 15 }),
+      null,
+    );
+  } finally {
+    await service.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("import navigation follows unsaved files and ignores missing paths", async () => {
+  const directory = await Deno.makeTempDir();
+  const mainUri = toFileUrl(join(directory, "main.blot")).href;
+  const libraryUri = toFileUrl(join(directory, "unsaved.blot")).href;
+  const service = new LanguageService();
+  try {
+    service.open(libraryUri, "unfinished source (", 1);
+    service.open(mainUri, 'return import "./unsaved.blot"\n', 1);
+    assertEquals(
+      await service.definition(mainUri, { line: 0, character: 18 }),
+      {
+        uri: libraryUri,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+    );
+    const absent = ["./missing.blot", "./", "missing-editor-test-package"];
+    for (const [index, specifier] of absent.entries()) {
+      service.change(
+        mainUri,
+        `return import ${JSON.stringify(specifier)}\n`,
+        index + 2,
+      );
+      assertEquals(
+        await service.definition(mainUri, { line: 0, character: 16 }),
+        null,
+      );
+    }
+  } finally {
+    await service.destroy();
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("import navigation uses package source exports even when a capsule is declared", async () => {
+  const directory = await Deno.makeTempDir();
+  const packageRoot = join(directory, "node_modules", "@editor", "library");
+  const mainUri = toFileUrl(join(directory, "main.blot")).href;
+  const service = new LanguageService();
+  try {
+    await Deno.mkdir(packageRoot, { recursive: true });
+    await Deno.writeTextFile(
+      join(packageRoot, "blot.json"),
+      JSON.stringify({
+        schema: PACKAGE_SCHEMA,
+        version: PACKAGE_FORMAT_VERSION,
+        exports: {
+          ".": { source: "./main.blot", built: "./main.blotc" },
+          "./math": { source: "./math.blot" },
+        },
+      }),
+    );
+    await Deno.writeTextFile(join(packageRoot, "main.blot"), "return 1\n");
+    await Deno.writeTextFile(join(packageRoot, "math.blot"), "return 2\n");
+    const origin = { line: 0, character: 0 };
+    for (
+      const [index, [specifier, filename]] of [
+        ["@editor/library", "main.blot"],
+        ["@editor/library/math", "math.blot"],
+      ].entries()
+    ) {
+      service.open(
+        mainUri,
+        `return import ${JSON.stringify(specifier)}\n`,
+        index + 1,
+      );
+      assertEquals(
+        await service.definition(mainUri, { line: 0, character: 20 }),
+        {
+          uri: toFileUrl(join(packageRoot, filename)).href,
+          range: { start: origin, end: origin },
+        },
+      );
+    }
+  } finally {
+    await service.destroy();
+    await Deno.remove(directory, { recursive: true });
   }
 });
 
@@ -797,6 +1010,7 @@ return (identity #True, same #True, pushed, unchanged)
       end: { line: 18, character: 56 },
     });
     assertEquals(actions.map((action) => action.title), [
+      "Import only the used fields",
       "Return the Boolean condition directly",
       "Replace identical branches with their value",
       "Replace singleton append with `Array.push`",
@@ -1146,6 +1360,92 @@ return unwrap
         "if let #Some value = option else:",
       ) === true,
     );
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("code actions group edits, filter kinds, and resolve fix all for one revision", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:idiom-actions.blot";
+  const source = `open import "blot:prelude"
+let sum = fn values => fold (values, 0, fn (total, value) => total + value)
+let count = 2
+let record = { .count = count; }
+return { .record = record; .sum = sum [1, 2]; }
+`;
+  const range = {
+    start: { line: 0, character: 0 },
+    end: { line: 5, character: 0 },
+  };
+  try {
+    service.open(uri, source, 7);
+    const actions = await service.codeActions(uri, range, {
+      resolveEdits: true,
+    });
+    const all = actions.find((action) => action.kind === "source.fixAll.blot");
+    const fields = actions.find((action) =>
+      action.kind === "source.fixAll.blot.BLOT_LINT_FIELD_SHORTHAND"
+    );
+    assert(all);
+    assert(
+      fields,
+      "distinct unresolved source actions must survive deduplication",
+    );
+    assertEquals(all.edit.documentChanges[0].edits, []);
+    const resolved = await service.resolveCodeAction(fields);
+    assertEquals(resolved.edit.documentChanges[0].textDocument, {
+      uri,
+      version: 7,
+    });
+    const replacement = resolved.edit.documentChanges[0].edits[0].newText;
+    assertStringIncludes(replacement, "{ .count; }");
+    assertStringIncludes(replacement, "{ .record; .sum = sum [1, 2]; }");
+    assertStringIncludes(replacement, "open import");
+    assertStringIncludes(replacement, "fold (values");
+    const refactors = await service.codeActions(uri, range, {
+      only: ["refactor"],
+    });
+    assert(refactors.length > 0);
+    assert(refactors.every((action) => action.kind === "refactor.rewrite"));
+    service.change(uri, source + "\n", 8);
+    let refused = false;
+    try {
+      await service.resolveCodeAction(all);
+    } catch (error) {
+      assertStringIncludes(String(error), "document changed");
+      refused = true;
+    }
+    assert(refused, "a stale fix-all request must not edit a newer revision");
+  } finally {
+    await service.destroy();
+  }
+});
+
+Deno.test("parameter destructuring is one action with coordinated edits", async () => {
+  const service = new LanguageService();
+  const uri = "untitled:grouped-parameter-action.blot";
+  const source = `let width = fn rectangle => do:
+  let { .left; .right; } = rectangle
+  return @int.sub right left
+return width { .left = 2; .right = 8; }
+`;
+  try {
+    service.open(uri, source, 1);
+    const actions = await service.codeActions(uri, {
+      start: { line: 1, character: 0 },
+      end: { line: 1, character: 36 },
+    });
+    const action = actions.find((action) =>
+      action.title === "Destructure in the function parameter"
+    );
+    assert(action);
+    assertEquals(action.edit.documentChanges[0].edits.length, 2);
+    assertEquals(
+      action.edit.documentChanges[0].edits[0].newText,
+      "{ .left; .right; }",
+    );
+    assertEquals(action.edit.documentChanges[0].edits[1].newText, "");
   } finally {
     await service.destroy();
   }

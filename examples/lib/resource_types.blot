@@ -14,4 +14,4 @@ let texts = same
 return {
   .integers = integers;
   .texts = texts;
-  }
+}

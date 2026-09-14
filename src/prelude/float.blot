@@ -55,4 +55,4 @@ return {
     .cmp_exn = F32.cmp;
     .to_text = Format.binary32;
   };
-  }
+}

@@ -20,7 +20,11 @@ test("composable reducers preserve types and both executions", async () => {
       assert.equal(formatted.source, source);
     }
 
-    assert.deepEqual(await compiler.check(example), {
+    const checkedInterface1 = await compiler.check(example);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type:
         "{ .default = { .full = { .revenue_cents = Int; .unit_count = Int; .line_count = Int; .average_unit_cents = #None | #Some Int }; .empty = { .revenue_cents = Int; .unit_count = Int; .line_count = Int; .average_unit_cents = #None | #Some Int }; .single = { .revenue_cents = Int; .unit_count = Int; .line_count = Int; .average_unit_cents = #None | #Some Int } } }",
       effects: "",

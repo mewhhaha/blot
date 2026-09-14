@@ -250,7 +250,12 @@ export type CompilerEvaluationResult =
   | CompilerTransportFailure;
 
 export type CompilerCheckResult =
-  | { readonly ok: true; readonly type: string; readonly effects: string }
+  | {
+    readonly ok: true;
+    readonly type: string;
+    readonly effects: string;
+    readonly interfaceKey: string;
+  }
   | CompilerTransportFailure;
 
 export interface CompilerTypeFact {
@@ -312,6 +317,15 @@ export type CompilerSimplificationFact =
   };
 
 export type CompilerReadabilityFact =
+  | {
+    readonly kind: "source-operations";
+    readonly span: { readonly start: number; readonly end: number };
+    readonly operations: readonly string[];
+    readonly callee: string | null;
+    readonly primitiveAlias: string | null;
+    readonly forwarding: boolean;
+    readonly totalPredicate: boolean;
+  }
   | {
     readonly kind: "direct-effect-computation";
     readonly span: { readonly start: number; readonly end: number };
@@ -384,6 +398,7 @@ export type CompilerAnalysisResult =
     readonly ok: true;
     readonly type: string;
     readonly effects: string;
+    readonly interfaceKey: string;
     readonly types: readonly CompilerTypeFact[];
     readonly tags: readonly CompilerTagFact[];
     readonly ownership: readonly CompilerOwnershipFact[];
@@ -799,6 +814,7 @@ export class CompilerWasm {
         ok: true as const,
         type: decoder.string("check type"),
         effects: decoder.string("check effects"),
+        interfaceKey: decoder.string("check interface key"),
       };
       decoder.finish();
       return result;

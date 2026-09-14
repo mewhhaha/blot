@@ -13,13 +13,13 @@ const increment = tag ("increment", (), fn value => value + 1)
 
 // The nearest tag runs first: multiply produces 6, then increment produces 7.
 @[increment]
-@[multiply(2)]
+@[multiply 2]
 let ordered = 3
 
 // `derive` is a descriptor constructor, not a compiler builtin. This transform
 // enriches the type value with an attached namespace member.
 const label = fn target => target <+ { .label = "enriched"; }
-@[derive(label)]
+@[derive label]
 const Count = I32
 
 // Lowering keeps `rec` directly bound under its source name before applying
@@ -39,6 +39,6 @@ let transformations_work = fn () => do:
   return expect (
     ordered == 7,
     "tags apply nearest-first"
-    )
+  )
 
 return { .ordered = ordered; .label = Count.label; .factorial = factorial 5; }

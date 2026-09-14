@@ -72,4 +72,4 @@ return {
     .account_changed = account_diff.changed (account_before, account_after);
     .account_equal = account_diff.equal (account_before, account_after);
   };
-  }
+}

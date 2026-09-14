@@ -53,4 +53,4 @@ return {
     .zero_limit = page ((&feed), 0, 0);
     .huge_limit = page ((&feed), 1, 9223372036854775807);
   };
-  }
+}

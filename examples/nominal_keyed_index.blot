@@ -67,4 +67,4 @@ return {
     .user_id = UserId.value membership.user;
     .project_id = ProjectId.value membership.project;
   };
-  }
+}

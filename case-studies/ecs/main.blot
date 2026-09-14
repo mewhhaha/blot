@@ -9,4 +9,4 @@ return {
   .direct = simulation.direct;
   .regrouped = simulation.regrouped;
   .wrong_order = simulation.wrong_order;
-  }
+}

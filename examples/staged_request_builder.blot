@@ -26,4 +26,4 @@ return {
     .auth_first = auth_first;
     .body_first = body_first;
   };
-  }
+}

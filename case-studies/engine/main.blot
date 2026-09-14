@@ -88,14 +88,14 @@ const Model = { .kind = Int; .color = R.Color; .texture = Text; }
 
 let advance :: Store Transform -> Store Transform
 let advance = fn ts => E.each_1 (
-    ts,
-    fn t => {
-        .position = t.position;
-        .angle = (t.angle + t.spin) % M.turn;
-        .spin = t.spin;
-        .scale = t.scale;
-      }
-  )
+  ts,
+  fn t => {
+    .position = t.position;
+    .angle = (t.angle + t.spin) % M.turn;
+    .spin = t.spin;
+    .scale = t.scale;
+  }
+)
 
 // The two loaders below name their rows: an effectful arrow's type includes
 // what it performs, and `~ { Assets }` is how a signature says so. `render`
@@ -111,24 +111,24 @@ let advance = fn ts => E.each_1 (
 let render = fn (transforms, models) => do:
   let paint :: R.Paint
   let paint = fn draw => do:
-      use E.visit_2 (
-          transforms,
-          models,
-          fn (transform, model) => do:
-            use case model.kind of
-              ^KIND_MESH => draw.mesh {
-                .position = transform.position;
-                .angle = transform.angle;
-                .scale = transform.scale;
-                .color = model.color;
-              }
+    use E.visit_2 (
+      transforms,
+      models,
+      fn (transform, model) => do:
+        use case model.kind of
+          ^KIND_MESH => draw.mesh {
+            .position = transform.position;
+            .angle = transform.angle;
+            .scale = transform.scale;
+            .color = model.color;
+          }
 
-              _ => draw.sprite {
-                .position = transform.position;
-                .scale = transform.scale;
-                .texture = model.texture;
-              }
-        )
+          _ => draw.sprite {
+            .position = transform.position;
+            .scale = transform.scale;
+            .texture = model.texture;
+          }
+    )
   use R.frame (&paint)
 
 // --- loading ----------------------------------------------------------------

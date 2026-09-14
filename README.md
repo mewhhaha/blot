@@ -120,7 +120,7 @@ WebAssembly. See [spec/PACKAGES.md](spec/PACKAGES.md).
 The parser profile is a design tool, not an implementation afterthought. It
 rules out contextual lexing and recursive precedence grammar, keeping both the
 grammar and the language small enough to understand. Node instantiates Baba
-9.0.0's generated lexer Wasm with Blot's checked-in binary and plan. Because
+9.0.1's generated lexer Wasm with Blot's checked-in binary and plan. Because
 that plan uses Baba's `general` throughput profile, Baba's own CPU island
 executor completes parsing; the generated-Wasm island parser intentionally
 accepts only `strict`. WebGPU remains a comparison target.

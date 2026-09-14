@@ -8,7 +8,12 @@ import {
 } from "./compiler.ts";
 import { BlotError } from "./diagnostic.ts";
 import type { Diagnostic } from "./diagnostic.ts";
-import { LoadError, resolvePath } from "./load.ts";
+import { importExpressions, LoadError, resolvePath } from "./load.ts";
+import {
+  isPackageSpecifier,
+  PackageArtifactError,
+  resolvePackageExport,
+} from "./package_format.ts";
 import type { Decl, Expr, Module, Pattern, Span } from "./syntax/ast.ts";
 import { parse } from "./syntax/parse.ts";
 import {
@@ -25,6 +30,7 @@ import { DEFAULT_LINT_RULES, lintModule } from "./tooling/lint.ts";
 import type { LintDiagnostic } from "./tooling/lint.ts";
 import { sourceCodeSpan } from "./tooling/lint/syntax.ts";
 import { validateLintDiagnostics } from "./tooling/lint.ts";
+import { fixLintSource } from "./tooling/lint_command.ts";
 
 export interface Position {
   readonly line: number;
@@ -111,8 +117,16 @@ export interface ContentChange {
 
 export interface CodeAction {
   readonly title: string;
-  readonly kind: "quickfix";
+  readonly kind:
+    | "quickfix"
+    | "refactor.rewrite"
+    | `source.fixAll.blot${string}`;
   readonly diagnostics: readonly LanguageDiagnostic[];
+  readonly data?: {
+    readonly uri: string;
+    readonly version: number;
+    readonly rule?: string;
+  };
   readonly edit: {
     readonly documentChanges: readonly [{
       readonly textDocument: {
@@ -128,6 +142,9 @@ interface OpenDocument {
   readonly source: string;
   readonly version: number;
 }
+
+const maximumInlayHintLength = 60;
+const inlayHintSegments = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 export class LanguageService {
   readonly #documents = new Map<string, OpenDocument>();
@@ -273,8 +290,17 @@ export class LanguageService {
   async codeActions(
     uri: string,
     range: Range,
+    context: {
+      readonly only?: readonly string[];
+      readonly resolveEdits?: boolean;
+    } = {},
   ): Promise<readonly CodeAction[]> {
     const document = this.#requiredDocument(uri);
+    const accepts = (kind: string) =>
+      context.only === undefined ||
+      context.only.some((requested) =>
+        kind === requested || kind.startsWith(requested + ".")
+      );
     const requestedStart = offsetAtPosition(document.source, range.start);
     const requestedEnd = offsetAtPosition(document.source, range.end);
     let parsed: CompilerSyntaxSnapshot;
@@ -312,24 +338,37 @@ export class LanguageService {
             },
           });
         }
-        return deduplicateCodeActions(actions);
+        return deduplicateCodeActions(
+          actions.filter((action) => accepts(action.kind)),
+        );
       }
       throw error;
     }
     const actions: CodeAction[] = [];
-    for (
-      const diagnostic of await this.#validatedLints(uri, parsed)
+    const lints = await this.#validatedLints(uri, parsed);
+    if (
+      context.resolveEdits === true ||
+      context.only?.some((kind) =>
+        kind === "source" || kind.startsWith("source.fixAll")
+      )
     ) {
+      actions.push(
+        ...await this.#fixAllActions(
+          uri,
+          document,
+          range,
+          accepts,
+          lints,
+          context.resolveEdits === true,
+        ),
+      );
+    }
+    for (const diagnostic of lints) {
       if (diagnostic.fix === null) continue;
       if (
         requestedEnd < diagnostic.span.start ||
         requestedStart > diagnostic.span.end
       ) continue;
-      const editSpan = diagnostic.fix.span;
-      const replacement = document.source.slice(0, editSpan.start) +
-        diagnostic.fix.replacement +
-        document.source.slice(editSpan.end);
-      if (!(await parse(replacement)).ok) continue;
       const language = languageDiagnostic(
         document.source,
         diagnostic,
@@ -337,15 +376,15 @@ export class LanguageService {
       );
       actions.push({
         title: diagnostic.fix.title,
-        kind: "quickfix",
+        kind: diagnostic.fix.kind,
         diagnostics: [language],
         edit: {
           documentChanges: [{
             textDocument: { uri, version: document.version },
-            edits: [{
-              range: rangeOf(document.source, editSpan),
-              newText: diagnostic.fix.replacement,
-            }],
+            edits: diagnostic.fix.edits.map((edit) => ({
+              range: rangeOf(document.source, edit.span),
+              newText: edit.replacement,
+            })),
           }],
         },
       });
@@ -424,7 +463,113 @@ export class LanguageService {
         },
       });
     }
-    return deduplicateCodeActions(actions);
+    return deduplicateCodeActions(
+      actions.filter((action) => accepts(action.kind)),
+    );
+  }
+
+  async #fixAllActions(
+    uri: string,
+    document: OpenDocument,
+    range: Range,
+    accepts: (kind: string) => boolean,
+    diagnostics: readonly LintDiagnostic[],
+    resolveEdits: boolean,
+  ): Promise<readonly CodeAction[]> {
+    if (
+      !diagnostics.some((diagnostic) => diagnostic.fix?.kind === "quickfix")
+    ) return [];
+    const start = offsetAtPosition(document.source, range.start);
+    const end = offsetAtPosition(document.source, range.end);
+    const rules = new Set(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.fix?.kind === "quickfix" && diagnostic.span.start <= end &&
+        diagnostic.span.end >= start
+      ).map((diagnostic) => diagnostic.code),
+    );
+    const selections: {
+      kind: CodeAction["kind"];
+      title: string;
+      rule?: string;
+    }[] = [{
+      kind: "source.fixAll.blot",
+      title: "Fix all safe Blot suggestions",
+    }];
+    for (const rule of [...rules].sort()) {
+      selections.push({
+        kind: `source.fixAll.blot.${rule}`,
+        title: `Fix all ${
+          rule.replace("BLOT_LINT_", "").toLowerCase().replaceAll("_", " ")
+        } suggestions`,
+        rule,
+      });
+    }
+    const actions: CodeAction[] = [];
+    for (const selection of selections) {
+      if (!accepts(selection.kind)) continue;
+      const action: CodeAction = {
+        title: selection.title,
+        kind: selection.kind,
+        diagnostics: [],
+        data: { uri, version: document.version, rule: selection.rule },
+        edit: {
+          documentChanges: [{
+            textDocument: { uri, version: document.version },
+            edits: [],
+          }],
+        },
+      };
+      if (resolveEdits) actions.push(action);
+      else actions.push(await this.resolveCodeAction(action));
+    }
+    return actions;
+  }
+
+  async resolveCodeAction(action: CodeAction): Promise<CodeAction> {
+    const selection = action.data;
+    if (selection === undefined) return action;
+    if (
+      typeof selection.uri !== "string" ||
+      !Number.isSafeInteger(selection.version) ||
+      (selection.rule !== undefined &&
+        !DEFAULT_LINT_RULES.some((rule) => rule.code === selection.rule))
+    ) {
+      throw new Error("Invalid Blot fix-all action");
+    }
+    const document = this.#requiredDocument(selection.uri);
+    if (document.version !== selection.version) {
+      throw new Error("The document changed; request code actions again");
+    }
+    const analysis = await Compiler.create();
+    const validation = await Compiler.create();
+    try {
+      const fixed = await fixLintSource(
+        { analysis, validation },
+        editorPath(selection.uri),
+        document.source,
+        { rule: selection.rule },
+      );
+      return {
+        title: action.title,
+        kind: action.kind,
+        diagnostics: action.diagnostics,
+        edit: {
+          documentChanges: [{
+            textDocument: { uri: selection.uri, version: document.version },
+            edits: [{
+              range: rangeOf(document.source, {
+                start: 0,
+                end: document.source.length,
+              }),
+              newText: fixed.source,
+            }],
+          }],
+        },
+      };
+    } finally {
+      analysis.destroy();
+      validation.destroy();
+    }
   }
 
   async definition(
@@ -432,21 +577,37 @@ export class LanguageService {
     position: Position,
   ): Promise<Location | null> {
     const document = this.#requiredDocument(uri);
-    let parsed: CompilerSyntaxSnapshot;
+    let module: Module;
+    let sourceGraphLoaded = false;
     try {
-      parsed = await this.#syntaxRevision(uri, document);
+      module = (await this.#syntaxRevision(uri, document)).module;
+      sourceGraphLoaded = true;
     } catch (error) {
-      if (diagnosticsFromError(editorPath(uri), error) !== null) return null;
-      throw error;
+      const sourceFailure = error instanceof BlotError ||
+        error instanceof LoadError || error instanceof PackageArtifactError ||
+        (error instanceof Error && "code" in error &&
+          (error.code === "ENOENT" || error.code === "ENOTDIR" ||
+            error.code === "EISDIR"));
+      if (!sourceFailure) throw error;
+      // A broken dependency must not prevent syntax-only source navigation.
+      const parsed = await parse(document.source);
+      if (!parsed.ok) return null;
+      module = parsed.module;
     }
     const offset = offsetAtPosition(document.source, position);
-    const span = definitionAt(parsed.module, document.source, offset);
+    for (const [expression, specifier] of importExpressions(module)) {
+      if (offset >= expression.span.start && offset < expression.span.end) {
+        return await this.#importedDefinition(uri, specifier);
+      }
+    }
+    const span = definitionAt(module, document.source, offset);
     if (span !== null) return { uri, range: rangeOf(document.source, span) };
-    const field = fieldDefinitionAt(parsed.module, document.source, offset);
+    const field = fieldDefinitionAt(module, document.source, offset);
     if (field !== null) return { uri, range: rangeOf(document.source, field) };
+    if (!sourceGraphLoaded) return null;
     for (
       const imported of importReferencesAt(
-        parsed.module,
+        module,
         document.source,
         offset,
       )
@@ -634,11 +795,15 @@ export class LanguageService {
       if (hole.span.end < start || hole.span.start > end) continue;
       const type = typeForSpan(analysis, hole.span);
       if (type === null) continue;
+      const fullLabel = `: ${type}`;
+      const label = truncateInlayHint(fullLabel);
+      let tooltip = "Compiler-inferred signature hole";
+      if (label !== fullLabel) tooltip += `\n\n${type}`;
       hints.push({
         position: positionAtOffset(document.source, hole.span.end),
-        label: `: ${type}`,
+        label,
         kind: 1,
-        tooltip: "Compiler-inferred signature hole",
+        tooltip,
       });
     }
     return hints;
@@ -856,15 +1021,22 @@ export class LanguageService {
   async #importedDefinition(
     importerUri: string,
     specifier: string,
-    name: string,
+    name?: string,
   ): Promise<Location | null> {
-    if (
-      !specifier.startsWith(".") && !specifier.startsWith("/") &&
-      !specifier.startsWith("blot:")
-    ) {
-      return null;
+    let targetPath: string;
+    if (isPackageSpecifier(specifier)) {
+      if (name !== undefined) return null;
+      try {
+        targetPath =
+          (await resolvePackageExport(specifier, editorPath(importerUri)))
+            .source;
+      } catch (error) {
+        if (error instanceof PackageArtifactError) return null;
+        throw error;
+      }
+    } else {
+      targetPath = resolvePath(specifier, editorPath(importerUri));
     }
-    const targetPath = resolvePath(specifier, editorPath(importerUri));
     let targetUri = toFileUrl(targetPath).href;
     let targetSource: string | undefined;
     for (const [openUri, document] of this.#documents) {
@@ -880,12 +1052,17 @@ export class LanguageService {
       } catch (error) {
         if (
           error instanceof Error && "code" in error &&
-          error.code === "ENOENT"
+          (error.code === "ENOENT" || error.code === "ENOTDIR" ||
+            error.code === "EISDIR")
         ) {
           return null;
         }
         throw error;
       }
+    }
+    if (name === undefined) {
+      const start = { line: 0, character: 0 };
+      return { uri: targetUri, range: { start, end: start } };
     }
     const compiler = await this.#compiler;
     let snapshot: CompilerSyntaxSnapshot;
@@ -1098,6 +1275,18 @@ function typeForSpan(analysis: CompilerAnalysis, span: Span): string | null {
     )[0];
   if (containing === undefined) return null;
   return containing.type;
+}
+
+function truncateInlayHint(label: string): string {
+  const segments: string[] = [];
+  for (const { segment } of inlayHintSegments.segment(label)) {
+    if (segments.length === maximumInlayHintLength) {
+      return segments.slice(0, maximumInlayHintLength - 1).join("").trimEnd() +
+        "…";
+    }
+    segments.push(segment);
+  }
+  return label;
 }
 
 function recordFields(type: string): readonly string[] {
@@ -1380,14 +1569,17 @@ export function deduplicateCodeActions(
   const unique: CodeAction[] = [];
   const indices = new Map<string, number>();
   for (const action of actions) {
-    const key = JSON.stringify(action.edit.documentChanges.map((change) => ({
-      uri: change.textDocument.uri,
-      version: change.textDocument.version,
-      edits: change.edits.map((edit) => ({
-        range: edit.range,
-        newText: edit.newText,
+    const key = JSON.stringify([
+      action.data,
+      action.edit.documentChanges.map((change) => ({
+        uri: change.textDocument.uri,
+        version: change.textDocument.version,
+        edits: change.edits.map((edit) => ({
+          range: edit.range,
+          newText: edit.newText,
+        })),
       })),
-    })));
+    ]);
     const existingIndex = indices.get(key);
     if (existingIndex === undefined) {
       indices.set(key, unique.length);

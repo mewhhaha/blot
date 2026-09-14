@@ -79,4 +79,4 @@ return {
   .reduce = reduce;
   .length = length;
   .to_array = to_array;
-  }
+}

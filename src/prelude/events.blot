@@ -21,4 +21,4 @@ return {
   .subscribe = subscribe;
   .next = Events.next;
   .close = Events.close;
-  }
+}

@@ -14,4 +14,4 @@ return @handle (
   {
     .value = fn (value, ?resume) => resume (value + 10)
   }
-  )
+)

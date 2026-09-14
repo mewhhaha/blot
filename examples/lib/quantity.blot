@@ -21,7 +21,7 @@ const Quantity = fn (name, symbol) => do:
     .value = value;
     .add = add;
     .symbol = symbol;
-    }
+  }
 
 // A conversion is generated from two descriptors. `From.type` and `To.type`
 // make the relationship part of the resulting function's checked signature.
@@ -37,4 +37,4 @@ const scale = fn (From, To, factor) => do:
 return {
   .Quantity = Quantity;
   .scale = scale;
-  }
+}

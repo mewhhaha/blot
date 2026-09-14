@@ -54,7 +54,11 @@ let run = fn index => do:
 return run
 `,
         );
-        assert.deepEqual(await compiler.check(path), {
+        const checkedInterface1 = await compiler.check(path);
+        assert.deepEqual({
+          type: checkedInterface1.type,
+          effects: checkedInterface1.effects,
+        }, {
           type: "Int -> Int",
           effects: "",
         });

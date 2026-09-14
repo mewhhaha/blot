@@ -27,13 +27,13 @@ let apply = fn (state, event) => case event of
         .balance = state.balance - amount;
         .accepted = state.accepted + 1;
         .rejected = state.rejected;
-        }
+      }
     else:
       return {
         .balance = state.balance;
         .accepted = state.accepted;
         .rejected = state.rejected + 1;
-    }
+      }
 
 let events = [#Deposit 10, #Withdraw 4, #Withdraw 20, #Deposit 3, #Withdraw 8]
 let initial = { .balance = 0; .accepted = 0; .rejected = 0; }

@@ -45,7 +45,11 @@ for (const example of examples) {
       assert.equal(formatted.ok, true);
       if (!formatted.ok) throw new Error("accepted example failed to format");
       assert.equal(formatted.source, source);
-      assert.deepEqual(await compiler.check(path), {
+      const checkedInterface1 = await compiler.check(path);
+      assert.deepEqual({
+        type: checkedInterface1.type,
+        effects: checkedInterface1.effects,
+      }, {
         type: example.type,
         effects: "",
       });

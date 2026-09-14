@@ -5,4 +5,4 @@ return @handle (
   example.Tick,
   fn () => example.run [1, 2, 3],
   { .next = fn (value, ?resume) => resume (value * 2); .return = identity; }
-  )
+)

@@ -32,7 +32,7 @@ let apply = fn (config, override) => case override of
     .workers = config.workers;
     .verbose = config.verbose;
     .environment = environment;
-}
+  }
 
 let defaults :: Config
 let defaults =

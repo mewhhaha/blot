@@ -19,4 +19,4 @@ return [
   left (42, "ignored"),
   right (True, 42),
   result (42, ())
-  ]
+]

@@ -56,4 +56,4 @@ return {
   .contramap = contramap;
   .map_output = map_output;
   .zip_with = zip_with;
-  }
+}

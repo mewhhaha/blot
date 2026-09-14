@@ -126,24 +126,88 @@ for (const path of await blotFiles(REJECTED)) {
 }
 
 const highlightCaptures = await treeSitterCaptures(`../${HIGHLIGHT_FIXTURE}`);
-const keywordUses = highlightCaptures.filter((capture) =>
-  capture.name === "keyword.control" && capture.text === "use"
-);
-const memberUses = highlightCaptures.filter((capture) =>
-  capture.name === "variable.other.member" && capture.text === "use"
-);
-const memberUsePositions = new Set(
-  memberUses.map((capture) => `${capture.row}:${capture.column}`),
-);
-if (keywordUses.length !== 1 || memberUsePositions.size !== 3) {
-  disagreements += 1;
-  console.error(
-    `${HIGHLIGHT_FIXTURE}: expected one keyword and three member positions for ` +
-      `"use", found ${keywordUses.length} keyword and ${memberUsePositions.size} member`,
-  );
-} else {
-  console.log(`${basename(HIGHLIGHT_FIXTURE)}: use highlighting is scoped`);
+const highlightSource = await Deno.readTextFile(HIGHLIGHT_FIXTURE);
+const expectations = [
+  ["const Number", "Number", "variable"],
+  ["let transform", "transform", "function"],
+  ["fn value =>", "value", "variable.parameter"],
+  ["fn (left, right)", "left", "variable.parameter"],
+  ["fn (left, right)", "right", "variable.parameter"],
+  [".count = amount", "amount", "variable.parameter"],
+  ["fn !owned", "!", "keyword.storage.modifier"],
+  ["fn ~later", "~", "keyword.storage.modifier"],
+  ["fn ?once", "?", "keyword.storage.modifier"],
+  ["fn &shared", "&", "keyword.storage.modifier"],
+  ["for case #Some", "for", "keyword.control.repeat"],
+  ["for case #Some", "case", "keyword.control.conditional"],
+  ["for case #Some", "Some", "constructor"],
+  ["Iter.items options", "items", "function.call"],
+  ["      continue", "continue", "keyword.control.repeat"],
+  ["      break", "break", "keyword.control.return"],
+  ["value if value", "if", "keyword.control.conditional"],
+  ["case option of", "case", "keyword.control.conditional"],
+  ["case option of", "of", "keyword.control.conditional"],
+  ["use record.use", "use", "keyword.control"],
+  ["transform 2", "transform", "function.call"],
+  ["@int.add 1 2", "@int.add", "function.builtin"],
+  [
+    '"return fn #Some // not a comment"',
+    '"return fn #Some // not a comment"',
+    "string",
+  ],
+] as const;
+for (const [context, spelling, name] of expectations) {
+  const start = highlightSource.indexOf(context);
+  if (start < 0 || highlightSource.indexOf(context, start + 1) >= 0) {
+    throw new Error(`Highlight context must occur once: ${context}`);
+  }
+  const offset = start + context.indexOf(spelling);
+  const before = highlightSource.slice(0, offset);
+  const row = before.split("\n").length - 1;
+  const column = offset - before.lastIndexOf("\n") - 1;
+  if (
+    !highlightCaptures.some((capture) =>
+      capture.row === row && capture.column === column &&
+      capture.text === spelling && capture.name === name
+    )
+  ) {
+    disagreements += 1;
+    console.error(
+      `${HIGHLIGHT_FIXTURE}:${row + 1}:${
+        column + 1
+      }: expected ${spelling} as ${name}`,
+    );
+  }
 }
+for (
+  const match of highlightSource.matchAll(
+    /\.(use|return|case|const|continue)\b/g,
+  )
+) {
+  const offset = match.index + 1;
+  const before = highlightSource.slice(0, offset);
+  const row = before.split("\n").length - 1;
+  const column = offset - before.lastIndexOf("\n") - 1;
+  const captures = highlightCaptures.filter((capture) =>
+    capture.row === row && capture.column === column
+  );
+  if (
+    !captures.some((capture) => capture.name === "variable.other.member") ||
+    captures.some((capture) =>
+      capture.name.startsWith("keyword") || capture.name === "function.call"
+    )
+  ) {
+    disagreements += 1;
+    console.error(
+      `${HIGHLIGHT_FIXTURE}:${row + 1}: .${match[1]} must remain a member`,
+    );
+  }
+}
+console.log(
+  `${
+    basename(HIGHLIGHT_FIXTURE)
+  }: checked ${expectations.length} highlight roles and keyword-shaped members`,
+);
 
 if (disagreements > 0) {
   console.error(

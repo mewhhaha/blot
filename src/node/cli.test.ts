@@ -86,7 +86,7 @@ return Op.rem 5 2
     );
     assert.equal(
       await readFile(path, "utf8"),
-      `open import "blot:prelude"
+      `const { .Op; } = import "blot:prelude"
 return (5 % 2)
 `,
     );

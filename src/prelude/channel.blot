@@ -36,4 +36,4 @@ return {
   .send = send;
   .receive = ChannelRuntime.receive;
   .close = ChannelRuntime.close;
-  }
+}

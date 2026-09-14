@@ -11,13 +11,16 @@ function record(fields: Record<string, RuntimeValue>): RuntimeValue {
 test("fresh record results keep their own layouts after wider arguments", async () => {
   const compiler = await Compiler.create();
   try {
-    assert.deepEqual(
-      await compiler.check("examples/lib/record_view_results.blot"),
-      {
-        type: "Int -> { .0 = { .count = Int }; .1 = { .count = Text } }",
-        effects: "",
-      },
+    const checkedInterface1 = await compiler.check(
+      "examples/lib/record_view_results.blot",
     );
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
+      type: "Int -> { .0 = { .count = Int }; .1 = { .count = Text } }",
+      effects: "",
+    });
     const guest = await instantiateArtifact(
       await compiler.compile("examples/lib/record_view_results.blot"),
     );

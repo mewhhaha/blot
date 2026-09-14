@@ -861,12 +861,12 @@ persistent array when older versions must remain observable.
 
 ## Let compile time do compile-time work
 
-Use `comptime` for an expression whose result must be known while compiling:
+Use `const` for a binding whose value must be known while compiling:
 
 ```blot
 const build_table = fn count => map (upto (0, count), fn value => value * value)
 
-const Squares = comptime build_table 16
+const Squares = build_table 16
 ```
 
 Use `@include` with an explicit parser for non-Blot source:

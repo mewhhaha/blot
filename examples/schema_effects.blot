@@ -20,7 +20,7 @@ const supply = fn answers => do:
   return {
     .host = fn ((), ?resume) => resume checked.host;
     .port = fn ((), ?resume) => resume checked.port;
-    }
+  }
 
 let endpoint = fn () => do:
   use host <- Config.host ()
@@ -35,4 +35,4 @@ return {
     .development = @handle (Config, endpoint, development);
     .production = @handle (Config, endpoint, production);
   };
-  }
+}

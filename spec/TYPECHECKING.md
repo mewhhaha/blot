@@ -227,6 +227,10 @@ variables, the deeper part is copied down before recording the edge. Polarity is
 reversed only through function parameters. The original and copy are linked in
 the direction that preserves the requested subtype constraint.
 
+A record-update type takes the maximum level of its base and every overridden
+field. Structural and interned type views must agree on that level, so extrusion
+lowers all deeper variables before the constraint is queued again.
+
 This is Simple-sub's level discipline. It prevents a local variable from
 escaping its scope while avoiding a free-variable scan during generalisation. A
 `let` use freshens every variable created below the binding's saved level;
@@ -303,19 +307,19 @@ checker retains the existing bidirectional constraints until that variable is
 settled; this is required for generated loop accumulators whose initial value
 and recursive back edges jointly determine the stable type. When `for` lowering
 introduces its unspellable `loop$` accumulator binding, a closed
-multi-constructor variant or inhabited closed record already established
-for a carried source name is retained separately as that name's stable lineage.
+multi-constructor variant or inhabited closed record already established for a
+carried source name is retained separately as that name's stable lineage.
 
-An unannotated aggregate literal has a separate stable lineage type obtained
-by widening its integer and text literal leaves to their domains. Nested
-records, tuples, arrays, and their inferred unions retain their structure.
-Explicit signatures and embedded requirement expressions do not undergo this
-widening. Ordinary expression types and principal initializer types remain
-unchanged. Unchanged fields retain their inference variables and polymorphism;
-literal widening does not settle an unrelated function's open parameter to
-bottom. A simple alias inherits explicit stable lineage metadata, while a new
-binding replaces any previous lineage metadata. Deep rebinding is already
-ordinary record reconstruction and array copying/replacement when checked.
+An unannotated aggregate literal has a separate stable lineage type obtained by
+widening its integer and text literal leaves to their domains. Nested records,
+tuples, arrays, and their inferred unions retain their structure. Explicit
+signatures and embedded requirement expressions do not undergo this widening.
+Ordinary expression types and principal initializer types remain unchanged.
+Unchanged fields retain their inference variables and polymorphism; literal
+widening does not settle an unrelated function's open parameter to bottom. A
+simple alias inherits explicit stable lineage metadata, while a new binding
+replaces any previous lineage metadata. Deep rebinding is already ordinary
+record reconstruction and array copying/replacement when checked.
 
 Record updates distribute over union bases and preserve bottom: reconstructing
 an uninhabited base cannot produce a value. This normalization also applies to
@@ -335,8 +339,9 @@ The initial accumulator argument retains its checked structural type and
 explicit stable-lineage evidence for residual instance checking. Synthetic
 argument facts propagate that evidence through tuple and record constructors;
 the initializer's ordinary expression type stays precise. A declared Boolean
-field remains the complete variant there even when its initial runtime value is one constructor; source
-checking and residual instance checking must admit the same back edges.
+field remains the complete variant there even when its initial runtime value is
+one constructor; source checking and residual instance checking must admit the
+same back edges.
 
 The implementation uses an undo journal and a variable-arena checkpoint. It must
 not clone the whole solver graph for a candidate. This is both a semantic

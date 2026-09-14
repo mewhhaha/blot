@@ -69,7 +69,7 @@ await runCommand("deno", [
   "run",
   "--allow-read",
   "--allow-write",
-  "npm:@jsr/mewhhaha__baba@9.0.0/cli",
+  "npm:@jsr/mewhhaha__baba@9.0.1/cli",
   "grammar.baba",
   "--out",
   grammarDirectory,
@@ -225,6 +225,7 @@ const highlights = [
   await Deno.readTextFile(join(generatedQueries, "generated-highlights.scm")),
   await Deno.readTextFile(join(repositoryQueries, "keywords.scm")),
   await Deno.readTextFile(join(repositoryQueries, "calls.scm")),
+  await Deno.readTextFile(join(repositoryQueries, "bindings.scm")),
 ].join("\n");
 
 await Deno.mkdir(generatedQueries, { recursive: true });
@@ -303,6 +304,8 @@ roots = ["AGENTS.md", "deno.json", ".git"]
 comment-token = "//"
 grammar = "blot"
 language-servers = ["blot"]
+auto-format = true
+text-width = 80
 rainbow-brackets = true
 indent = { tab-width = 2, unit = "  " }
 

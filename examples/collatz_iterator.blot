@@ -26,4 +26,4 @@ let sequence = collect (collatz 13)
 return {
   .sequence = sequence;
   .steps = Array.length sequence;
-  }
+}

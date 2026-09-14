@@ -9,7 +9,7 @@ const component = fn (name, T) => do:
     .get = Read.get;
     .supply = fn value => { .get = fn ((), ?resume) => resume (@satisfies value T); };
     .replace = fn (row, value) => { ...row; .[name] = @satisfies value T; };
-    }
+  }
 
 const Components = fn schema => do:
   let components = Unit

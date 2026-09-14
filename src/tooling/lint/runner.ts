@@ -9,12 +9,14 @@ import { DEFAULT_LINT_RULES } from "./rules.ts";
 import type {
   AstNode,
   LintDiagnostic,
+  LintFix,
   LintRule,
   LintRuleContext,
   LintVisitors,
 } from "./types.ts";
 import { lineComments } from "./syntax.ts";
 import { ConcreteIndex } from "./concrete_index.ts";
+import { orderedLintEdits } from "./edits.ts";
 
 export function lintModule(
   module: Module,
@@ -34,6 +36,18 @@ export function lintModule(
     return concrete;
   };
   const visitors = rules.map((rule) => {
+    const fixEdits = (fix: LintFix): LintFix | null => {
+      const edits = orderedLintEdits(fix.edits);
+      const before = edits.flatMap((edit) =>
+        lineComments(source.slice(edit.span.start, edit.span.end))
+      );
+      const after = edits.flatMap((edit) => lineComments(edit.replacement));
+      if (
+        before.length !== after.length ||
+        before.some((comment, index) => comment !== after[index])
+      ) return null;
+      return { ...fix, edits };
+    };
     const context: LintRuleContext = {
       module,
       source,
@@ -50,7 +64,14 @@ export function lintModule(
           span: report.span,
           fix: report.fix || null,
         }),
-      fix: (span, title, replacement, validation = "parse") => {
+      fixEdits,
+      fix: (
+        span,
+        title,
+        replacement,
+        validation = "parse",
+        kind = "quickfix",
+      ) => {
         const replaced = source.slice(span.start, span.end);
         const replacedComments = lineComments(replaced);
         const replacementComments = lineComments(replacement);
@@ -69,8 +90,8 @@ export function lintModule(
         }
         return {
           title,
-          span,
-          replacement: rendered,
+          edits: [{ span, replacement: rendered }],
+          kind,
           validation,
         };
       },

@@ -18,7 +18,11 @@ test("typed validation accumulates independent errors and preserves refinements"
     if (!formatted.ok) throw new Error("typed validation failed to format");
     assert.equal(formatted.source, source);
 
-    assert.deepEqual(await compiler.check(path), { type, effects: "" });
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, { type, effects: "" });
 
     const evaluated = await compiler.evaluate(path);
     assert.deepEqual(evaluated.writes, []);

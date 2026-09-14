@@ -68,4 +68,4 @@ return {
   .atomic_load = fn counter => SharedAccess.atomic_load counter;
   .atomic_store = fn counter => fn value => SharedAccess.atomic_store (counter, value);
   .atomic_add = fn counter => fn value => SharedAccess.atomic_add (counter, value);
-  }
+}

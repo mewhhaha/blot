@@ -19,4 +19,4 @@ return owned_fold (
   (&[2, 3, 4]),
   ?initial,
   fn (?state, value) => @array.push state value
-  )
+)

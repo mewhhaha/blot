@@ -86,4 +86,4 @@ return {
   .total = total;
   .thirds = thirds;
   .shuffled = F32.truncate (F32x4.sum shuffled);
-  }
+}

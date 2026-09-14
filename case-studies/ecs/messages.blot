@@ -59,14 +59,14 @@ const Messages = fn Payload => do:
         .links = freeze links;
         .messages = freeze messages;
         .undelivered = freeze undelivered;
-        } Delivery
+      } Delivery
     ;
     .undelivered = fn snapshot => do:
       let delivery = @satisfies snapshot Delivery
       return Iter.map (
         Iter.items delivery.undelivered,
         fn index => Array.expect_get (delivery.messages, index)
-        )
+      )
     ;
     .expect_inbox = fn (snapshot, recipient) => do:
       let delivery = @satisfies snapshot Delivery
@@ -82,10 +82,10 @@ const Messages = fn Payload => do:
             return #Some (
               Array.expect_get (delivery.messages, index),
               Array.expect_get (delivery.links, index)
-              )
+            )
         ;
-        }
+      }
     ;
-    }
+  }
 
 return Messages

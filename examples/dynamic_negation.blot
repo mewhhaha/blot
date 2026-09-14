@@ -13,4 +13,4 @@ return {
   .negate_int = negate_int;
   .negate_f32 = negate_f32;
   .negate_f64 = negate_f64;
-  }
+}

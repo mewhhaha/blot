@@ -64,7 +64,7 @@ let purchase = fn product => do:
     .sku = product.sku;
     .quantity = quantity;
     .cost = quantity * product.unit_cost;
-    }
+  }
 
 let purchases = map (filter (products, needs_restock), purchase)
 
@@ -72,4 +72,4 @@ return {
   .skus = map (purchases, fn order => order.sku);
   .units = sum (map (purchases, fn order => order.quantity));
   .cost = sum (map (purchases, fn order => order.cost));
-  }
+}

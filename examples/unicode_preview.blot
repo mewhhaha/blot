@@ -35,4 +35,4 @@ return {
     .precomposed_length = Text.length "é";
     .decomposed_length = Text.length "é";
   };
-  }
+}

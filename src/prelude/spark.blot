@@ -109,4 +109,4 @@ return {
   .cancel = SparkRuntime.cancel;
   .yield = SparkRuntime.yield;
   .on_exit = fn scope => fn ?cleanup => SparkRuntime.on_exit (scope, ?cleanup);
-  }
+}

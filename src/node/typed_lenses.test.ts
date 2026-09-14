@@ -9,7 +9,13 @@ const expected =
 test("typed lenses compose and execute through emitted Wasm", async () => {
   const compiler = await Compiler.create();
   try {
-    assert.deepEqual(await compiler.check("examples/typed_lenses.blot"), {
+    const checkedInterface1 = await compiler.check(
+      "examples/typed_lenses.blot",
+    );
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type:
         '{ .default = { .before = Text; .after = Text; .postal = Int; .name = "Ada"; .revision = 7 } }',
       effects: "",

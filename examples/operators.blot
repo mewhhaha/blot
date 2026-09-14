@@ -81,4 +81,4 @@ return {
   .block_applied = block_applied;
   .bounded = bounded;
   .negated = negated;
-  }
+}

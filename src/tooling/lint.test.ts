@@ -10,6 +10,7 @@ import type {
 } from "../compiler/wasm.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import type { LintRule } from "./lint.ts";
+import { applyLintFix as applySourceFix } from "./lint/edits.ts";
 import {
   binaryCall,
   lineComments,
@@ -116,8 +117,7 @@ async function applyLintFix(
   );
   if (diagnostic === undefined) throw new Error(`${code} was not reported`);
   if (diagnostic.fix === null) throw new Error(`${code} did not provide a fix`);
-  const fixed = source.slice(0, diagnostic.fix.span.start) +
-    diagnostic.fix.replacement + source.slice(diagnostic.fix.span.end);
+  const fixed = applySourceFix(source, diagnostic.fix);
   if (!(await parseConcrete(fixed)).ok) {
     throw new Error(`${code} produced syntax the parser rejected`);
   }
@@ -1821,8 +1821,7 @@ Deno.test("every syntax-only lint fix produces accepted syntax", async () => {
     for (const diagnostic of diagnostics) {
       const fix = diagnostic.fix;
       if (fix === null || fix.validation !== "parse") continue;
-      const replacement = ruleCase.source.slice(0, fix.span.start) +
-        fix.replacement + ruleCase.source.slice(fix.span.end);
+      const replacement = applySourceFix(ruleCase.source, fix);
       const fixed = await parseConcrete(replacement);
       assert(
         fixed.ok,
@@ -1990,8 +1989,7 @@ Deno.test("every standard source operator target has a spelling action", async (
     assert(diagnostic !== undefined, `${target} has no operator diagnostic`);
     const fix = diagnostic.fix;
     if (fix === null) throw new Error(`${target} lost its operator action`);
-    const replacement = source.slice(0, fix.span.start) + fix.replacement +
-      source.slice(fix.span.end);
+    const replacement = applySourceFix(source, fix);
     assert(
       (await parseConcrete(replacement)).ok,
       `${target} produced invalid operator syntax: ${replacement}`,
@@ -2028,8 +2026,7 @@ return unwrap
   );
   const fix = diagnostic?.fix;
   assert(fix !== null && fix !== undefined);
-  const replacement = source.slice(0, fix.span.start) + fix.replacement +
-    source.slice(fix.span.end);
+  const replacement = applySourceFix(source, fix);
   assert((await parseConcrete(replacement)).ok, replacement);
   assert(replacement.includes("if let #Some value = option else:"));
 });

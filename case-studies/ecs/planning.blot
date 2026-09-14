@@ -47,7 +47,7 @@ const merge = fn (left, right) => do:
     .nodes = union_names (left.nodes, right.nodes);
     .edges = freeze edges;
     .barriers = union_names (left.barriers, right.barriers);
-    }
+  }
 
 // A dependency orders row work. A barrier node additionally ends a traversal.
 const then :: (Graph, Graph) -> Graph

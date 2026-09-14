@@ -26,4 +26,4 @@ return {
   .Lens = Lens;
   .compose = compose;
   .over = over;
-  }
+}

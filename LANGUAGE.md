@@ -758,11 +758,10 @@ with a different type.
 
 For an unannotated record, tuple, or array literal, this widening also applies
 to integer and text literal leaves. Thus `let point = { .x = 0; }` permits
-`point.x := 3`, and an inferred text field can change from `"Ada"` to
-`"Lin"`. Explicit signatures and requirements retain their refinements.
-The initializer's ordinary inferred type remains precise; the wider type
-belongs to its rebinding lineage. A simple alias carries that stable type into
-its new lineage.
+`point.x := 3`, and an inferred text field can change from `"Ada"` to `"Lin"`.
+Explicit signatures and requirements retain their refinements. The initializer's
+ordinary inferred type remains precise; the wider type belongs to its rebinding
+lineage. A simple alias carries that stable type into its new lineage.
 
 A declared `Bool` accumulator initialized with `False` retains `Bool` when a
 runtime loop carries it alongside numeric state. Branches may rebind it to
@@ -783,24 +782,24 @@ An indexed update rebuilds the array with
 `@array.set (@array.copy (&array)) index value`. The copy preserves earlier
 shared values and costs O(length) in source semantics; an existing
 last-reference proof may eliminate its physical copy. Nested paths copy each
-array along the path and rebuild each enclosing record. Ordinary ownership
-rules still apply: sharing an owned array requires `freeze`, and copying or
-spreading cannot duplicate linear resources.
+array along the path and rebuild each enclosing record. Ordinary ownership rules
+still apply: sharing an owned array requires `freeze`, and copying or spreading
+cannot duplicate linear resources.
 
 Index expressions are evaluated once, from left to right, followed by the
-replacement once, before reconstruction transfers owned fields. Each path
-prefix is retained once. All are pure value positions, and source expressions
-can read the original root. Every index must be proved
-in bounds under the same rules as direct `@array.get` and `@array.set`;
-out-of-bounds and unproved indices are rejected. Brackets here are update-target
-syntax; indexed reads continue to use the array API.
+replacement once, before reconstruction transfers owned fields. Each path prefix
+is retained once. All are pure value positions, and source expressions can read
+the original root. Every index must be proved in bounds under the same rules as
+direct `@array.get` and `@array.set`; out-of-bounds and unproved indices are
+rejected. Brackets here are update-target syntax; indexed reads continue to use
+the array API.
 
 A path advances only its root's lineage. A `:=` in a `for` body defines that
-root as an accumulator field only when the root comes from
-the enclosing scope, including when the rebinding is written inside a statement
-conditional. A loop-pattern name or a name introduced in the body rebinds only
-its iteration-local lineage. A `:=` inside a nested `for` belongs to the inner
-loop instead.
+root as an accumulator field only when the root comes from the enclosing scope,
+including when the rebinding is written inside a statement conditional. A
+loop-pattern name or a name introduced in the body rebinds only its
+iteration-local lineage. A `:=` inside a nested `for` belongs to the inner loop
+instead.
 
 ### 4.5 Effect sequencing
 
@@ -1170,6 +1169,11 @@ replace or add named fields without reconstructing the base from only the fields
 visible through width subtyping. A second open spread, or an open spread after
 another member, is `BLOT_OPEN_RECORD_SPREAD`; concatenating two unknown rows has
 no principal type in Blot's lattice.
+
+This relationship also applies when a generic function reads through a supplied
+getter and passes a spread update to a supplied setter, including inside a
+returned system closure. Both the base and replacement fields contribute to the
+inferred relationship; untouched fields remain part of the result.
 
 `Shape.entries record` enumerates its statically known fields in insertion order
 as `(name, value)` pairs; the field values may remain dynamic.
@@ -3237,6 +3241,11 @@ Effects not named by the handler remain in the inferred row. Handler
 specialization is lexical: the effect, computation, and clause shape must be
 statically visible. Runtime HIR has no general runtime handler representation.
 
+A generic handler constructor may receive its effect through a parameter.
+Checking its unspecialized body defers operation ownership until the effect is
+known. Each concrete specialization checks the selected clauses and operation
+contracts normally; deferral grants no runtime handler capability.
+
 ### 12.2 Handler composition
 
 Composing handlers is ordinary function composition. `@handle (effect, handler)`
@@ -3855,8 +3864,10 @@ when the ordinary result already has a structural type such as an array or
 record.
 
 `@type.of` is different: it evaluates a compile-time value and returns that
-value's type. `@satisfies` can inspect the inferred type of an ordinary runtime
-expression without evaluating the expression itself.
+value's type. A returned closure's signature includes its captured type and
+effect substitutions, including generated members reached through imports.
+`@satisfies` can inspect the inferred type of an ordinary runtime expression
+without evaluating the expression itself.
 
 The prelude keeps `Is expected` and `Has shape` as ordinary one-line
 compatibility predicates over `type_equal` and `refines`. They add no

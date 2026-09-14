@@ -13,7 +13,7 @@ let replaced = case Slice.split ((!owned), 1) of
       (!left),
       0,
       fn () => consume (!new_token)
-    ) of
+      ) of
       #Replaced (!old, !updated) => do:
         let joined = Slice.join ((!rejoin), (!updated), (!right))
         let [current, tail] = Slice.freeze (!joined)

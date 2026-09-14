@@ -32,10 +32,12 @@ interface IndentRegion {
 const maximumLineWidth = 80;
 const delimitedLayoutRules = new Set([
   "array",
+  "array_pattern",
   "effect_row",
   "parenthesized_or_tuple",
   "tuple_pattern",
   "shape",
+  "shape_pattern",
 ]);
 const layoutSensitiveRules = new Set([
   "array",
@@ -89,6 +91,19 @@ export async function formatSource(
   if (snapshot === undefined) parsed = await parseConcrete(source);
   else parsed = snapshot;
   if (!parsed.ok) return parsed;
+
+  const spaced = formatHorizontalSpacing(source, parsed.cst);
+  if (spaced !== source) {
+    const reparsed = await parseConcrete(spaced);
+    if (
+      !reparsed.ok ||
+      moduleWithoutSpans(reparsed.module) !== moduleWithoutSpans(parsed.module)
+    ) {
+      throw new Error("formatter spacing changed the parsed module");
+    }
+    source = spaced;
+    parsed = reparsed;
+  }
 
   const preferredSequencing = preferDiscardSequencing(source, parsed.cst);
   if (preferredSequencing !== source) {
@@ -1038,6 +1053,93 @@ function removeParentheses(
   return characters.join("");
 }
 
+function formatHorizontalSpacing(source: string, root: ConcreteRule): string {
+  const tokens: ConcreteToken[] = [];
+  const spacedOperators = new Set<number>();
+  const tightPrefixes = new Set<number>();
+  const arguments_ = new Set<number>();
+  const tightDots = new Set<number>();
+  function collect(node: ConcreteNode): void {
+    if (node.type === "token") {
+      if (
+        node.kind !== "WHITESPACE" && !node.kind.startsWith("LAYOUT_") &&
+        node.span.end > node.span.start
+      ) tokens.push(node);
+      return;
+    }
+    if (node.name === "infix_operation") {
+      const operator = directRule(node, "operator_token");
+      if (operator !== null) spacedOperators.add(operator.span.start);
+    }
+    if (node.name === "prefix_operator") {
+      tightPrefixes.add(node.span.start);
+    }
+    if (node.name === "binding_pattern") {
+      const qualifier = directRule(node, "operator_token");
+      if (qualifier !== null) tightPrefixes.add(qualifier.span.start);
+    }
+    if (node.name === "application_argument") arguments_.add(node.span.start);
+    if (node.name === "field_suffix") tightDots.add(node.span.start);
+    for (const child of node.children()) collect(child);
+  }
+  collect(root);
+  tokens.sort((left, right) => left.span.start - right.span.start);
+  const edits: { start: number; end: number; text: string }[] = [];
+  const operators = new Set(["=", ":=", "::", "<-", "=>"]);
+  const keywords = new Set([
+    "fn",
+    "return",
+    "case",
+    "of",
+    "if",
+    "else",
+    "for",
+    "in",
+    "open",
+    "import",
+    "use",
+    "module",
+    "with",
+    "let",
+    "const",
+    "rec",
+  ]);
+  for (let index = 1; index < tokens.length; index += 1) {
+    const left = tokens[index - 1];
+    const right = tokens[index];
+    if (left.kind === "COMMENT" || right.kind === "COMMENT") continue;
+    const gap = source.slice(left.span.end, right.span.start);
+    if (!/^[ \t]*$/.test(gap)) continue;
+    let space = "";
+    if (gap.length > 0) space = " ";
+    if (keywords.has(left.text)) space = " ";
+    if (
+      left.text === "," || left.text === ";" || left.text === "{" ||
+      right.text === "}"
+    ) space = " ";
+    if (
+      operators.has(left.text) || operators.has(right.text) ||
+      spacedOperators.has(left.span.start) ||
+      spacedOperators.has(right.span.start) || arguments_.has(right.span.start)
+    ) space = " ";
+    if (
+      [")", "]", ",", ";", ":"].includes(right.text) ||
+      ["(", "[", ".", "#"].includes(left.text) ||
+      tightDots.has(right.span.start) || tightPrefixes.has(left.span.start)
+    ) space = "";
+    if (left.text === "{" && right.text === "}") space = "";
+    if (space !== gap) {
+      edits.push({ start: left.span.end, end: right.span.start, text: space });
+    }
+  }
+  let formatted = source;
+  for (const edit of edits.toReversed()) {
+    formatted = formatted.slice(0, edit.start) + edit.text +
+      formatted.slice(edit.end);
+  }
+  return formatted;
+}
+
 function moduleWithoutSpans(module: Module): string {
   return JSON.stringify(normalizeModuleValue(module));
 }
@@ -1150,7 +1252,10 @@ function collectIndentRegions(
         lineStarts,
         Math.max(value.span.start, ruleContentSpan(value).end - 1),
       );
-      if (startsAtLine < endsAtLine) {
+      if (
+        startsAtLine < endsAtLine &&
+        !hasInlineLayoutRegion(value, startsAtLine, lineStarts)
+      ) {
         regions.push({
           startsAtLine,
           endsAtLine,
@@ -1194,9 +1299,7 @@ function collectIndentRegions(
     ) {
       startsAtLine -= 1;
     }
-    const contentEnd = node.name === "lambda" || node.name === "block"
-      ? ruleContentSpan(node).end
-      : node.span.end;
+    const contentEnd = ruleContentSpan(node).end;
     // A suite's span runs to the dedent, so it can cover the blank line and
     // the comment that introduce whatever follows. Ending the region at the
     // last line carrying code keeps a comment block at the indentation of the
@@ -1209,7 +1312,8 @@ function collectIndentRegions(
       lineAtOffset(lineStarts, node.span.start),
     );
     if (startsAtLine < endsAtLine) {
-      let includesLastLine = node.name === "block" || node.name === "lambda";
+      let includesLastLine = node.name === "block" || node.name === "lambda" ||
+        node.name === "case_expression" || node.name === "statement_suite";
       if (delimitedLayoutRules.has(node.name)) {
         const closingLineStart = lineStarts[endsAtLine];
         if (closingLineStart === undefined) {
@@ -1231,6 +1335,21 @@ function collectIndentRegions(
   for (const child of node.children()) {
     collectIndentRegions(child, source, lineStarts, regions);
   }
+}
+
+function hasInlineLayoutRegion(
+  node: ConcreteNode,
+  line: number,
+  lineStarts: readonly number[],
+): boolean {
+  if (node.type !== "rule") return false;
+  if (
+    (INDENTED_RULES.has(node.name) || node.name === "do_block") &&
+    lineAtOffset(lineStarts, node.span.start) === line
+  ) return true;
+  return node.children().some((child) =>
+    hasInlineLayoutRegion(child, line, lineStarts)
+  );
 }
 
 export function sourceLineStarts(source: string): readonly number[] {

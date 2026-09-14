@@ -1,5 +1,7 @@
 import type { CheckedModule, Compiler } from "../compiler.ts";
+import { compareCodeUnits } from "../text_order.ts";
 import type { LintDiagnostic, LintFix } from "./lint.ts";
+import { lintEditsOverlap } from "./lint/edits.ts";
 import { DEFAULT_LINT_RULES, lintModule } from "./lint.ts";
 import {
   applyLintFix,
@@ -118,6 +120,7 @@ export async function fixLintSource(
   compilers: LintCompilers,
   path: string,
   source: string,
+  options: { readonly rule?: string } = {},
 ): Promise<LintedSource> {
   let current = source;
   let appliedFixes = 0;
@@ -128,7 +131,11 @@ export async function fixLintSource(
       path,
       current,
     );
-    const fixes = selectNonOverlappingFixes(revision.diagnostics);
+    const fixes = selectNonOverlappingFixes(
+      revision.diagnostics.filter((diagnostic) =>
+        options.rule === undefined || diagnostic.code === options.rule
+      ),
+    );
     if (fixes.length === 0) {
       return {
         source: current,
@@ -136,13 +143,29 @@ export async function fixLintSource(
         appliedFixes,
       };
     }
-    current = await applyFixTransaction(
-      compilers.validation,
-      path,
-      revision,
-      fixes,
-    );
-    appliedFixes += fixes.length;
+    let selected = fixes;
+    try {
+      current = await applyFixTransaction(
+        compilers.validation,
+        path,
+        revision,
+        selected,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof LintFixTransactionError) || selected.length === 1
+      ) throw error;
+      // Nonoverlapping edits may still depend on the same scope. Commit one
+      // validated fix and discover the remaining suggestions on its revision.
+      selected = [selected[0]];
+      current = await applyFixTransaction(
+        compilers.validation,
+        path,
+        revision,
+        selected,
+      );
+    }
+    appliedFixes += selected.length;
     if (revisions.has(current)) {
       throw new Error(
         `lint fixes repeated a prior source revision after ${appliedFixes} fixes`,
@@ -182,9 +205,13 @@ async function lintRevision(
       if (left.span.start !== right.span.start) {
         return left.span.start - right.span.start;
       }
-      return left.code.localeCompare(right.code);
+      return compareCodeUnits(left.code, right.code);
     }),
-    checked: { type: analysis.type, effects: analysis.effects },
+    checked: {
+      type: analysis.type,
+      effects: analysis.effects,
+      interfaceKey: analysis.interfaceKey,
+    },
   };
 }
 
@@ -193,24 +220,32 @@ function selectNonOverlappingFixes(
 ): readonly SelectedFix[] {
   const candidates: SelectedFix[] = [];
   for (const diagnostic of diagnostics) {
-    if (diagnostic.fix === null) continue;
+    if (diagnostic.fix === null || diagnostic.fix.kind !== "quickfix") continue;
     candidates.push({ diagnostic, fix: diagnostic.fix });
   }
   candidates.sort((left, right) => {
-    const leftLength = left.fix.span.end - left.fix.span.start;
-    const rightLength = right.fix.span.end - right.fix.span.start;
+    const leftLength = left.fix.edits.reduce(
+      (length, edit) => length + edit.span.end - edit.span.start,
+      0,
+    );
+    const rightLength = right.fix.edits.reduce(
+      (length, edit) => length + edit.span.end - edit.span.start,
+      0,
+    );
     if (leftLength !== rightLength) return leftLength - rightLength;
-    if (left.fix.span.start !== right.fix.span.start) {
-      return left.fix.span.start - right.fix.span.start;
+    if (left.fix.edits[0].span.start !== right.fix.edits[0].span.start) {
+      return left.fix.edits[0].span.start - right.fix.edits[0].span.start;
     }
-    return left.diagnostic.code.localeCompare(right.diagnostic.code);
+    return compareCodeUnits(left.diagnostic.code, right.diagnostic.code);
   });
 
   const selected: SelectedFix[] = [];
   for (const candidate of candidates) {
     if (
       selected.some((existing) =>
-        spansOverlap(existing.fix.span, candidate.fix.span)
+        existing.fix.edits.some((left) =>
+          candidate.fix.edits.some((right) => lintEditsOverlap(left, right))
+        )
       )
     ) {
       continue;
@@ -226,44 +261,36 @@ async function applyFixTransaction(
   revision: LintRevision,
   fixes: readonly SelectedFix[],
 ): Promise<string> {
-  let source = revision.source;
-  let checked = revision.checked;
-  const descending = fixes.toSorted((left, right) =>
-    right.fix.span.start - left.fix.span.start
-  );
-  for (const selected of descending) {
-    const replacement = applyLintFix(source, selected.fix);
-    let next: CheckedModule;
-    try {
-      next = await compiler.checkSource(path, replacement);
-    } catch (error) {
-      if (!isCompilerSourceRejection(error)) throw error;
-      throw new LintFixTransactionError(
-        selected.diagnostic,
-        selected.fix,
-        "did not pass compiler checking",
-        error,
-      );
-    }
-    if (
-      selected.fix.validation === "check-interface" &&
-      (next.type !== checked.type || next.effects !== checked.effects)
-    ) {
-      throw new LintFixTransactionError(
-        selected.diagnostic,
-        selected.fix,
-        `changed the interface from ${checked.type}${checked.effects} to ${next.type}${next.effects}`,
-      );
-    }
-    source = replacement;
-    checked = next;
+  const first = fixes[0];
+  if (first === undefined) return revision.source;
+  const combined: LintFix = {
+    title: "Apply safe lint fixes",
+    kind: "quickfix",
+    validation: "check-interface",
+    edits: fixes.flatMap((selected) => selected.fix.edits),
+  };
+  const replacement = applyLintFix(revision.source, combined);
+  let next: CheckedModule;
+  try {
+    next = await compiler.checkSource(path, replacement);
+  } catch (error) {
+    if (!isCompilerSourceRejection(error)) throw error;
+    throw new LintFixTransactionError(
+      first.diagnostic,
+      combined,
+      "did not pass compiler checking",
+      error,
+    );
   }
-  return source;
-}
-
-function spansOverlap(
-  left: { readonly start: number; readonly end: number },
-  right: { readonly start: number; readonly end: number },
-): boolean {
-  return left.start < right.end && right.start < left.end;
+  if (
+    fixes.some((selected) => selected.fix.validation === "check-interface") &&
+    next.interfaceKey !== revision.checked.interfaceKey
+  ) {
+    throw new LintFixTransactionError(
+      first.diagnostic,
+      combined,
+      `changed the interface from ${revision.checked.type}${revision.checked.effects} to ${next.type}${next.effects}`,
+    );
+  }
+  return replacement;
 }

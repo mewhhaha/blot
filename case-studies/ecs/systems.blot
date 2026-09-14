@@ -47,6 +47,6 @@ const Systems = fn Row => do:
         return apply (row, patch)
       return { .reads; .writes; .step = @satisfies step Step; }
     ;
-    }
+  }
 
 return Systems

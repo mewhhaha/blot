@@ -21,7 +21,7 @@ const entry_count =
   fn count => case Array.get (
     Shape.entries { .first = count; .second = count + 1; },
     1
-  ) of
+    ) of
     #None => 0
     #Some pair => pair.1
 

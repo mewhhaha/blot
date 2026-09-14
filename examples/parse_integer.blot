@@ -9,4 +9,4 @@ return [
   Parse.integer "12🐱",
   Parse.integer " 42",
   Parse.integer "+"
-  ]
+]

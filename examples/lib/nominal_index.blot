@@ -30,4 +30,4 @@ return {
   .from_entries = from_entries;
   .lookup = lookup;
   .map_values = map_values;
-  }
+}

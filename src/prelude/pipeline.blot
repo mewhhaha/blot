@@ -59,4 +59,4 @@ return {
   .map_with
   .filter_with
   .fold_with
-  }
+}

@@ -47,10 +47,17 @@ impl DeferredDemands {
 }
 
 pub(crate) fn closure_signature(value: &Value) -> Option<Value> {
-    let Value::Closure { signature, .. } = value else {
+    let Value::Closure {
+        signature,
+        environment,
+        ..
+    } = value
+    else {
         return None;
     };
-    signature.as_deref().cloned()
+    signature
+        .as_deref()
+        .map(|signature| crate::eval::substitute_signature(signature, environment))
 }
 
 pub(crate) fn attach_signature(value: &mut Value, signature: &Value) {
@@ -556,6 +563,19 @@ pub fn lookup_signature(environment: &Environment, name: &str) -> Option<Value> 
 }
 
 pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
+    find_binding(environment, name, BindingRead::Observed)
+}
+
+pub(crate) fn lookup_unobserved(environment: &Environment, name: &str) -> Option<Value> {
+    find_binding(environment, name, BindingRead::Inspection)
+}
+
+enum BindingRead {
+    Observed,
+    Inspection,
+}
+
+fn find_binding(environment: &Environment, name: &str, read: BindingRead) -> Option<Value> {
     let mut scope = Some(environment.clone());
     while let Some(current) = scope {
         let (current, indexed) = if let Some(locations) = current.name_locations.get() {
@@ -578,7 +598,11 @@ pub fn lookup(environment: &Environment, name: &str) -> Option<Value> {
             return Some(value);
         }
         for opened in current.opens.borrow().iter().rev() {
-            if let Some(value) = opened.get(name) {
+            let value = match read {
+                BindingRead::Observed => opened.get(name),
+                BindingRead::Inspection => opened.fields().get(name),
+            };
+            if let Some(value) = value {
                 return Some(value.clone());
             }
         }
@@ -1985,6 +2009,14 @@ mod type_value_tests {
             ),
         ]);
         let names = ["shadowed", "inherited", "opened", "missing", "opened"].map(str::to_owned);
+        assert!(equal(
+            &lookup_unobserved(&inner, "unused").unwrap(),
+            &Value::Int(7.into())
+        ));
+        assert!(
+            used.borrow().is_empty(),
+            "inspecting an operation must not mark an open as used"
+        );
         let expected = names
             .iter()
             .filter_map(|name| lookup(&inner, name).map(|value| (name.clone(), value)))

@@ -46,9 +46,9 @@ let count :: (Frequencies, Text) -> Int
 let count = fn (&frequencies, word) => case OrderedTextMap.get (
   (&frequencies),
   word
-) of
-    #Some value => value
-    #None => 0
+  ) of
+  #Some value => value
+  #None => 0
 
 let frequencies = count_words "red blue red green blue red"
 let red = count ((&frequencies), "red")

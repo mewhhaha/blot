@@ -44,9 +44,9 @@ multiplicity rises from 24 to 25. Record value shorthand reuses its field
 island; multiline field boundaries are layout elaboration. Lexer states, 33
 contraction rounds, 24 summary factors, and seven parallel long-region islands
 remain fixed. At that point all 71 rules were declared as islands; the version-3
-general profile is accepted without parser resolutions. Highlight queries capture field
-names, rather than whole fields or values; keyword captures name their parent
-syntax context.
+general profile is accepted without parser resolutions. Highlight queries
+capture field names, rather than whole fields or values; keyword captures name
+their parent syntax context.
 
 Baba 9's generated Wasm runtime accepts only strict plans. Blot instead uses
 `CpuFrontend`, which accepts the general plan and emits the compact token, node,

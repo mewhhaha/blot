@@ -1,8 +1,7 @@
 ; Keyword highlighting, appended to baba's generated highlights.
 ;
-; baba's metadata emits captures as named-node patterns — `(let) @keyword` — but
-; every blot keyword is an anonymous literal node, so those patterns would not
-; compile. Anonymous nodes have to be matched by their spelling.
+; Baba supplies basic keyword captures. These scoped captures add the more
+; precise control, declaration, and import categories used by Helix themes.
 ;
 ; Each capture is scoped to the rule the keyword belongs to rather than matched
 ; bare. blot lets field names be keywords (`.const`, `.return`, `.of`), and a
@@ -39,13 +38,17 @@
   "with"? @keyword.control.import)
 
 (iteration
-  "for" @keyword.control.repeat)
+  "for" @keyword.control.repeat
+  "case"? @keyword.control.conditional)
 
 (iteration_source
   "in" @keyword.control)
 
 (breaking
   "break" @keyword.control.return)
+
+(continuing
+  "continue" @keyword.control.repeat)
 
 (conditional_statement
   "if" @keyword.control.conditional)
@@ -61,8 +64,11 @@
   "else" @keyword.control.conditional)
 
 (case_expression
-  "case" @keyword.control.exception
-  "of" @keyword.control.exception)
+  "case" @keyword.control.conditional
+  "of" @keyword.control.conditional)
+
+(case_guard
+  "if" @keyword.control.conditional)
 
 (do_block
   "do" @keyword.control)
@@ -71,8 +77,7 @@
   "fn" @keyword.function)
 
 ; A constructor is a TYPE_IDENT behind `#`. Types are values in blot, so the
-; generated `(TYPE_IDENT) @type` is right for the bare form; this narrows the
-; tagged one.
+; bare form remains a variable. Only the explicitly tagged form is a constructor.
 (constructor_expression
   "#" @constructor
   constructor: (TYPE_IDENT) @constructor)

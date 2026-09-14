@@ -63,4 +63,4 @@ return {
     .route = join_names mapped;
     .names = NonEmpty.to_array mapped;
   };
-  }
+}

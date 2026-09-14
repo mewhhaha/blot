@@ -728,7 +728,11 @@ test("conditional loop updates preserve one Store authority on both paths", asyn
   const compiler = await Compiler.create();
   try {
     const path = "examples/lib/conditional_array_update.blot";
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: "{ .case_update = Int -> [Int]; .statement_update = Int -> [Int] }",
       effects: "",
     });

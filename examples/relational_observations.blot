@@ -12,4 +12,4 @@ return [
   lengths.larger,
   lengths.equal,
   lengths.smaller
-  ]
+]

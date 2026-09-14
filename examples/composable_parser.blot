@@ -57,4 +57,4 @@ return {
     .unicode_trailing = parse_route "/users/🐱.";
     .trailing = parse_route "/health/extra";
   };
-  }
+}

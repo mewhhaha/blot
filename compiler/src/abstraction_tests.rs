@@ -93,6 +93,191 @@ fn generic_middleware_preserves_its_open_effect_tail() {
 }
 
 #[test]
+fn nested_resource_updates_preserve_unmodified_fields() {
+    with_compiler(
+        r#"open import "blot:prelude"
+const update = fn access => fn () => do:
+  let current = access.read ()
+  return access.write { ...current; .count = current.count + 1; }
+let run = fn (count :: Int) => update {
+  .read = fn () => { .count; .label = "kept"; };
+  .write = fn value => value;
+} ()
+return { .run; }
+"#,
+        |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            assert_eq!(
+                checked["type"], "{ .run = Int -> { .count = Int; .label = \"kept\" } }",
+                "{checked}",
+            );
+            session
+                .compile_module("main.blot")
+                .expect("resource update should compile");
+        },
+    );
+}
+
+#[test]
+fn generic_effect_handlers_defer_operation_ownership_until_specialization() {
+    let checked = check(
+        "const provide = fn (capability, work) => @handle (capability.Read, work, {\n\
+           .get = fn ((), ?resume) => resume 1;\n\
+         })\n\
+         return { .provide; }\n",
+    );
+    assert_eq!(checked["ok"], true, "{checked}");
+}
+
+#[test]
+fn specialized_generic_handlers_still_check_operation_ownership() {
+    for (parameter, expected) in [("value", false), ("!value", true)] {
+        let source = format!(
+            "open import \"blot:prelude\"\n\
+             const consume = fn !value => value + 0\n\
+             const provide = fn (capability, work) => @handle (capability, work, {{\n\
+               .release = fn ({parameter}, ?resume) => resume (consume value);\n\
+             }})\n\
+             const Release = @effect {{ .release = Effect.consumes (Int -> Int); }}\n\
+             const work = fn () => do:\n\
+             \x20 let !value = 7\n\
+             \x20 return Release.release (!value)\n\
+             return provide (Release, work)\n",
+        );
+        let checked = check(&source);
+        assert_eq!(checked["ok"], expected, "{checked}");
+        if !expected {
+            assert_eq!(
+                checked["diagnostic"]["code"], "BLOT_EFFECT_HANDLER_OWNERSHIP",
+                "{checked}"
+            );
+        }
+    }
+}
+
+#[test]
+fn imported_generic_handlers_check_specialized_operation_ownership() {
+    with_compiler("return ()", |mut session| {
+        let library = "open import \"blot:prelude\"\n\
+            const consume = fn !value => value + 0\n\
+            const provide = fn (capability, work) => @handle (capability, work, {\n\
+              .release = fn (value, ?resume) => resume (consume value);\n\
+            })\n\
+            return { .provide; }\n";
+        session
+            .add_source("handler.blot".into(), library.encode_utf16().collect())
+            .unwrap();
+        session
+            .configure_module(
+                "handler.blot",
+                BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        let checked = session.check_module("handler.blot");
+        assert_eq!(checked["ok"], true, "{checked}");
+        let caller = "open import \"blot:prelude\"\n\
+            const Handler = import \"./handler.blot\"\n\
+            const Release = @effect { .release = Effect.consumes (Int -> Int); }\n\
+            const work = fn () => do:\n\
+            \x20 let !value = 7\n\
+            \x20 return Release.release (!value)\n\
+            return Handler.provide (Release, work)\n";
+        session
+            .add_source("caller.blot".into(), caller.encode_utf16().collect())
+            .unwrap();
+        session
+            .configure_module(
+                "caller.blot",
+                BTreeMap::from([
+                    ("blot:prelude".into(), "prelude.blot".into()),
+                    ("./handler.blot".into(), "handler.blot".into()),
+                ]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        let checked = session.check_module("caller.blot");
+        assert_eq!(
+            checked["diagnostic"]["code"], "BLOT_EFFECT_HANDLER_OWNERSHIP",
+            "{checked}"
+        );
+    });
+}
+
+#[test]
+fn imported_system_reflection_retains_generated_effects() {
+    with_compiler("return ()", |mut session| {
+        let factory = r#"open import "blot:prelude"
+const resource_type = fn (T, initial) => do:
+  const Read = @effect { .get = Unit -> T; }
+  const Write = @effect { .set = T -> Unit; }
+  return { .Read; .Write; .initial; .get = Read.get; .set = Write.set; }
+const component = fn prototype => do:
+  const T = @type.of prototype
+  const column = resource_type ([T], @satisfies [] [T])
+  return { .column; .insert = fn (value :: T) => do:
+    use previous <- column.get ()
+    return column.set (@linear.freeze (@array.push (Array.copy (&previous)) value))
+  ; }
+return { .component; }
+"#;
+        let reexport = r#"const Factory = import "./factory.blot"
+return { .component = Factory.component; }
+"#;
+        let scene = r#"open import "blot:prelude"
+const Loop = import "./loop.blot"
+const Position = Loop.component 0.0
+const Velocity = Loop.component 0.0
+const setup = fn () => do:
+  use Position.insert 1.0
+  return Velocity.insert 2.0
+return { .Position; .Velocity; .setup; }
+"#;
+        let caller = r#"open import "blot:prelude"
+const Scene = import "./scene.blot"
+const rec effects_of = fn T => case @type.reflect T of
+  #Forall => effects_of (@type.probe T)
+  #Arrow arrow => arrow.effects
+  _ => @fail "not a function"
+const effects = @linear.freeze (effects_of (@type.of Scene.setup))
+const contains = fn effect => any ((&effects), fn candidate => @type.equal candidate effect)
+const verified = case (contains Scene.Position.column.Read, contains Scene.Position.column.Write, contains Scene.Velocity.column.Read, contains Scene.Velocity.column.Write) of
+  (#True, #True, #True, #True) => True
+  _ => @fail "reflected effects lost their module instance"
+return verified
+"#;
+        for (path, source, dependencies) in [
+            ("factory.blot", factory, vec![]),
+            (
+                "loop.blot",
+                reexport,
+                vec![("./factory.blot", "factory.blot")],
+            ),
+            ("scene.blot", scene, vec![("./loop.blot", "loop.blot")]),
+            ("caller.blot", caller, vec![("./scene.blot", "scene.blot")]),
+        ] {
+            session
+                .add_source(path.into(), source.encode_utf16().collect())
+                .unwrap();
+            let mut imports = BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]);
+            imports.extend(
+                dependencies
+                    .into_iter()
+                    .map(|(specifier, target)| (specifier.into(), target.into())),
+            );
+            session
+                .configure_module(path, imports, BTreeMap::new())
+                .unwrap();
+        }
+        let checked = session.check_module("caller.blot");
+        assert_eq!(checked["ok"], true, "{checked}");
+        assert_eq!(checked["type"], "#True", "{checked}");
+        session.compile_module("caller.blot").unwrap();
+    });
+}
+
+#[test]
 fn immutable_projections_retain_guard_refinements() {
     let checked = check(include_str!(
         "../../experiments/pr-triage/projected_refinement.blot"

@@ -15,7 +15,11 @@ const principalType =
 test("composable prisms preserve types and both executions", async () => {
   const compiler = await Compiler.create();
   try {
-    assert.deepEqual(await compiler.check(examplePath), {
+    const checkedInterface1 = await compiler.check(examplePath);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: principalType,
       effects: "",
     });

@@ -61,7 +61,11 @@ let run = fn number => ${variant.body}
 return run
 `,
       );
-      assert.deepEqual(await compiler.check(path), {
+      const checkedInterface1 = await compiler.check(path);
+      assert.deepEqual({
+        type: checkedInterface1.type,
+        effects: checkedInterface1.effects,
+      }, {
         type: "Int -> Int",
         effects: "",
       });
@@ -123,7 +127,11 @@ return run
     );
     const compiler = await Compiler.create();
     try {
-      assert.deepEqual(await compiler.check(path), {
+      const checkedInterface2 = await compiler.check(path);
+      assert.deepEqual({
+        type: checkedInterface2.type,
+        effects: checkedInterface2.effects,
+      }, {
         type: "Int -> Int",
         effects: "",
       });

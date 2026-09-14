@@ -448,7 +448,11 @@ async function main(): Promise<void> {
         const before = performance.now();
         const analysis = await compiler.analyzeSource(selected.path, edited);
         const durationMilliseconds = performance.now() - before;
-        const checked = { type: analysis.type, effects: analysis.effects };
+        const checked = {
+          type: analysis.type,
+          effects: analysis.effects,
+          interfaceKey: analysis.interfaceKey,
+        };
         return {
           durationMilliseconds,
           sourceBytes: Buffer.byteLength(edited),

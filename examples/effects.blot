@@ -120,4 +120,4 @@ return {
   .silenced = silenced;
   .nested = nested;
   .asked = asked;
-  }
+}

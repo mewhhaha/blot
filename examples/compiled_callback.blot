@@ -19,4 +19,4 @@ return @handle (
   example.Clock,
   fn () => @handle (example.Executor, fn () => example.run 10, executor),
   clock
-  )
+)

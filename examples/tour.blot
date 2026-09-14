@@ -46,7 +46,7 @@ let classify = fn value => case value of
   1 => "up"
   _ => "flat"
 
-  // --- destructuring ----------------------------------------------------------
+// --- destructuring ----------------------------------------------------------
 
 let counter = { .current = 1; .limit = 10; }
 let { .current; .limit = ceiling; } = counter
@@ -78,7 +78,7 @@ for ever:
   if repeated >= 3:
     break
 
-    // --- effects ----------------------------------------------------------------
+// --- effects ----------------------------------------------------------------
 
 const Console = @effect { .write = Text -> Unit; }
 
@@ -122,37 +122,37 @@ return {
   .small = Small;
   .message = Message;
   .default = {
-  .counter_fields = Counter.fields;
+    .counter_fields = Counter.fields;
 
-  .doubled = double 21;
-  .twice = apply_twice increment 5;
-  .distance = distance (2, 40);
-  .factorial = factorial 5;
+    .doubled = double 21;
+    .twice = apply_twice increment 5;
+    .distance = distance (2, 40);
+    .factorial = factorial 5;
 
-  .ready = describe #Ready;
-  .idle = describe (#Progress 0);
-  .failed = describe (#Failed "boom");
-  .down = classify (-1);
+    .ready = describe #Ready;
+    .idle = describe (#Progress 0);
+    .failed = describe (#Failed "boom");
+    .down = classify (-1);
 
-  .current = current;
-  .ceiling = ceiling;
-  .left = left;
-  .head = head;
-  .tail = tail;
-  .staged = staged;
-  .changing = changing;
-  .folded = folded;
-  .repeated = repeated;
+    .current = current;
+    .ceiling = ceiling;
+    .left = left;
+    .head = head;
+    .tail = tail;
+    .staged = staged;
+    .changing = changing;
+    .folded = folded;
+    .repeated = repeated;
 
-  .joined = @handle (Console, report, joining);
-  .printed = @handle (Console, report, printing);
+    .joined = @handle (Console, report, joining);
+    .printed = @handle (Console, report, printing);
 
-  // A prefixed operand needs parentheses: a trailing operator in a flat chain
-  // reads as infix, which is what keeps expressions recursion-free.
-  .owned = consume (!token);
-  .compared = 20 + 22 == 42;
-  .appended = "a" <> "b" <> "c";
-  .piped = 20 |> Int.add 2 |> double;
-  .comptime = 20 * 2 + 1;
-};
+    // A prefixed operand needs parentheses: a trailing operator in a flat chain
+    // reads as infix, which is what keeps expressions recursion-free.
+    .owned = consume (!token);
+    .compared = 20 + 22 == 42;
+    .appended = "a" <> "b" <> "c";
+    .piped = 20 |> Int.add 2 |> double;
+    .comptime = 20 * 2 + 1;
+  };
 }

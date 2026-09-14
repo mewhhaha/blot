@@ -36,7 +36,7 @@ let rec summarize = fn (&values, index, accepted, errors) => case Array.get (
       index + 1,
       !accepted,
       @array.push errors reason
-)
+    )
 
 let values = [-2, 3, 4, 10]
 return summarize ((&values), 0, [], [])

@@ -15,16 +15,24 @@ Indent queries: ✓       Tags queries: ✓        Rainbow queries: ✓
 
 The server publishes syntax and compiler diagnostics for the open editor
 revision, finds local lexical definitions, describes values and syntax on hover,
-formats documents, and publishes style lints with quick fixes. All of those
+formats documents, and publishes style lints with quick fixes. Compiler-backed
 features consume the resident Rust frontend's canonical compact syntax snapshot,
-so the accepted editor revision is parsed once. Production compiler conformance
-uses the downloaded CI-built compiler Wasm; the server hosts that Rust/Wasm
-compiler with Baba's CPU frontend and does not initialize WebGPU. Run it outside
-Helix with:
+so they share the accepted editor revision. Source navigation can also use the
+syntax-only Baba parser when an imported dependency cannot be loaded. Production
+compiler conformance uses the downloaded CI-built compiler Wasm; the server
+hosts that Rust/Wasm compiler with Baba's CPU frontend and does not initialize
+WebGPU. Run it outside Helix with:
 
 ```bash
 just lsp
 ```
+
+Go-to-definition on an import's quoted path opens the referenced file at its
+beginning. Relative and absolute paths, `blot:` modules, and package source
+exports are supported. Open unsaved target files are navigable, and navigation
+does not require either module to type-check. Package imports navigate to their
+declared source export when that source is available, including packages that
+also ship a compiled capsule.
 
 Go-to-definition resolves local bindings, lambda parameters, case patterns,
 rebindings, signature headers, source-declared shape fields, and their
@@ -33,20 +41,23 @@ follow the compiler's resolved source path and canonical export shape to the
 exported binding. Go-to-type-definition follows the ordinary value references in
 a binding's explicit signature; a compound signature may therefore lead to more
 than one source-defined type value. An inferred structural type has no erased
-alias to recover and remains non-navigable. Package capsules, generated names,
-compiler-provided attached members, and dynamic record fields without a stable
-source location remain non-navigable.
+alias to recover and remains non-navigable. Exported names inside package
+capsules, generated names, compiler-provided attached members, and dynamic
+record fields without a stable source location remain non-navigable.
 
 The LSP also publishes local references and safe local rename, workspace symbols
 for open documents, local-name/field/constructor completion, inferred signature
 help, current surface-keyword completion, and inferred types beside explicit `_`
-holes in signature values. Values without signatures offer a code action that
-inserts a matching `let`, `let rec`, `const`, or `const rec` header with a hole;
-a header whose kind, recursion marker, or name disagrees with its following
-binding offers an action that corrects the header without changing its type
-value. Ordinary inferred values stay free of inlay annotations. Rename refuses
-invalid identifiers and does not claim that a generated or dynamic name has a
-stable source location. These features use the same resident analysis and syntax
+holes in signature values. Inline hints are capped at 60 characters, including
+the `:` prefix and any truncation ellipsis. Truncation preserves Unicode
+characters, and a shortened hint keeps its complete inferred type in the
+tooltip. Values without signatures offer a code action that inserts a matching
+`let`, `let rec`, `const`, or `const rec` header with a hole; a header whose
+kind, recursion marker, or name disagrees with its following binding offers an
+action that corrects the header without changing its type value. Ordinary
+inferred values stay free of inlay annotations. Rename refuses invalid
+identifiers and does not claim that a generated or dynamic name has a stable
+source location. These features use the same resident analysis and syntax
 revision as diagnostics and hover.
 
 LSP requests run through an explicit host queue. `$/cancelRequest` removes work
@@ -85,18 +96,18 @@ prefix and infix forms show both relationships. Those descriptions remain
 available when an incomplete program cannot yet be inferred.
 
 The formatter is biased but conservative. It applies two-space structural
-indentation and targets 80-column lines. Value conditionals always use vertical
-`if condition:` / `else:` branches, with an explicit `return` for every branch
-result. If that conditional is the scope's terminal result, the branch returns
-make an outer `return if` redundant, so the formatter writes the conditional as
-a statement. A binding or `return` value moves to a two-space continuation when
-the complete line is too wide. Multiline delimited values move as a unit before
-their contents are laid out, so a declaration prefix cannot select a different
-delimiter shape. Lambdas expand according to their scope when needed. Arrays
-stay on one line when the complete expression fits within its value scope;
-otherwise every element gets its own line. Long tuple arguments likewise expand
-when that removes an overlong line. It also removes trailing whitespace, writes
-LF line endings, leaves one final newline, and removes parentheses made
+indentation and targets 80-column lines. It spaces operators, declaration
+delimiters, calls, and collection members consistently, while keeping
+projections and prefix qualifiers tight. `case` arms and statement `if` suites
+stay vertical. Closing delimiters align with their opening scope, including
+returned records. A binding or `return` value moves to a two-space continuation
+when the complete line is too wide. Multiline delimited values move as a unit
+before their contents are laid out, so a declaration prefix cannot select a
+different delimiter shape. Lambdas expand according to their scope when needed.
+Arrays stay on one line when the complete expression fits within its value
+scope; otherwise every element gets its own line. Long tuple arguments likewise
+expand when that removes an overlong line. It also removes trailing whitespace,
+writes LF line endings, leaves one final newline, and removes parentheses made
 redundant by postfix precedence or left-associative application while retaining
 groupings that affect the AST. Comments remain source text in the gaps between
 Baba CST nodes, so formatting cannot discard them. Use it from the command line
@@ -112,7 +123,61 @@ just lint-fix source.blot
 `lint-check` reports findings without changing the file. `lint-fix` selects
 non-overlapping rewrites, checks each combined revision with the Rust compiler,
 and writes the file once after the complete fix run succeeds. A failed rewrite
-leaves the original file unchanged.
+leaves the original file unchanged. Safe fixes may consist of several
+coordinated edits. Refactors are explicitly selected and never included in
+`lint-fix`. When disjoint edits conflict through scope, fix-all applies one
+validated edit and recomputes the remaining suggestions. Every published
+document edit carries its source version; resolving a stale action requires a
+new request.
+
+In Helix, press [`Space-a`](https://docs.helix-editor.com/lsp.html) for
+individual suggestions and explicit refactors. Clients supporting
+`codeAction/resolve` also see “Fix all safe Blot suggestions” and actions for
+all occurrences of the selected rule. Their edits are calculated only when
+selected. The server honors `context.only`, including `source.fixAll.blot`, and
+also returns immediate edits to clients requesting source actions without
+resolve support. The installed language configuration formats on save through
+the LSP; `:format` runs it explicitly. Set `auto-format = false` in the managed
+language block to opt out of format on save.
+
+The additional idiom rules are:
+
+| Rule                        | Suggested action                                                         | Kind     |
+| --------------------------- | ------------------------------------------------------------------------ | -------- |
+| `field-shorthand`           | Write `.name;` for `.name = name;`, including patterns                   | Fix      |
+| `projection-destructuring`  | Combine adjacent projections from one record                             | Fix      |
+| `parameter-destructuring`   | Move an immediate destructuring binding into a strict parameter          | Fix      |
+| `terminal-value-forwarding` | Return the final temporary's expression directly                         | Fix      |
+| `public-primitive`          | Use the public name of the exact same primitive                          | Fix      |
+| `identity-handler-return`   | Remove an identity `.return` clause from a handler literal               | Fix      |
+| `selective-open`            | Bind the few fields actually used by an `open`                           | Fix      |
+| `local-open`                | Move an `open` used by one function into its body                        | Refactor |
+| `identity-variant-case`     | Return the subject of a constructor-preserving match                     | Fix      |
+| `forwarding-callback`       | Pass a strict function directly instead of forwarding through a callback | Fix      |
+| `handler-pipeline`          | Compose nested handlers in their original order                          | Refactor |
+| `terminal-continue`         | Remove a final `continue` from a nonempty loop body                      | Fix      |
+| `filtering-loop-pattern`    | Replace a first guard that only skips failures with `for case`           | Fix      |
+| `iterator-loop`             | Write a canonical iterator-consuming recursion as `for`                  | Refactor |
+| `accumulator-fold`          | Write a simple array fold over an already-bound array as `for`           | Refactor |
+| `variant-map`               | Use `Option.map`, `Result.map`, or `Result.map_error`                    | Fix      |
+| `variant-chaining`          | Use `Option.and_then` or `Result.and_then`                               | Fix      |
+| `variant-fallback`          | Use the appropriate `unwrap_or_else`, retaining deferred fallback demand | Fix      |
+| `complementary-filters`     | Partition once when both filters use a proved total integer predicate    | Refactor |
+| `array-find`                | Replace a first-match array loop with `Array.find`                       | Refactor |
+
+These rules deliberately have narrow premises. An unknown library identity,
+changed checked interface, ownership conflict, deferred capture, or lost comment
+withholds an action. A successful type check alone does not prove a rewrite
+preserves evaluation. Generative effect identities that cannot be compared also
+withhold interface-sensitive actions.
+
+The highlighting fixture exercises function definitions and calls, plain and
+destructured parameters, ownership/deferred qualifiers, constructors, guards,
+loop control, primitives, and strings. Types remain ordinary values:
+capitalization alone does not imply a type. Keyword-shaped fields such as
+`.return` and `.continue` remain members. `just grammar-check` verifies the
+capture positions and parser agreement; the formatter tests verify the accepted
+corpus, comments, line endings, structural preservation, and idempotence.
 
 Lints are independent rules over the lowered AST. A rule registers typed module,
 declaration, expression, or pattern visitors and may also inspect the compact

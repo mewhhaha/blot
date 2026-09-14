@@ -39,4 +39,4 @@ return {
     .committed = settle #Commit;
     .rolled_back = settle #Rollback;
   };
-  }
+}

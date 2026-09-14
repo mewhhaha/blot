@@ -45,4 +45,4 @@ return {
     .singleton_text = @handle (Numbers, singleton, describe);
     .singleton_first = @handle (Numbers, singleton, first);
   };
-  }
+}

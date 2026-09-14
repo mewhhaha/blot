@@ -1,4 +1,26 @@
 import type { LintRule } from "./types.ts";
+import { iteratorLoop } from "./rules/iterator_loop.ts";
+import { complementaryFilters } from "./rules/complementary_filters.ts";
+import { arrayFind } from "./rules/array_find.ts";
+import { publicPrimitive } from "./rules/public_primitive.ts";
+import { forwardingCallback } from "./rules/forwarding_callback.ts";
+import {
+  variantChaining,
+  variantFallback,
+  variantMap,
+} from "./rules/variant_combinators.ts";
+import { accumulatorFold } from "./rules/accumulator_fold.ts";
+import { fieldShorthand } from "./rules/field_shorthand.ts";
+import { projectionDestructuring } from "./rules/projection_destructuring.ts";
+import { parameterDestructuring } from "./rules/parameter_destructuring.ts";
+import { terminalValueForwarding } from "./rules/terminal_value_forwarding.ts";
+import { identityVariantCase } from "./rules/identity_variant_case.ts";
+import { identityHandlerReturn } from "./rules/identity_handler_return.ts";
+import { selectiveOpen } from "./rules/selective_open.ts";
+import { localOpen } from "./rules/local_open.ts";
+import { handlerPipeline } from "./rules/handler_pipeline.ts";
+import { terminalContinue } from "./rules/terminal_continue.ts";
+import { filteringLoopPattern } from "./rules/filtering_loop_pattern.ts";
 import { booleanIdentityConditional } from "./rules/boolean_identity_conditional.ts";
 import { discardedBooleanCase } from "./rules/discarded_boolean_case.ts";
 import { emptyArrayAppend } from "./rules/empty_array_append.ts";
@@ -31,6 +53,26 @@ import { unusedOpen } from "./rules/unused_open.ts";
 import { unusedPatternName } from "./rules/unused_pattern_name.ts";
 
 export const DEFAULT_LINT_RULES: readonly LintRule[] = [
+  iteratorLoop,
+  complementaryFilters,
+  arrayFind,
+  publicPrimitive,
+  forwardingCallback,
+  variantMap,
+  variantChaining,
+  variantFallback,
+  accumulatorFold,
+  fieldShorthand,
+  projectionDestructuring,
+  parameterDestructuring,
+  terminalValueForwarding,
+  identityVariantCase,
+  identityHandlerReturn,
+  selectiveOpen,
+  localOpen,
+  handlerPipeline,
+  terminalContinue,
+  filteringLoopPattern,
   unusedBinding,
   unusedEffectResult,
   unusedPatternName,

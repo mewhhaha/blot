@@ -2,6 +2,8 @@ use std::cell::{Cell, RefCell};
 
 #[path = "member_constraints.rs"]
 mod member_constraints;
+#[path = "readability.rs"]
+mod readability;
 #[path = "runtime_signature.rs"]
 mod runtime_signature;
 #[path = "value_bridge.rs"]
@@ -1391,6 +1393,14 @@ pub enum SimplificationFact {
 #[derive(Clone, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ReadabilityFact {
+    SourceOperations {
+        expression: ExpressionId,
+        operations: Vec<String>,
+        callee: Option<String>,
+        primitive_alias: Option<String>,
+        forwarding: bool,
+        total_predicate: bool,
+    },
     DirectEffectComputation {
         expression: ExpressionId,
     },
@@ -1415,6 +1425,7 @@ pub enum ReadabilityFact {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ReadabilityFactKind {
+    SourceOperations,
     DirectEffectComputation,
     EmptyArray,
     StableShadow,
@@ -1463,6 +1474,7 @@ impl SimplificationFact {
 impl ReadabilityFact {
     fn kind(&self) -> ReadabilityFactKind {
         match self {
+            Self::SourceOperations { .. } => ReadabilityFactKind::SourceOperations,
             Self::DirectEffectComputation { .. } => ReadabilityFactKind::DirectEffectComputation,
             Self::EmptyArray { .. } => ReadabilityFactKind::EmptyArray,
             Self::StableShadow { .. } => ReadabilityFactKind::StableShadow,
@@ -1473,7 +1485,8 @@ impl ReadabilityFact {
 
     fn expression(&self) -> ExpressionId {
         match self {
-            Self::DirectEffectComputation { expression }
+            Self::SourceOperations { expression, .. }
+            | Self::DirectEffectComputation { expression }
             | Self::EmptyArray { expression }
             | Self::StableShadow { expression, .. }
             | Self::RecordReconstruction { expression, .. }
@@ -2668,7 +2681,7 @@ pub struct Checker {
     bound_insertions: RefCell<Vec<BoundInsertion>>,
     numeric_literals: RefCell<BTreeMap<VariableId, NumericLiteralFact>>,
     editor_holes: RefCell<ModuleFacts<ExpressionId, EditorHole>>,
-    handler_clauses: RefCell<ModuleFacts<ExpressionId, Vec<crate::ownership::HandlerClause>>>,
+    handler_clauses: RefCell<ModuleFacts<ExpressionId, crate::ownership::HandlerEvidence>>,
     member_constraints: RefCell<MemberConstraints>,
     next_skolem: Rc<Cell<VariableId>>,
     next_representation_hole: Rc<Cell<VariableId>>,
@@ -3303,6 +3316,7 @@ impl Checker {
                     "ok": true,
                     "type": self.show_settled(&checked.result),
                     "effects": show_effects(&effects),
+                    "interfaceKey": self.interface_key(&checked.result, &effects),
                 })
             }
             Err(diagnostic) => diagnostic.failure_json("type checking"),
@@ -3489,6 +3503,22 @@ impl Checker {
             .readability
             .iter()
             .map(|fact| match fact {
+                ReadabilityFact::SourceOperations {
+                    expression,
+                    operations,
+                    callee,
+                    primitive_alias,
+                    forwarding,
+                    total_predicate,
+                } => serde_json::json!({
+                    "kind": "source-operations",
+                    "span": module.arena.expression_span(*expression),
+                    "operations": operations,
+                    "callee": callee,
+                    "primitiveAlias": primitive_alias,
+                    "forwarding": forwarding,
+                    "totalPredicate": total_predicate,
+                }),
                 ReadabilityFact::DirectEffectComputation { expression } => serde_json::json!({
                     "kind": "direct-effect-computation",
                     "span": module.arena.expression_span(*expression),
@@ -3527,6 +3557,7 @@ impl Checker {
         serde_json::json!({
             "ok": true,
             "type": self.show_settled(&checked.result),
+            "interfaceKey": self.interface_key(&checked.result, &self.settle(checked.effects.clone(), true)),
             "effects": show_effects(&self.settle(checked.effects, true)),
             "types": types,
             "tags": tags,
@@ -4185,6 +4216,7 @@ impl Checker {
             .collect::<Vec<_>>();
         readability.sort_by_key(|(expression, fact)| {
             let kind = match fact {
+                ReadabilityFact::SourceOperations { .. } => 5,
                 ReadabilityFact::DirectEffectComputation { .. } => 0,
                 ReadabilityFact::EmptyArray { .. } => 1,
                 ReadabilityFact::StableShadow { .. } => 2,
@@ -5379,10 +5411,12 @@ impl Checker {
                     inferred.type_ = refined;
                 }
                 if kind == DeclarationKind::Const
-                    && type_exposes_generative_effect(&inferred.type_)
                     && let Some(value) = &evaluated
                 {
-                    inferred.type_ = self.instantiate_comptime_effects(&inferred.type_, value);
+                    let settled = self.settle(inferred.type_.clone(), true);
+                    if type_exposes_generative_effect(&settled) {
+                        inferred.type_ = self.instantiate_comptime_effects(&settled, value);
+                    }
                 }
                 let recursive_bounds = if recursive {
                     names
@@ -5809,6 +5843,23 @@ impl Checker {
         if let Ok(inferred) = &inferred
             && !module.arena.synthetic_expressions.contains(&expression_id)
         {
+            if matches!(
+                module.arena.expressions[expression_id.0 as usize],
+                Expression::Apply { .. }
+                    | Expression::Case { .. }
+                    | Expression::Lambda { .. }
+                    | Expression::Intrinsic { .. }
+            ) || matches!(&module.arena.expressions[expression_id.0 as usize], Expression::Var { name, .. } if name == "None")
+            {
+                let candidate =
+                    self.source_operations(module, expression_id, environment, values, path);
+                self.record_structural_readability_candidate(
+                    path,
+                    expression_id,
+                    ReadabilityFactKind::SourceOperations,
+                    candidate,
+                );
+            }
             if !matches!(
                 module.arena.expressions[expression_id.0 as usize],
                 Expression::Lambda { .. } | Expression::Rec { .. }
@@ -8184,6 +8235,14 @@ impl Checker {
         let effect_value = match self.evaluate(path, effect_expression, values, Phase::Comptime) {
             Ok(value) => value,
             Err(error) if error.code == "BLOT_UNBOUND" => {
+                let mut evidence = self.handler_clauses.borrow_mut();
+                if evidence.get(path, &argument).is_none() {
+                    evidence.insert(
+                        path.to_owned(),
+                        argument,
+                        crate::ownership::HandlerEvidence::Deferred,
+                    );
+                }
                 return Ok(Inferred::pure(self.fresh()));
             }
             Err(error) => return Err(error),
@@ -8240,7 +8299,7 @@ impl Checker {
             }
             let (defining_module, parameter, body) =
                 require_continuation_qualifier(&self.context, name, clause, span)?;
-            checked_clauses.push(crate::ownership::HandlerClause {
+            let selection = crate::ownership::HandlerClause {
                 name: name.clone(),
                 module: defining_module,
                 parameter,
@@ -8249,22 +8308,31 @@ impl Checker {
                     .get(name)
                     .expect("checked effect operation has ownership")
                     .clone(),
-            });
+            };
+            checked_clauses.push(selection);
         }
-        let mut known_clauses = self
-            .handler_clauses
-            .borrow()
-            .get(path, &argument)
-            .cloned()
-            .unwrap_or_default();
+        let mut known_clauses = match self.handler_clauses.borrow().get(path, &argument).cloned() {
+            Some(crate::ownership::HandlerEvidence::Checked(clauses)) => clauses,
+            Some(crate::ownership::HandlerEvidence::Deferred) | None => Vec::new(),
+        };
+        let mut changed = false;
         for clause in checked_clauses {
             if !known_clauses.contains(&clause) {
                 known_clauses.push(clause);
+                changed = true;
             }
         }
-        self.handler_clauses
-            .borrow_mut()
-            .insert(path.to_owned(), argument, known_clauses);
+        self.handler_clauses.borrow_mut().insert(
+            path.to_owned(),
+            argument,
+            crate::ownership::HandlerEvidence::Checked(known_clauses),
+        );
+        if changed && self.module_analyses.borrow_mut().remove(path).is_some() {
+            // A previously checked generic module now has concrete handler
+            // contracts. Replay ownership before its importer can use them.
+            let analyses = self.cached_analyses(path, module, values);
+            analyses.ownership?;
+        }
         let thunk = self.infer(
             path,
             module,
@@ -9301,6 +9369,12 @@ impl Checker {
             Type::Record(fields) | Type::Variant { cases: fields, .. } => fields
                 .iter()
                 .map(|(_, field)| self.level_of(field))
+                .max()
+                .unwrap_or(0),
+            Type::RecordUpdate { base, fields } => fields
+                .iter()
+                .map(|(_, field)| self.level_of(field))
+                .chain(std::iter::once(self.level_of(base)))
                 .max()
                 .unwrap_or(0),
             Type::Array(element)
@@ -11267,6 +11341,14 @@ impl Checker {
         if let Value::Extended { inner, .. } = value {
             return self.instantiate_comptime_effects(type_, inner);
         }
+        if let Type::Union(members) = type_ {
+            return join_types(
+                members
+                    .iter()
+                    .map(|member| self.instantiate_comptime_effects(member, value))
+                    .collect(),
+            );
+        }
         if let (Type::Record(fields), Value::Shape(values)) = (type_, value) {
             return Type::Record(
                 fields
@@ -11418,14 +11500,8 @@ impl Checker {
     }
 
     fn bridge_closed_attached_signature(&self, value: &Value) -> Option<Type> {
-        let Value::Closure {
-            signature: Some(signature),
-            ..
-        } = value
-        else {
-            return None;
-        };
-        self.bridge_closed_value(signature)
+        let signature = closure_signature(value)?;
+        self.bridge_closed_value(&signature)
     }
 
     fn bridge_closed_value(&self, value: &Value) -> Option<Type> {
@@ -11444,6 +11520,33 @@ impl Checker {
     fn show(&self, type_: &Type) -> String {
         let settled = self.settle(type_.clone(), true);
         self.show_settled(&settled)
+    }
+
+    // Lint validation compares interfaces independently of union discovery
+    // order. Record field order and every other checked distinction remain.
+    fn interface_key(&self, result: &Type, effects: &Type) -> String {
+        fn canonical(checker: &Checker, type_: &Type) -> Type {
+            let mut normalized = map_type_children_ref(type_, |child| canonical(checker, child));
+            match &mut normalized {
+                Type::Union(members) => {
+                    let mut sorted = members.to_vec();
+                    sorted.sort_by_cached_key(|member| checker.show_settled(member));
+                    *members = sorted.into();
+                }
+                Type::Variant { cases, .. } => {
+                    let mut sorted = cases.to_vec();
+                    sorted.sort_by(|left, right| left.0.cmp(&right.0));
+                    *cases = sorted.into();
+                }
+                _ => {}
+            }
+            normalized
+        }
+        serde_json::json!([
+            self.show_settled(&canonical(self, result)),
+            show_effects(&canonical(self, effects)),
+        ])
+        .to_string()
     }
 
     fn show_settled(&self, type_: &Type) -> String {
@@ -16723,6 +16826,29 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn lint_interface_keys_ignore_union_order_and_empty_effect_encoding() {
+        let checker = Checker::new(Rc::new(Context::default()));
+        let left = Type::Union(vec![int_type(), Type::Unit].into());
+        let right = Type::Union(vec![Type::Unit, int_type()].into());
+        assert_eq!(
+            checker.interface_key(&left, &Type::Bottom),
+            checker.interface_key(&right, &Type::Effects(BTreeSet::new()))
+        );
+        let ordered =
+            Type::Record(vec![("first".into(), int_type()), ("second".into(), Type::Unit)].into());
+        let reversed =
+            Type::Record(vec![("second".into(), Type::Unit), ("first".into(), int_type())].into());
+        assert_ne!(
+            checker.interface_key(&ordered, &Type::Bottom),
+            checker.interface_key(&reversed, &Type::Bottom)
+        );
+        assert_ne!(
+            checker.interface_key(&left, &Type::Bottom),
+            checker.interface_key(&left, &Type::Effects(BTreeSet::from(["Console".into()])))
+        );
+    }
+
     fn certificate_with_result(
         mut types: Vec<FlatTypeNode>,
         result: FlatTypeId,
@@ -16781,6 +16907,35 @@ mod tests {
         CachedModuleInterface::from_checked(checked)
             .expect("closed test interface must pass artifact admission")
             .expect("test interface must be closed")
+    }
+
+    #[test]
+    fn record_update_extrusion_lowers_base_and_field_levels() {
+        for (base_level, field_level) in [(1, 0), (0, 1), (1, 1)] {
+            let checker = Checker::new(Rc::new(Context::default()));
+            let target = checker.fresh();
+            checker.level.set(base_level);
+            let base = checker.fresh();
+            checker.level.set(field_level);
+            let field = checker.fresh();
+            let update = Type::RecordUpdate {
+                base: Rc::new(base),
+                fields: vec![("count".into(), field)].into(),
+            };
+            assert_eq!(checker.level_of(&update), 1);
+            checker
+                .constrain(target, update.clone(), Span { start: 0, end: 0 })
+                .unwrap();
+            let extruded = checker.extrude(update.clone(), false, 0, &mut HashMap::new());
+            let extruded_id = checker.constraint_type(&extruded);
+            assert_eq!(
+                checker
+                    .constraint_types
+                    .borrow()
+                    .level_of(extruded_id, &checker.variables.borrow()),
+                0,
+            );
+        }
     }
 
     #[test]

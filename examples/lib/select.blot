@@ -93,7 +93,7 @@ let wait = fn io => do:
       Select.channel channel.receiver,
       Select.events subscription,
       Select.after io.clock 100
-      ]
+    ]
   return Spark.scope io.executor body
 
 let timers :: Io.Clock.Capability -> Select.Selection Int ~ { Select.Effect }

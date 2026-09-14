@@ -2,12 +2,10 @@ import { type CheckedModule, Compiler } from "../../compiler.ts";
 import { BlotError } from "../../diagnostic.ts";
 import { LoadError } from "../../load.ts";
 import { parse } from "../../syntax/parse.ts";
-import type { LintDiagnostic, LintFix } from "./types.ts";
+import type { LintDiagnostic } from "./types.ts";
+import { applyLintFix } from "./edits.ts";
 
-export function applyLintFix(source: string, fix: LintFix): string {
-  return source.slice(0, fix.span.start) + fix.replacement +
-    source.slice(fix.span.end);
-}
+export { applyLintFix } from "./edits.ts";
 
 export async function validateLintDiagnostics(
   path: string,
@@ -78,8 +76,7 @@ async function validateSemanticLintDiagnostics(
       if (
         fix.validation === "check" ||
         (
-          checked.type === original.type &&
-          checked.effects === original.effects
+          checked.interfaceKey === original.interfaceKey
         )
       ) {
         validated.push(diagnostic);

@@ -75,7 +75,7 @@ const report =
       return {
         ...totals;
         .average_unit_cents = average_unit_cents;
-        }
+      }
   )
 
 // A concrete public boundary closes the generic input type, so callers of
@@ -96,4 +96,4 @@ return {
     .empty = analyze [];
     .single = analyze [{ .sku = "marker"; .quantity = 4; .unit_cents = 175; }];
   };
-  }
+}

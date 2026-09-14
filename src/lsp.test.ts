@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { toFileUrl } from "@std/path";
+import { PRELUDE } from "./load.ts";
 import { runLanguageServer } from "./lsp.ts";
 
 Deno.test("the LSP advertises and returns lint code actions", async () => {
@@ -87,6 +89,15 @@ return remainder
     },
     {
       jsonrpc: "2.0",
+      id: 9,
+      method: "textDocument/definition",
+      params: {
+        textDocument: { uri },
+        position: { line: 0, character: 21 },
+      },
+    },
+    {
+      jsonrpc: "2.0",
       method: "$/cancelRequest",
       params: { id: 6 },
     },
@@ -98,7 +109,10 @@ return remainder
   const initialize = responses.find((response) => response.id === 1) as {
     readonly result: { readonly capabilities: Record<string, unknown> };
   };
-  assertEquals(initialize.result.capabilities.codeActionProvider, true);
+  assertEquals(initialize.result.capabilities.codeActionProvider, {
+    resolveProvider: true,
+    codeActionKinds: ["quickfix", "refactor.rewrite", "source.fixAll.blot"],
+  });
   assertEquals(initialize.result.capabilities.hoverProvider, true);
   assertEquals(initialize.result.capabilities.typeDefinitionProvider, true);
   assertEquals(initialize.result.capabilities.referencesProvider, true);
@@ -146,10 +160,81 @@ return remainder
       end: { line: 3, character: 12 },
     },
   }]);
+  assertEquals(responses.find((response) => response.id === 9)?.result, {
+    uri: toFileUrl(PRELUDE).href,
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+  });
   const cancelled = responses.find((response) => response.id === 6) as {
     readonly error: { readonly code: number };
   };
   assertEquals(cancelled.error.code, -32800);
+});
+
+Deno.test("the LSP resolves a deferred fix-all action into versioned edits", async () => {
+  const uri = "untitled:lsp-resolve-fix-all.blot";
+  const source = "let count = 2\nreturn { .count = count; }\n";
+  const action = {
+    title: "Fix all field shorthand suggestions",
+    kind: "source.fixAll.blot.BLOT_LINT_FIELD_SHORTHAND",
+    diagnostics: [],
+    data: { uri, version: 7, rule: "BLOT_LINT_FIELD_SHORTHAND" },
+  };
+  const responses = await exchange([
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        capabilities: {
+          textDocument: {
+            codeAction: { resolveSupport: { properties: ["edit"] } },
+          },
+        },
+      },
+    },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    {
+      jsonrpc: "2.0",
+      method: "textDocument/didOpen",
+      params: { textDocument: { uri, version: 7, text: source } },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/codeAction",
+      params: {
+        textDocument: { uri },
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 2, character: 0 },
+        },
+        context: { diagnostics: [], only: [action.kind] },
+      },
+    },
+    { jsonrpc: "2.0", id: 3, method: "codeAction/resolve", params: action },
+    { jsonrpc: "2.0", id: 4, method: "shutdown", params: null },
+    { jsonrpc: "2.0", method: "exit", params: null },
+  ]);
+  assertEquals(responses.find((response) => response.id === 2)?.result, [
+    action,
+  ]);
+  assertEquals(responses.find((response) => response.id === 3)?.result, {
+    title: action.title,
+    kind: action.kind,
+    diagnostics: [],
+    edit: {
+      documentChanges: [{
+        textDocument: { uri, version: 7 },
+        edits: [{
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 2, character: 0 },
+          },
+          newText: "let count = 2\nreturn { .count; }\n",
+        }],
+      }],
+    },
+  });
 });
 
 Deno.test("document close releases a diskless LSP root", async () => {

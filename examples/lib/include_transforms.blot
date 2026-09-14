@@ -9,4 +9,4 @@ return {
   .as_raw = as_raw;
   .as_json = as_json;
   .as_const_json = as_const_json;
-  }
+}

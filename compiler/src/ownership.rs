@@ -148,6 +148,12 @@ pub(crate) struct HandlerClause {
     pub(crate) operation: crate::value::EffectOperationContract,
 }
 
+#[derive(Clone)]
+pub(crate) enum HandlerEvidence {
+    Deferred,
+    Checked(Vec<HandlerClause>),
+}
+
 pub(crate) struct OwnershipCheck {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) contracts: Vec<(ExpressionId, OwnershipContract)>,
@@ -402,7 +408,7 @@ struct Analysis<'a> {
     values: &'a ValueEnvironment,
     closure_types: &'a HashMap<ExpressionId, Type>,
     expression_types: &'a HashMap<ExpressionId, Type>,
-    handler_clauses: &'a HashMap<ExpressionId, Vec<HandlerClause>>,
+    handler_clauses: &'a HashMap<ExpressionId, HandlerEvidence>,
     diagnostics: Vec<Diagnostic>,
     function_results: HashMap<ExpressionId, Produced>,
     contracts: HashMap<ExpressionId, OwnershipContract>,
@@ -420,7 +426,7 @@ pub(crate) fn check(
     values: &ValueEnvironment,
     closure_types: &HashMap<ExpressionId, Type>,
     expression_types: &HashMap<ExpressionId, Type>,
-    handler_clauses: &HashMap<ExpressionId, Vec<HandlerClause>>,
+    handler_clauses: &HashMap<ExpressionId, HandlerEvidence>,
 ) -> OwnershipCheck {
     let mut analysis = Analysis {
         module_path: path,
@@ -2675,11 +2681,14 @@ fn validate_effect_handler_ownership(
     computation: Obligation,
     analysis: &mut Analysis<'_>,
 ) {
-    let clauses = analysis
+    let evidence = analysis
         .handler_clauses
         .get(&argument)
         .expect("checked handle application has clause provenance")
         .clone();
+    let HandlerEvidence::Checked(clauses) = evidence else {
+        return;
+    };
     let span = analysis.module.arena.expression_span(argument);
     for clause in clauses {
         let module = analysis

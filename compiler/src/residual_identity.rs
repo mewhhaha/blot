@@ -17,12 +17,38 @@ use crate::value::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::mem::{Discriminant, discriminant};
 use std::rc::{Rc, Weak};
 
-#[derive(Clone, PartialEq)]
-pub(super) struct ResidualEnvironmentKey(Vec<Part>);
+#[derive(Clone)]
+pub(super) struct ResidualEnvironmentKey(Rc<[Part]>);
+
+impl PartialEq for ResidualEnvironmentKey {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(&self.0, &other.0)];
+        let mut visited = HashSet::new();
+        while let Some((left, right)) = pending.pop() {
+            if Rc::ptr_eq(left, right) {
+                continue;
+            }
+            if left.len() != right.len() {
+                return false;
+            }
+            if !visited.insert((left.as_ptr(), right.as_ptr())) {
+                continue;
+            }
+            for (left, right) in left.iter().zip(right.iter()) {
+                match (left, right) {
+                    (Part::Fields(left), Part::Fields(right)) => pending.push((left, right)),
+                    _ if left != right => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+}
 
 // Lengths and variant markers make this a structural encoding, not a display
 // string or a hash. Scope values retain their revision-qualified identities.
@@ -40,6 +66,7 @@ enum Part {
     Runtime(usize, usize, RuntimeMeaning),
     Closure(usize),
     Reference(usize),
+    Fields(Rc<[Part]>),
     Instances(Rc<ModuleInstanceScope>),
     Scope(Rc<EffectScope>),
     Ownership(EffectOperationContract),
@@ -313,7 +340,28 @@ fn portable_evidence<'a>(
     let mut tags = HashMap::new();
     let mut instances = HashMap::new();
     let mut scopes = HashMap::new();
-    for part in parts {
+    let mut roots = parts;
+    let mut nested: Vec<std::slice::Iter<'a, Part>> = Vec::new();
+    let flattened = std::iter::from_fn(|| {
+        loop {
+            let part = if let Some(current) = nested.last_mut() {
+                if let Some(part) = current.next() {
+                    part
+                } else {
+                    nested.pop();
+                    continue;
+                }
+            } else {
+                roots.next()?
+            };
+            if let Part::Fields(fields) = part {
+                nested.push(fields.iter());
+                continue;
+            }
+            return Some(part);
+        }
+    });
+    for part in flattened {
         let value = match part {
             Part::SessionOnly => return Ok(None),
             Part::Body(module, body) => {
@@ -369,6 +417,7 @@ fn portable_evidence<'a>(
             }),
             Part::Closure(index) => PortablePart::Closure(*index),
             Part::Reference(index) => PortablePart::Reference(*index),
+            Part::Fields(_) => unreachable!("record evidence is flattened before encoding"),
             Part::Instances(scope) => {
                 let pointer = Rc::as_ptr(scope);
                 let index = if let Some(index) = instances.get(&pointer) {
@@ -617,13 +666,14 @@ pub(super) fn residual_environment_key(
     if !key.closure(closure)? {
         return Ok(None);
     }
-    Ok(Some(ResidualEnvironmentKey(key.parts)))
+    Ok(Some(ResidualEnvironmentKey(key.parts.into())))
 }
 
 struct Builder<'a> {
     context: &'a Rc<Context>,
     slots: HashMap<(usize, usize), usize>,
     closures: HashMap<(String, u32, usize), usize>,
+    fields: HashMap<*const (), (Rc<[Part]>, OrderedFields)>,
     parts: Vec<Part>,
 }
 
@@ -637,6 +687,7 @@ impl<'a> Builder<'a> {
                 .map(|(slot, capture)| ((capture.id, capture.type_id), slot))
                 .collect(),
             closures: HashMap::new(),
+            fields: HashMap::new(),
             parts: Vec::new(),
         }
     }
@@ -671,14 +722,31 @@ impl<'a> Builder<'a> {
     }
 
     fn fields(&mut self, fields: &OrderedFields) -> Result<bool, Diagnostic> {
+        let identity = fields.storage_identity();
+        if let Some((parts, _)) = self.fields.get(&identity) {
+            self.parts.push(Part::Fields(parts.clone()));
+            return Ok(true);
+        }
+        let outer = std::mem::take(&mut self.parts);
+        let closures = self.closures.len();
         self.number(fields.len() as u64);
+        let mut supported = true;
         for (name, value) in fields {
             self.text(name);
             if !self.value(value)? {
-                return Ok(false);
+                supported = false;
+                break;
             }
         }
-        Ok(true)
+        let parts: Rc<[Part]> = std::mem::replace(&mut self.parts, outer).into();
+        // A new closure definition becomes a reference on later visits. Only
+        // memoize record evidence once its closure references are stable.
+        if supported && closures == self.closures.len() {
+            self.fields
+                .insert(identity, (parts.clone(), fields.clone()));
+        }
+        self.parts.push(Part::Fields(parts));
+        Ok(supported)
     }
 
     fn runtime(&mut self, value: &RuntimeValue) -> Result<bool, Diagnostic> {
@@ -1019,7 +1087,7 @@ mod tests {
         builder
             .value(value)
             .unwrap()
-            .then_some(ResidualEnvironmentKey(builder.parts))
+            .then_some(ResidualEnvironmentKey(builder.parts.into()))
     }
 
     fn runtime(id: usize, meaning: RuntimeMeaning) -> RuntimeValue {
@@ -1037,6 +1105,64 @@ mod tests {
         let nan = Value::Float(f64::from_bits(0x7ff8_0000_0000_0001));
         assert!(key(&nan, &[]) == key(&nan, &[]));
         assert!(key(&nan, &[]) != key(&Value::Float(f64::from_bits(0x7ff8_0000_0000_0002)), &[]));
+    }
+
+    #[test]
+    fn shared_record_evidence_grows_with_the_graph() {
+        let nested = |leaf: Value| {
+            let mut value = leaf;
+            for _ in 0..12 {
+                value = Value::Shape(OrderedFields::from([
+                    ("left".into(), value.clone()),
+                    ("right".into(), value),
+                ]));
+            }
+            value
+        };
+        let left = key(&nested(Value::Text("left".into())), &[]).unwrap();
+        let same = key(&nested(Value::Text("left".into())), &[]).unwrap();
+        let right = key(&nested(Value::Text("right".into())), &[]).unwrap();
+        assert!(left == same);
+        assert!(left != right);
+        let mut pending = vec![&left.0];
+        let mut visited = HashSet::new();
+        let mut parts = 0;
+        while let Some(chunk) = pending.pop() {
+            if !visited.insert(chunk.as_ptr()) {
+                continue;
+            }
+            parts += chunk.len();
+            for part in chunk.iter() {
+                if let Part::Fields(fields) = part {
+                    pending.push(fields);
+                }
+            }
+        }
+        assert!(parts < 128, "{parts} evidence parts");
+        assert!(Rc::ptr_eq(&left.0, &left.clone().0));
+    }
+
+    #[test]
+    fn record_evidence_ignores_allocation_sharing() {
+        let fields = || OrderedFields::from([("value".into(), Value::Text("same".into()))]);
+        let shared = fields();
+        let shared = Value::Array(vec![Value::Shape(shared.clone()), Value::Shape(shared)].into());
+        let copied = Value::Array(vec![Value::Shape(fields()), Value::Shape(fields())].into());
+        assert!(key(&shared, &[]) == key(&copied, &[]));
+    }
+
+    #[test]
+    fn copied_record_mutations_do_not_reuse_evidence() {
+        let first = OrderedFields::from([("value".into(), Value::Text("before".into()))]);
+        let mut second = first.clone();
+        second.insert("value".into(), Value::Text("after".into()));
+        let pair = |first: OrderedFields, second: OrderedFields| {
+            Value::Shape(OrderedFields::from([
+                ("first".into(), Value::Shape(first)),
+                ("second".into(), Value::Shape(second)),
+            ]))
+        };
+        assert!(key(&pair(first.clone(), first.clone()), &[]) != key(&pair(first, second), &[]));
     }
 
     #[test]
