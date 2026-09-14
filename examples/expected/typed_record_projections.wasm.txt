@@ -1,0 +1,1 @@
+{ .after = { .host = "edge-🐱"; .port = 443 }; .before = { .host = "api.internal"; .port = 8080 }; .capacity = { .replicas = 5 }; .empty = {  }; .identity = { .locale = "pl-PL"; .name = "Grace" }; .owner = "Ada"; .unchanged_owner = "Ada" }

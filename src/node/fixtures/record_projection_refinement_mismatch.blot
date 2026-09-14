@@ -1,0 +1,13 @@
+open import "blot:prelude"
+const Projection = import "../../../examples/lib/record_projection.blot"
+
+const Port = refine (Int, fn value => value >= 1 && value <= 65535)
+const Deployment = { .host = Text; .port = Port; .owner = Text; }
+const network = Projection.fields (Deployment, ["host", "port"])
+
+let initial :: Deployment
+let initial = { .host = "api"; .port = 8080; .owner = "Ada"; }
+return network.projection.put (
+  initial,
+  { .host = "edge"; .port = 70000; }
+)
