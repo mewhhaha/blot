@@ -38,7 +38,8 @@ test("reversible updates preserve typed undo evidence in both executions", async
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/reversible_updates.txt", "utf8")).trim(),
+      (await readFile("examples/expected/reversible_updates.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(path)),
