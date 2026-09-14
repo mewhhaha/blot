@@ -54,6 +54,7 @@ const abstractionExamples = [
   "deferred_fallback.blot",
   "residual_command_router.blot",
   "typed_relational_join.blot",
+  "reversible_updates.blot",
 ] as const;
 
 let selectedExamples: readonly string[] = [

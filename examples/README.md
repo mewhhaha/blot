@@ -59,6 +59,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`deferred_fallback.blot`](deferred_fallback.blot)             | Affine deferred fallback expressions preserve one success carrier while replacing or pairing independently typed errors              | cache hit skips fallback; store hit; paired errors remain typed   |
 | [`residual_command_router.blot`](residual_command_router.blot) | Typed routing stages forward exact residual variants; composition can only pass cases the previous stage left unresolved             | create, rename, delete, and final health resolution               |
 | [`typed_coordinate_spaces.blot`](typed_coordinate_spaces.blot) | Generated space descriptors and composable transforms keep points and vectors in matched coordinate frames                           | model/world/screen composition, vector semantics, static mismatches |
+| [`reversible_updates.blot`](reversible_updates.blot)           | Reversible updates compose exact input/undo evidence and roll back failed validation with matching typed evidence                    | apply, round-trip restore, commit, rollback, and static mismatches |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -151,6 +152,12 @@ both function-result and function-input positions, and points stay distinct from
 vectors so translation cannot accidentally affect a displacement. The explicit
 frame marker is runtime data; the example does not claim a zero-cost phantom
 type.
+
+The reversible-update example turns an immutable getter/setter pair into a
+`Reversible (State, Input, Undo)` plan whose `apply` result carries exactly the
+evidence accepted by `revert`. Composition pairs both input and undo carriers,
+while `commit_if` uses the produced evidence to roll back failed validation. The
+type checks carrier compatibility; inverse laws remain executable contracts.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
