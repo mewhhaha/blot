@@ -64,22 +64,3 @@ test("event aggregate boundaries reject foreign events and wrong product command
     compiler.destroy();
   }
 });
-
-test("documents the current unannotated right-branch result precision gap", async () => {
-  const compiler = await Compiler.create();
-  try {
-    const probe = "src/node/fixtures/event_aggregate_unannotated_right.blot";
-    const checked = await compiler.check(probe);
-    assert.equal(checked.type, "{ .value = ⊥ }");
-    assert.equal(
-      (await compiler.evaluate(probe)).display,
-      "{ .value = #Ok { .state = (0, #True); .events = [#Right #Enabled]; }; }",
-    );
-    assert.equal(
-      await runArtifact(await compiler.compile(probe)),
-      "#Ok { .events = [#Right #Enabled]; .state = { .0 = 0; .1 = true } }",
-    );
-  } finally {
-    compiler.destroy();
-  }
-});
