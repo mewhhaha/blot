@@ -1,0 +1,1 @@
+{ .default = { .before = ["ready", "users", "métriques"]; .after = ["ready-prod", "users-prod", "métriques-prod"]; .empty_labels = []; .first_url = "/ready"; .waves = 3; }; }
