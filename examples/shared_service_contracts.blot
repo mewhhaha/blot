@@ -1,0 +1,28 @@
+// Independently authored modules reconstruct the same typed service ports from
+// qualified keys and exact operation contracts. One provider can therefore
+// handle a consumer without either module importing the other's effect value.
+open import "blot:prelude"
+
+const Consumer = import "./lib/shared_service_consumer.blot"
+const Provider = import "./lib/shared_service_provider.blot"
+
+let run = fn (name, quota) => @handle (
+  Provider.Directory,
+  fn () => @handle (
+    Provider.Quota,
+    fn () => Consumer.profile 7,
+    Provider.quota quota
+  ),
+  Provider.directory name
+)
+
+// Pain point: changing either a shared key or its operation contract deliberately
+// creates a different effect identity. The rejection fixtures show that this is
+// currently diagnosed only when the mismatched effect remains unhandled.
+return {
+  .default = {
+    .ada = run (#Some "Ada", 25);
+    .grace = run (#Some "Grace", 80);
+    .missing = run (#None, 0);
+  };
+}

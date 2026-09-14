@@ -1,0 +1,22 @@
+open import "blot:prelude"
+
+const Port = import "../../../examples/lib/shared_service_port.blot"
+const Consumer =
+  Port.unary (
+    "example.directory.lookup.v1",
+    Int,
+    Option Text
+  )
+const WrongProvider =
+  Port.unary (
+    "example.directory.lookup.v2",
+    Int,
+    Option Text
+  )
+
+let lookup = fn () => Consumer.call 7
+return @handle (
+  WrongProvider,
+  lookup,
+  { .call = fn (_, ?resume) => resume #None; }
+)
