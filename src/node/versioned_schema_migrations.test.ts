@@ -14,7 +14,7 @@ const wrongOrderPath = "src/node/fixtures/versioned_migration_wrong_order.blot";
 const invalidV3Path = "src/node/fixtures/versioned_migration_invalid_v3.blot";
 
 const principalType =
-  '{ .default = { .valid = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .invalid_seconds = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .invalid_retry = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .boundary = { .status = Text; .timeout_ms = Int; .retry_limit = Int } } }';
+  "{ .default = { .valid = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .invalid_seconds = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .invalid_retry = { .status = Text; .timeout_ms = Int; .retry_limit = Int }; .boundary = { .status = Text; .timeout_ms = Int; .retry_limit = Int } } }";
 
 const blotPaths = [
   libraryPath,
