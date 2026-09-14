@@ -1,14 +1,16 @@
 const Article = import "../../../examples/lib/article_protocol.blot"
 
-let reviewed = #Reviewed {
-  .title = "Compiler notes";
-  .body = "polished";
-  .reviewer = "Ada";
-}
-let request = {
-  .reviewer = "Ada";
-  .approved_body = "polished";
-  .slug = "compiler-notes";
-}
+let reviewed =
+  #Reviewed {
+    .title = "Compiler notes";
+    .body = "polished";
+    .reviewer = "Ada";
+  }
+let request =
+  {
+    .reviewer = "Ada";
+    .approved_body = "polished";
+    .slug = "compiler-notes";
+  }
 
 return Article.Workflow.forward (reviewed, request)
