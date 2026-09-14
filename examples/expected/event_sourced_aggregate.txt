@@ -1,0 +1,1 @@
+{ .default = { .accepted_allocated = 4; .accepted_available = 1; .accepted_events = 1; .batch_allocated = 3; .batch_available = 5; .batch_events = 2; .empty_allocated = 0; .empty_available = 0; .invalid_count = 0; .rejected_available = 4; .rejected_requested = 7; .replayed_allocated = 1; .replayed_available = 4; .round_trip_allocated = 4; .round_trip_available = 1; }; }
