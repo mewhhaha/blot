@@ -1,0 +1,1 @@
+{ .after = ["ready-prod", "users-prod", "métriques-prod"]; .before = ["ready", "users", "métriques"]; .empty_labels = []; .first_url = "/ready"; .waves = 3 }
