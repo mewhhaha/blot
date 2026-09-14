@@ -43,7 +43,7 @@ The implementation freezes the right input once before capturing it in the
 per-left predicate. Without that sharing boundary, the generic declaration
 checks but its concrete use is rejected when the callback would repeatedly
 consume the same array authority. The empty-left call needs no result
-annotation: its precise inferred type is `[⊥]`, an empty array that is a subtype
-of every array element type. It evaluates to `[]` and compiles normally. The
+annotation: its precise inferred type is `[⊥]`, the empty-array type, which is a
+subtype of every array type. It evaluates to `[]` and compiles normally. The
 typed relation still constrains the supplied row arguments; an empty result does
 not authorize an incompatible nonempty input.

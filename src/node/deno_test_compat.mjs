@@ -97,15 +97,37 @@ async function denoStat(path) {
   }
 }
 
+async function runTest(context, fn) {
+  let stepsPassed = true;
+  await fn({
+    name: context.name,
+    async step(nameOrDefinition, stepFn) {
+      let definition = { name: nameOrDefinition, fn: stepFn, ignore: false };
+      if (typeof nameOrDefinition !== "string") definition = nameOrDefinition;
+      let passed = false;
+      await context.test(
+        definition.name,
+        { skip: definition.ignore },
+        async (child) => {
+          passed = await runTest(child, definition.fn);
+        },
+      );
+      if (!definition.ignore && !passed) stepsPassed = false;
+      return passed;
+    },
+  });
+  return stepsPassed;
+}
+
 function registerTest(nameOrDefinition, fn) {
   if (typeof nameOrDefinition === "string") {
-    test(nameOrDefinition, fn);
+    test(nameOrDefinition, (context) => runTest(context, fn));
     return;
   }
   test(
     nameOrDefinition.name,
     { skip: nameOrDefinition.ignore },
-    nameOrDefinition.fn,
+    (context) => runTest(context, nameOrDefinition.fn),
   );
 }
 

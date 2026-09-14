@@ -36,11 +36,7 @@ test("typed record projections preserve selected types in both executions", asyn
       assert.equal(formatted.source, source);
     }
 
-    const checkedInterface1 = await compiler.check(examplePath);
-    assert.deepEqual({
-      type: checkedInterface1.type,
-      effects: checkedInterface1.effects,
-    }, {
+    assert.deepEqual(await compiler.check(examplePath), {
       type: principalType,
       effects: "",
       interfaceKey: JSON.stringify([principalType, ""]),

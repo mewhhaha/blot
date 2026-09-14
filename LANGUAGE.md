@@ -1187,9 +1187,9 @@ directly when constructing an extension with new fields.
 `Reflect.pick (record, names)` constructs a record containing only the listed
 compile-time field names. The selected fields may contain type values or runtime
 values. This is an explicit projection for constructing restricted record views.
-If a compile-time projection generator requests a missing field, its diagnostic
-identifies the caller's application and retains the originating implementation
-span in the explanation.
+If an imported compile-time projection generator requests a missing field, its
+diagnostic identifies the caller's application and retains the originating
+implementation span in the explanation.
 
 ```blot
 let original :: { .name = Text; .count = Int; }

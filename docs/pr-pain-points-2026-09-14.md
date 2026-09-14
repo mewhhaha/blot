@@ -31,6 +31,12 @@ the proposed fix. The rule now replaces only the opening's code. A focused
 regression checks that the import narrows, the explanation after it survives
 unchanged, and the result still evaluates correctly.
 
+The new idiom suite also exposed missing `Deno.test` step support in the Node
+regression runner. The compatibility layer now runs nested steps, honors ignored
+steps, returns their success status, and propagates failures to the parent and
+process exit. Runner regressions cover successful nesting, skipped work, failed
+descendants, and stopping before a later test file.
+
 ## PR decisions
 
 | PR                                                                       | Reviewed head                              | Decision                                                                                                                                                    |
@@ -41,7 +47,7 @@ unchanged, and the result still evaluates correctly.
 | [#139](https://github.com/mewhhaha/blot/pull/139), coordinate spaces     | `192728fe1331853008f5a1d7874e89997fd21fe1` | Merge. Staged descriptors enforce a concrete frame; the quantified widening fixture correctly documents covariance.                                         |
 | [#140](https://github.com/mewhhaha/blot/pull/140), reversible updates    | `e810276ae2304182dd179122e1dceca0e6ffe2e8` | Merge. The API checks carrier compatibility; round-trip laws and tuple association remain explicit library contracts.                                       |
 | [#141](https://github.com/mewhhaha/blot/pull/141), typed traversals      | `69083b5a709ff2b35980bcc6d5be4c9335339813` | Merge after the specialization fix. The rejection fixture uses `T.each` directly, and a documented nested-array record setter is tested in both executions. |
-| [#142](https://github.com/mewhhaha/blot/pull/142), record projections    | `1955c5f4f2ec1574f4986411d7c2afcb96fa268d` | Merge with the caller-diagnostic fix. Keep concrete type-value staging for selected record shapes.                                                          |
+| [#142](https://github.com/mewhhaha/blot/pull/142), record projections    | `28a4a9446156cc7322bdb040d10bef5157e8e418` | Merge with the caller-diagnostic fix. Keep concrete type-value staging for selected record shapes.                                                          |
 
 The examples and libraries are updated for current formatting and lint rules.
 Their tests assert the public type/effect observations while allowing the
@@ -82,3 +88,24 @@ Possible future work such as richer deferred-effect explanations, different
 runtime suspension APIs, or domain-specific flattened undo plans requires its
 own design decision. This triage does not classify those requests as unfixed
 compiler correctness bugs.
+
+## Integrated validation
+
+- 629 Rust compiler tests and 372 Node tests pass.
+- All 87 regression files pass, including ECS scalar/SIMD execution, the full
+  formatter corpus, and the new idiom tests. Failed legacy result-shape
+  assertions and the missing step adapter were corrected and the affected files
+  rerun.
+- All 264 catalog programs compile; evaluator/Wasm conformance passes.
+- The seven example suites cover their principal types, positive executions,
+  rejection fixtures, and intentional target refusals. The updated projection
+  head and nested-array traversal path pass their focused checks.
+- TypeScript checking, Deno lint/format, changed-Blot formatting and lint,
+  configured Wasm Clippy, generated frontend/health checks, current compiler
+  inventory, and the runnable npm package checks pass.
+
+The integrated compiler Wasm SHA-256 is
+`a1e7f2010f92ea48887ac514fd48176cde75477ad9c54d05eb44b3ec4b0d68c8`. The compiler
+and primary tooling fixes are in `4f167ac1`; the merge history also retains the
+updated #142 head. Generated inventory now records the baseline's compiler-host
+ABI 10 and checked-module certificate 24.

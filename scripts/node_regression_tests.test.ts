@@ -57,6 +57,54 @@ test("regression runner reports each file and preserves successful exits", async
   });
 });
 
+test("regression runner supports nested and ignored Deno steps", async () => {
+  await withFixture(
+    `Deno.test("nested steps", async (context) => {
+  const passed = await context.step({
+    name: "outer step",
+    fn: async (child) => {
+      if (child.name !== "outer step") throw new Error("wrong step name");
+      if (!await child.step("inner step", () => {})) throw new Error("step failed");
+    },
+  });
+  const skipped = await context.step({
+    name: "ignored step",
+    ignore: true,
+    fn: () => { throw new Error("ignored step ran"); },
+  });
+  if (!passed || skipped) throw new Error("wrong step status");
+});\n`,
+    (directory) => {
+      const result = runFixture(directory, "5000");
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /inner step/);
+      assert.match(result.stdout, /later file ran/);
+    },
+  );
+});
+
+test("regression runner propagates failed nested steps", async () => {
+  await withFixture(
+    `Deno.test("nested failure", async (context) => {
+  const passed = await context.step("outer step", async (child) => {
+    await child.step("inner step", () => { throw new Error("nested assertion failed"); });
+  });
+  if (passed) throw new Error("failed step reported success");
+  console.log("failed step returned false");
+});\n`,
+    (directory) => {
+      const result = runFixture(directory, "5000");
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stdout, /nested assertion failed/);
+      assert.match(result.stdout, /failed step returned false/);
+      assert.match(result.stderr, /Regression test failed: a\.test\.ts/);
+      assert.doesNotMatch(result.stdout, /later file ran|\[2\/2\]/);
+    },
+  );
+});
+
 test("regression runner fails instead of stalling on synchronous compiler work", async () => {
   await withFixture(
     'Deno.test("blocked", () => { console.log("entered loop"); while (true) {} });\n',
