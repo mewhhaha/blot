@@ -121,11 +121,11 @@ widens those errors to the application-level union at the product boundary.
 cannot masquerade as a codec. Product decoding is intentionally left-biased on
 errors; the example records that behavior rather than claiming accumulation.
 
-The reversible-update example turns an immutable getter/setter pair into an
+The reversible-update example turns an immutable getter/setter pair into a
 `Reversible (State, Input, Undo)` plan whose `apply` result carries exactly the
 evidence accepted by `revert`. Composition pairs both input and undo carriers,
-while `commit_if` uses the produced evidence to roll back failed validation.
-The type checks carrier compatibility; inverse laws remain executable contracts.
+while `commit_if` uses the produced evidence to roll back failed validation. The
+type checks carrier compatibility; inverse laws remain executable contracts.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
