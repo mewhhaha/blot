@@ -35,6 +35,7 @@ const suites = [
   "src/node/deferred_fallback.test.ts",
   "src/node/residual_command_router.test.ts",
   "src/node/typed_relational_join.test.ts",
+  "src/node/typed_coordinate_spaces.test.ts",
   "case-studies/live-report/live_report.test.ts",
 ];
 

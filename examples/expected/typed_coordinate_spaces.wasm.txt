@@ -1,0 +1,1 @@
+{ .moved = { .frame = #Screen; .x = 206; .y = -104 }; .same_target = { .frame = #Model; .x = 3; .y = 2 }; .screen_offset = { .dx = 6; .dy = -4; .frame = #Screen }; .screen_vertices = [{ .frame = #Screen; .x = 200; .y = -100 }, { .frame = #Screen; .x = 206; .y = -104 }, { .frame = #Screen; .x = 192; .y = -102 }] }

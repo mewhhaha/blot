@@ -58,6 +58,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
 | [`deferred_fallback.blot`](deferred_fallback.blot)             | Affine deferred fallback expressions preserve one success carrier while replacing or pairing independently typed errors              | cache hit skips fallback; store hit; paired errors remain typed   |
 | [`residual_command_router.blot`](residual_command_router.blot) | Typed routing stages forward exact residual variants; composition can only pass cases the previous stage left unresolved             | create, rename, delete, and final health resolution               |
+| [`typed_coordinate_spaces.blot`](typed_coordinate_spaces.blot) | Generated space descriptors and composable transforms keep points and vectors in matched coordinate frames                           | model/world/screen composition, vector semantics, static mismatches |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -142,6 +143,14 @@ shares each residual with the next stage, so an already handled constructor
 cannot be forwarded again and `finish` requires a resolver for every final
 remaining case. Blot has no surface empty type, so the chain ends with one
 concrete final resolver rather than subtracting the last alternative to empty.
+
+The coordinate-space example specializes a small descriptor per singleton frame,
+so within-space operations are monomorphic while reusable transforms quantify
+over their source and destination frames. `compose` shares its middle frame in
+both function-result and function-input positions, and points stay distinct from
+vectors so translation cannot accidentally affect a displacement. The explicit
+frame marker is runtime data; the example does not claim a zero-cost phantom
+type.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
