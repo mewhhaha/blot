@@ -63,6 +63,7 @@ shared array snapshots, guarded runtime indices, and large record-update folds.
 | [`typed_relational_join.blot`](typed_relational_join.blot)       | Typed key projections connect two row domains and preserve grouped matches                                                           | duplicates, unmatched rows, empty sides, flipped relations          |
 | [`typed_traversals.blot`](typed_traversals.blot)                 | Composable zero-or-more focuses preserve the relationship between whole values and their parts                                       | nested arrays, empty waves, Unicode labels, incompatible modifiers  |
 | [`typed_record_projections.blot`](typed_record_projections.blot) | A staged field selection derives a shared shape for typed observation and replacement                                                | refinements, unselected fields, empty selections, unknown names     |
+| [`stateful_processors.blot`](stateful_processors.blot)           | Staged processor descriptors compose stateful zero-or-one emission stages through an exact intermediate carrier                      | duplicate suppression, thresholded jumps, empty and silent streams  |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete

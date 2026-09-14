@@ -1,0 +1,15 @@
+open import "blot:prelude"
+const P = import "../../../examples/lib/stream_processor.blot"
+
+const Raw = #Raw Int
+const Out = #Out Int
+const processor =
+  P.make {
+    .state_type = Unit;
+    .input_type = Raw;
+    .output_type = Out;
+    .initial = ();
+    .step = fn (_, #Raw value) => ((), Some (#Out value));
+  }
+
+return P.run processor [#Out 1]

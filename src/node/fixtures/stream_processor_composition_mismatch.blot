@@ -1,0 +1,25 @@
+open import "blot:prelude"
+const P = import "../../../examples/lib/stream_processor.blot"
+
+const A = #A Int
+const B = #B Int
+const C = #C Int
+
+const left =
+  P.make {
+    .state_type = Unit;
+    .input_type = A;
+    .output_type = B;
+    .initial = ();
+    .step = fn (_, #A value) => ((), Some (#B value));
+  }
+const wrong_right =
+  P.make {
+    .state_type = Unit;
+    .input_type = C;
+    .output_type = C;
+    .initial = ();
+    .step = fn (_, #C value) => ((), Some (#C value));
+  }
+
+return P.compose (left, wrong_right)
