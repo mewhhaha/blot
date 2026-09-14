@@ -11,9 +11,9 @@ let run = fn (name, quota) => @handle (
   fn () => @handle (
     Provider.Quota,
     fn () => Consumer.profile 7,
-    Provider.quota quota,
+    Provider.quota quota
   ),
-  Provider.directory name,
+  Provider.directory name
 )
 
 // Pain point: changing either a shared key or its operation contract deliberately
