@@ -1,6 +1,9 @@
 open import "blot:prelude"
 const R = import "./reversible_protocol.blot"
 
+// Pain point: structural record width subtyping is intentionally permissive, so
+// later records with more fields are not exclusive protocol stages. Constructors
+// make Draft, Reviewed, and Published disjoint while keeping their payloads clear.
 const Draft = #Draft {
   .title = Text;
   .body = Text;
