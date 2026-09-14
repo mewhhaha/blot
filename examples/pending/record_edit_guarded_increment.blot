@@ -1,0 +1,17 @@
+// Pain point: desired pressure case: the branch proves the input is below the upper bound,
+// but integer arithmetic currently widens the successor back to Int. A future
+// range-aware arithmetic relation could make this natural modifier typecheck.
+open import "blot:prelude"
+const Edit = import "../lib/record_edit.blot"
+const Limits = { .burst = range (1, 100); }
+const Burst = Edit.field (Limits, "burst")
+
+let increment :: Burst.Part -> Burst.Part
+let increment = fn value => do:
+  if value < 100:
+    return value + 1
+  else:
+    return value
+
+let bump = Burst.modify increment
+return { .default = bump { .burst = 99; }; }
