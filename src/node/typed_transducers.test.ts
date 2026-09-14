@@ -47,7 +47,8 @@ test("typed transducers compose input transformations independently of reducer s
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/typed_transducers.txt", "utf8")).trim(),
+      (await readFile("examples/expected/typed_transducers.txt", "utf8"))
+        .trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(examplePath)),
