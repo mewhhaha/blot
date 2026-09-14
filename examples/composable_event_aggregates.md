@@ -14,10 +14,10 @@ than asking callers to repeat them.
 
 The interesting combinator is `product`. Two unrelated aggregates become one
 aggregate with tuple state and tagged command, event, and error sums. A left
-command can only produce left events or a left error, and replay can only consume
-the product event carrier. The concrete program composes a bounded counter with
-an open/closed gate, then exercises both sides independently and by replaying a
-mixed history.
+command can only produce left events or a left error, and replay can only
+consume the product event carrier. The concrete program composes a bounded
+counter with an open/closed gate, then exercises both sides independently and by
+replaying a mixed history.
 
 The compiler enforces carrier compatibility, the `Amount = 1..100` refinement,
 and the left/right wrappers exposed by the product. It does **not** prove event-
