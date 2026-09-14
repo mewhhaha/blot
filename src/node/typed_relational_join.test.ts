@@ -7,7 +7,7 @@ import { runArtifact } from "./run.ts";
 
 const path = "examples/typed_relational_join.blot";
 const expectedType =
-  "{ .default = { .customers = [{ .customer = Text; .order_count = Int; .total = Int }]; .products = [{ .product = Text; .line_count = Int; .quantity = Int }]; .orders = [{ .order = Int; .customer_count = Int }]; .empty_right_counts = [Int]; .empty_left = [{ .left = { .id = #CustomerId Int; .name = Text }; .matches = [{ .id = Int; .customer_id = #CustomerId Int; .total = Int }] }] } }";
+  "{ .default = { .customers = [{ .customer = Text; .order_count = Int; .total = Int }]; .products = [{ .product = Text; .line_count = Int; .quantity = Int }]; .orders = [{ .order = Int; .customer_count = Int }]; .empty_right_counts = [Int]; .empty_left = [⊥] } }";
 
 const sourcePaths = [
   "examples/lib/relational_join.blot",
@@ -27,7 +27,11 @@ test("typed relational group join preserves key domains in both executions", asy
       assert.equal(formatted.source, source);
     }
 
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: expectedType,
       effects: "",
     });

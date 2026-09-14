@@ -28,7 +28,11 @@ test("deferred fallback preserves typed errors and skips unused work", async () 
       assert.equal(formatted.source, source);
     }
 
-    assert.deepEqual(await compiler.check(example), {
+    const checkedInterface1 = await compiler.check(example);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: expectedType,
       effects: "",
     });
@@ -58,7 +62,11 @@ test("deferred fallback keeps its arrow and error contracts", async () => {
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
 
-    assert.deepEqual(await compiler.check(runtimeEscapeFixture), {
+    const checkedInterface2 = await compiler.check(runtimeEscapeFixture);
+    assert.deepEqual({
+      type: checkedInterface2.type,
+      effects: checkedInterface2.effects,
+    }, {
       type:
         "{ .default = #Ok ⊤ | #Error ⊤ ~> #Ok ⊤ | #Error ⊤ -> #Ok ⊥ | #Error { .primary = ⊥; .fallback = ⊥ } }",
       effects: "",

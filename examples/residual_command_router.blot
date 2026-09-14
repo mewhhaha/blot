@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Int; .Text; .Type; } = import "blot:prelude"
 const Router = import "./lib/residual_router.blot"
 
 const Create = #Create { .name = Text; }

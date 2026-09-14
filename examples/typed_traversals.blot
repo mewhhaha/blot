@@ -2,8 +2,7 @@
 // traversal can observe or update every probe label across deployment waves
 // without exposing nested loops to callers.
 
-open import "blot:prelude"
-
+const { .Array; .Shape; .Text; } = import "blot:prelude"
 const T = import "./lib/traversal.blot"
 
 const Probe =
@@ -18,7 +17,7 @@ const probe_label :: T.Traversal (Probe, Text)
 const probe_label =
   T.one (
     fn probe => probe.label,
-    fn (probe, label) => Shape.update (probe, { .label = label; })
+    fn (probe, label) => Shape.update (probe, { .label; })
   )
 
 const probes :: T.Traversal (Plan, Probe)
@@ -47,10 +46,10 @@ let empty_updated = T.over (labels, empty, fn label => label <> "!")
 
 return {
   .default = {
-    .before = before;
-    .after = after;
+    .before;
+    .after;
     .empty_labels = labels.collect empty_updated;
     .first_url = (Array.expect_get (Array.expect_get ((&updated), 0), 0)).url;
     .waves = Array.length (&updated);
   };
-  }
+}

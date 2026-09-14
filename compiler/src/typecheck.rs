@@ -5941,25 +5941,7 @@ impl Checker {
                     .or_insert(type_);
             }
         }
-        inferred.map_err(|mut diagnostic| {
-            if diagnostic.code == "BLOT_TYPE_ERROR"
-                && matches!(
-                    module.arena.expressions[expression_id.0 as usize],
-                    Expression::Apply { .. }
-                )
-                && !module.arena.synthetic_expressions.contains(&expression_id)
-                && let Some(origin) = diagnostic.origin.as_deref()
-                && origin != path
-            {
-                diagnostic.message = format!(
-                    "{} Required by {origin} at source span [{}, {}).",
-                    diagnostic.message, diagnostic.span.start, diagnostic.span.end,
-                );
-                diagnostic.span = module.arena.expression_span(expression_id);
-                diagnostic.origin = Some(path.to_owned());
-            }
-            diagnostic
-        })
+        inferred.map_err(|diagnostic| call_site_diagnostic(path, module, expression_id, diagnostic))
     }
 
     fn stable_argument_type(
@@ -6692,6 +6674,7 @@ impl Checker {
                         && !contains_bottom(&checked_result)
                         && !self.contains_unevidenced(&checked_result, &mut HashSet::new())
                     {
+                        self.constrain(result, checked_result.clone(), span)?;
                         checked_result
                     } else {
                         result
@@ -11255,7 +11238,7 @@ impl Checker {
             Runtime::new(phase, path.to_owned()),
         ));
         self.restore_evaluation_expression_types(path, saved);
-        evaluated
+        evaluated.map_err(|diagnostic| call_site_diagnostic(path, &module, expression, diagnostic))
     }
 
     fn evaluate_binding(
@@ -11331,7 +11314,7 @@ impl Checker {
                     },
                 );
         }
-        evaluated
+        evaluated.map_err(|diagnostic| call_site_diagnostic(path, module, expression, diagnostic))
     }
 
     fn instantiate_comptime_effects(&self, type_: &Type, value: &Value) -> Type {
@@ -11550,6 +11533,11 @@ impl Checker {
     }
 
     fn show_settled(&self, type_: &Type) -> String {
+        let mut next_quantifier = 0;
+        self.show_type(type_, &mut next_quantifier)
+    }
+
+    fn show_type(&self, type_: &Type, next_quantifier: &mut usize) -> String {
         match type_ {
             Type::Qualified { requirements, body } => format!(
                 "({}) => {}",
@@ -11557,29 +11545,33 @@ impl Checker {
                     .iter()
                     .map(|requirement| format!(
                         "{}.{} :: {}",
-                        self.show_settled(&requirement.subject),
+                        self.show_type(&requirement.subject, next_quantifier),
                         requirement.name,
-                        self.show_settled(&requirement.member)
+                        self.show_type(&requirement.member, next_quantifier)
                     ))
                     .collect::<Vec<_>>()
                     .join(", "),
-                self.show_settled(body),
+                self.show_type(body, next_quantifier),
             ),
             Type::Variable(id) => format!("'t{id}"),
             Type::Rigid(id) => format!("'s{id}"),
             Type::Forall { variables, body } => {
+                let first = *next_quantifier;
+                *next_quantifier += variables.len();
                 let replacements = variables
                     .iter()
                     .enumerate()
-                    .map(|(index, variable)| (*variable, Type::Opaque(format!("'q{index}"))))
+                    .map(|(index, variable)| {
+                        (*variable, Type::Opaque(format!("'q{}", first + index)))
+                    })
                     .collect();
-                let names = (0..variables.len())
+                let names = (first..*next_quantifier)
                     .map(|index| format!("'q{index}"))
                     .collect::<Vec<_>>()
                     .join(" ");
                 format!(
                     "forall {names}. {}",
-                    self.show_settled(&substitute_rigid(body.as_ref().clone(), &replacements))
+                    self.show_type(&substitute_rigid(body.as_ref().clone(), &replacements), next_quantifier)
                 )
             }
             Type::Range {
@@ -11620,8 +11612,8 @@ impl Checker {
                 let arrow = if *deferred { " ~> " } else { " -> " };
                 format!(
                     "{}{arrow}{}{}",
-                    self.show_settled(parameter),
-                    self.show_settled(result),
+                    self.show_type(parameter, next_quantifier),
+                    self.show_type(result, next_quantifier),
                     show_effects(effects)
                 )
             }
@@ -11629,31 +11621,31 @@ impl Checker {
                 "{{ {} }}",
                 fields
                     .iter()
-                    .map(|(name, type_)| format!(".{name} = {}", self.show_settled(type_)))
+                    .map(|(name, type_)| format!(".{name} = {}", self.show_type(type_, next_quantifier)))
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
             Type::RecordUpdate { base, fields } => format!(
                 "update {} with {{ {} }}",
-                self.show_settled(base),
+                self.show_type(base, next_quantifier),
                 fields
                     .iter()
-                    .map(|(name, type_)| format!(".{name} = {}", self.show_settled(type_)))
+                    .map(|(name, type_)| format!(".{name} = {}", self.show_type(type_, next_quantifier)))
                     .collect::<Vec<_>>()
                     .join("; ")
             ),
             Type::Array(element) => {
-                let shown = self.show_settled(element);
+                let shown = self.show_type(element, next_quantifier);
                 if matches!(element.as_ref(), Type::Union(_)) && shown.contains(" | ") {
                     format!("[({shown})]")
                 } else {
                     format!("[{shown}]")
                 }
             }
-            Type::Region(element) => format!("Region {}", self.show_settled(element)),
-            Type::Scratch(element) => format!("Scratch {}", self.show_settled(element)),
+            Type::Region(element) => format!("Region {}", self.show_type(element, next_quantifier)),
+            Type::Scratch(element) => format!("Scratch {}", self.show_type(element, next_quantifier)),
             Type::Resource { family, payload } => {
-                format!("Resource:{family} {}", self.show_settled(payload))
+                format!("Resource:{family} {}", self.show_type(payload, next_quantifier))
             }
             Type::Variant { cases, .. } => cases
                 .iter()
@@ -11661,7 +11653,7 @@ impl Checker {
                     if matches!(payload, Type::Unit) {
                         format!("#{name}")
                     } else {
-                        let shown = self.show_settled(payload);
+                        let shown = self.show_type(payload, next_quantifier);
                         let grouped = matches!(payload, Type::Function { .. } | Type::Forall { .. })
                             || matches!(payload, Type::Variant { cases, .. } if cases.len() > 1)
                             || matches!(payload, Type::Union(members) if union_members(members).len() > 1);
@@ -11680,13 +11672,13 @@ impl Checker {
             ),
             Type::OpenEffects { labels, tail } => {
                 let mut parts = labels.iter().cloned().collect::<Vec<_>>();
-                parts.push(format!("..{}", self.show_settled(tail)));
+                parts.push(format!("..{}", self.show_type(tail, next_quantifier)));
                 format!("{{ {} }}", parts.join(", "))
             }
             Type::Union(members) => show_union(
                 union_members(members)
                     .into_iter()
-                    .map(|member| self.show_settled(member))
+                    .map(|member| self.show_type(member, next_quantifier))
                     .collect::<Vec<_>>(),
             ),
             Type::Opaque(name) => match sealed_type_name(name) {
@@ -15290,6 +15282,31 @@ fn admits_omission(type_: &Type) -> bool {
         Type::Union(members) => members.iter().any(admits_omission),
         _ => false,
     }
+}
+
+fn call_site_diagnostic(
+    path: &str,
+    module: &Module,
+    expression: ExpressionId,
+    mut diagnostic: Diagnostic,
+) -> Diagnostic {
+    if matches!(diagnostic.code, "BLOT_TYPE_ERROR" | "BLOT_NO_FIELD")
+        && matches!(
+            module.arena.expressions[expression.0 as usize],
+            Expression::Apply { .. }
+        )
+        && !module.arena.synthetic_expressions.contains(&expression)
+        && let Some(origin) = diagnostic.origin.as_deref()
+        && origin != path
+    {
+        diagnostic.message = format!(
+            "{} Required by {origin} at source span [{}, {}).",
+            diagnostic.message, diagnostic.span.start, diagnostic.span.end,
+        );
+        diagnostic.span = module.arena.expression_span(expression);
+        diagnostic.origin = Some(path.to_owned());
+    }
+    diagnostic
 }
 
 fn widen_aggregate_literals(

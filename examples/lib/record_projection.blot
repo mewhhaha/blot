@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Iter; .Reflect; .freeze; } = import "blot:prelude"
 
 // A projection packages a selected structural view together with the inverse
 // replacement operation for exactly that view.
@@ -10,7 +10,7 @@ const Projection = fn (whole, part) => {
 // Derive a projection from a concrete record type and a compile-time list of
 // field names. `Reflect.pick` computes Part once; the generated getter and
 // setter are then checked against the same Whole/Part relationship.
-// Pain point: Blot intentionally has no record row variable, so this subset
+// Blot has no record row variable, so this subset
 // relation is staged from concrete Whole/names instead of quantified as a row.
 const fields = fn (Whole, names) => do:
   const Part = Reflect.pick (Whole, names)
@@ -35,15 +35,15 @@ const fields = fn (Whole, names) => do:
   let projection :: Projection (Whole, Part)
   let projection = { .get; .put; }
   return {
-    .Part = Part;
-    .projection = projection;
+    .Part;
+    .projection;
   }
 
 const over :: @forall (fn Whole => @forall (fn Part => (Projection (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (projection, whole, change) => projection.put (whole, change (projection.get whole))
 
 return {
-  .Projection = Projection;
-  .fields = fields;
-  .over = over;
+  .Projection;
+  .fields;
+  .over;
 }

@@ -256,8 +256,11 @@ test("planning erases metadata and emits one traversal per nonempty barrier phas
         0,
       ]] as const
     ) {
+      const checked = await compiler.check(
+        `case-studies/ecs/kernels/${kernel}.blot`,
+      );
       assert.deepEqual(
-        await compiler.check(`case-studies/ecs/kernels/${kernel}.blot`),
+        { type: checked.type, effects: checked.effects },
         {
           type: `[${rowType}] -> [${rowType}]`,
           effects: "",

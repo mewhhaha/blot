@@ -46,4 +46,4 @@ return { .default = {
   .restored;
   .committed;
   .rolled_back;
-  }; }
+}; }

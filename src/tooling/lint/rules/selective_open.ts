@@ -1,4 +1,4 @@
-import { spanKey } from "../syntax.ts";
+import { sourceCodeSpan, spanKey } from "../syntax.ts";
 import type { LintRule } from "../types.ts";
 
 export const selectiveOpen: LintRule = {
@@ -28,9 +28,9 @@ export const selectiveOpen: LintRule = {
             fact.used.join(", ") + ".",
           span: node.span,
           fix: context.fix(
-            node.span,
+            sourceCodeSpan(context.source, node.span),
             "Import only the used fields",
-            "const { " + fields + " } = " + source + "\n",
+            "const { " + fields + " } = " + source,
             "check-interface",
           ),
         });

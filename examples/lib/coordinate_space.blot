@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Int; .Op; .map; } = import "blot:prelude"
 
 // Coordinate markers are ordinary singleton type values. The marker is carried
 // by the data so points/vectors in otherwise identical integer spaces remain
@@ -7,7 +7,7 @@ const Point = fn Frame => { .frame = Frame; .x = Int; .y = Int; }
 const Vector = fn Frame => { .frame = Frame; .dx = Int; .dy = Int; }
 
 // Generate the operations that must stay inside one exact coordinate space.
-// Pain point: a repeated quantified Frame is a shared subtype constraint, not
+// A repeated quantified Frame is a shared subtype constraint, not
 // nominal equality; two covariant markers can widen to their common union.
 // Specializing this descriptor first gives each local operation an exact frame.
 const space = fn frame => do:
@@ -34,7 +34,7 @@ const space = fn frame => do:
     .vector;
     .between;
     .move;
-    }
+  }
 
 // A transform changes coordinate space while keeping positions distinct from
 // displacement vectors. Translation belongs in `.point`, never `.vector`.
@@ -68,4 +68,4 @@ return {
   .identity;
   .compose;
   .map_points;
-  }
+}

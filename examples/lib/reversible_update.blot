@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Result; .Type; .Unit; } = import "blot:prelude"
 
 // A reversible update relates one state type, one input type, and the exact undo
 // evidence produced by applying that input. Undo evidence stays operation-specific
@@ -10,7 +10,7 @@ const Reversible = fn (state, input, undo) => {
 
 // Lift an immutable projection/setter pair into a reversible replacement. The
 // previous focused value becomes precisely the undo evidence.
-// Pain point: this type relates apply/revert carriers, but it cannot prove the
+// This type relates apply/revert carriers, but it cannot prove the
 // semantic inverse law; concrete plans still need round-trip tests.
 const replace :: @forall (fn State => @forall (fn Part => ((State -> Part), ((State, Part) -> State)) -> Reversible (State, Part, Part)))
 const replace = fn (view, set) => {
@@ -20,7 +20,7 @@ const replace = fn (view, set) => {
 
 // Sequential composition preserves both input types and both undo types. Revert
 // runs in the opposite order, so the paired evidence mirrors the composed plan.
-// Pain point: longer heterogeneous compositions expose tuple association in both
+// Longer heterogeneous compositions expose tuple association in both
 // their input and undo evidence; keep that tree-shaped detail behind domain APIs.
 const compose :: @forall (fn State => @forall (fn LeftInput => @forall (fn RightInput => @forall (fn LeftUndo => @forall (fn RightUndo => (Reversible (State, LeftInput, LeftUndo), Reversible (State, RightInput, RightUndo)) -> Reversible (State, (LeftInput, RightInput), (LeftUndo, RightUndo)))))))
 const compose = fn (left, right) => {
@@ -35,8 +35,8 @@ const compose = fn (left, right) => {
 }
 
 const Outcome = fn (state, error) => #Committed state | #RolledBack {
-  .state = state;
-  .error = error;
+  .state;
+  .error;
 }
 
 // Apply one plan, validate the resulting state, and use only the undo evidence
@@ -57,4 +57,4 @@ return {
   .replace
   .compose
   .commit_if
-  }
+}

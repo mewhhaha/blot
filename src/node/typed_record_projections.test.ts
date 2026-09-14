@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Compiler } from "../compiler.ts";
+import { BlotError } from "../diagnostic.ts";
 import { formatSource } from "../tooling/formatter.ts";
 import { runArtifact } from "./run.ts";
 
@@ -35,7 +36,11 @@ test("typed record projections preserve selected types in both executions", asyn
       assert.equal(formatted.source, source);
     }
 
-    assert.deepEqual(await compiler.check(examplePath), {
+    const checkedInterface1 = await compiler.check(examplePath);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: principalType,
       effects: "",
     });
@@ -74,7 +79,19 @@ test("typed record projections reject invalid selected shapes", async () => {
     );
     await assert.rejects(
       () => compiler.check(unknownNamePath),
-      /BLOT_NO_FIELD: No field `missing`/,
+      (error: unknown) => {
+        assert(error instanceof BlotError);
+        assert.equal(error.diagnostic.code, "BLOT_NO_FIELD");
+        const origin = error.origin;
+        assert(origin !== null);
+        assert(origin.path.endsWith(unknownNamePath));
+        const { start, end } = error.diagnostic.span;
+        assert.match(
+          origin.source.slice(start, end),
+          /Projection\.fields.*"missing"/,
+        );
+        return true;
+      },
     );
   } finally {
     compiler.destroy();

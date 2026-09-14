@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Op; } = import "blot:prelude"
 const Space = import "./lib/coordinate_space.blot"
 
 const Model = Space.space #Model
@@ -68,4 +68,4 @@ return {
     .moved;
     .same_target;
   };
-  }
+}

@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Result; } = import "blot:prelude"
 
 // A stage either resolves an input or forwards a statically narrower residual
 // to the next stage. The caller chooses the residual with ordinary type algebra.
@@ -10,12 +10,9 @@ const then = fn (first, second) => fn input => case first input of
   #Error remaining => second remaining
 
 const finish :: @forall (fn Input => @forall (fn Remaining => @forall (fn Output => (Stage (Input, Output, Remaining), Remaining -> Output) -> Input -> Output)))
-const finish = fn (stage, final) => fn input => case stage input of
-  #Ok output => output
-  #Error remaining => final remaining
-
+const finish = fn (stage, final) => fn input => Result.unwrap_or_else final (stage input)
 return {
-  .Stage = Stage;
-  .then = then;
-  .finish = finish;
+  .Stage;
+  .then;
+  .finish;
 }

@@ -54,6 +54,7 @@ const abstractionExamples = [
   "deferred_fallback.blot",
   "residual_command_router.blot",
   "typed_relational_join.blot",
+  "typed_coordinate_spaces.blot",
   "reversible_updates.blot",
   "typed_traversals.blot",
   "typed_record_projections.blot",

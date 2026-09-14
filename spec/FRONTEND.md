@@ -82,6 +82,9 @@ rendered candidate validates the edit; it is not evidence that the original and
 replacement are equivalent. A renderer may impose stricter source conditions;
 for example, collapsing an equality ladder requires one repeated immutable
 variable or field path so the rewrite does not change how often a subject runs.
+An opening's concrete span can include following comments. Replacing it with a
+selective import edits only its code span and preserves those comments and their
+surrounding whitespace.
 
 ## 3. Source fixity folding
 

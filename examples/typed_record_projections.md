@@ -30,6 +30,7 @@ node --import tsx --test src/node/typed_record_projections.test.ts
 ```
 
 The focused rejection fixtures cover an invalid refined replacement, a missing
-selected field, and an unknown compile-time field name. The PR description
-records the diagnostic and record-row design friction found while deriving the
-abstraction.
+selected field, and an unknown compile-time field name. An unknown name points
+to the caller's `Projection.fields` application and retains the implementation
+origin as diagnostic context. Concrete type values and `Reflect.pick` express
+the selected-field relation without introducing record-row polymorphism.

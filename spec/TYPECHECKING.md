@@ -261,23 +261,32 @@ rigids before supplying the function's parameter context to the body. Tuple
 patterns preserve known field types before checking cases; unresolved inference
 variables still use directional projection constraints. Higher-order calls with
 a checked signature use that signature's argument/result relationship before any
-specialization of the source body. Rechecking a computed constant closure's
-captures may refine its representation, but cannot erase a closed input/result
-relationship or effects established by the original call.
+specialization of the source body. The specialized body's result must flow into
+the instantiated signature's result before the checker publishes that result;
+choosing a closed result type cannot discard an incompatible body result.
+Rechecking a computed constant closure's captures may refine its representation,
+but cannot erase a closed input/result relationship or effects established by
+the original call.
 
 A rigid effect tail constrained below an open row flows into that row's tail.
 Adding named effects to the row never discharges the remaining tail.
 
 An error found while specializing an imported call retains the originating
 constraint's module and span in its explanation and identifies the caller's
-application as its primary source evidence. This relocation applies only to
-source type errors. An export without a concrete ABI parameter remains a target
-refusal and identifies the export field and parameter position; neither target
-refusals nor compiler invariant failures become synthetic source diagnostics.
+application as its primary source evidence. This relocation applies to source
+type errors and missing reflected fields, including errors raised by
+compile-time evaluation of a demanded binding. An export without a concrete ABI
+parameter remains a target refusal and identifies the export field and parameter
+position; neither target refusals nor compiler invariant failures become
+synthetic source diagnostics.
 
 Equality of quantified types is alpha-equivalence under a scoped bijection of
 their bound rigid identities. A bound rigid never compares equal to a free rigid
 merely because their integer representations coincide.
+
+Type display allocates quantified names from one supply per rendered type.
+Nested and sibling quantifiers receive distinct names, and every occurrence
+retains its binder's name; independent binders must not both print as `'q0`.
 
 ## 4. Choice and transactions
 

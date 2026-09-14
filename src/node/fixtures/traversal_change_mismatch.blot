@@ -3,6 +3,4 @@ const T = import "../../../examples/lib/traversal.blot"
 
 const values :: [Text]
 const values = ["a", "b"]
-const texts :: T.Traversal ([Text], Text)
-const texts = T.each
-return T.over (texts, values, fn _ => 1)
+return T.over (T.each, values, fn _ => 1)

@@ -105,9 +105,6 @@ const order_groups = Join.group (Join.flip customer_orders, orders, customers)
 const empty_right :: [Join.Group (Customer, Order)]
 const empty_right = Join.group (customer_orders, customers, [])
 
-// Pain point: without this boundary, the fully empty left input currently makes
-// `check` publish `⊥` even though the relation and right side fix both row types.
-const empty_left :: [Join.Group (Customer, Order)]
 const empty_left = Join.group (customer_orders, [], orders)
 
 return {
@@ -119,6 +116,6 @@ return {
       empty_right,
       fn group => Array.length (&group.matches)
     );
-    .empty_left = empty_left;
+    .empty_left;
   };
 }

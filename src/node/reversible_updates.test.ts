@@ -29,7 +29,11 @@ test("reversible updates preserve typed undo evidence in both executions", async
 
   const compiler = await Compiler.create();
   try {
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: expectedType,
       effects: "",
     });

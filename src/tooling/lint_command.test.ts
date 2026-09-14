@@ -71,6 +71,39 @@ return (5 % 2)
   }
 });
 
+Deno.test("selective imports preserve following comments", async () => {
+  const analysis = await Compiler.create();
+  const validation = await Compiler.create();
+  const path = resolve("lint-selective-import-comment.blot");
+  const source = `open import "blot:prelude"
+
+// This explanation belongs to the result.
+return Op.rem 5 2
+`;
+  try {
+    const fixed = await fixLintSource(
+      { analysis, validation },
+      path,
+      source,
+      { rule: "BLOT_LINT_SELECTIVE_OPEN" },
+    );
+    assertEquals(fixed.appliedFixes, 1);
+    assertEquals(
+      fixed.source,
+      `const { .Op; } = import "blot:prelude"
+
+// This explanation belongs to the result.
+return Op.rem 5 2
+`,
+    );
+    await analysis.checkSource(path, fixed.source);
+    assertEquals((await analysis.evaluate(path)).display, "1");
+  } finally {
+    analysis.destroy();
+    validation.destroy();
+  }
+});
+
 Deno.test("fix all rechecks scope interactions and excludes refactors", async () => {
   const analysis = await Compiler.create();
   const validation = await Compiler.create();

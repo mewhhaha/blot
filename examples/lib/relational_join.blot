@@ -7,7 +7,7 @@ const On = fn (left, right, key) => {
 }
 
 const Group = fn (left, right) => {
-  .left = left;
+  .left;
   .matches = [right];
 }
 
@@ -20,13 +20,13 @@ const flip = fn relation => {
 
 const group :: @forall (fn Left => @forall (fn Right => @forall (fn Key => (On (Left, Right, Key), [Left], [Right]) -> [Group (Left, Right)])))
 const group = fn (relation, lefts, rights) => do:
-  // Pain point: this side is captured by a callback that may run for every left row.
+  // This side is captured by a callback that may run for every left row.
   // Freeze it once so repeated read-only traversal does not duplicate authority.
   let rights = @linear.freeze rights
   let collect = fn left => do:
     let keep = fn right => relation.equal (relation.left_key left, relation.right_key right)
     let matches = filter ((&rights), ?keep)
-    return { .left = left; .matches = matches; }
+    return { .left; .matches; }
   return map (lefts, collect)
 
-return { .On = On; .Group = Group; .flip = flip; .group = group; }
+return { .On; .Group; .flip; .group; }

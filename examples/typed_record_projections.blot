@@ -58,7 +58,7 @@ let unchanged = no_fields.projection.put (initial, {})
 
 return {
   .default = {
-    .before = before;
+    .before;
     .after = network.projection.get scaled;
     .capacity = capacity.projection.get scaled;
     .owner = scaled.owner;
@@ -66,4 +66,4 @@ return {
     .empty = empty_view;
     .unchanged_owner = unchanged.owner;
   };
-  }
+}

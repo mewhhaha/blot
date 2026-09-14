@@ -67,8 +67,11 @@ test("SIMD matrices agree with scalar F32 arithmetic for runtime inputs", async 
       [0, 1, 2, 3].map((column) => `.c${column} = ${vectorType}`).join("; ")
     } }`;
     for (const variant of ["simd", "scalar"]) {
+      const checked = await compiler.check(
+        `case-studies/ecs/kernels/${variant}-matrix.blot`,
+      );
       assert.deepEqual(
-        await compiler.check(`case-studies/ecs/kernels/${variant}-matrix.blot`),
+        { type: checked.type, effects: checked.effects },
         {
           type:
             `{ .multiply = [{ .0 = ${matrixType}; .1 = ${matrixType} }] -> [${matrixType}]; .transform = [{ .0 = ${matrixType}; .1 = ${vectorType} }] -> [${vectorType}]; .product = { .0 = ${matrixType}; .1 = ${matrixType} } -> ${matrixType}; .point = { .0 = ${matrixType}; .1 = ${vectorType} } -> ${vectorType} }`,
@@ -203,10 +206,11 @@ test("SIMD particle blocks preserve every live lane and omit padding", async () 
   try {
     const entity = "{ .Position = F32; .Velocity = F32 }";
     for (const variant of ["simd", "scalar"]) {
+      const checked = await compiler.check(
+        `case-studies/ecs/kernels/${variant}-particles.blot`,
+      );
       assert.deepEqual(
-        await compiler.check(
-          `case-studies/ecs/kernels/${variant}-particles.blot`,
-        ),
+        { type: checked.type, effects: checked.effects },
         {
           type: `{ .0 = [${entity}]; .1 = Int } -> [${entity}]`,
           effects: "",

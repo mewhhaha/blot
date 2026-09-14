@@ -78,15 +78,21 @@ async function runtimeScore(
 
 test("report views infer field requirements and run quantities", async () => {
   await withReport(async (compiler, paths) => {
+    const score = await compiler.check(join(paths.directory, "score.blot"));
     assert.deepEqual(
-      await compiler.check(join(paths.directory, "score.blot")),
+      { type: score.type, effects: score.effects },
       { type: "{ .quantity = Int } -> Int", effects: "" },
     );
+    const heading = await compiler.check(join(paths.directory, "heading.blot"));
     assert.deepEqual(
-      await compiler.check(join(paths.directory, "heading.blot")),
+      { type: heading.type, effects: heading.effects },
       { type: "{ .name = Text } -> Text", effects: "" },
     );
-    assert.deepEqual(await compiler.check(paths.root), {
+    const checkedInterface1 = await compiler.check(paths.root);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: "{ .heading = Text; .score = Int -> Int }",
       effects: "",
     });

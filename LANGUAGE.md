@@ -1187,6 +1187,9 @@ directly when constructing an extension with new fields.
 `Reflect.pick (record, names)` constructs a record containing only the listed
 compile-time field names. The selected fields may contain type values or runtime
 values. This is an explicit projection for constructing restricted record views.
+If a compile-time projection generator requests a missing field, its diagnostic
+identifies the caller's application and retains the originating implementation
+span in the explanation.
 
 ```blot
 let original :: { .name = Text; .count = Int; }
@@ -2446,7 +2449,10 @@ A higher-order call must satisfy the callee's checked signature before its body
 is specialized. Written function signatures supply parameter context before
 checking the body, including quantified parameters and tuple destructuring.
 Rechecking a computed constant closure preserves closed input and result types
-already established by its call, along with the call's effects. A computed
+already established by its call, along with the call's effects. The specialized
+body's result must satisfy that result type. For example, a traversal over
+`[Text]` whose modifier must return `Text` rejects a modifier returning `Int`,
+including when the traversal is passed as a polymorphic record. A computed
 constant record likewise retains the closed, monomorphic contracts of generated
 methods when its inferred members still contain unknown positions. Passing a
 schema factory through another function does not remove the resulting methods'
@@ -2585,6 +2591,10 @@ Constructor payloads containing a union or function are parenthesized. Thus
 | `'a`, `'b`                  | inferred type variables          |
 | `forall 'q0. ...`           | explicit quantified type         |
 | `⊤`, `⊥`                    | top and bottom                   |
+
+Each quantified binder receives a distinct display name within the printed type.
+For example, `forall 'q0. forall 'q1. ...` distinguishes two independent
+parameters; references in the body use the corresponding binder's name.
 
 Array lengths and affine relations are not display types. Diagnostics that need
 to explain a failed proof render propositions such as `index < length(values)`

@@ -27,6 +27,27 @@ node --import tsx --test src/node/typed_traversals.test.ts
 
 The structural interface does not prove traversal laws such as identity or
 composition equivalence; those are library laws and are covered behaviorally.
-The PR description also records ownership and inference friction found while
-building natural variants of the abstraction, together with exact validation
-limits for the currently available compiler artifact.
+The polymorphic `T.each` can be passed directly to `T.over`: a text array with
+an integer-producing modifier is rejected during checking. A local traversal
+annotation is useful documentation but is not required to keep that
+relationship.
+
+An exactly-one focus observes the old whole before rebuilding it, so sharing
+must be explicit when the whole contains owned arrays. A nested-array record can
+use an ordinary reconstructing setter:
+
+```blot
+const Config = { .items = [[Int]]; .revision = Int; }
+const items :: T.Traversal (Config, [[Int]])
+const items = T.one (
+  fn config => config.items,
+  fn (config, values) => { ...config; .items = values; }
+)
+let initial :: Config
+let initial = { .items = freeze [[1, 2], [3]]; .revision = 7; }
+return T.over (items, initial, fn _ => [[9]])
+```
+
+The result keeps revision `7`. The focused test executes this path in both the
+evaluator and emitted Wasm. `Shape.update` has a different generic ownership
+contract; the direct record reconstruction makes this transfer visible.

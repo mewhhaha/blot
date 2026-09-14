@@ -31,7 +31,7 @@ const replace_error = fn (key, divisor) => cache key |> Fallback.recover (store 
 
 const Remote = @effect { .load = Text -> Result (Profile, StoreError); }
 
-// Pain point: demand is conditional at runtime, but effect checking is deliberately
+// Demand is conditional at runtime, but effect checking is deliberately
 // conservative: this resolver keeps `Remote` in its row even when a cache hit
 // skips the deferred `Remote.load` expression.
 let resolve_remote :: Text -> Result (Profile, ResolutionError) ~ { Remote }

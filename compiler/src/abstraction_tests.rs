@@ -43,6 +43,70 @@ fn check(source: &str) -> serde_json::Value {
 }
 
 #[test]
+fn traversal_specialization_rejects_a_changed_element_carrier() {
+    with_compiler(
+        "open import \"blot:prelude\"\nconst T = import \"traversal.blot\"\nconst values :: [Text]\nconst values = [\"a\", \"b\"]\nreturn T.over (T.each, values, fn _ => 1)\n",
+        |mut session| {
+            session
+                .add_source(
+                    "traversal.blot".into(),
+                    include_str!("../../examples/lib/traversal.blot")
+                        .encode_utf16()
+                        .collect(),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "traversal.blot",
+                    BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".into(), "prelude.blot".into()),
+                        ("traversal.blot".into(), "traversal.blot".into()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let checked = session.check_module("main.blot");
+            assert_eq!(
+                checked["diagnostic"]["code"], "BLOT_TYPE_ERROR",
+                "{checked}"
+            );
+            assert_eq!(checked["diagnostic"]["origin"], "main.blot", "{checked}");
+        },
+    );
+}
+
+#[test]
+fn nested_quantifiers_have_distinct_display_names() {
+    let checked = check(
+        "const pair :: @forall (fn Left => @forall (fn Right => (Left, Right) -> (Right, Left)))\nconst pair = fn (left, right) => (right, left)\nreturn pair\n",
+    );
+    assert_eq!(checked["ok"], true, "{checked}");
+    assert_eq!(
+        checked["type"], "forall 'q0. forall 'q1. { .0 = 'q0; .1 = 'q1 } -> { .0 = 'q1; .1 = 'q0 }",
+        "{checked}"
+    );
+}
+
+#[test]
+fn reflected_missing_fields_point_to_the_generator_call() {
+    let source = "open import \"blot:prelude\"\nconst select = fn (Whole, names) => Reflect.pick (Whole, names)\nconst projected = select ({ .port = Int; }, [\"missing\"])\nreturn projected\n";
+    let checked = check(source);
+    assert_eq!(checked["diagnostic"]["code"], "BLOT_NO_FIELD", "{checked}");
+    assert_eq!(checked["diagnostic"]["origin"], "main.blot", "{checked}");
+    let span = &checked["diagnostic"]["span"];
+    let selected =
+        &source[span["start"].as_u64().unwrap() as usize..span["end"].as_u64().unwrap() as usize];
+    assert!(selected.contains("[\"missing\"]"), "{checked}");
+}
+
+#[test]
 fn fold_rejects_an_incompatible_callback_input_during_checking() {
     let source = include_str!("../../experiments/pr-triage/fold_input.blot");
     let checked = check(source);

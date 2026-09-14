@@ -50,7 +50,13 @@ test("ECS schedules preserve rows, order, grouping, and both executions", async 
     ) {
       fields.push(`.${name} = [${rowType}] -> [${rowType}]`);
     }
-    assert.deepEqual(await compiler.check("case-studies/ecs/main.blot"), {
+    const checkedInterface1 = await compiler.check(
+      "case-studies/ecs/main.blot",
+    );
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: `{ ${fields.join("; ")} }`,
       effects: "",
     });

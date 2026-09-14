@@ -20,7 +20,11 @@ test("typed coordinate spaces preserve frame relationships in both executions", 
       assert.equal(formatted.source, source);
     }
 
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: expectedType,
       effects: "",
     });
@@ -57,10 +61,11 @@ test("coordinate spaces reject mismatches and document quantified widening", asy
       await assert.rejects(() => compiler.check(fixture), /BLOT_TYPE_ERROR/);
     }
 
+    const widened = await compiler.check(
+      "src/node/fixtures/coordinate_space_generic_same_frame_widens.blot",
+    );
     assert.deepEqual(
-      await compiler.check(
-        "src/node/fixtures/coordinate_space_generic_same_frame_widens.blot",
-      ),
+      { type: widened.type, effects: widened.effects },
       {
         type: "{ .frame = #Model | #World; .x = Int; .y = Int }",
         effects: "",

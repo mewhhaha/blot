@@ -1,4 +1,4 @@
-open import "blot:prelude"
+const { .Result; } = import "blot:prelude"
 
 // A fallback can change the failure type while preserving the successful value.
 // The fallback expression is deferred, so it is evaluated only when the primary
@@ -26,7 +26,7 @@ const recover_with_context = fn ~fallback => fn primary => case primary of
     }
 
 return {
-  .BothFailed = BothFailed;
-  .recover = recover;
-  .recover_with_context = recover_with_context;
+  .BothFailed;
+  .recover;
+  .recover_with_context;
 }

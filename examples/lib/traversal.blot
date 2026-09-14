@@ -35,7 +35,7 @@ const compose = fn (outer, inner) => {
       fn (parts, middle) => do:
         let focused = inner.collect middle
         return fold (focused, parts, fn (result, part) => @array.push result part)
-      )
+    )
   ;
   .modify = fn (whole, change) => outer.modify (
     whole,
@@ -47,9 +47,9 @@ const over :: @forall (fn Whole => @forall (fn Part => (Traversal (Whole, Part),
 const over = fn (traversal, whole, change) => traversal.modify (whole, change)
 
 return {
-  .Traversal = Traversal;
-  .one = one;
-  .each = each;
-  .compose = compose;
-  .over = over;
-  }
+  .Traversal;
+  .one;
+  .each;
+  .compose;
+  .over;
+}

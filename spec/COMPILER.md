@@ -878,6 +878,13 @@ A source diagnostic means a source-language premise is false, for example:
 
 It may be cached only under the exact observed revision and diagnostic schema.
 
+When specialization or compile-time evaluation reports a missing reflected field
+from an imported generator, the primary span identifies the caller's
+application. The explanation retains the originating module and constraint span.
+The same source-evidence policy applies to type errors from imported calls;
+evaluation of a demanded constant must not replace that evidence with a prelude
+implementation span.
+
 ### 13.2 LimitDiagnostic
 
 A limit diagnostic means a documented deterministic compiler resource bound was

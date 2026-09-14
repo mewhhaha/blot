@@ -68,7 +68,11 @@ test("constructed handlers capture runtime values and retain continuation checks
   const compiler = await Compiler.create();
   try {
     const path = "case-studies/ecs/constructed-handler.blot";
-    assert.deepEqual(await compiler.check(path), {
+    const checkedInterface1 = await compiler.check(path);
+    assert.deepEqual({
+      type: checkedInterface1.type,
+      effects: checkedInterface1.effects,
+    }, {
       type: "Int -> Int",
       effects: "",
     });
