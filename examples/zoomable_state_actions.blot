@@ -1,0 +1,119 @@
+open import "blot:prelude"
+
+const L = import "./lib/lens.blot"
+const S = import "./lib/state_action.blot"
+
+const Quota = range (1, 100)
+const Profile =
+  {
+    .name = Text;
+    .quota = Quota;
+  }
+const Metrics =
+  {
+    .requests = Int;
+  }
+const App =
+  {
+    .profile = Profile;
+    .metrics = Metrics;
+  }
+
+const profile :: L.Lens (App, Profile)
+const profile =
+  {
+    .view = fn app => app.profile;
+    .set = fn (app, value) => Shape.update (app, { .profile = value; });
+  }
+
+const metrics :: L.Lens (App, Metrics)
+const metrics =
+  {
+    .view = fn app => app.metrics;
+    .set = fn (app, value) => Shape.update (app, { .metrics = value; });
+  }
+
+const name :: L.Lens (Profile, Text)
+const name =
+  {
+    .view = fn value => value.name;
+    .set = fn (value, next) => Shape.update (value, { .name = next; });
+  }
+
+const quota :: L.Lens (Profile, Quota)
+const quota =
+  {
+    .view = fn value => value.quota;
+    .set = fn (value, next) => Shape.update (value, { .quota = next; });
+  }
+
+const bump_requests :: S.Action (Metrics, Int)
+const bump_requests = fn current => do:
+  const next = current.requests + 1
+  return {
+    .state = Shape.update (current, { .requests = next; });
+    .value = next;
+  }
+
+const initial :: App
+const initial =
+  {
+    .profile = { .name = "Ada"; .quota = 20; };
+    .metrics = { .requests = 0; };
+  }
+
+// The same local replacement action can be lifted through nested lenses.
+const rename :: S.Action (App, Text)
+const rename = S.zoom (profile, S.zoom (name, S.replace "Grace 🐱"))
+
+// Lens composition gives the same one-step localization for quota.
+const app_quota :: L.Lens (App, Quota)
+const app_quota = L.compose (profile, quota)
+const raise_quota :: S.Action (App, Quota)
+const raise_quota = S.zoom (app_quota, S.replace 80)
+
+const count :: S.Action (App, Int)
+const count = S.zoom (metrics, bump_requests)
+
+const plan :: S.Action (App, (Text, (Quota, Int)))
+const plan = S.sequence (rename, S.sequence (raise_quota, count))
+
+const result = S.run (plan, initial)
+
+// `pure` is an identity state action; close its otherwise-unmentioned state
+// parameter at the public App boundary.
+const untouched :: S.Action (App, Text)
+const untouched = S.pure "unchanged"
+const untouched_result = S.run (untouched, initial)
+
+// `map` can reinterpret an action's observation without changing its state.
+const counted :: S.Action (App, Text)
+const counted = S.map (count, fn value => "requests=" <> Text.of_int value)
+const counted_result = S.run (counted, initial)
+
+// Pain point: adjacent tuple projections such as `result.value.1.0` are
+// currently lexically rejected; destructuring keeps the evidence shape explicit.
+const (previous_name, remaining) = result.value
+const (previous_quota, new_request_count) = remaining
+
+const Observation =
+  {
+    .state = App;
+    .previous_name = Text;
+    .previous_quota = Quota;
+    .new_request_count = Int;
+    .untouched = S.Step (App, Text);
+    .mapped = S.Step (App, Text);
+  }
+const observation :: Observation
+const observation =
+  {
+    .state = result.state;
+    .previous_name;
+    .previous_quota;
+    .new_request_count;
+    .untouched = untouched_result;
+    .mapped = counted_result;
+  }
+
+return { .default = observation; }
