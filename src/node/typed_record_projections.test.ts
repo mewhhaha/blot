@@ -43,6 +43,7 @@ test("typed record projections preserve selected types in both executions", asyn
     }, {
       type: principalType,
       effects: "",
+      interfaceKey: JSON.stringify([principalType, ""]),
     });
 
     const evaluated = await compiler.evaluate(examplePath);
