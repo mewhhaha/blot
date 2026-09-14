@@ -1,0 +1,109 @@
+open import "blot:prelude"
+const R = import "./lib/reducer.blot"
+const T = import "./lib/transducer.blot"
+
+const Score = refine (Int, fn value => value >= 0 && value <= 100)
+const Limit = refine (Int, fn value => value >= 1 && value <= 100)
+const Reading =
+  {
+    .sensor = Text;
+    .score = Score;
+    .limit = Limit;
+  }
+const Classified =
+  {
+    .sensor = Text;
+    .score = Score;
+    .limit = Limit;
+    .over = Bool;
+  }
+const Alert =
+  {
+    .sensor = Text;
+    .excess = Int;
+  }
+const Summary =
+  {
+    .count = Int;
+    .total_excess = Int;
+  }
+
+const classify :: T.Transducer (Reading, Classified)
+const classify =
+  T.map (fn reading => {
+    ...reading;
+    .over = reading.score > reading.limit;
+  })
+
+const select_alerts :: T.Transducer (Classified, Alert)
+const select_alerts =
+  T.choose_map (fn reading => case reading.over of
+    #True => #Some {
+      .sensor = reading.sensor;
+      .excess = reading.score - reading.limit;
+    }
+
+    #False => #None
+  )
+
+const alerts :: T.Transducer (Reading, Alert)
+const alerts = T.compose (classify, select_alerts)
+
+const count_alerts :: R.Reducer (Alert, Int, Int)
+const count_alerts =
+  {
+    .initial = 0;
+    .step = fn (count, _) => count + 1;
+    .finish = fn count => count;
+  }
+
+const sum_excess :: R.Reducer (Alert, Int, Int)
+const sum_excess =
+  {
+    .initial = 0;
+    .step = fn (total, alert) => total + alert.excess;
+    .finish = fn total => total;
+  }
+
+const summarize :: R.Reducer (Alert, { .left = Int; .right = Int; }, Summary)
+const summarize =
+  R.zip_with (
+    count_alerts,
+    sum_excess,
+    fn (count, total_excess) => {
+      .count;
+      .total_excess;
+    }
+  )
+
+const analyze :: [Reading] -> Summary
+const analyze = fn readings => R.run (alerts summarize, readings)
+
+const raw =
+  [
+    { .sensor = "cpu"; .score = 80; .limit = 80; },
+    { .sensor = "db-🐱"; .score = 93; .limit = 75; },
+    { .sensor = "cache"; .score = 40; .limit = 60; },
+    { .sensor = "queue"; .score = 100; .limit = 99; }
+  ]
+
+const identity_summary =
+  R.run (
+    T.identity count_alerts,
+    [
+      { .sensor = "manual"; .excess = 3; },
+      { .sensor = "manual-2"; .excess = 4; }
+    ]
+  )
+
+return {
+  .default = {
+    .mixed = analyze raw;
+    .all_filtered = analyze [
+      { .sensor = "steady"; .score = 20; .limit = 20; },
+      { .sensor = "cool"; .score = 10; .limit = 30; }
+    ];
+    .empty = analyze [];
+    .identity_count = identity_summary;
+  };
+}
