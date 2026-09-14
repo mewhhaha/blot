@@ -1,0 +1,5 @@
+open import "blot:prelude"
+
+const Input = #A | #B
+const Empty = Input \ Input
+return Empty
