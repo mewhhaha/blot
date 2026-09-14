@@ -1,0 +1,8 @@
+open import "blot:prelude"
+const Edit = import "../../../examples/lib/record_edit.blot"
+const Service = { .host = Text; .port = Int; }
+const Profile = { .name = Text; .active = Bool; }
+const Host = Edit.field (Service, "host")
+const Name = Edit.field (Profile, "name")
+let mixed = Edit.then (Host.replace "api", Name.replace "Ada")
+return { .default = mixed { .host = "old"; .port = 443; }; }
