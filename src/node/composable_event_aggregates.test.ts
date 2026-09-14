@@ -38,11 +38,17 @@ test("composable event aggregates preserve state, command, event, and error carr
     assert.deepEqual(evaluated.writes, []);
     assert.equal(
       evaluated.display,
-      (await readFile("examples/expected/composable_event_aggregates.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/composable_event_aggregates.txt",
+        "utf8",
+      )).trim(),
     );
     assert.equal(
       await runArtifact(await compiler.compile(path)),
-      (await readFile("examples/expected/composable_event_aggregates.wasm.txt", "utf8")).trim(),
+      (await readFile(
+        "examples/expected/composable_event_aggregates.wasm.txt",
+        "utf8",
+      )).trim(),
     );
   } finally {
     compiler.destroy();
@@ -53,11 +59,15 @@ test("event aggregate boundaries reject foreign events and wrong product command
   const compiler = await Compiler.create();
   try {
     await assert.rejects(
-      () => compiler.check("src/node/fixtures/event_aggregate_wrong_event.blot"),
+      () =>
+        compiler.check("src/node/fixtures/event_aggregate_wrong_event.blot"),
       /BLOT_TYPE_ERROR/,
     );
     await assert.rejects(
-      () => compiler.check("src/node/fixtures/event_aggregate_wrong_command_side.blot"),
+      () =>
+        compiler.check(
+          "src/node/fixtures/event_aggregate_wrong_command_side.blot",
+        ),
       /BLOT_ARGUMENT_MISMATCH/,
     );
   } finally {
