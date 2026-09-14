@@ -16,7 +16,8 @@ test("typed quantities preserve units through both executions", async () => {
     );
     assert.equal(
       await runArtifact(await compiler.compile(path)),
-      (await readFile("examples/expected/typed_quantities.wasm.txt", "utf8")).trim(),
+      (await readFile("examples/expected/typed_quantities.wasm.txt", "utf8"))
+        .trim(),
     );
   } finally {
     compiler.destroy();

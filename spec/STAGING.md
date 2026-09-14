@@ -134,6 +134,23 @@ Finite compile-time unions are flattened, retain the first semantic occurrence
 of each member, and compare as sets. The evaluator may keep an indexed
 persistent member representation, but an index collision must fall back to exact
 type-value equality and extending an aliased union must not mutate the alias.
+Signature substitution requires evidence for a constructor's entire payload. An
+unknown runtime child refuses that conversion; it cannot turn a populated
+constructor into a payload-free one. Collapsing a one-member union to its
+constructor preserves the constructor's payload representation. Ordinary
+constructor-returning helpers remain staged, as union-returning helpers do, so a
+known iterator alternative does not acquire runtime sum dispatch solely through
+normalization.
+
+Nonrecursive helpers performing source-handled effects also remain in the
+caller's staging context: a handler may supply values from that caller's frame,
+which are not lexical captures of the helper. A separate runtime function cannot
+refer to those values without an explicit captured-parameter relation.
+
+Store update selection uses the lowered argument's reuse evidence. Lowering a
+known empty array creates a fresh reusable Store even when the staged argument
+was not already a runtime value; a borrowed or shared runtime Store retains its
+persistent update policy.
 
 Within one staging execution, a successful closure call may reuse a prior result
 only when its settled arrow is monomorphic and has a closed empty effect row,
@@ -149,8 +166,8 @@ body retains the source algorithm.
 
 A returned source closure receives the closed result signature recorded at its
 call site in preference to an unspecialized codomain. A source codomain is
-substituted in the completed call's lexical environment before it is attached
-to returned values, including records containing closures. Its effects remain those
+substituted in the completed call's lexical environment before it is attached to
+returned values, including records containing closures. Its effects remain those
 established by checking, including when the closure captures other computations.
 A generic representation signature that omits those effects cannot certify
 purity for call-result caching.
@@ -321,20 +338,25 @@ accumulator names. Checked expression and nested-closure facts belong to that
 instance and are restored when leaving it, rather than overwriting facts for
 other calls of the same source body.
 
-An open or quantified recursive signature can request instance checking using
-the same source checker. Each instance identifies the source body checked at its
-entry. Calls back to that body reuse its facts instead of repeatedly minting new
-interfaces; a nested closure still checks its own actual argument at entry.
-An empty residual Scratch contributes a fresh element unknown, and
-the body's checked operations determine its element representation. Physical
-scalar evidence contributes its full carrier, without inventing refinements.
-When recursive lower bounds remain open, residual signature settlement combines
+An open or quantified recursive signature requests instance checking using the
+same source checker. An open development-unit signature with cyclic inference
+evidence also requests this check, so a finite aggregate result closes before
+choosing its reload interface. An ordinary generic identity retains its checked
+parameter/result relationship and the argument's representation, including
+sealed carriers. Each instance identifies the source body checked at its entry.
+Calls back to that body reuse its facts instead of repeatedly minting new
+interfaces; a nested closure still checks its own actual argument at entry. An
+empty residual Scratch contributes a fresh element unknown, and the body's
+checked operations determine its element representation. Physical scalar
+evidence contributes its full carrier, without inventing refinements. When
+recursive lower bounds remain open, residual signature settlement combines
 settled upper evidence, removing redundant bounds and neutral `Top` entries.
 
 A nonrecursive call with a partially known argument may remain in the staged
-evaluator to eliminate statically selected alternatives, even if an alternative's
-payload contains runtime values. Recursive helpers, host callback boundaries,
-and development boundaries still require a settled runtime interface.
+evaluator to eliminate statically selected alternatives, even if an
+alternative's payload contains runtime values. Recursive helpers, host callback
+boundaries, and development boundaries still require a settled runtime
+interface.
 
 Contextual source checking must likewise preserve an expression's existing
 generic representation fact. A concrete call refines its call site; it cannot
@@ -361,13 +383,13 @@ recovered from that operand's checked-value entry.
 Source type evidence, including refinements, is retained across runtime
 parameter and capture renaming. An unrefined physical carrier may identify an
 integer, floating-point, collection, or recursive aggregate representation, but
-cannot supply a source refinement, nominal seal, or ownership permission.
-The eight built-in SIMD vector and mask types have distinct, fixed element and
-lane layouts; their exact layouts identify those built-in carriers. Other vector
+cannot supply a source refinement, nominal seal, or ownership permission. The
+eight built-in SIMD vector and mask types have distinct, fixed element and lane
+layouts; their exact layouts identify those built-in carriers. Other vector
 layouts supply no source type. Checked record requirements retain all fields of
-the physical carrier, and checked integer ranges are restricted to that carrier's
-bounds. A record's argument representation can be reused only for the same
-checked type value, never because unrelated fields have similar shapes.
+the physical carrier, and checked integer ranges are restricted to that
+carrier's bounds. A record's argument representation can be reused only for the
+same checked type value, never because unrelated fields have similar shapes.
 Captured record fields retain closed callable signatures independently: an
 unknown field does not erase another field's quantified contract. Free
 representation holes are not genuine quantified binders and must not be admitted
@@ -377,7 +399,8 @@ call-site-substituted representation, not the original open signature spelling.
 Substitutions recovered from a known array account for every element rather than
 only its first element. Integer values contribute the finite `Int` carrier.
 Reification and substitution use the ordinary finite type-value union operation:
-nested unions flatten and equal members collapse before runtime layout selection.
+nested unions flatten and equal members collapse before runtime layout
+selection.
 
 Host-operation specialization applies one binder substitution to both the
 declared parameter and result, recursively through arrays, matching constructor
@@ -472,6 +495,19 @@ or borrowing the layout of an equal-looking staged value when checked views
 disagree, violates `closedRep` and is an invariant failure. A decoded immutable
 aggregate may reuse a structural memo only when every recorded checked view has
 the same closed representation.
+
+Adapting an evaluated record argument to a checked parameter row preserves all
+supplied fields and their insertion order. It adds only omitted fields whose
+checked type admits `Unit`. Specializing deferred Scratch fields likewise
+retains fields outside the checked row; that row describes required evidence,
+not a projection of the argument's physical contents. An ordinary call whose
+specialized parameter representation omits supplied record fields remains
+staged, including when the narrower representation comes from a type-variable
+substitution. Recursive evaluator bindings retain the closure's deferred calling
+convention. The prelude's record operations use deferred folds over known field
+names so runtime field values do not turn those names into runtime text.
+Nonempty field enumeration seeds its array with the first entry, preserving the
+entry representation before subsequent updates.
 
 When a finite recursive variant result omits constructors present in its checked
 codomain, settlement completes that constructor set from the finite result's

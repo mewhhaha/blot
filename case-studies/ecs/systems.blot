@@ -43,7 +43,7 @@ const Systems = fn Row => do:
 
       let step :: Step
       let step = fn row => do:
-        let patch = execute row
+        let patch = execute (Reflect.pick (row, reads))
         return apply (row, patch)
       return { .reads; .writes; .step = @satisfies step Step; }
     ;

@@ -8652,6 +8652,14 @@ return s.resolve (row, combined)
 "#,
                 ),
                 (
+                    "fused.blot",
+                    "const s = import \"./simulation.blot\"\nreturn s.fused\n",
+                ),
+                (
+                    "simulation_main.blot",
+                    include_str!("../../case-studies/ecs/main.blot"),
+                ),
+                (
                     "arena.blot",
                     include_str!("../../case-studies/ecs/arena.blot"),
                 ),
@@ -8686,6 +8694,7 @@ return s.resolve (row, combined)
                     "systems.blot" => vec!["components.blot"],
                     "arena.blot" | "simulation.blot" => vec!["ecs.blot"],
                     "query.blot" => vec!["ecs.blot", "simulation.blot"],
+                    "fused.blot" | "simulation_main.blot" => vec!["simulation.blot"],
                     "main.blot" => vec!["arena.blot"],
                     _ => vec![],
                 } {
@@ -8695,7 +8704,12 @@ return s.resolve (row, combined)
                     .configure_module(path, imports, BTreeMap::new())
                     .unwrap();
             }
-            for path in ["main.blot", "query.blot"] {
+            for path in [
+                "main.blot",
+                "query.blot",
+                "fused.blot",
+                "simulation_main.blot",
+            ] {
                 let checked = session.check_module(path);
                 assert_eq!(checked["ok"], true, "{path}: {checked}");
                 let prepared = session.prepare_runtime_hir(path);
@@ -9231,7 +9245,8 @@ return s.resolve (row, combined)
                         && operation.operation.update == Some("persistent")
                 })
                 .count();
-            assert_eq!(persistent_writes, 3);
+            // Both literal updates own fresh Stores; only the shared acquire copies.
+            assert_eq!(persistent_writes, 1);
         });
     }
 

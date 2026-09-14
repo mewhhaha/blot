@@ -12,7 +12,12 @@ test("typed nonempty evaluator matches the recorded result", async () => {
     "utf8",
   );
   assert.equal(
-    show(await evaluateFile("examples/typed_nonempty.blot", {})),
+    show(
+      await evaluateFile("examples/typed_nonempty.blot", {
+        write: (line) =>
+          assert.fail(`Unexpected nonempty example write: ${line}`),
+      }),
+    ),
     expected.trim(),
   );
 });

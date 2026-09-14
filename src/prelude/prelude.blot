@@ -2974,24 +2974,38 @@ const shape_update_compatible = fn pair => case reflect pair of
 
   _ => False
 
-const shape_entries = fn shape => map (
-  @shape.names shape,
-  fn name => (name, @shape.get shape name)
-)
+const shape_entries = fn shape => do:
+  let rec collect = fn ~state => do:
+    let (names, ?entries) = state
+    return case array_uncons names of
+      #None => entries
+      #Some pair => do:
+        let (name, remaining) = pair
+        let name = @satisfies name @type.text
+        return collect (remaining, @array.push entries (name, @shape.get shape name))
+
+  return case array_uncons (@shape.names shape) of
+    #None => []
+    #Some pair => do:
+      let (name, remaining) = pair
+      let name = @satisfies name @type.text
+      return collect (remaining, [(name, @shape.get shape name)])
 
 const shape_update = fn (left, patch) => do:
   let _ = @satisfies (left, patch) shape_update_compatible
-  let rec apply = fn (current, ?entries) => do:
-    return case array_uncons entries of
+  let rec apply = fn ~update => do:
+    let (current, names) = update
+    return case array_uncons names of
       #None => current
       #Some pair => do:
-        let ((name, value), remaining) = pair
+        let (name, remaining) = pair
+        let name = @satisfies name @type.text
         return apply ({
           ...current;
-          .[name] = value;
+          .[name] = @shape.get patch name;
         }, remaining)
 
-  return apply (left, shape_entries patch)
+  return apply (left, @shape.names patch)
 
 const Shape =
   {
@@ -3026,14 +3040,19 @@ const Exclude = fn (whole, bound) => do:
   ))
 
 const Pick = fn (shape, names) => do:
-  return fold (
-    names,
-    @shape.empty,
-    fn (kept, name) => {
-      ...kept;
-      .[name] = @shape.get shape name;
-    }
-  )
+  let rec select = fn ~selection => do:
+    let (names, kept) = selection
+    return case array_uncons names of
+      #None => kept
+      #Some pair => do:
+        let (name, remaining) = pair
+        let name = @satisfies name @type.text
+        return select (remaining, {
+          ...kept;
+          .[name] = @shape.get shape name;
+        })
+
+  return select (names, @shape.empty)
 
 const Omit = fn (shape, names) => do:
   return fold (

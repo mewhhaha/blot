@@ -5347,6 +5347,13 @@ impl Checker {
                     }
                     inferred.type_ = selected;
                 }
+                if signature.is_none()
+                    && kind == DeclarationKind::Const
+                    && let Some(value @ Value::Shape(_)) = &evaluated
+                    && let Some(refined) = self.refine_comptime_members(&inferred.type_, value)
+                {
+                    inferred.type_ = refined;
+                }
                 if kind == DeclarationKind::Const
                     && type_exposes_generative_effect(&inferred.type_)
                     && let Some(value) = &evaluated
@@ -11150,6 +11157,65 @@ impl Checker {
         type_.clone()
     }
 
+    fn refine_comptime_members(&self, inferred: &Type, value: &Value) -> Option<Type> {
+        match value {
+            Value::Shape(values) => match self.settle(inferred.clone(), true) {
+                Type::Record(fields) => {
+                    let mut refined = false;
+                    let fields = fields
+                        .iter()
+                        .map(|(name, type_)| {
+                            let replacement = values
+                                .get(name)
+                                .and_then(|value| self.refine_comptime_members(type_, value));
+                            let type_ = match replacement {
+                                Some(type_) => {
+                                    refined = true;
+                                    type_
+                                }
+                                None => type_.clone(),
+                            };
+                            (name.clone(), type_)
+                        })
+                        .collect();
+                    refined.then_some(Type::Record(fields))
+                }
+                Type::Union(members) => {
+                    let mut refined = false;
+                    let members = members
+                        .iter()
+                        .map(|member| match self.refine_comptime_members(member, value) {
+                            Some(member) => {
+                                refined = true;
+                                member
+                            }
+                            None => member.clone(),
+                        })
+                        .collect();
+                    refined.then(|| join_types(members))
+                }
+                _ => None,
+            },
+            Value::Closure {
+                signature: Some(signature),
+                ..
+            } if !crate::value::contains_type_variables(signature) => {
+                let settled = self.settle(inferred.clone(), true);
+                if (contains_bottom(&settled)
+                    || self.contains_unevidenced(&settled, &mut HashSet::new()))
+                    && let Some(checked) = self.bridge(signature)
+                    && !contains_bottom(&checked)
+                    && !self.contains_unevidenced(&checked, &mut HashSet::new())
+                {
+                    Some(checked)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn bridge_runtime_value(&self, value: &Value) -> Type {
         match value {
             Value::Closure { .. } | Value::ModuleClosure { .. } | Value::IndexedStep { .. } => {
@@ -14244,12 +14310,34 @@ fn prebind_recursive_group(
             continue;
         };
         let Expression::Lambda {
-            parameter, body, ..
+            parameter,
+            body,
+            deferred,
+            ..
         } = module.arena.expressions[lambda.0 as usize]
         else {
             continue;
         };
         for name in bound_names {
+            if deferred {
+                let typing = environment
+                    .names
+                    .get(&name)
+                    .expect("a recursive name was prebound");
+                let Typing::Mono(type_) = typing else {
+                    unreachable!("a recursive name has a monomorphic placeholder");
+                };
+                checker.constrain(
+                    Type::Function {
+                        deferred: true,
+                        parameter: Rc::new(checker.fresh_at_next_level()),
+                        effects: Rc::new(checker.fresh_at_next_level()),
+                        result: Rc::new(checker.fresh_at_next_level()),
+                    },
+                    type_.clone(),
+                    *span,
+                )?;
+            }
             closures.push((name, parameter, body));
         }
         if !tags.is_empty() {

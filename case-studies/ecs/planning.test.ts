@@ -395,11 +395,11 @@ test("systems reject undeclared reads, invalid patches, and host effects at chec
           "BLOT_DOES_NOT_SATISFY",
         ],
         [
-          'const unused = S.define ({ ...access; .reads = [Other.Missing]; }, fn read => { .Position = 1; })',
+          "const unused = S.define ({ ...access; .reads = [Other.Missing]; }, fn read => { .Position = 1; })",
           "BLOT_REFUSED",
         ],
         [
-          'const unused = S.define ({ ...access; .writes = [Other.Missing]; }, fn read => { .Missing = 1; })',
+          "const unused = S.define ({ ...access; .writes = [Other.Missing]; }, fn read => { .Missing = 1; })",
           "BLOT_REFUSED",
         ],
         [

@@ -182,6 +182,10 @@ for every i, A_i <= B              some j, A <= B_j
 Record fields whose type admits `unit` may be omitted. This is a property of the
 required field type, not a distinct optional-field constructor.
 
+Prebinding a recursive deferred lambda records its deferred arrow before
+checking recursive calls. An unconstrained placeholder must not make those calls
+strict.
+
 Functions are contravariant in their parameter and covariant in their effect row
 and result. Arrays are immutable at the language level and therefore covariant.
 Effects and variants use finite set inclusion. The empty effect row flows into
@@ -252,8 +256,8 @@ Checking a lambda against a quantified signature opens its binders with fresh
 rigids before supplying the function's parameter context to the body. Tuple
 patterns preserve known field types before checking cases; unresolved inference
 variables still use directional projection constraints. Higher-order calls with
-a checked signature use that signature's argument/result relationship before
-any specialization of the source body. Rechecking a computed constant closure's
+a checked signature use that signature's argument/result relationship before any
+specialization of the source body. Rechecking a computed constant closure's
 captures may refine its representation, but cannot erase a closed input/result
 relationship or effects established by the original call.
 
@@ -744,6 +748,13 @@ own quantified relationships after it has passed through an enclosing value and
 hands the next higher-order specialization its exact input. It does not make
 arbitrary closure-bearing records exact at their declarations or exported module
 boundaries.
+
+When an inferred record member retains unevidenced or bottom positions after a
+compile-time schema factory is forwarded, its evaluated closure's closed,
+monomorphic signature may supply that member's instantiated contract. This does
+not replace an already informative inferred member or instantiate a quantified
+callback a second time. In particular, a generated method's concrete schema
+parameter must still reject records missing that schema's fields.
 
 Closed residual signatures reify `Slice.of T` as the compiler-private
 `@region.type T` type value. This preserves the signature of a local recursive

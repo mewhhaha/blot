@@ -1,5 +1,76 @@
 # Example PR triage — 2026-09-13
 
+## Implementation follow-up — 2026-09-14
+
+The integrated branch includes example PRs #119–#135 and the completed retained
+state-loop work from main. The original observations below remain a historical
+record of the September 13 baseline. The compiler and example updates address
+these separate obligations:
+
+| ID   | Implemented change                                                                                                          | Regression boundary                                                                                                  |
+| ---- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| PP01 | Higher-order application checks the original callback relationship before specialization.                                   | Wrong fold elements and incompatible projections reject during checking.                                             |
+| PP02 | Computed closures preserve checked input/result relationships; generated monomorphic methods retain their schema contracts. | Unannotated parser and keyed-index results, a forwarded structural differ, and incompatible generated-method inputs. |
+| PP03 | Open effect constraints retain the inherited rigid tail.                                                                    | Generic `instrument` accepts pure and effectful callbacks; dropping the callback's effect still rejects.             |
+| PP04 | Closed tuple parameter evidence reaches nested case checking.                                                               | Semiring operations no longer repeat parameter annotations; missing constructors still reject.                       |
+| PP05 | Universal signatures provide fresh quantified context while checking their implementation.                                  | Nonempty length accepts its explicit generic signature; an invalid universal implementation rejects.                 |
+| PP06 | Immutable guard refinements follow the binding and field path.                                                              | Validation reads refined fields directly; another field gains no evidence.                                           |
+| PP07 | Generic failures retain source evidence at the application; open-export refusals name the export and parameter.             | Fold source spans, mismatched library arguments, and an intentionally open exported comparator.                      |
+| PP08 | Nested constructor payload unions print with parentheses.                                                                   | Prism and codec principal types preserve visible grouping.                                                           |
+| PP09 | Failed Baba continuations receive a token span and accepted spelling.                                                       | Newlines after `=>` suggest `do:`; continued unions suggest parentheses. Syntax acceptance is unchanged.             |
+| PP10 | `format` and `format:check` run without the semantic compiler; CI checks changed Blot files early.                          | CLI check/write, malformed-source preservation, and the merged example catalog.                                      |
+
+The quantity example now uses singleton unit labels with typed descriptors and
+rejects cross-unit arithmetic. Readers compose record schemas with spreads.
+Parser, index, validation, middleware, semiring, and structural-diff examples
+exercise the repaired forms. Their useful public contracts and ownership
+requirements remain explicit.
+
+Integration also exposed residual representation defects: nested closures must
+use facts from their own specialization, array evidence must include every
+member, incomplete constructor payload evidence must remain unknown, and type
+unions must normalize before representation selection. Regression coverage
+includes record selection, suspended aggregate state, iterator erasure, and the
+engine's scalar/SIMD component stores. Fused source-effect queries keep the
+caller's handler frame, and fresh message-array updates use their lowered
+ownership evidence instead of falling back to persistent copies.
+
+Record arguments retain fields outside a checked parameter row, including when
+an outlined function would otherwise narrow their runtime layout. Recursive
+bindings preserve deferred calls. `Shape.update` and `Shape.entries` traverse
+known field names while their values remain dynamic; the runtime fixture checks
+extra-field preservation, patches, and ordered field enumeration. ECS systems
+explicitly project their declared read fields with `Reflect.pick`, so reflection
+inside a callback cannot observe undeclared components. Development-unit
+boundaries also recheck open provider signatures with cyclic inference evidence
+against their actual arguments, so inferred aggregate results keep a concrete
+reload interface. Generic identity links retain sealed argument representations.
+
+The request-builder and codec PRs add no further confirmed compiler defect to
+this list. Generic consuming transitions still need a proven ownership relation;
+codec `Result` products intentionally return the first failure. Quantifier
+shorthand, codec laws, broader reflection, opaque APIs, and algorithmic costs
+remain separate design or library topics, as distinguished in the original
+triage. The implementations do not weaken ownership to remove those boundaries.
+
+Compiler regressions live in
+[`compiler/src/abstraction_tests.rs`](../compiler/src/abstraction_tests.rs).
+[`scripts/check_abstractions.mjs`](../scripts/check_abstractions.mjs) includes
+all of these example suites with a process timeout per suite. Integrated
+verification covers 610 Rust compiler tests, 354 Node tests, all 86 regression
+suites (including 28 ECS tests), all 256 catalog programs, the abstraction
+suites, and evaluator/Wasm conformance. Formatting, TypeScript checking, Wasm
+Rust lint, generated frontend/health checks, memory checks, guest ABI checks,
+and package checks also pass. Historical test counts below refer only to the
+original review.
+
+An additional native `cargo clippy --all-targets -- -D warnings` run reports
+existing `large_enum_variant` (`hir.rs`), `items_after_test_module`
+(`safety.rs`), and `collapsible_if` (`session.rs`) warnings. These are outside
+the configured Wasm lint target and remain unchanged.
+
+## Original triage
+
 Fix the checker/compilation disagreement and lost generic result types first.
 Most submitted examples can merge with their explicit type boundaries while
 those compiler fixes proceed separately. Quantities and structural Readers need

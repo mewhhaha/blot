@@ -47,7 +47,10 @@ async function agrees(
 test("record selection preserves every array alternative and its nested variant", async () => {
   const source = await readFile("examples/lib/record_selection.blot", "utf8");
   await agrees(
-    source.replace('open import "blot:prelude"\n', "").replace(/\nreturn run\s*$/, ""),
+    source.replace('open import "blot:prelude"\n', "").replace(
+      /\nreturn run\s*$/,
+      "",
+    ),
     [[1n, 1n], [2n, 20n], [99n, 1n], [2n, 20n]],
   );
 });

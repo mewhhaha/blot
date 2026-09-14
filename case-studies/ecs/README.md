@@ -283,7 +283,8 @@ const integrate = S.define (
 Here the callback's boundary is
 `{ .Position = Int; .Velocity = Int; } -> { .Position = Int; }`. The callback
 receives only the declared read view, including when it reflects on its fields.
-It returns exactly the declared write fields, with their schema types. The
+The generated step explicitly selects those fields before calling the work. It
+returns exactly the declared write fields, with their schema types. The
 generated `step` applies that patch to the original row and preserves all other
 fields. A multi-field patch reads one snapshot, so exchanging Position and
 Velocity works without one update affecting the next read.

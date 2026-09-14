@@ -1,34 +1,45 @@
 use crate::session::CompilerSession;
 use std::collections::BTreeMap;
 
-fn compiler_with_prelude(source: &str) -> CompilerSession {
-    let mut session = CompilerSession::default();
-    session
-        .add_source(
-            "prelude.blot".into(),
-            include_str!("../../src/prelude/prelude.blot")
-                .encode_utf16()
-                .collect(),
-        )
-        .unwrap();
-    session
-        .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
-        .unwrap();
-    session
-        .add_source("main.blot".into(), source.encode_utf16().collect())
-        .unwrap();
-    session
-        .configure_module(
-            "main.blot",
-            BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
-            BTreeMap::new(),
-        )
-        .unwrap();
-    session
+fn with_compiler<T: Send + 'static>(
+    source: &str,
+    observe: impl FnOnce(CompilerSession) -> T + Send + 'static,
+) -> T {
+    let source = source.to_owned();
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let mut session = CompilerSession::default();
+            session
+                .add_source(
+                    "prelude.blot".into(),
+                    include_str!("../../src/prelude/prelude.blot")
+                        .encode_utf16()
+                        .collect(),
+                )
+                .unwrap();
+            session
+                .configure_module("prelude.blot", BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            session
+                .add_source("main.blot".into(), source.encode_utf16().collect())
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            observe(session)
+        })
+        .expect("compiler test thread should start")
+        .join()
+        .expect("compiler test thread should finish")
 }
 
 fn check(source: &str) -> serde_json::Value {
-    compiler_with_prelude(source).check_module("main.blot")
+    with_compiler(source, |session| session.check_module("main.blot"))
 }
 
 #[test]
@@ -52,8 +63,8 @@ fn generic_composition_preserves_inhabited_result_payloads() {
         "../../experiments/pr-triage/generic_result.blot"
     ));
     assert_eq!(checked["ok"], true, "{checked}");
-    assert!(
-        !checked["type"].as_str().unwrap().contains('⊥'),
+    assert_eq!(
+        checked["type"], "#Ok { .value = #Health; .rest = Text } | #Error Text",
         "{checked}"
     );
 }
@@ -165,6 +176,17 @@ return selected.compare ({ .wrong = "oops"; }, { .id = 7; })
     );
     let checked = check(&source.replace(".wrong = \"oops\"", ".id = 4"));
     assert_eq!(checked["ok"], true, "{checked}");
+    let source = source
+        .split("return selected.compare")
+        .next()
+        .unwrap()
+        .to_owned()
+        + "return selected\n";
+    let checked = check(&source);
+    assert_eq!(
+        checked["type"], "{ .compare = { .0 = { .id = Int }; .1 = { .id = Int } } -> Int }",
+        "{checked}"
+    );
 }
 
 #[test]
@@ -236,28 +258,121 @@ fn projection_refinements_follow_nested_paths() {
 
 #[test]
 fn record_selection_loop_retains_its_nested_variant_representation() {
-    let session = compiler_with_prelude(include_str!("../../examples/lib/record_selection.blot"));
-    let checked = session.check_module("main.blot");
-    assert_eq!(checked["ok"], true, "{checked}");
-    let prepared = session.prepare_runtime_hir("main.blot");
-    assert_eq!(prepared["ok"], true, "{prepared}");
+    with_compiler(
+        include_str!("../../examples/lib/record_selection.blot"),
+        |session| {
+            let checked = session.check_module("main.blot");
+            assert_eq!(checked["ok"], true, "{checked}");
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        },
+    );
+}
+
+#[test]
+fn shape_updates_preserve_fields_outside_the_checked_parameter_row() {
+    let source = include_str!("../../examples/lib/shape_update.blot");
+    with_compiler(source, |session| {
+        let evaluated = session.evaluate_module("main.blot");
+        assert_eq!(evaluated["ok"], true, "{evaluated}");
+        assert_eq!(evaluated["display"], "3", "{evaluated}");
+        let prepared = session.prepare_runtime_hir("main.blot");
+        assert_eq!(prepared["ok"], true, "{prepared}");
+    });
+    with_compiler(
+        include_str!("../../examples/lib/shape_update_runtime.blot"),
+        |session| {
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(prepared["ok"], true, "{prepared}");
+        },
+    );
+}
+
+#[test]
+fn inferred_development_provider_closes_aggregate_result_representations() {
+    with_compiler(
+        r#"open import "blot:prelude"
+const codec = import "./codec.blot"
+const Distance = @type.seal "Distance" Int
+const Source = @effect.host { .value = Unit -> Int; .distance = Unit -> Distance; }
+use value <- Source.value ()
+use distance <- Source.distance ()
+let values = [value, value + 1]
+let response = codec.expand {
+  .choice = #Some (value + 2);
+  .label = "oak";
+  .seed = value + 3;
+  .values = values;
+}
+let reflected = codec.reflect { .distance = distance; .value = value; }
+return (response, Array.length values, reflected)
+"#,
+        |mut session| {
+            session
+                .add_source(
+                    "codec.blot".into(),
+                    r#"open import "blot:prelude"
+let expand = fn request => {
+  .choice = request.choice;
+  .label = request.label;
+  .values = [...request.values, request.seed];
+}
+let reflect = fn value => value
+return { .expand = expand; .reflect = reflect; }
+"#
+                    .encode_utf16()
+                    .collect(),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "codec.blot",
+                    BTreeMap::from([("blot:prelude".into(), "prelude.blot".into())]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            session
+                .configure_module(
+                    "main.blot",
+                    BTreeMap::from([
+                        ("blot:prelude".into(), "prelude.blot".into()),
+                        ("./codec.blot".into(), "codec.blot".into()),
+                    ]),
+                    BTreeMap::new(),
+                )
+                .unwrap();
+            let program = session
+                .compile_development_program(
+                    "main.blot",
+                    "game",
+                    &BTreeMap::from([
+                        ("game".into(), "main.blot".into()),
+                        ("codec".into(), "codec.blot".into()),
+                    ]),
+                )
+                .unwrap();
+            assert_eq!(program.edges.len(), 2, "{:?}", program.edges);
+        },
+    );
 }
 
 #[test]
 fn open_export_refusals_name_the_field_and_parameter() {
-    let session = compiler_with_prelude(
+    with_compiler(
         "let compare = fn left => fn right => left\nreturn { .compare = compare; }\n",
+        |session| {
+            let prepared = session.prepare_runtime_hir("main.blot");
+            assert_eq!(
+                prepared["targetRefusal"]["code"], "BLOT_UNSUPPORTED_LOWERING",
+                "{prepared}"
+            );
+            assert!(prepared.get("diagnostic").is_none(), "{prepared}");
+            let message = prepared["targetRefusal"]["message"].as_str().unwrap();
+            assert!(
+                message.contains("Parameter 1 of export 'compare'"),
+                "{message}"
+            );
+            assert!(message.contains("concrete function signature"), "{message}");
+        },
     );
-    let prepared = session.prepare_runtime_hir("main.blot");
-    assert_eq!(
-        prepared["targetRefusal"]["code"], "BLOT_UNSUPPORTED_LOWERING",
-        "{prepared}"
-    );
-    assert!(prepared.get("diagnostic").is_none(), "{prepared}");
-    let message = prepared["targetRefusal"]["message"].as_str().unwrap();
-    assert!(
-        message.contains("Parameter 1 of export 'compare'"),
-        "{message}"
-    );
-    assert!(message.contains("concrete function signature"), "{message}");
 }

@@ -1112,10 +1112,12 @@ second kind of record member.
 When a record flows into an expected record type, an omitted field is supplied
 as `()` only when that expected field explicitly contains `Unit`, either as `()`
 itself or as a member of a union. Other missing fields are type errors. The
-reference evaluator materializes the unit field at the call boundary. An exact
-`Unit` field remains `Unit` in Core. Core uses a private absent/present sum so
-`T | ()` has one HM representation; that sum is not source syntax and does not
-cross the Wasm ABI.
+reference evaluator materializes the unit field at the call boundary, retaining
+all supplied fields in their insertion order. Missing optional fields are
+appended in the expected type's field order. Width subtyping does not remove
+fields from the supplied value. An exact `Unit` field remains `Unit` in Core.
+Core uses a private absent/present sum so `T | ()` has one HM representation;
+that sum is not source syntax and does not cross the Wasm ABI.
 
 A computed field is written `.[name] = value`, where `name` must resolve at
 compile time to `Text`. The resolved text is the structural field name; it is
@@ -1133,11 +1135,17 @@ another member, is `BLOT_OPEN_RECORD_SPREAD`; concatenating two unknown rows has
 no principal type in Blot's lattice.
 
 `Shape.entries record` enumerates its statically known fields in insertion order
-as `(name, value)` pairs. `Shape.update (record, patch)` is ordinary prelude
-source: it checks at specialization that every patch field exists in `record`
-and that the patch value refines the corresponding field type, then rebuilds the
-record with computed fields. The result preserves the record's type. Use a
-leading spread directly when constructing an extension with new fields.
+as `(name, value)` pairs; the field values may remain dynamic.
+`Shape.update (record, patch)` is ordinary prelude source: it checks at
+specialization that every patch field exists in `record` and that the patch
+value refines the corresponding field type, then traverses the patch's known
+field names and rebuilds the record with computed fields. Patch values may
+remain dynamic. The result preserves the record's type. Use a leading spread
+directly when constructing an extension with new fields.
+
+`Reflect.pick (record, names)` constructs a record containing only the listed
+compile-time field names. The selected fields may contain type values or runtime
+values. This is an explicit projection for constructing restricted record views.
 
 ```blot
 let original :: { .name = Text; .count = Int; }
@@ -1363,6 +1371,7 @@ which runtime branch the callee chose.
 
 Known deferred calls are normalized during specialization. A demanded argument
 is emitted in the branch that demands it, and an omitted argument emits no work.
+Recursive bindings preserve that deferred calling convention at every call.
 Runtime HIR and Wasm therefore contain ordinary control flow and no suspension
 or heap thunk. A deferred function that escapes known call sites into an opaque
 runtime value or the public ABI is refused with `BLOT_DEFERRED_AT_RUNTIME`.
@@ -2392,11 +2401,15 @@ preserves directional subtype, effect, region, and refinement relations while
 preventing a chain of wrappers from retaining every prior wrapper's private
 variables. Recursive schemes retain their live fixed-point graph.
 
-A higher-order call must satisfy the callee's checked signature before its
-body is specialized. Written function signatures supply parameter context before
+A higher-order call must satisfy the callee's checked signature before its body
+is specialized. Written function signatures supply parameter context before
 checking the body, including quantified parameters and tuple destructuring.
 Rechecking a computed constant closure preserves closed input and result types
-already established by its call, along with the call's effects.
+already established by its call, along with the call's effects. A computed
+constant record likewise retains the closed, monomorphic contracts of generated
+methods when its inferred members still contain unknown positions. Passing a
+schema factory through another function does not remove the resulting methods'
+schema requirements.
 
 ```blot
 // Before its body is checked: 'a -> 'b
@@ -2500,8 +2513,8 @@ exactly the same way they prove an explicitly written range.
 
 Comparisons also refine immutable field paths, such as `raw.port` or
 `settings.http.port`. Repeating that same projection in the guarded branch uses
-the fact; another field does not. Shadowing or rebinding the root record replaces
-its field facts with those of the new binding.
+the fact; another field does not. Shadowing or rebinding the root record
+replaces its field facts with those of the new binding.
 
 This operation does not turn value relationships into ordinary types. Facts such
 as `i < length(values)` remain in the refinement context described in §8.5, and

@@ -15,12 +15,14 @@ const check_guests :: Int -> Result (Guests, #InvalidGuests Int)
 const check_guests = fn value => do:
   if value >= 1 && value <= 8:
     return #Ok value
+
   return #Error (#InvalidGuests value)
 
 const check_nights :: Int -> Result (Nights, #InvalidNights Int)
 const check_nights = fn value => do:
   if value >= 1 && value <= 30:
     return #Ok value
+
   return #Error (#InvalidNights value)
 
 const guest_codec :: C.Codec (Guests, Int, #InvalidGuests Int)

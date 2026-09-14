@@ -2454,22 +2454,16 @@ impl ResidualTrace {
                 return self.symbolic_value(value, span).map(Some);
             }
             "@array.set" => {
-                let update = if matches!(
-                    arguments.first(),
-                    Some(Value::Runtime(RuntimeValue {
-                        meaning: RuntimeMeaning::ReusableStore,
-                        ..
-                    }))
-                ) {
-                    "owned-reuse"
-                } else {
-                    "persistent"
-                };
                 let store = self.lower_primitive_argument(
                     &arguments[0],
                     checked_arguments.first().and_then(Option::as_ref),
                     span,
                 )?;
+                let update = if matches!(store.meaning, RuntimeMeaning::ReusableStore) {
+                    "owned-reuse"
+                } else {
+                    "persistent"
+                };
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error(
                         "Dynamic array update received a non-array value.",
@@ -2488,22 +2482,16 @@ impl ResidualTrace {
                 result
             }
             "@array.push" => {
-                let update = if matches!(
-                    arguments.first(),
-                    Some(Value::Runtime(RuntimeValue {
-                        meaning: RuntimeMeaning::ReusableStore,
-                        ..
-                    }))
-                ) {
-                    "owned-reuse"
-                } else {
-                    "persistent"
-                };
                 let store = self.lower_primitive_argument(
                     &arguments[0],
                     checked_arguments.first().and_then(Option::as_ref),
                     span,
                 )?;
+                let update = if matches!(store.meaning, RuntimeMeaning::ReusableStore) {
+                    "owned-reuse"
+                } else {
+                    "persistent"
+                };
                 let RuntimeType::Store { element_type } = self.types[store.type_id] else {
                     return Err(hir_error("Dynamic array push received a non-array value."));
                 };
@@ -4563,9 +4551,15 @@ impl ResidualTrace {
                 .collect::<BTreeMap<_, _>>();
         let mut instance_facts = None;
         let mut signature = signature;
+        let recursive_result = context
+            .recursive_closures
+            .borrow()
+            .contains_key(module, &body);
         if (signature.is_none()
             && (host_callback || self_name.is_some() || crosses_development_boundary))
-            || (!instance_checked && self_name.is_some() && signature.is_some_and(crate::value::contains_type_variables))
+            || (!instance_checked
+                && (self_name.is_some() || (crosses_development_boundary && recursive_result))
+                && signature.is_some_and(crate::value::contains_type_variables))
             || (host_callback && signature.is_some_and(|mut signature| {
                 while let Value::Forall { body, .. } | Value::Extended { inner: body, .. } = signature {
                     signature = body;
@@ -4638,7 +4632,10 @@ impl ResidualTrace {
             || (!host_callback
                 && !crosses_development_boundary
                 && self_name.is_none()
-                && matches!(result_body, Value::Union(_) | Value::Tag { .. }))
+                && (matches!(result_body, Value::Union(_) | Value::Tag { .. })
+                    || effects
+                        .iter()
+                        .any(|effect| matches!(effect, Value::Effect { host: false, .. }))))
         {
             return Ok(ResidualFunctionCall::Static(
                 "the callback is deferred or its result requires staging",
@@ -4722,6 +4719,17 @@ impl ResidualTrace {
                 "the argument representation is unresolved",
             ));
         }
+        if !host_callback
+            && !crosses_development_boundary
+            && self_name.is_none()
+            && actual_evidence.as_ref().is_some_and(|actual| {
+                self.record_argument_exceeds_signature(actual, domain, &substitutions)
+            })
+        {
+            return Ok(ResidualFunctionCall::Static(
+                "the argument retains fields outside the checked parameter row",
+            ));
+        }
         let caller_argument = if host_callback {
             RuntimeValue {
                 id: usize::MAX,
@@ -4756,10 +4764,6 @@ impl ResidualTrace {
             .map(|contract| (contract.input.clone(), contract.result.clone()))
             .unwrap_or((Produced::None, Produced::None));
         let mut argument_reuse = input_store_reuse_witness(&input_ownership, argument, &self.types);
-        let recursive_result = context
-            .recursive_closures
-            .borrow()
-            .contains_key(module, &body);
         if recursive_result {
             argument_reuse = preserve_recursive_store_reuse(&argument_reuse, argument, &self.types);
         }
@@ -5784,6 +5788,39 @@ impl ResidualTrace {
                 Ok(self.operation("product.make", type_id, operands, span, None))
             }
             _ => self.lower_value(value, span),
+        }
+    }
+
+    fn record_argument_exceeds_signature(
+        &self,
+        actual: &Value,
+        expected: &Value,
+        substitutions: &HashMap<u32, usize>,
+    ) -> bool {
+        match (actual, expected) {
+            (Value::Shape(actual), Value::Shape(expected)) => {
+                actual
+                    .iter()
+                    .any(|(name, actual)| match expected.get(name) {
+                        Some(expected) => {
+                            self.record_argument_exceeds_signature(actual, expected, substitutions)
+                        }
+                        None => true,
+                    })
+            }
+            (actual, Value::TypeVariable(variable)) => substitutions
+                .get(variable)
+                .and_then(|type_id| self.runtime_type_value(*type_id, &mut HashSet::new()))
+                .is_some_and(|expected| {
+                    self.record_argument_exceeds_signature(actual, &expected, substitutions)
+                }),
+            (Value::Extended { inner, .. }, expected) => {
+                self.record_argument_exceeds_signature(inner, expected, substitutions)
+            }
+            (actual, Value::Extended { inner, .. }) => {
+                self.record_argument_exceeds_signature(actual, inner, substitutions)
+            }
+            _ => false,
         }
     }
 

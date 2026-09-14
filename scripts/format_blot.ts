@@ -18,7 +18,13 @@ for (let index = 0; index < arguments_.length; index += 1) {
     if (base === undefined) throw new Error("--base requires a Git revision.");
     index += 1;
     const changed = execFileSync("git", [
-      "diff", "--name-only", "--diff-filter=ACMR", "-z", base, "--", "*.blot",
+      "diff",
+      "--name-only",
+      "--diff-filter=ACMR",
+      "-z",
+      base,
+      "--",
+      "*.blot",
     ], { encoding: "utf8" });
     for (const path of changed.split("\0")) {
       if (
@@ -36,7 +42,9 @@ for (let index = 0; index < arguments_.length; index += 1) {
 }
 
 if (arguments_.length === 0) {
-  throw new Error("Usage: format_blot.ts [--check | --write] [--base REV] PATH...");
+  throw new Error(
+    "Usage: format_blot.ts [--check | --write] [--base REV] PATH...",
+  );
 }
 
 let failures = 0;
@@ -61,5 +69,7 @@ for (const path of [...paths].sort()) {
     failures += 1;
   }
 }
-console.log(`Checked ${paths.size} Blot files; ${changed} required formatting.`);
+console.log(
+  `Checked ${paths.size} Blot files; ${changed} required formatting.`,
+);
 if (failures > 0) process.exitCode = 1;

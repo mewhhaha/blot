@@ -4745,7 +4745,7 @@ fn apply_with_expected(
             effect_scope: creation_scope,
             parameter,
             body,
-            deferred: _,
+            deferred,
             environment,
             self_name,
             imports: _,
@@ -4892,7 +4892,7 @@ fn apply_with_expected(
                         effect_scope: creation_scope.clone(),
                         parameter,
                         body,
-                        deferred: false,
+                        deferred,
                         environment: scope.parent.borrow().clone().expect("closure environment"),
                         self_name: Some(name),
                         imports: None,
@@ -6136,10 +6136,9 @@ fn adapt_argument(argument: Value, expected: &Value, span: Span) -> Result<Value
     let Value::Shape(present) = argument else {
         return Ok(argument);
     };
-    let mut adapted = OrderedFields::default();
+    let mut adapted = present;
     for (name, expected) in required {
-        if let Some(value) = present.get(name) {
-            adapted.insert(name.clone(), value.clone());
+        if adapted.get(name).is_some() {
             continue;
         }
         if admits_omission(expected) {
@@ -6183,7 +6182,7 @@ fn specialize_deferred_scratch(
                 )
             }),
         (Value::Shape(arguments), Value::Shape(fields)) => {
-            let mut specialized = OrderedFields::default();
+            let mut specialized = arguments.clone();
             for (name, expected) in fields {
                 let argument = arguments.get(name).cloned().ok_or_else(|| {
                     Diagnostic::new(
@@ -6364,7 +6363,10 @@ pub(crate) fn record_signature_substitutions(
             )),
             Value::Tag { name, payload } => Some(Value::Tag {
                 name: name.clone(),
-                payload: payload.as_deref().and_then(value_signature).map(Box::new),
+                payload: match payload.as_deref() {
+                    Some(payload) => Some(Box::new(value_signature(payload)?)),
+                    None => None,
+                },
             }),
             Value::Extended { inner, .. } | Value::Sealed { inner, .. } => value_signature(inner),
             _ => None,
@@ -6485,10 +6487,10 @@ pub(crate) fn record_signature_substitutions(
             record_signature_substitutions(environment, expected, actual);
         }
         (Value::Array(expected), Value::Array(actual)) => {
-            if let Some(expected) = expected.first() {
-                if let Some(Value::Array(types)) = value_signature(&Value::Array(actual.clone())) {
-                    record_types(environment, expected, &types[0]);
-                }
+            if let Some(expected) = expected.first()
+                && let Some(Value::Array(types)) = value_signature(&Value::Array(actual.clone()))
+            {
+                record_types(environment, expected, &types[0]);
             }
         }
         (Value::Array(expected), Value::EmptyArray { element }) => {

@@ -24,29 +24,33 @@ files before rebuilding the compiler.
 representation boundary: functions consume a `{ .count = Int; }` view of a wider
 record and return fresh integer and text records with their own layouts.
 [`lib/record_selection.blot`](lib/record_selection.blot) carries records with
-nested variant fields through an array iterator and a selection fold; both
-array alternatives remain available at runtime.
+nested variant fields through an array iterator and a selection fold; both array
+alternatives remain available at runtime.
+[`lib/shape_update_runtime.blot`](lib/shape_update_runtime.blot) preserves extra
+record fields through a narrow parameter, applies runtime patches, and
+enumerates runtime field values in insertion order.
 
-| Example                                                      | Abstraction                                                                                                       | Observations                                                 |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot) | A nonempty producer becomes a sum, text, or its first element through different handlers                          | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"` |
-| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)   | A map handler translates an integer effect into a text effect; the next handler joins it                          | `"$10 + $20 + $12"`                                          |
-| [`schema_effects.blot`](schema_effects.blot)                 | A record of types generates reader operations; a handler factory checks supplied settings against the same schema | `"localhost:8080"` and `"example.com:443"`                   |
-| [`linear_transaction.blot`](linear_transaction.blot)         | An effect produces a linear pending transaction; commit and rollback consume it and return receipts               | `#Committed "order-42"` and `#RolledBack "order-42"`         |
-| [`typed_quantities.blot`](typed_quantities.blot)             | A compile-time descriptor couples a quantity type distinguished by its unit label to operations and generates typed unit conversions      | `1550 m`, `155000 cm`, and `90 s`                            |
-| [`typed_lenses.blot`](typed_lenses.blot)                     | Composable lenses connect immutable nested updates through statically matched whole/part types                    | `"London"` -> `"London / west"`; postal becomes `90210`      |
-| [`composable_ordering.blot`](composable_ordering.blot)       | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`               | priority desc; team/id asc; equal keys stay stable           |
-| [`typed_nonempty.blot`](typed_nonempty.blot)                 | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces              | first `"Ada"`, length `4`, total weight `11`, and typed route |
-| [`structural_readers.blot`](structural_readers.blot)         | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments       | `"EUR 12500"` and `"EUR 11100"`                              |
-| [`typed_validation.blot`](typed_validation.blot)             | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                  | three invalid fields accumulate; legal maxima pass           |
-| [`effect_row_middleware.blot`](effect_row_middleware.blot)   | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                           | `252` effectful, `251` pure; callback effects stay visible   |
-| [`composable_reducers.blot`](composable_reducers.blot)       | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                      | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
-| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                          | two-step walk counts plus cheapest reachable two-leg costs   |
-| [`composable_parser.blot`](composable_parser.blot)           | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice      | health, Unicode user, and asset routes plus precise failures |
-| [`composable_prisms.blot`](composable_prisms.blot)           | Structural prisms compose partial focuses through one shared intermediate type                                    | nested event preview, update-on-match, misses, and review     |
-| [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records            | changed field names, exact equality, and refined-field bounds |
-| [`staged_request_builder.blot`](staged_request_builder.blot) | Required slots are type parameters; consuming setters advance either order while preserving the other slot        | Two receipts; invalid stages reject statically               |
-| [`typed_codec.blot`](typed_codec.blot)                       | Bidirectional codecs compose validated fields while preserving model, wire, and error types                       | round trips, boundary values, and typed decode errors        |
+| Example                                                        | Abstraction                                                                                                                          | Observations                                                      |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| [`nonempty_effect_stream.blot`](nonempty_effect_stream.blot)   | A nonempty producer becomes a sum, text, or its first element through different handlers                                             | `42`, `"10, 20, 12"`, and `10`; a singleton renders as `"7"`      |
+| [`typed_effect_pipeline.blot`](typed_effect_pipeline.blot)     | A map handler translates an integer effect into a text effect; the next handler joins it                                             | `"$10 + $20 + $12"`                                               |
+| [`schema_effects.blot`](schema_effects.blot)                   | A record of types generates reader operations; a handler factory checks supplied settings against the same schema                    | `"localhost:8080"` and `"example.com:443"`                        |
+| [`linear_transaction.blot`](linear_transaction.blot)           | An effect produces a linear pending transaction; commit and rollback consume it and return receipts                                  | `#Committed "order-42"` and `#RolledBack "order-42"`              |
+| [`typed_quantities.blot`](typed_quantities.blot)               | A compile-time descriptor couples a quantity type distinguished by its unit label to operations and generates typed unit conversions | `1550 m`, `155000 cm`, and `90 s`                                 |
+| [`typed_lenses.blot`](typed_lenses.blot)                       | Composable lenses connect immutable nested updates through statically matched whole/part types                                       | `"London"` -> `"London / west"`; postal becomes `90210`           |
+| [`composable_ordering.blot`](composable_ordering.blot)         | Typed key projection, reversal, and lexicographic tie-breakers compose one reusable `Order Ticket`                                   | priority desc; team/id asc; equal keys stay stable                |
+| [`typed_nonempty.blot`](typed_nonempty.blot)                   | A head-plus-tail collection is statically nonempty while satisfying structural collection interfaces                                 | first `"Ada"`, length `4`, total weight `11`, and typed route     |
+| [`structural_readers.blot`](structural_readers.blot)           | Pure `Reader (Env, A)` composition accumulates narrow structural capabilities and lifts nested environments                          | `"EUR 12500"` and `"EUR 11100"`                                   |
+| [`typed_validation.blot`](typed_validation.blot)               | Independent validators accumulate typed failures while refinement outputs encode accepted bounds                                     | three invalid fields accumulate; legal maxima pass                |
+| [`effect_row_middleware.blot`](effect_row_middleware.blot)     | Composable wrappers add tracing/metrics while preserving arbitrary callback effect rows                                              | `252` effectful, `251` pure; callback effects stay visible        |
+| [`composable_reducers.blot`](composable_reducers.blot)         | Typed reducers contramap inputs, map outputs, and zip independent accumulators into one fold                                         | revenue `3500`, units `6`, lines `3`; empty and singleton reports |
+| [`typed_semiring_matrices.blot`](typed_semiring_matrices.blot) | One typed matrix product runs over integer path counts and optional min-plus route costs                                             | two-step walk counts plus cheapest reachable two-leg costs        |
+| [`nominal_keyed_index.blot`](nominal_keyed_index.blot)         | Generated key types keep distinct indexes separate while lookup infers its optional payload                                          | user `#Some "Ada"`, project `#Some "compiler"`, missing `#None`   |
+| [`composable_parser.blot`](composable_parser.blot)             | Typed parser combinators sequence Unicode-safe cursor parsers and preserve one result carrier through choice                         | health, Unicode user, and asset routes plus precise failures      |
+| [`composable_prisms.blot`](composable_prisms.blot)             | Structural prisms compose partial focuses through one shared intermediate type                                                       | nested event preview, update-on-match, misses, and review         |
+| [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records                               | changed field names, exact equality, and refined-field bounds     |
+| [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
+| [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -68,8 +72,8 @@ port refinement. Its answers are supplied source values, not decoded user input.
 The transaction handlers simulate the ownership protocol; they do not implement
 database durability or isolation. The quantity example keeps its operation
 dictionary explicit because attached type namespaces are intentionally outside
-the structural type lattice; its `.type` member carries the unit-specific type into
-generic checked signatures without runtime dispatch.
+the structural type lattice; its `.type` member carries the unit-specific type
+into generic checked signatures without runtime dispatch.
 
 The lens example treats a path as a pair of ordinary functions plus the type
 relationship between its whole and focused part. Composition reuses the same
@@ -96,15 +100,13 @@ The validation example treats a check as `Input -> Result (Value, [Error])`.
 failures accumulate instead of short-circuiting. Successful leaves strengthen
 ordinary integer fields into refinements before the final config is built.
 
-The middleware example keeps its callback row
-open: `traced` and `counted` add named observability effects while direct
-composition preserves any unrelated callback effects instead of hiding them
-behind a runtime registry.
+The middleware example keeps its callback row open: `traced` and `counted` add
+named observability effects while direct composition preserves any unrelated
+callback effects instead of hiding them behind a runtime registry.
 
-The semiring example uses ordinary structural
-dictionaries and type-valued matrices; it checks carrier compatibility
-statically, while algebraic laws remain executable library contracts rather than
-compiler proofs.
+The semiring example uses ordinary structural dictionaries and type-valued
+matrices; it checks carrier compatibility statically, while algebraic laws
+remain executable library contracts rather than compiler proofs.
 
 The parser example uses `Text.Cursor` as ordinary immutable parser state. `map`
 changes the parsed value, `zip_with` sequences different result types, and

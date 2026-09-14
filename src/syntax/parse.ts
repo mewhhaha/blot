@@ -64,12 +64,17 @@ export async function parseConcrete(
       ok: false,
       diagnostics: result.diagnostics.map((diagnostic) => {
         const start = elaborated.layout.originalOffset(diagnostic.start);
-        const hint = elaborated.layout.continuationHints.find((hint) => hint.declarationStart === start);
+        const hint = elaborated.layout.continuationHints.find((hint) =>
+          hint.declarationStart === start
+        );
         if (hint !== undefined) return hint.diagnostic;
         return {
           code: diagnosticCode(diagnostic.code),
           message: diagnostic.message,
-          span: { start, end: elaborated.layout.originalOffset(diagnostic.end) },
+          span: {
+            start,
+            end: elaborated.layout.originalOffset(diagnostic.end),
+          },
         };
       }),
     };

@@ -648,6 +648,20 @@ test("Shape.update preserves fields outside the updater's visible row", async ()
       "examples/lib/shape_update.blot",
     );
     assert.equal(evaluated.display, "3");
+    const artifact = await compiler.compile(
+      "examples/lib/shape_update_runtime.blot",
+    );
+    const instantiated = await WebAssembly.instantiate(
+      Uint8Array.from(artifact.wasm) as BufferSource,
+    );
+    for (const name of ["preserve_extra", "replace_count"]) {
+      const run = scalarExport(instantiated.instance, `blot:${name}`);
+      assert.equal(run(3n), 3n);
+      assert.equal(run(42n), 42n);
+    }
+    const entryCount = scalarExport(instantiated.instance, "blot:entry_count");
+    assert.equal(entryCount(3n), 4n);
+    assert.equal(entryCount(42n), 43n);
   } finally {
     compiler.destroy();
   }

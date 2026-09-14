@@ -1,0 +1,29 @@
+open import "blot:prelude"
+
+const Named = { .name = Text; }
+
+const rename = fn value => do:
+  let value = @satisfies value Named
+  return Shape.update (value, { .name = "new"; })
+
+const preserve_extra :: Int -> Int
+const preserve_extra =
+  fn count => (rename { .name = "old"; .count = count; }).count
+
+const replace_count :: Int -> Int
+const replace_count = fn count => do:
+  let original :: { .name = Text; .count = Int; }
+  let original = { .name = "old"; .count = 0; }
+  return (Shape.update (original, { .count = count; })).count
+
+const entry_count :: Int -> Int
+const entry_count =
+  fn count => case Array.get (
+    Shape.entries { .first = count; .second = count + 1; },
+    1
+  ) of
+    #None => 0
+    #Some pair => pair.1
+
+return
+  { .preserve_extra = preserve_extra; .replace_count = replace_count; .entry_count = entry_count; }

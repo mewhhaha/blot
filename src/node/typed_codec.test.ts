@@ -7,7 +7,7 @@ import { runArtifact } from "./run.ts";
 
 const path = "examples/typed_codec.blot";
 const expectedType =
-  "{ .default = { .encoded = { .guests = Int; .nights = Int }; .valid = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int; .invalid_guests = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int; .invalid_nights = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int; .both_invalid = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int; .boundary = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int; .round_trip = #Ok { .guests = 1..8; .nights = 1..30 } | #Error #InvalidGuests Int | #InvalidNights Int } }";
+  "{ .default = { .encoded = { .guests = Int; .nights = Int }; .valid = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int); .invalid_guests = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int); .invalid_nights = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int); .both_invalid = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int); .boundary = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int); .round_trip = #Ok { .guests = 1..8; .nights = 1..30 } | #Error (#InvalidGuests Int | #InvalidNights Int) } }";
 
 test("typed codec preserves carrier relationships in both executions", async () => {
   const compiler = await Compiler.create();

@@ -13,9 +13,10 @@ deno task generate && deno task inspect
 
 ## Recorded counters
 
-Measured against Baba 9.0.0. These are checked into the repository so that a
-grammar change which quietly degrades parallelism shows up in a diff instead of
-in a benchmark months later.
+Measured against Baba 9.0.1. The 9.0.1 lexer regeneration leaves these profile
+counters unchanged. These are checked into the repository so that a grammar
+change which quietly degrades parallelism shows up in a diff instead of in a
+benchmark months later.
 
 | counter                     |    blot | note                                               |
 | --------------------------- | ------: | -------------------------------------------------- |
