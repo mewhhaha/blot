@@ -1,0 +1,31 @@
+open import "blot:prelude"
+// Pressure probe for the natural fully rank-polymorphic runner. The signature
+// relates Output to the accumulator, but the empty/no-emission branch currently
+// remains [bottom] rather than taking the expected [Output] element type.
+const Generic = fn (State, Input, Output) => {
+  .initial = State;
+  .step = (State, Input) -> (State, Option Output);
+}
+
+const Result = fn (State, Output) => {
+  .state = State;
+  .outputs = [Output];
+}
+
+let run_generic ::
+  @forall (fn State => @forall (fn Input => @forall (fn Output => (
+    Generic (State, Input, Output),
+    [Input]
+  ) -> Result (State, Output))))
+let run_generic = fn (processor, inputs) => fold (
+  inputs,
+  { .state = processor.initial; .outputs = Array.empty; },
+  fn (result, input) => do:
+    let (state, output) = processor.step (result.state, input)
+    let outputs = case output of
+      #None => result.outputs
+      #Some value => @array.push (Array.copy result.outputs) value
+    return { .state = state; .outputs = outputs; }
+)
+
+return run_generic

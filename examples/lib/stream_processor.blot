@@ -1,0 +1,93 @@
+open import "blot:prelude"
+
+// A processor may emit zero or one output for each input while carrying state.
+// Its descriptor also carries the three type values used by staged combinators.
+const Processor = fn (State, Input, Output) => {
+  .initial = State;
+  .step = (State, Input) -> (State, Option Output);
+}
+
+const PairState = fn (Left, Right) => {
+  .left = Left;
+  .right = Right;
+}
+
+const Run = fn (State, Output) => {
+  .state = State;
+  .outputs = [Output];
+}
+
+const make = fn Spec => do:
+  const State = Spec.state_type
+  const Input = Spec.input_type
+  const Output = Spec.output_type
+  let initial = Spec.initial
+  let step = Spec.step
+  let checked :: Processor (State, Input, Output)
+  let checked = { .initial; .step; }
+  return {
+    .state_type = State;
+    .input_type = Input;
+    .output_type = Output;
+    .initial = checked.initial;
+    .step = checked.step;
+  }
+
+// Sequential composition shares exactly one middle carrier. Suppressed upstream
+// outputs do not run the downstream step, so its state remains unchanged.
+const compose = fn (Left, Right) => do:
+  let pass :: Left.output_type -> Right.input_type
+  let pass = fn value => value
+
+  const State = PairState (Left.state_type, Right.state_type)
+  let step :: (State, Left.input_type) -> (State, Option Right.output_type)
+  let step = fn (state, input) => do:
+    let (left_state, middle) = Left.step (state.left, input)
+    return case middle of
+      #None => ({ .left = left_state; .right = state.right; }, None)
+      #Some value => do:
+        let (right_state, output) = Right.step (state.right, pass value)
+        return ({ .left = left_state; .right = right_state; }, output)
+
+  return make {
+    .state_type = State;
+    .input_type = Left.input_type;
+    .output_type = Right.output_type;
+    .initial = { .left = Left.initial; .right = Right.initial; };
+    .step;
+  }
+
+// Pain point: a direct rank-polymorphic runner leaves the no-emission branch at
+// `[⊥]` instead of using its expected `[Output]` element type. Staging from the
+// descriptor makes that output type an ordinary compile-time value, so empty and
+// fully suppressed runs remain precise without a cast.
+const run = fn ProcessorValue => do:
+  let execute ::
+    [
+      ProcessorValue.input_type
+    ] -> Run (ProcessorValue.state_type, ProcessorValue.output_type)
+  let execute = fn inputs => do:
+    let result :: Run (ProcessorValue.state_type, ProcessorValue.output_type)
+    let result =
+      {
+        .state = ProcessorValue.initial;
+        .outputs = @satisfies Array.empty [ProcessorValue.output_type];
+      }
+    for input in Iter.items inputs:
+      let (state, output) = ProcessorValue.step (result.state, input)
+      let outputs = case output of
+        #None => result.outputs
+        #Some value => @array.push (Array.copy result.outputs) value
+      result := { .state; .outputs; }
+
+    return result
+  return execute
+
+return {
+  .Processor;
+  .PairState;
+  .Run;
+  .make;
+  .compose;
+  .run;
+}
