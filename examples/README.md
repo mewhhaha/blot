@@ -51,6 +51,7 @@ enumerates runtime field values in insertion order.
 | [`derived_structural_diff.blot`](derived_structural_diff.blot) | Checked scalar field evidence generates a schema-indexed structural differ reused by unrelated records                               | changed field names, exact equality, and refined-field bounds     |
 | [`staged_request_builder.blot`](staged_request_builder.blot)   | Required slots are type parameters; consuming setters advance either order while preserving the other slot                           | Two receipts; invalid stages reject statically                    |
 | [`typed_codec.blot`](typed_codec.blot)                         | Bidirectional codecs compose validated fields while preserving model, wire, and error types                                          | round trips, boundary values, and typed decode errors             |
+| [`event_sourced_aggregate.blot`](event_sourced_aggregate.blot) | One structural aggregate relates commands, nonempty event batches, state evolution, and historical replay                           | replay, single/multi-event decisions, and typed rejections        |
 
 `typed_nonempty.blot` represents a nonempty collection directly as a required
 `.head` plus an array `.tail`. The same implementation record satisfies concrete
@@ -119,6 +120,15 @@ widens those errors to the application-level union at the product boundary.
 `imap` requires both directions of a representation change, so a one-way remap
 cannot masquerade as a codec. Product decoding is intentionally left-biased on
 errors; the example records that behavior rather than claiming accumulation.
+
+The event-sourced aggregate composes with `lib/nonempty.blot`: a successful
+`decide` must return at least one event, while the quantified `Event` carrier is
+shared by decisions, changes, state evolution, and replay. `handle` derives the
+next state from exactly the emitted batch; historical `replay` accepts ordinary
+event arrays, including the empty history. The seat-pool example validates
+command values at runtime but rejects empty successful decisions and event
+carrier mismatches statically. Persisted event ordering and domain validity are
+application invariants, not claims made by the compiler.
 
 `src/node/effect_abstractions.test.ts` checks principal types, both executions,
 the singleton and early-exit cases, and rejection of nonpositive emissions,
