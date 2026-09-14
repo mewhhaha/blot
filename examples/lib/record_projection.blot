@@ -37,7 +37,7 @@ const fields = fn (Whole, names) => do:
   return {
     .Part = Part;
     .projection = projection;
-  }
+    }
 
 const over :: @forall (fn Whole => @forall (fn Part => (Projection (Whole, Part), Whole, (Part -> Part)) -> Whole))
 const over = fn (projection, whole, change) => projection.put (whole, change (projection.get whole))
@@ -46,4 +46,4 @@ return {
   .Projection = Projection;
   .fields = fields;
   .over = over;
-}
+  }
