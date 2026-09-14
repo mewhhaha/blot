@@ -1,0 +1,1 @@
+#Ok ConfigV2({ .endpoint = "api"; .retry_limit = 3; .timeout = 10 })
